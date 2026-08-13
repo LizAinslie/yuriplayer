@@ -292,18 +292,18 @@ class MusicRepository(private val context: Context) {
                 compareBy(String.CASE_INSENSITIVE_ORDER) { it.title }
             )
             SortMode.ARTIST -> songs.sortedWith(
-                compareBy(String.CASE_INSENSITIVE_ORDER) { it.artist }
+                compareBy<Song, String>(String.CASE_INSENSITIVE_ORDER) { it.artist }
                     .thenBy(String.CASE_INSENSITIVE_ORDER) { it.album }
                     .thenBy { it.trackNumber }
                     .thenBy(String.CASE_INSENSITIVE_ORDER) { it.title }
             )
             SortMode.ALBUM -> songs.sortedWith(
-                compareBy(String.CASE_INSENSITIVE_ORDER) { it.album }
+                compareBy<Song, String>(String.CASE_INSENSITIVE_ORDER) { it.album }
                     .thenBy { it.trackNumber }
                     .thenBy(String.CASE_INSENSITIVE_ORDER) { it.title }
             )
             SortMode.TRACK -> songs.sortedWith(
-                compareBy(String.CASE_INSENSITIVE_ORDER) { it.album }
+                compareBy<Song, String>(String.CASE_INSENSITIVE_ORDER) { it.album }
                     .thenBy { it.trackNumber }
                     .thenBy(String.CASE_INSENSITIVE_ORDER) { it.title }
             )
