@@ -32,6 +32,9 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.QueueMusic
 import androidx.compose.material.icons.filled.ExpandMore
+import androidx.compose.material.icons.filled.Favorite
+import androidx.compose.material.icons.filled.Home
+import androidx.compose.material.icons.filled.LibraryMusic
 import androidx.compose.material.icons.filled.MusicNote
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
@@ -54,7 +57,6 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Slider
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -68,6 +70,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -145,7 +148,15 @@ class MainActivity : ComponentActivity() {
     }
 }
 
-private enum class TopTab { Library, Search }
+private enum class TopTab(
+    val label: String,
+    val icon: ImageVector
+) {
+    Home("Home", Icons.Default.Home),
+    Library("Library", Icons.Default.LibraryMusic),
+    MyStuff("My Stuff", Icons.Default.Favorite)
+}
+
 private enum class LibrarySection { Songs, Albums, Artists, Untagged }
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -210,24 +221,23 @@ fun YuriApp(
         topBar = {
             TopAppBar(
                 title = {
-                    Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                        TextButton(
-                            onClick = { topTab = TopTab.Library },
-                            enabled = topTab != TopTab.Library
-                        ) {
-                            Text(
-                                "Library",
-                                fontWeight = if (topTab == TopTab.Library) FontWeight.Bold else FontWeight.Normal
-                            )
-                        }
-                        TextButton(
-                            onClick = { topTab = TopTab.Search },
-                            enabled = topTab != TopTab.Search
-                        ) {
-                            Text(
-                                "Search",
-                                fontWeight = if (topTab == TopTab.Search) FontWeight.Bold else FontWeight.Normal
-                            )
+                    Row(
+                        horizontalArrangement = Arrangement.spacedBy(4.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        TopTab.entries.forEach { tab ->
+                            val selected = topTab == tab
+                            IconButton(onClick = { topTab = tab }) {
+                                Icon(
+                                    imageVector = tab.icon,
+                                    contentDescription = tab.label,
+                                    tint = if (selected) {
+                                        MaterialTheme.colorScheme.primary
+                                    } else {
+                                        MaterialTheme.colorScheme.onSurface.copy(alpha = 0.45f)
+                                    }
+                                )
+                            }
                         }
                     }
                 },
@@ -236,7 +246,10 @@ fun YuriApp(
                         val loading by library.isLoading.collectAsState()
                         IconButton(onClick = { library.refresh() }) {
                             if (loading) {
-                                CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp)
+                                CircularProgressIndicator(
+                                    modifier = Modifier.size(20.dp),
+                                    strokeWidth = 2.dp
+                                )
                             } else {
                                 Icon(Icons.Default.Refresh, contentDescription = "Refresh library")
                             }
@@ -258,6 +271,10 @@ fun YuriApp(
     ) { innerPadding ->
         Box(modifier = Modifier.fillMaxSize().padding(innerPadding)) {
             when (topTab) {
+                TopTab.Home -> PlaceholderScreen(
+                    title = "Home",
+                    body = "Pin playlists and shortcuts here later."
+                )
                 TopTab.Library -> LibraryScreen(
                     library = library,
                     onPlay = { songs, index ->
@@ -265,15 +282,31 @@ fun YuriApp(
                         player.play()
                     }
                 )
-                TopTab.Search -> SearchScreen(
-                    library = library,
-                    onPlay = { songs, index ->
-                        player.setPlaylist(songs, index)
-                        player.play()
-                    }
+                TopTab.MyStuff -> PlaceholderScreen(
+                    title = "My Stuff",
+                    body = "Favorites, playlists, and saved albums/artists will live here."
                 )
             }
         }
+    }
+}
+
+@Composable
+fun PlaceholderScreen(title: String, body: String) {
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .padding(24.dp),
+        verticalArrangement = Arrangement.Center,
+        horizontalAlignment = Alignment.CenterHorizontally
+    ) {
+        Text(title, style = MaterialTheme.typography.headlineSmall)
+        Spacer(modifier = Modifier.height(8.dp))
+        Text(
+            body,
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
+        )
     }
 }
 
@@ -553,15 +586,31 @@ fun LibraryScreen(
     val lastScanned by library.lastScannedAt.collectAsState()
     val error by library.error.collectAsState()
 
+    var query by remember { mutableStateOf("") }
     var sortMode by remember { mutableStateOf(SortMode.TITLE) }
     var section by remember { mutableStateOf(LibrarySection.Songs) }
 
-    val taggedSongs = remember(allSongs, sortMode) { library.sorted(sortMode, taggedOnly = true) }
-    val untaggedSongs = remember(allSongs, sortMode) { library.sorted(sortMode, taggedOnly = false) }
-    val albums = remember(allSongs) { library.albums(taggedOnly = true) }
-    val artists = remember(allSongs) { library.artists(taggedOnly = true) }
+    val taggedSongs = remember(allSongs, sortMode, query) {
+        library.search(query, sortMode, taggedOnly = true)
+    }
+    val untaggedSongs = remember(allSongs, sortMode, query) {
+        library.search(query, sortMode, taggedOnly = false)
+    }
+    val albums = remember(allSongs, query) { library.albums(query, taggedOnly = true) }
+    val artists = remember(allSongs, query) { library.artists(query, taggedOnly = true) }
 
     Column(modifier = Modifier.fillMaxSize()) {
+        OutlinedTextField(
+            value = query,
+            onValueChange = { query = it },
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 12.dp, vertical = 8.dp),
+            singleLine = true,
+            leadingIcon = { Icon(Icons.Default.Search, contentDescription = null) },
+            placeholder = { Text("Filter songs, albums, artists…") }
+        )
+
         Row(
             modifier = Modifier
                 .fillMaxWidth()
@@ -607,21 +656,34 @@ fun LibraryScreen(
             LibrarySection.Songs -> SongList(taggedSongs, loading, onPlay)
             LibrarySection.Untagged -> SongList(untaggedSongs, loading, onPlay)
             LibrarySection.Albums -> {
-                LazyColumn(modifier = Modifier.fillMaxSize()) {
-                    items(albums, key = { "${it.name}|${it.artist}" }) { album ->
-                        AlbumRow(album) { onPlay(album.songs, 0) }
+                if (albums.isEmpty()) {
+                    Text("No albums match.", modifier = Modifier.padding(16.dp))
+                } else {
+                    LazyColumn(modifier = Modifier.fillMaxSize()) {
+                        items(albums, key = { normalizeAlbumKey(it) }) { album ->
+                            AlbumRow(album) { onPlay(album.songs, 0) }
+                        }
                     }
                 }
             }
             LibrarySection.Artists -> {
-                LazyColumn(modifier = Modifier.fillMaxSize()) {
-                    items(artists, key = { it.name ?: "_" }) { artist ->
-                        ArtistRow(artist) { onPlay(artist.songs, 0) }
+                if (artists.isEmpty()) {
+                    Text("No artists match.", modifier = Modifier.padding(16.dp))
+                } else {
+                    LazyColumn(modifier = Modifier.fillMaxSize()) {
+                        items(artists, key = { it.name?.lowercase() ?: "_" }) { artist ->
+                            ArtistRow(artist) { onPlay(artist.songs, 0) }
+                        }
                     }
                 }
             }
         }
     }
+}
+
+private fun normalizeAlbumKey(album: AlbumItem): String {
+    return listOf(album.name, album.artist)
+        .joinToString("|") { it?.trim()?.lowercase().orEmpty() }
 }
 
 @Composable
@@ -636,89 +698,6 @@ private fun SongList(
         LazyColumn(modifier = Modifier.fillMaxSize()) {
             itemsIndexed(songs, key = { _, s -> s.id to s.path }) { index, song ->
                 SongRow(song) { onPlay(songs, index) }
-            }
-        }
-    }
-}
-
-@Composable
-fun SearchScreen(
-    library: LibraryIndex,
-    onPlay: (List<Song>, Int) -> Unit
-) {
-    val allSongs by library.songs.collectAsState()
-    var query by remember { mutableStateOf("") }
-    var section by remember { mutableStateOf(LibrarySection.Songs) }
-    var sortMode by remember { mutableStateOf(SortMode.TITLE) }
-
-    val taggedSongs = remember(allSongs, query, sortMode) {
-        library.search(query, sortMode, taggedOnly = true)
-    }
-    val untaggedSongs = remember(allSongs, query, sortMode) {
-        library.search(query, sortMode, taggedOnly = false)
-    }
-    val albums = remember(allSongs, query) { library.albums(query, taggedOnly = true) }
-    val artists = remember(allSongs, query) { library.artists(query, taggedOnly = true) }
-
-    Column(modifier = Modifier.fillMaxSize()) {
-        OutlinedTextField(
-            value = query,
-            onValueChange = { query = it },
-            modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp),
-            singleLine = true,
-            leadingIcon = { Icon(Icons.Default.Search, null) },
-            placeholder = { Text("Songs, albums, artists…") }
-        )
-
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .horizontalScroll(rememberScrollState())
-                .padding(horizontal = 12.dp),
-            horizontalArrangement = Arrangement.spacedBy(8.dp)
-        ) {
-            listOf(
-                LibrarySection.Songs to "Songs",
-                LibrarySection.Albums to "Albums",
-                LibrarySection.Artists to "Artists",
-                LibrarySection.Untagged to "Untagged"
-            ).forEach { (s, label) ->
-                FilterChip(
-                    selected = section == s,
-                    onClick = { section = s },
-                    label = { Text(label) }
-                )
-            }
-        }
-
-        if (section == LibrarySection.Songs || section == LibrarySection.Untagged) {
-            SortDropdown(sortMode = sortMode, onSortModeChange = { sortMode = it })
-        }
-
-        if (query.isBlank() && section != LibrarySection.Untagged) {
-            Text(
-                "Type to search tagged library",
-                modifier = Modifier.padding(16.dp),
-                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f)
-            )
-        } else {
-            when (section) {
-                LibrarySection.Songs -> SongList(taggedSongs, false, onPlay)
-                LibrarySection.Untagged -> SongList(untaggedSongs, false, onPlay)
-                LibrarySection.Albums -> {
-                    LazyColumn(modifier = Modifier.fillMaxSize()) {
-                        items(albums, key = { "${it.name}|${it.artist}" }) { album ->
-                            AlbumRow(album) { onPlay(album.songs, 0) }
-                        }
-                    }
-                }
-                LibrarySection.Artists -> {
-                    LazyColumn(modifier = Modifier.fillMaxSize()) {
-                        items(artists, key = { it.name ?: "_" }) { artist ->
-                            ArtistRow(artist) { onPlay(artist.songs, 0) }
-                        }
-                    }
-                }
             }
         }
     }
