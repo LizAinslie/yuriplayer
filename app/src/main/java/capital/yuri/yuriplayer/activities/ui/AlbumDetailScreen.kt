@@ -4,6 +4,7 @@ import android.widget.Toast
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -47,6 +48,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
@@ -67,6 +70,8 @@ import org.koin.compose.koinInject
 /** Expanded header content height (below status bar). */
 private val ExpandedHeaderBody = 400.dp
 private val CollapsedBarHeight = 56.dp
+/** How far the album→default fade extends below the header bottom. */
+private val GradientFadeLength = 220.dp
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -149,25 +154,60 @@ fun AlbumDetailScreen(
         else onPlayAlbum(album.songs, 0)
     }
 
-    // Real collapsing height — space is reclaimed, no ghost region
     val headerBodyH = ExpandedHeaderBody * (1f - f) + CollapsedBarHeight * f
+    val fadePx = with(density) { GradientFadeLength.toPx() }
 
-    // Transparent system bar; we paint albumBg behind it. Icons from luminance.
     ThemedStatusBar(color = albumBg, enabled = true)
 
     MaterialTheme(colorScheme = scheme) {
-        Box(
+        BoxWithConstraints(
             modifier = Modifier
                 .fillMaxSize()
-                .background(albumBg)
                 .nestedScroll(nestedScroll)
+                // Base is default page color; album gradient is painted on top of it
+                .background(defaultBg)
+                .drawBehind {
+                    // Status bar + header body are solid album color.
+                    // From header bottom, a long smooth fade into defaultBg.
+                    // Pure draw — does not consume layout height.
+                    val headerEnd = headerBodyH.toPx() // statusBars handled by content pad
+                    // Approximate status-bar height via density-independent top inset isn't
+                    // available here; paint a tall solid region then fade.
+                    val solidEnd = headerEnd + with(density) { 48.dp.toPx() } // covers status bar
+                    val fadeEnd = solidEnd + fadePx
+
+                    // Solid album band (status bar + header)
+                    drawRect(
+                        color = albumBg,
+                        topLeft = Offset.Zero,
+                        size = Size(size.width, solidEnd.coerceAtMost(size.height))
+                    )
+
+                    // Long vertical fade under the header
+                    if (fadeEnd > solidEnd) {
+                        drawRect(
+                            brush = Brush.verticalGradient(
+                                colors = listOf(
+                                    albumBg,
+                                    albumBg.copy(alpha = 0.85f),
+                                    albumBg.copy(alpha = 0.45f),
+                                    albumBg.copy(alpha = 0.15f),
+                                    Color.Transparent
+                                ),
+                                startY = solidEnd,
+                                endY = fadeEnd
+                            ),
+                            topLeft = Offset(0f, solidEnd),
+                            size = Size(size.width, (fadeEnd - solidEnd).coerceAtMost(size.height - solidEnd))
+                        )
+                    }
+                }
         ) {
             Column(modifier = Modifier.fillMaxSize()) {
-                // Header: solid album color under status bar + collapsing body
+                // Header chrome — transparent so the drawn gradient shows through
                 Box(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .background(albumBg)
                         .statusBarsPadding()
                 ) {
                     Box(
@@ -176,7 +216,6 @@ fun AlbumDetailScreen(
                             .height(headerBodyH)
                             .clipToBounds()
                     ) {
-                        // Expanded hero — fades out while height shrinks
                         Box(
                             modifier = Modifier
                                 .fillMaxWidth()
@@ -201,7 +240,7 @@ fun AlbumDetailScreen(
                             CollapsedSpotifyBar(
                                 album = album,
                                 showPause = showPause,
-                                barColor = albumBg,
+                                barColor = Color.Transparent,
                                 onBack = onBack,
                                 onPrimary = onPrimary,
                                 modifier = Modifier
@@ -230,56 +269,37 @@ fun AlbumDetailScreen(
                     }
                 }
 
-                // Short edge blend into the list — not a tall empty gradient band
-                Box(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(28.dp)
-                        .drawBehind {
-                            drawRect(
-                                brush = Brush.verticalGradient(
-                                    colors = listOf(albumBg, defaultBg)
-                                )
-                            )
-                        }
-                )
-
-                // Track list on the default page color
-                Box(
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .background(defaultBg)
+                // Track list — transparent rows so the gradient shows behind early tracks
+                LazyColumn(
+                    state = listState,
+                    modifier = Modifier.fillMaxSize(),
+                    contentPadding = PaddingValues(bottom = 96.dp)
                 ) {
-                    LazyColumn(
-                        state = listState,
-                        modifier = Modifier.fillMaxSize(),
-                        contentPadding = PaddingValues(bottom = 96.dp)
-                    ) {
-                        discs.forEach { (disc, tracks) ->
-                            if (multiDisc) {
-                                item(key = "disc-$disc") {
-                                    DiscSectionHeader(discNumber = disc ?: 1)
-                                }
+                    discs.forEach { (disc, tracks) ->
+                        if (multiDisc) {
+                            item(key = "disc-$disc") {
+                                DiscSectionHeader(discNumber = disc ?: 1)
                             }
-                            itemsIndexed(
-                                tracks,
-                                key = { _, s -> "${s.id}-${s.path}" }
-                            ) { _, song ->
-                                val globalIndex = album.songs.indexOfFirst {
-                                    (it.path != null && it.path == song.path) || it.id == song.id
-                                }.coerceAtLeast(0)
-                                SwipeAddSongRow(
-                                    song = song,
-                                    onClick = { onPlayAlbum(album.songs, globalIndex) },
-                                    onSwipeAdd = {
-                                        onAddSongToQueue(song)
-                                        Toast.makeText(context, "Added to queue", Toast.LENGTH_SHORT).show()
-                                    },
-                                    showTrackNumber = true,
-                                    isPlaying = song.isSameAs(nowPlaying),
-                                    transparentSurface = true
-                                )
-                            }
+                        }
+                        itemsIndexed(
+                            tracks,
+                            key = { _, s -> "${s.id}-${s.path}" }
+                        ) { _, song ->
+                            val globalIndex = album.songs.indexOfFirst {
+                                (it.path != null && it.path == song.path) || it.id == song.id
+                            }.coerceAtLeast(0)
+                            SwipeAddSongRow(
+                                song = song,
+                                onClick = { onPlayAlbum(album.songs, globalIndex) },
+                                onSwipeAdd = {
+                                    onAddSongToQueue(song)
+                                    Toast.makeText(context, "Added to queue", Toast.LENGTH_SHORT).show()
+                                },
+                                showTrackNumber = true,
+                                isPlaying = song.isSameAs(nowPlaying),
+                                isPlaybackActive = isPlaying,
+                                transparentSurface = true
+                            )
                         }
                     }
                 }
