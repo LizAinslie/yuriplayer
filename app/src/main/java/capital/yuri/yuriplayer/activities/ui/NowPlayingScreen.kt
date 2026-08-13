@@ -41,7 +41,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import capital.yuri.yuriplayer.data.PlayerThemeStore
 import capital.yuri.yuriplayer.data.Song
@@ -115,7 +114,6 @@ fun NowPlayingScreen(
 
     val scheme = playerColorScheme(shownColors, baseScheme)
 
-    // API 27+: classic statusBarColor (not ROM Material You)
     ThemedStatusBar(color = scheme.background, enabled = true)
 
     MaterialTheme(colorScheme = scheme) {
@@ -161,7 +159,6 @@ fun NowPlayingScreen(
             }
 
             Column(modifier = Modifier.fillMaxSize()) {
-                // Top chrome — padded
                 Box(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -174,7 +171,6 @@ fun NowPlayingScreen(
                     }
                 }
 
-                // Album art — full width, edge-to-edge (swipe from absolute screen edge)
                 SwipeableAlbumArt(
                     current = theme,
                     next = nextTheme,
@@ -189,7 +185,6 @@ fun NowPlayingScreen(
                         .aspectRatio(1f)
                 )
 
-                // Controls — padded
                 Column(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -198,27 +193,21 @@ fun NowPlayingScreen(
                 ) {
                     Spacer(modifier = Modifier.height(12.dp))
 
-                    Text(
-                        song?.displayTitle ?: "Not playing",
+                    MarqueeText(
+                        text = song?.displayTitle ?: "Not playing",
                         style = MaterialTheme.typography.headlineSmall,
                         fontWeight = FontWeight.Bold,
-                        color = scheme.onBackground,
-                        maxLines = 2,
-                        overflow = TextOverflow.Ellipsis
+                        color = scheme.onBackground
                     )
-                    Text(
-                        song?.displayArtist ?: "",
+                    MarqueeText(
+                        text = song?.displayArtist ?: "",
                         style = MaterialTheme.typography.titleMedium,
-                        color = shownColors.muted,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis
+                        color = shownColors.muted
                     )
-                    Text(
-                        song?.displayAlbum ?: "",
+                    MarqueeText(
+                        text = song?.displayAlbum ?: "",
                         style = MaterialTheme.typography.bodyMedium,
-                        color = shownColors.muted.copy(alpha = 0.75f),
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis
+                        color = shownColors.muted.copy(alpha = 0.75f)
                     )
 
                     Spacer(modifier = Modifier.height(20.dp))

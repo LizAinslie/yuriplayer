@@ -22,9 +22,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
-import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.shadow
@@ -32,7 +30,6 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.zIndex
 import capital.yuri.yuriplayer.data.Song
@@ -40,7 +37,6 @@ import capital.yuri.yuriplayer.player.QueueLane
 import capital.yuri.yuriplayer.player.QueueSnapshot
 import kotlin.math.roundToInt
 
-/** Shared drag state for live visual reordering within one list section. */
 private class SectionDragState {
     var from by mutableIntStateOf(-1)
     var hover by mutableIntStateOf(-1)
@@ -170,7 +166,6 @@ private fun LiveReorderRow(
 ) {
     val isDragged = drag.active && drag.from == index
 
-    // Live gap: items between from and hover shift aside
     val targetShift = when {
         !drag.active || isDragged -> 0f
         drag.from < drag.hover && index in (drag.from + 1)..drag.hover -> -rowHeightPx
@@ -196,10 +191,7 @@ private fun LiveReorderRow(
             .then(
                 if (isDragged) Modifier
                     .shadow(8.dp, RoundedCornerShape(8.dp))
-                    .background(
-                        MaterialTheme.colorScheme.surface,
-                        RoundedCornerShape(8.dp)
-                    )
+                    .background(MaterialTheme.colorScheme.surface, RoundedCornerShape(8.dp))
                 else Modifier
             )
             .clickable(enabled = !drag.active, onClick = onClick)
@@ -226,22 +218,18 @@ private fun LiveReorderRow(
             modifier = Modifier.padding(end = 8.dp)
         )
         Column(modifier = Modifier.weight(1f)) {
-            Text(
+            MarqueeText(
                 text = buildString {
                     if (isCurrent) append("▶ ")
                     append(song.displayTitle)
                 },
                 style = MaterialTheme.typography.bodyMedium,
-                fontWeight = if (isCurrent) FontWeight.Bold else FontWeight.Normal,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis
+                fontWeight = if (isCurrent) FontWeight.Bold else FontWeight.Normal
             )
-            Text(
-                song.displayArtist,
+            MarqueeText(
+                text = song.displayArtist,
                 style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis
+                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
             )
         }
     }
