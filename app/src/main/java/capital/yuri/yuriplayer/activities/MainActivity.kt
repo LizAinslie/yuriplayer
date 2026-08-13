@@ -5,6 +5,7 @@ import android.app.Activity
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Bundle
+import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
@@ -64,6 +65,9 @@ import capital.yuri.yuriplayer.data.ArtistItem
 import capital.yuri.yuriplayer.data.LibraryIndex
 import capital.yuri.yuriplayer.data.PlayerThemeStore
 import capital.yuri.yuriplayer.data.Song
+import capital.yuri.yuriplayer.data.albumKey
+import capital.yuri.yuriplayer.player.ColdSource
+import capital.yuri.yuriplayer.player.ColdSourceType
 import capital.yuri.yuriplayer.player.PlayerController
 import capital.yuri.yuriplayer.player.QueueSnapshot
 import capital.yuri.yuriplayer.player.RepeatMode
@@ -212,9 +216,18 @@ fun YuriApp(
     BackHandler(enabled = playerExpanded) { playerExpanded = false }
     BackHandler(enabled = !playerExpanded && detail != null) { detail = null }
 
-    fun playAlbumFrom(songs: List<Song>, index: Int) {
+    fun playAlbumFrom(album: AlbumItem, songs: List<Song>, index: Int) {
+        val key = albumKey(album.name, album.artist)
         player.setRepeatMode(RepeatMode.COLD)
-        player.playSource(songs, index)
+        player.playSource(
+            songs = songs,
+            startIndex = index,
+            source = ColdSource(
+                type = ColdSourceType.ALBUM,
+                id = key,
+                title = album.name
+            )
+        )
     }
 
     Box(modifier = Modifier.fillMaxSize()) {
@@ -275,13 +288,43 @@ fun YuriApp(
         ) { innerPadding ->
             Box(modifier = Modifier.fillMaxSize().padding(innerPadding)) {
                 when (val d = detail) {
-                    is DetailRoute.Album -> AlbumDetailScreen(
-                        album = d.album,
-                        onBack = { detail = null },
-                        onPlayAlbum = { songs, index -> playAlbumFrom(songs, index) },
-                        onAddSongToQueue = { player.addToHotQueue(it) },
-                        onAddAlbumToQueue = { player.addToHotQueue(it) }
-                    )
+                    is DetailRoute.Album -> {
+                        val key = albumKey(d.album.name, d.album.artist)
+                        // Keep cold queue in sync if library rescan adds tracks
+                        LaunchedEffect(d.album.songs.size, key) {
+                            player.updateColdFromSource(d.album.songs, key)
+                        }
+                        AlbumDetailScreen(
+                            album = d.album,
+                            isSourceActive = snapshot.isPlayingFromAlbum(key),
+                            isPlaying = playing,
+                            shuffleEnabled = snapshot.shuffleEnabled,
+                            onBack = { detail = null },
+                            onPlayAlbum = { songs, index -> playAlbumFrom(d.album, songs, index) },
+                            onTogglePlayPause = { player.togglePlayPause() },
+                            onToggleShuffle = { player.toggleShuffle() },
+                            onFavorite = {
+                                Toast.makeText(
+                                    context,
+                                    "My Stuff coming soon",
+                                    Toast.LENGTH_SHORT
+                                ).show()
+                            },
+                            onOpenArtist = {
+                                val name = d.album.artist ?: return@AlbumDetailScreen
+                                detail = DetailRoute.Artist(
+                                    ArtistItem(
+                                        name = name,
+                                        trackCount = 0,
+                                        albumCount = 0,
+                                        songs = emptyList()
+                                    )
+                                )
+                            },
+                            onAddSongToQueue = { player.addToHotQueue(it) },
+                            onAddAlbumToQueue = { player.addToHotQueue(it) }
+                        )
+                    }
                     is DetailRoute.Artist -> {
                         val albums = library.albums().filter {
                             it.artist.equals(d.artist.name, ignoreCase = true)
@@ -291,7 +334,14 @@ fun YuriApp(
                             albums = albums,
                             onBack = { detail = null },
                             onOpenAlbum = { detail = DetailRoute.Album(it) },
-                            onPlaySongs = { songs, i -> playAlbumFrom(songs, i) }
+                            onPlaySongs = { songs, i ->
+                                // Artist play: no stable album source
+                                player.setRepeatMode(RepeatMode.COLD)
+                                player.playSource(
+                                    songs, i,
+                                    ColdSource(ColdSourceType.ARTIST, d.artist.name ?: "", d.artist.name)
+                                )
+                            }
                         )
                     }
                     is DetailRoute.Settings -> SettingsScreen(onBack = { detail = null })
