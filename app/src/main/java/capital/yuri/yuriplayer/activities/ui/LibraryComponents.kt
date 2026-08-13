@@ -133,6 +133,7 @@ fun SortDropdown(sortMode: SortMode, onSortModeChange: (SortMode) -> Unit) {
 fun LibraryScreen(
     library: LibraryIndex,
     nowPlaying: Song? = null,
+    isPlaybackActive: Boolean = false,
     onPlay: (List<Song>, Int) -> Unit,
     onAddToQueue: (Song) -> Unit,
     onAddAlbumToQueue: (List<Song>) -> Unit = {},
@@ -242,11 +243,15 @@ fun LibraryScreen(
         )
 
         when (section) {
-            LibrarySection.Songs -> SongList(taggedSongs, loading, nowPlaying, onPlay) {
+            LibrarySection.Songs -> SongList(
+                taggedSongs, loading, nowPlaying, isPlaybackActive, onPlay
+            ) {
                 onAddToQueue(it)
                 Toast.makeText(context, "Added to queue", Toast.LENGTH_SHORT).show()
             }
-            LibrarySection.Untagged -> SongList(untaggedSongs, loading, nowPlaying, onPlay) {
+            LibrarySection.Untagged -> SongList(
+                untaggedSongs, loading, nowPlaying, isPlaybackActive, onPlay
+            ) {
                 onAddToQueue(it)
                 Toast.makeText(context, "Added to queue", Toast.LENGTH_SHORT).show()
             }
@@ -286,6 +291,7 @@ private fun SongList(
     songs: List<Song>,
     loading: Boolean,
     nowPlaying: Song?,
+    isPlaybackActive: Boolean,
     onPlay: (List<Song>, Int) -> Unit,
     onAddToQueue: (Song) -> Unit
 ) {
@@ -299,7 +305,8 @@ private fun SongList(
                     onClick = { onPlay(songs, index) },
                     onSwipeAdd = { onAddToQueue(song) },
                     showTrackNumber = false,
-                    isPlaying = song.isSameAs(nowPlaying)
+                    isPlaying = song.isSameAs(nowPlaying),
+                    isPlaybackActive = isPlaybackActive
                 )
             }
         }
@@ -313,6 +320,7 @@ fun SwipeAddSongRow(
     onSwipeAdd: () -> Unit,
     showTrackNumber: Boolean = false,
     isPlaying: Boolean = false,
+    isPlaybackActive: Boolean = false,
     transparentSurface: Boolean = false,
     surfaceColor: Color? = null
 ) {
@@ -381,7 +389,10 @@ fun SwipeAddSongRow(
                         modifier = Modifier.width(28.dp),
                         contentAlignment = Alignment.Center
                     ) {
-                        PlayingIndicator(color = accent)
+                        PlayingIndicator(
+                            color = accent,
+                            animated = isPlaybackActive
+                        )
                     }
                 }
                 song.trackNumber != null -> {
