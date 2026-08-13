@@ -224,7 +224,8 @@ private fun QueueTabContent(
                 item { SectionHeader("Queue · ${upcomingHot.size}") }
                 itemsIndexed(
                     snapshot.hotQueue,
-                    key = { _, s -> "hot-${s.id}-${s.path}" }
+                    // Index must be in the key — same song can appear twice in queue
+                    key = { index, s -> "hot-$index-${s.id}-${s.path}" }
                 ) { index, song ->
                     if (isCurrent(song)) return@itemsIndexed
                     SwipeableQueueRow(
@@ -273,7 +274,7 @@ private fun QueueTabContent(
             }
             itemsIndexed(
                 snapshot.coldQueue,
-                key = { _, s -> "cold-${s.id}-${s.path}" }
+                key = { index, s -> "cold-$index-${s.id}-${s.path}" }
             ) { index, song ->
                 if (isCurrent(song)) return@itemsIndexed
                 SwipeableQueueRow(
