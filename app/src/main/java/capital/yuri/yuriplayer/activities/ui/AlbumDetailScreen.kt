@@ -59,6 +59,7 @@ import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import capital.yuri.yuriplayer.data.AlbumItem
@@ -68,11 +69,34 @@ import capital.yuri.yuriplayer.ui.formatTrackCount
 import org.koin.compose.koinInject
 import kotlin.math.sqrt
 
-/** Expanded header content height (below status bar). */
 private val ExpandedHeaderBody = 400.dp
 private val CollapsedBarHeight = 56.dp
-/** How far the album→default fade extends below the header bottom. */
 private val GradientFadeLength = 220.dp
+
+/** Perfect circle play/pause — IconButton + background was rendering fat/oval. */
+@Composable
+private fun CircularPlayButton(
+    showPause: Boolean,
+    onClick: () -> Unit,
+    size: Dp = 52.dp,
+    iconSize: Dp = 28.dp
+) {
+    Box(
+        modifier = Modifier
+            .size(size)
+            .clip(CircleShape)
+            .background(MaterialTheme.colorScheme.primary)
+            .clickable(onClick = onClick),
+        contentAlignment = Alignment.Center
+    ) {
+        Icon(
+            if (showPause) Icons.Default.Pause else Icons.Default.PlayArrow,
+            contentDescription = if (showPause) "Pause" else "Play",
+            tint = MaterialTheme.colorScheme.onPrimary,
+            modifier = Modifier.size(iconSize)
+        )
+    }
+}
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -103,8 +127,6 @@ fun AlbumDetailScreen(
     var collapsePx by remember { mutableFloatStateOf(0f) }
     val f = (collapsePx / collapseRangePx).coerceIn(0f, 1f)
 
-    // Height collapses faster than linear so space under the art snaps up as
-    // the art fades (sqrt curve: ~half height gone by f=0.25).
     val heightF = sqrt(f.toDouble()).toFloat()
     val headerBodyH = ExpandedHeaderBody * (1f - heightF) + CollapsedBarHeight * heightF
 
@@ -162,8 +184,6 @@ fun AlbumDetailScreen(
 
     val fadePx = with(density) { GradientFadeLength.toPx() }
 
-    // Pushes onto the app-wide status-bar stack; pops on leave so library
-    // and now-playing handoffs can't leave a stale tint behind.
     ThemedStatusBar(color = albumBg, enabled = true)
 
     MaterialTheme(colorScheme = scheme) {
@@ -217,7 +237,6 @@ fun AlbumDetailScreen(
                             .height(headerBodyH)
                             .clipToBounds()
                     ) {
-                        // Hero fades with height so they disappear together
                         Box(
                             modifier = Modifier
                                 .fillMaxWidth()
@@ -453,19 +472,12 @@ private fun SpotifyAlbumHero(
                     )
                 }
 
-                IconButton(
+                CircularPlayButton(
+                    showPause = showPause,
                     onClick = onPrimary,
-                    modifier = Modifier
-                        .size(52.dp)
-                        .background(MaterialTheme.colorScheme.primary, CircleShape)
-                ) {
-                    Icon(
-                        if (showPause) Icons.Default.Pause else Icons.Default.PlayArrow,
-                        contentDescription = if (showPause) "Pause" else "Play",
-                        tint = MaterialTheme.colorScheme.onPrimary,
-                        modifier = Modifier.size(30.dp)
-                    )
-                }
+                    size = 52.dp,
+                    iconSize = 28.dp
+                )
             }
         }
     }
@@ -510,18 +522,12 @@ private fun CollapsedSpotifyBar(
             )
         }
         Spacer(modifier = Modifier.width(8.dp))
-        IconButton(
+        CircularPlayButton(
+            showPause = showPause,
             onClick = onPrimary,
-            modifier = Modifier
-                .size(40.dp)
-                .background(MaterialTheme.colorScheme.primary, CircleShape)
-        ) {
-            Icon(
-                if (showPause) Icons.Default.Pause else Icons.Default.PlayArrow,
-                contentDescription = if (showPause) "Pause" else "Play",
-                tint = MaterialTheme.colorScheme.onPrimary
-            )
-        }
+            size = 40.dp,
+            iconSize = 22.dp
+        )
     }
 }
 
