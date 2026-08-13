@@ -1,29 +1,228 @@
 package capital.yuri.yuriplayer.activities
 
+import android.Manifest
+import android.content.pm.PackageManager
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Pause
+import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.SkipNext
+import androidx.compose.material.icons.filled.SkipPrevious
+import androidx.compose.material3.Card
+import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.tooling.preview.Preview
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.dp
+import androidx.core.content.ContextCompat
 import capital.yuri.yuriplayer.activities.ui.theme.YuriPlayerTheme
+import capital.yuri.yuriplayer.data.MusicRepository
+import capital.yuri.yuriplayer.data.Song
+import capital.yuri.yuriplayer.player.PlayerController
+import org.koin.android.ext.android.inject
 
 class MainActivity : ComponentActivity() {
+
+    private val musicRepository: MusicRepository by inject()
+    private val playerController: PlayerController by inject()
+
+    private var isCarMode = false
+
+    private val permissionLauncher = registerForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { granted ->
+        if (granted) {
+            // trigger recomposition via a simple flag if needed
+        }
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+
+        isCarMode = intent?.action == "capital.yuri.yuriplayer.action.CAR_MODE" ||
+                intent?.getBooleanExtra("car_mode", false) == true
+
+        if (ContextCompat.checkSelfPermission(this, Manifest.permission.READ_EXTERNAL_STORAGE)
+            != PackageManager.PERMISSION_GRANTED
+        ) {
+            permissionLauncher.launch(Manifest.permission.READ_EXTERNAL_STORAGE)
+        }
+
         enableEdgeToEdge()
         setContent {
             YuriPlayerTheme {
-                Scaffold(modifier = Modifier.fillMaxSize()) { innerPadding ->
-                    Greeting(
-                        name = "Android",
-                        modifier = Modifier.padding(innerPadding)
+                PlayerScreen(
+                    repository = musicRepository,
+                    player = playerController,
+                    isCarMode = isCarMode
+                )
+            }
+        }
+    }
+
+    override fun onStart() {
+        super.onStart()
+        playerController.bind()
+    }
+
+    override fun onStop() {
+        // Keep service running in background; only unbind the activity connection
+        playerController.unbind()
+        super.onStop()
+    }
+
+    override fun onNewIntent(intent: android.content.Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        val nowCar = intent.action == "capital.yuri.yuriplayer.action.CAR_MODE" ||
+                intent.getBooleanExtra("car_mode", false)
+        if (nowCar && !isCarMode) {
+            isCarMode = true
+            // Future: switch to car layout
+        }
+    }
+}
+
+@Composable
+fun PlayerScreen(
+    repository: MusicRepository,
+    player: PlayerController,
+    isCarMode: Boolean
+) {
+    var songs by remember { mutableStateOf<List<Song>>(emptyList()) }
+    var currentSong by remember { mutableStateOf<Song?>(null) }
+    var isPlaying by remember { mutableStateOf(false) }
+    var hasPermission by remember { mutableStateOf(true) }
+
+    LaunchedEffect(Unit) {
+        try {
+            songs = repository.getAllSongs()
+        } catch (_: SecurityException) {
+            hasPermission = false
+        }
+    }
+
+    // Simple polling for now-playing state (can be replaced with flows later)
+    LaunchedEffect(player.isConnected) {
+        while (true) {
+            currentSong = player.getCurrentSong()
+            isPlaying = player.isPlaying()
+            kotlinx.coroutines.delay(500)
+        }
+    }
+
+    Scaffold(modifier = Modifier.fillMaxSize()) { innerPadding ->
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(innerPadding)
+        ) {
+            // Now playing bar
+            Card(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(12.dp),
+                colors = CardDefaults.cardColors(
+                    containerColor = MaterialTheme.colorScheme.primaryContainer
+                )
+            ) {
+                Column(modifier = Modifier.padding(16.dp)) {
+                    Text(
+                        text = currentSong?.title ?: "Not playing",
+                        style = MaterialTheme.typography.titleMedium,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
                     )
+                    Text(
+                        text = currentSong?.artist ?: "",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.7f),
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+
+                    Spacer(modifier = Modifier.height(12.dp))
+
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceEvenly,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        IconButton(onClick = {
+                            player.skipToPrevious()
+                            currentSong = player.getCurrentSong()
+                        }) {
+                            Icon(Icons.Default.SkipPrevious, contentDescription = "Previous")
+                        }
+
+                        IconButton(onClick = {
+                            player.togglePlayPause()
+                            isPlaying = player.isPlaying()
+                        }) {
+                            Icon(
+                                if (isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
+                                contentDescription = if (isPlaying) "Pause" else "Play"
+                            )
+                        }
+
+                        IconButton(onClick = {
+                            player.skipToNext()
+                            currentSong = player.getCurrentSong()
+                        }) {
+                            Icon(Icons.Default.SkipNext, contentDescription = "Next")
+                        }
+                    }
+                }
+            }
+
+            if (!hasPermission) {
+                Text(
+                    text = "Storage permission required to read local music",
+                    modifier = Modifier.padding(16.dp),
+                    color = MaterialTheme.colorScheme.error
+                )
+            } else if (songs.isEmpty()) {
+                Text(
+                    text = "No music found on device",
+                    modifier = Modifier.padding(16.dp)
+                )
+            } else {
+                LazyColumn(modifier = Modifier.fillMaxSize()) {
+                    itemsIndexed(songs, key = { _, song -> song.id }) { index, song ->
+                        SongRow(song = song) {
+                            player.setPlaylist(songs, index)
+                            player.play()
+                            currentSong = song
+                            isPlaying = true
+                        }
+                    }
                 }
             }
         }
@@ -31,17 +230,25 @@ class MainActivity : ComponentActivity() {
 }
 
 @Composable
-fun Greeting(name: String, modifier: Modifier = Modifier) {
-    Text(
-        text = "Hello $name!",
-        modifier = modifier
-    )
-}
-
-@Preview(showBackground = true)
-@Composable
-fun GreetingPreview() {
-    YuriPlayerTheme {
-        Greeting("Android")
+fun SongRow(song: Song, onClick: () -> Unit) {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onClick)
+            .padding(horizontal = 16.dp, vertical = 10.dp)
+    ) {
+        Text(
+            text = song.title,
+            style = MaterialTheme.typography.bodyLarge,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis
+        )
+        Text(
+            text = "${song.artist} • ${song.album}",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis
+        )
     }
 }
