@@ -2,7 +2,6 @@ package capital.yuri.yuriplayer.activities.ui
 
 import android.widget.Toast
 import androidx.compose.foundation.background
-import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
@@ -25,6 +24,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Album
 import androidx.compose.material.icons.filled.MoreVert
+import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
@@ -49,7 +49,6 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.lerp
 import androidx.compose.ui.unit.sp
 import capital.yuri.yuriplayer.data.AlbumItem
 import capital.yuri.yuriplayer.data.Song
@@ -60,8 +59,11 @@ import org.koin.compose.koinInject
 @Composable
 fun AlbumDetailScreen(
     album: AlbumItem,
+    isSourceActive: Boolean = false,
+    isPlaying: Boolean = false,
     onBack: () -> Unit,
     onPlayAlbum: (List<Song>, Int) -> Unit,
+    onTogglePlayPause: () -> Unit = {},
     onAddSongToQueue: (Song) -> Unit,
     onAddAlbumToQueue: (List<Song>) -> Unit
 ) {
@@ -73,7 +75,6 @@ fun AlbumDetailScreen(
     val listState = rememberLazyListState()
     val density = LocalDensity.current
 
-    // Scroll range ≈ expanded header body height
     val collapseRangePx = with(density) { 220.dp.toPx() }
     val collapseFraction by remember {
         derivedStateOf {
@@ -96,6 +97,13 @@ fun AlbumDetailScreen(
     val scheme = playerColorScheme(themeColors, base)
     val tagLine = albumTagLine(album.trackCount)
 
+    // Spotify-style primary action
+    val showPause = isSourceActive && isPlaying
+    val onPrimaryAction = {
+        if (isSourceActive) onTogglePlayPause()
+        else onPlayAlbum(album.songs, 0)
+    }
+
     MaterialTheme(colorScheme = scheme) {
         Box(
             modifier = Modifier
@@ -103,29 +111,13 @@ fun AlbumDetailScreen(
                 .background(scheme.background)
                 .statusBarsPadding()
         ) {
-            // Sticky morphing header (always on top of list content)
-            MorphingAlbumHeader(
-                album = album,
-                tagLine = tagLine,
-                fraction = collapseFraction,
-                onBack = onBack,
-                onPlay = { onPlayAlbum(album.songs, 0) },
-                onMore = { showMenu = true },
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .align(Alignment.TopCenter)
-            )
-
             val headerPad = lerp(320.dp, 64.dp, collapseFraction)
             LazyColumn(
                 state = listState,
                 modifier = Modifier.fillMaxSize(),
                 contentPadding = PaddingValues(top = headerPad, bottom = 96.dp)
             ) {
-                // Spacer item so scrolling drives collapseFraction
-                item {
-                    Spacer(modifier = Modifier.height(1.dp))
-                }
+                item { Spacer(modifier = Modifier.height(1.dp)) }
 
                 discs.forEach { (disc, tracks) ->
                     if (multiDisc) {
@@ -142,7 +134,10 @@ fun AlbumDetailScreen(
                         }.coerceAtLeast(0)
                         SwipeAddSongRow(
                             song = song,
-                            onClick = { onPlayAlbum(album.songs, globalIndex) },
+                            onClick = {
+                                // Tapping a track always starts this album from that track
+                                onPlayAlbum(album.songs, globalIndex)
+                            },
                             onSwipeAdd = {
                                 onAddSongToQueue(song)
                                 Toast.makeText(context, "Added to queue", Toast.LENGTH_SHORT).show()
@@ -153,13 +148,13 @@ fun AlbumDetailScreen(
                 }
             }
 
-            // Re-draw header above list so it stays pinned
             MorphingAlbumHeader(
                 album = album,
                 tagLine = tagLine,
                 fraction = collapseFraction,
+                showPause = showPause,
                 onBack = onBack,
-                onPlay = { onPlayAlbum(album.songs, 0) },
+                onPrimary = onPrimaryAction,
                 onMore = { showMenu = true },
                 modifier = Modifier
                     .fillMaxWidth()
@@ -198,33 +193,19 @@ fun AlbumDetailScreen(
     }
 }
 
-/**
- * Single header that continuously morphs between expanded (sketch) and collapsed bar.
- *
- * Expanded:
- *   [←]
- *        [ big art ]
- *   [▶]  LP · 16tr
- *        Album
- *        Artist          [⋮]
- *
- * Collapsed:
- *   [←] [art] LP·16tr / Album / Artist  [▶] [⋮]
- *   art height ≈ text block height
- */
 @Composable
 private fun MorphingAlbumHeader(
     album: AlbumItem,
     tagLine: String,
     fraction: Float,
+    showPause: Boolean,
     onBack: () -> Unit,
-    onPlay: () -> Unit,
+    onPrimary: () -> Unit,
     onMore: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     val f = fraction.coerceIn(0f, 1f)
     val headerHeight = lerp(312.dp, 64.dp, f)
-    // Art: large square → fills ~3 text lines
     val artSize = lerp(180.dp, 52.dp, f)
     val playSize = lerp(52.dp, 40.dp, f)
     val titleStyle = if (f < 0.5f) {
@@ -238,6 +219,9 @@ private fun MorphingAlbumHeader(
         MaterialTheme.typography.bodySmall
     }
 
+    val primaryIcon = if (showPause) Icons.Default.Pause else Icons.Default.PlayArrow
+    val primaryDesc = if (showPause) "Pause" else "Play"
+
     BoxWithConstraints(
         modifier = modifier
             .height(headerHeight)
@@ -245,7 +229,6 @@ private fun MorphingAlbumHeader(
     ) {
         val width = maxWidth
 
-        // —— Back (always top-start) ——
         IconButton(
             onClick = onBack,
             modifier = Modifier.align(Alignment.TopStart)
@@ -257,8 +240,7 @@ private fun MorphingAlbumHeader(
             )
         }
 
-        // —— Album art: center (expanded) → left after back (collapsed) ——
-        val artStartX = lerp(48.dp, 48.dp, f) // after back button when collapsed
+        val artStartX = 48.dp
         val artExpandedX = (width - artSize) / 2
         val artX = lerp(artExpandedX, artStartX, f)
         val artY = lerp(44.dp, 6.dp, f)
@@ -274,9 +256,6 @@ private fun MorphingAlbumHeader(
             )
         }
 
-        // —— Meta + controls ——
-        // Expanded: row under art — play | text | more
-        // Collapsed: text to the right of art; play+more on trailing edge
         val metaTop = lerp(44.dp + 180.dp + 16.dp, 6.dp, f)
         val metaStart = lerp(16.dp, 48.dp + 52.dp + 10.dp, f)
 
@@ -287,17 +266,16 @@ private fun MorphingAlbumHeader(
                 .offset(y = metaTop),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            // Play — left of text when expanded; slides to trailing side when collapsed
             if (f < 0.55f) {
                 IconButton(
-                    onClick = onPlay,
+                    onClick = onPrimary,
                     modifier = Modifier
                         .size(playSize)
                         .background(MaterialTheme.colorScheme.primary, CircleShape)
                 ) {
                     Icon(
-                        Icons.Default.PlayArrow,
-                        contentDescription = "Play",
+                        primaryIcon,
+                        contentDescription = primaryDesc,
                         tint = MaterialTheme.colorScheme.onPrimary,
                         modifier = Modifier.size(playSize * 0.55f)
                     )
@@ -327,14 +305,14 @@ private fun MorphingAlbumHeader(
 
             if (f >= 0.55f) {
                 IconButton(
-                    onClick = onPlay,
+                    onClick = onPrimary,
                     modifier = Modifier
                         .size(playSize)
                         .background(MaterialTheme.colorScheme.primary, CircleShape)
                 ) {
                     Icon(
-                        Icons.Default.PlayArrow,
-                        contentDescription = "Play",
+                        primaryIcon,
+                        contentDescription = primaryDesc,
                         tint = MaterialTheme.colorScheme.onPrimary,
                         modifier = Modifier.size(playSize * 0.55f)
                     )
@@ -395,11 +373,8 @@ private fun guessReleaseType(trackCount: Int): String = when {
     else -> "LP"
 }
 
-/** Tags: TYPE · Ntr · (genre later) */
-private fun albumTagLine(trackCount: Int): String {
-    val type = guessReleaseType(trackCount)
-    return "$type · ${trackCount}tr"
-}
+private fun albumTagLine(trackCount: Int): String =
+    "${guessReleaseType(trackCount)} · ${trackCount}tr"
 
 private fun lerp(start: Dp, stop: Dp, fraction: Float): Dp =
     androidx.compose.ui.unit.lerp(start, stop, fraction.coerceIn(0f, 1f))
