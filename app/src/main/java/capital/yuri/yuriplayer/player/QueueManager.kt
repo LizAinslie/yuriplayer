@@ -31,6 +31,47 @@ class QueueManager {
 
     fun getSnapshot(): QueueSnapshot = _snapshot.value
 
+    /** Next song that [advance] would load (no mutation). Null if playback would stop. */
+    fun peekNext(): Song? {
+        if (repeatMode == RepeatMode.ONE) return currentSong()
+        when (lane) {
+            QueueLane.HOT -> {
+                if (indexInLane < hotQueue.lastIndex) return hotQueue[indexInLane + 1]
+                if (coldQueue.isNotEmpty()) {
+                    val idx = coldResumeIndex.coerceIn(0, coldQueue.lastIndex)
+                    if (coldResumeIndex < coldQueue.size) return coldQueue[idx]
+                    if (repeatMode == RepeatMode.COLD) return coldQueue.firstOrNull()
+                    return null
+                }
+                if (repeatMode == RepeatMode.COLD && coldOriginal.isNotEmpty()) {
+                    return if (shuffleEnabled) coldOriginal.random() else coldOriginal.first()
+                }
+                return null
+            }
+            QueueLane.COLD -> {
+                if (hotQueue.isNotEmpty()) return hotQueue.first()
+                if (indexInLane < coldQueue.lastIndex) return coldQueue[indexInLane + 1]
+                if (repeatMode == RepeatMode.COLD && coldQueue.isNotEmpty()) return coldQueue.first()
+                return null
+            }
+        }
+    }
+
+    /** Previous song [skipPrevious] would load when position ≤ 3s (no mutation). */
+    fun peekPrevious(): Song? {
+        when (lane) {
+            QueueLane.HOT -> {
+                if (indexInLane > 0) return hotQueue[indexInLane - 1]
+                val prevCold = (coldResumeIndex - 1).coerceAtLeast(0)
+                return coldQueue.getOrNull(prevCold)
+            }
+            QueueLane.COLD -> {
+                if (indexInLane > 0) return coldQueue[indexInLane - 1]
+                return currentSong()
+            }
+        }
+    }
+
     private fun publish() {
         _snapshot.value = QueueSnapshot(
             hotQueue = hotQueue.toList(),
@@ -66,7 +107,6 @@ class QueueManager {
         Log.i(TAG, "restore lane=$lane index=$indexInLane queue=${hotQueue.size} cold=${coldQueue.size}")
     }
 
-    /** Replace context (album/playlist) and point at [startIndex]. */
     fun playSource(songs: List<Song>, startIndex: Int = 0) {
         if (songs.isEmpty()) return
         Log.i(TAG, "playSource size=${songs.size} start=$startIndex")
@@ -133,7 +173,7 @@ class QueueManager {
                     return removingCurrent
                 }
                 index < indexInLane -> indexInLane--
-                removingCurrent -> { /* index stays; caller reloads */ }
+                removingCurrent -> { }
             }
         }
         publish()
@@ -144,9 +184,7 @@ class QueueManager {
         if (from !in hotQueue.indices || to !in hotQueue.indices || from == to) return
         val item = hotQueue.removeAt(from)
         hotQueue.add(to, item)
-        if (lane == QueueLane.HOT) {
-            indexInLane = remapIndex(indexInLane, from, to)
-        }
+        if (lane == QueueLane.HOT) indexInLane = remapIndex(indexInLane, from, to)
         publish()
     }
 
@@ -154,9 +192,7 @@ class QueueManager {
         if (from !in coldQueue.indices || to !in coldQueue.indices || from == to) return
         val item = coldQueue.removeAt(from)
         coldQueue.add(to, item)
-        if (lane == QueueLane.COLD) {
-            indexInLane = remapIndex(indexInLane, from, to)
-        }
+        if (lane == QueueLane.COLD) indexInLane = remapIndex(indexInLane, from, to)
         publish()
     }
 
@@ -223,10 +259,6 @@ class QueueManager {
         publish()
     }
 
-    /**
-     * Compute next track after end/skip.
-     * Caller loads [AdvanceResult.song] when non-null; pauses when [AdvanceResult.finished].
-     */
     fun advance(userInitiated: Boolean): AdvanceResult {
         Log.i(
             TAG,
@@ -248,7 +280,6 @@ class QueueManager {
                     publish()
                     return AdvanceResult(song = currentSong())
                 }
-                // Queue drained
                 hotQueue.clear()
                 return resumeColdResult()
             }
@@ -258,7 +289,6 @@ class QueueManager {
                     lane = QueueLane.HOT
                     indexInLane = 0
                     publish()
-                    Log.i(TAG, "context → queue path=${currentSong()?.path} resume=$coldResumeIndex")
                     return AdvanceResult(song = currentSong())
                 }
                 if (indexInLane < coldQueue.lastIndex) {
@@ -271,7 +301,6 @@ class QueueManager {
                     indexInLane = 0
                     coldResumeIndex = 0
                     publish()
-                    Log.i(TAG, "repeat ALL")
                     return AdvanceResult(song = currentSong())
                 }
                 publish()
