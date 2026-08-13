@@ -1,5 +1,6 @@
 package capital.yuri.yuriplayer.data
 
+import android.util.Log
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -10,11 +11,10 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
 /**
- * In-memory library backed by [LibraryCache].
- *
- * - [songs] is the full unsorted index (source of truth for search/sort)
- * - Sort and search never touch disk or MediaStore
- * - [refresh] rescans and rewrites the cache (manual or periodic)
+ * Library state:
+ * 1. Disk: [LibraryCache] in app cacheDir (survives process death)
+ * 2. Memory: [songs] StateFlow — sort/search/group use this only
+ * 3. Refresh: rescans device, then overwrites disk + memory
  */
 class LibraryIndex(
     private val repository: MusicRepository,
@@ -35,23 +35,26 @@ class LibraryIndex(
     private val _error = MutableStateFlow<String?>(null)
     val error: StateFlow<String?> = _error.asStateFlow()
 
-    /** Load cache immediately, then refresh in background if stale. */
+    /** Load cache from disk immediately, then refresh if missing or stale. */
     fun bootstrap(staleAfterMs: Long = DEFAULT_STALE_MS) {
         scope.launch {
             val cached = withContext(Dispatchers.IO) { cache.load() }
             if (cached != null && cached.songs.isNotEmpty()) {
                 _songs.value = cached.songs
                 _lastScannedAt.value = cached.scannedAt
+                Log.d(TAG, "Bootstrap: ${cached.songs.size} songs from disk cache")
             }
 
             val age = System.currentTimeMillis() - (cached?.scannedAt ?: 0L)
             val needsScan = cached == null || cached.songs.isEmpty() || age > staleAfterMs
             if (needsScan) {
+                Log.d(TAG, "Bootstrap: cache missing/stale (age=${age}ms) → refresh")
                 refresh()
             }
         }
     }
 
+    /** Full device scan, then write to cacheDir and update memory. */
     fun refresh() {
         if (_isLoading.value) return
         scope.launch {
@@ -59,22 +62,28 @@ class LibraryIndex(
             _error.value = null
             try {
                 val scanned = withContext(Dispatchers.IO) {
-                    repository.scanLibrary().also { cache.save(it) }
+                    val songs = repository.scanLibrary()
+                    cache.save(songs)
+                    songs
                 }
                 _songs.value = scanned
                 _lastScannedAt.value = System.currentTimeMillis()
+                Log.d(TAG, "Refresh complete: ${scanned.size} songs cached at ${cache.cacheFilePath()}")
             } catch (e: SecurityException) {
                 _error.value = "Storage permission required"
             } catch (e: Exception) {
                 _error.value = e.message ?: "Scan failed"
+                Log.e(TAG, "Refresh failed", e)
             } finally {
                 _isLoading.value = false
             }
         }
     }
 
+    /** In-memory only — does not read/write disk. */
     fun sorted(mode: SortMode): List<Song> = sortSongs(_songs.value, mode)
 
+    /** In-memory only. */
     fun search(query: String, mode: SortMode = SortMode.TITLE): List<Song> {
         val q = query.trim()
         val base = sorted(mode)
@@ -86,6 +95,7 @@ class LibraryIndex(
         }
     }
 
+    /** In-memory only. */
     fun albums(query: String = ""): List<AlbumItem> {
         val q = query.trim()
         return _songs.value
@@ -106,6 +116,7 @@ class LibraryIndex(
             .sortedWith(compareBy(String.CASE_INSENSITIVE_ORDER) { it.name })
     }
 
+    /** In-memory only. */
     fun artists(query: String = ""): List<ArtistItem> {
         val q = query.trim()
         return _songs.value
@@ -123,6 +134,7 @@ class LibraryIndex(
     }
 
     companion object {
+        private const val TAG = "LibraryIndex"
         const val DEFAULT_STALE_MS = 12L * 60 * 60 * 1000 // 12 hours
 
         fun sortSongs(songs: List<Song>, mode: SortMode): List<Song> {
