@@ -6,6 +6,7 @@ import capital.yuri.yuriplayer.data.LibraryIndex
 import capital.yuri.yuriplayer.data.LibrarySettings
 import capital.yuri.yuriplayer.data.MusicRepository
 import capital.yuri.yuriplayer.data.PlayerThemeStore
+import capital.yuri.yuriplayer.player.PlaybackHistoryStore
 import capital.yuri.yuriplayer.player.PlaybackStateStore
 import capital.yuri.yuriplayer.player.PlayerController
 import capital.yuri.yuriplayer.player.QueueManager
@@ -22,5 +23,6 @@ val appModule = module {
     single { PlayerThemeStore(get()) }
     single { QueueManager() }
     single { PlaybackStateStore(androidContext()) }
+    single { PlaybackHistoryStore(androidContext()) }
     single { PlayerController(androidContext()) }
 }
