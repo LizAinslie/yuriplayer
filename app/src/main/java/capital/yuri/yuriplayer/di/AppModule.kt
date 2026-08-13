@@ -24,5 +24,5 @@ val appModule = module {
     single { QueueManager() }
     single { PlaybackStateStore(androidContext()) }
     single { PlaybackHistoryStore(androidContext()) }
-    single { PlayerController(androidContext()) }
+    single { PlayerController(androidContext(), get()) }
 }
