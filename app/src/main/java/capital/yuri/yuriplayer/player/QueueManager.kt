@@ -9,6 +9,9 @@ import kotlin.random.Random
 
 /**
  * Dual-queue with consume-on-play semantics + cold [ColdSource] tracking.
+ *
+ * [playedStack] remembers consumed tracks so Previous can walk back
+ * (Spotify-style: >3s restarts current, otherwise previous in play order).
  */
 class QueueManager {
 
@@ -21,6 +24,9 @@ class QueueManager {
     private var shuffleEnabled = false
     private var repeatMode = RepeatMode.OFF
     private var floatingCurrent: Song? = null
+
+    /** Songs consumed by [advance], newest at the end — used for Previous. */
+    private val playedStack = mutableListOf<Song>()
 
     private val _snapshot = MutableStateFlow(QueueSnapshot())
     val snapshot: StateFlow<QueueSnapshot> = _snapshot.asStateFlow()
@@ -71,7 +77,7 @@ class QueueManager {
         }
     }
 
-    fun peekPrevious(): Song? = currentSong()
+    fun peekPrevious(): Song? = playedStack.lastOrNull()
 
     private fun publish() {
         _snapshot.value = QueueSnapshot(
@@ -86,6 +92,16 @@ class QueueManager {
         )
     }
 
+    private fun pushPlayed(song: Song) {
+        // Dedup consecutive duplicates (e.g. rapid next)
+        if (playedStack.lastOrNull()?.let { sameSong(it, song) } == true) return
+        playedStack.add(song)
+        // Cap so long sessions do not grow forever
+        while (playedStack.size > MAX_PLAYED_STACK) {
+            playedStack.removeAt(0)
+        }
+    }
+
     fun restore(snap: QueueSnapshot) {
         hotQueue.clear()
         hotQueue.addAll(snap.hotQueue)
@@ -98,6 +114,7 @@ class QueueManager {
         shuffleEnabled = snap.shuffleEnabled
         repeatMode = snap.repeatMode
         floatingCurrent = null
+        playedStack.clear()
         val max = when (lane) {
             QueueLane.HOT -> hotQueue.lastIndex
             QueueLane.COLD -> coldQueue.lastIndex
@@ -115,6 +132,7 @@ class QueueManager {
         if (songs.isEmpty()) return
         Log.i(TAG, "playSource size=${songs.size} start=$startIndex source=$source")
         floatingCurrent = null
+        playedStack.clear()
         coldSource = source
         coldOriginal = songs.toList()
         coldQueue.clear()
@@ -129,6 +147,15 @@ class QueueManager {
         } else {
             coldQueue.addAll(songs)
             indexInLane = startIndex.coerceIn(0, coldQueue.lastIndex)
+            // Tracks before the start index are "already behind us" for Previous
+            if (indexInLane > 0) {
+                for (i in 0 until indexInLane) {
+                    pushPlayed(coldQueue[i])
+                }
+                // Remove them from cold so consume model stays consistent
+                repeat(indexInLane) { coldQueue.removeAt(0) }
+                indexInLane = 0
+            }
         }
         lane = QueueLane.COLD
         publish()
@@ -337,11 +364,7 @@ class QueueManager {
 
     /**
      * Consume current and move to the next song.
-     *
-     * After removeAt(index), the next unplayed item sits at the same index when
-     * we were not on the last item. If we *were* on the last item, the index is
-     * out of range — do **not** wrap to earlier tracks; fall through to the other
-     * lane, repopulate (repeat all), or finished.
+     * Consumed tracks are pushed onto [playedStack] for Previous.
      */
     fun advance(userInitiated: Boolean): AdvanceResult {
         if (repeatMode == RepeatMode.ONE && !userInitiated) {
@@ -352,19 +375,23 @@ class QueueManager {
         val fromIndex = indexInLane
 
         if (floatingCurrent != null) {
+            pushPlayed(floatingCurrent!!)
             floatingCurrent = null
         } else {
             when (fromLane) {
                 QueueLane.HOT -> {
-                    if (fromIndex in hotQueue.indices) hotQueue.removeAt(fromIndex)
+                    if (fromIndex in hotQueue.indices) {
+                        pushPlayed(hotQueue.removeAt(fromIndex))
+                    }
                 }
                 QueueLane.COLD -> {
-                    if (fromIndex in coldQueue.indices) coldQueue.removeAt(fromIndex)
+                    if (fromIndex in coldQueue.indices) {
+                        pushPlayed(coldQueue.removeAt(fromIndex))
+                    }
                 }
             }
         }
 
-        // Hot still has a song at the same index (next slid down)
         if (fromLane == QueueLane.HOT && fromIndex in hotQueue.indices) {
             lane = QueueLane.HOT
             indexInLane = fromIndex
@@ -372,7 +399,6 @@ class QueueManager {
             return AdvanceResult(song = hotQueue[indexInLane])
         }
 
-        // Hot has items but we exhausted the previous lane's position → head of hot
         if (hotQueue.isNotEmpty() && fromLane != QueueLane.HOT) {
             lane = QueueLane.HOT
             indexInLane = 0
@@ -380,10 +406,6 @@ class QueueManager {
             return AdvanceResult(song = hotQueue[0])
         }
 
-        // Hot remaining after consuming last hot item — only if index still valid (handled above).
-        // If from hot and index out of range, hot is exhausted past the end.
-
-        // Cold: next at same index if still valid
         if (fromLane == QueueLane.COLD && fromIndex in coldQueue.indices) {
             lane = QueueLane.COLD
             indexInLane = fromIndex
@@ -391,7 +413,6 @@ class QueueManager {
             return AdvanceResult(song = coldQueue[indexInLane])
         }
 
-        // Came from hot (exhausted) or floating → start of remaining cold
         if (fromLane != QueueLane.COLD && coldQueue.isNotEmpty()) {
             lane = QueueLane.COLD
             indexInLane = 0
@@ -399,7 +420,6 @@ class QueueManager {
             return AdvanceResult(song = coldQueue[0])
         }
 
-        // Cold exhausted (consumed last item) — repopulate or finish
         if (repeatMode == RepeatMode.COLD && coldOriginal.isNotEmpty()) {
             repopulateCold()
             lane = QueueLane.COLD
@@ -413,8 +433,54 @@ class QueueManager {
         return AdvanceResult(finished = true)
     }
 
+    /**
+     * Spotify-style Previous:
+     * - If more than [PREV_RESTART_MS] into the track → restart current
+     * - Else pop [playedStack] and make that the current song, re-queuing the
+     *   song we left so Next returns to it
+     */
     fun skipPrevious(currentPositionMs: Long): AdvanceResult {
-        return AdvanceResult(song = currentSong(), seekToStart = true)
+        val current = currentSong()
+        if (currentPositionMs > PREV_RESTART_MS || playedStack.isEmpty()) {
+            return AdvanceResult(song = current, seekToStart = true)
+        }
+
+        val prev = playedStack.removeAt(playedStack.lastIndex)
+
+        // Stash current so it plays again after prev (Next / natural advance)
+        if (current != null) {
+            if (floatingCurrent != null) {
+                floatingCurrent = null
+            } else {
+                when (lane) {
+                    QueueLane.HOT -> {
+                        if (indexInLane in hotQueue.indices) {
+                            hotQueue.removeAt(indexInLane)
+                        }
+                    }
+                    QueueLane.COLD -> {
+                        if (indexInLane in coldQueue.indices) {
+                            coldQueue.removeAt(indexInLane)
+                        }
+                    }
+                }
+            }
+            // Prefer putting it back on cold so album order is preserved when
+            // walking previous within a cold source; fall back to hot head.
+            if (coldSource != null || coldQueue.isNotEmpty() || coldOriginal.isNotEmpty()) {
+                coldQueue.add(0, current)
+                lane = QueueLane.COLD
+            } else {
+                hotQueue.add(0, current)
+                lane = QueueLane.HOT
+            }
+        }
+
+        floatingCurrent = prev
+        indexInLane = -1
+        publish()
+        Log.i(TAG, "skipPrevious → '${prev.displayTitle}' (stack=${playedStack.size})")
+        return AdvanceResult(song = prev)
     }
 
     private fun repopulateCold() {
@@ -424,6 +490,7 @@ class QueueManager {
         } else {
             coldQueue.addAll(coldOriginal)
         }
+        playedStack.clear()
     }
 
     private fun remapIndex(current: Int, from: Int, to: Int): Int = when {
@@ -450,5 +517,8 @@ class QueueManager {
 
     companion object {
         private const val TAG = "YuriPlayer.Queue"
+        /** Spotify-ish: restart current if deeper than this into the track. */
+        private const val PREV_RESTART_MS = 3_000L
+        private const val MAX_PLAYED_STACK = 200
     }
 }
