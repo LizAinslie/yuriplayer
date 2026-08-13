@@ -1,15 +1,18 @@
 package capital.yuri.yuriplayer.activities.ui
 
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.spring
+import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.DragHandle
 import androidx.compose.material3.Icon
@@ -24,18 +27,53 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
-import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.zIndex
 import capital.yuri.yuriplayer.data.Song
 import capital.yuri.yuriplayer.player.QueueLane
 import capital.yuri.yuriplayer.player.QueueSnapshot
 import kotlin.math.roundToInt
+
+/** Shared drag state for live visual reordering within one list section. */
+private class SectionDragState {
+    var from by mutableIntStateOf(-1)
+    var hover by mutableIntStateOf(-1)
+    var offsetY by mutableFloatStateOf(0f)
+    val active: Boolean get() = from >= 0
+
+    fun start(index: Int) {
+        from = index
+        hover = index
+        offsetY = 0f
+    }
+
+    fun drag(deltaY: Float, rowHeight: Float, size: Int) {
+        offsetY += deltaY
+        val raw = from + (offsetY / rowHeight).roundToInt()
+        hover = raw.coerceIn(0, (size - 1).coerceAtLeast(0))
+    }
+
+    fun end(): Pair<Int, Int>? {
+        val f = from
+        val t = hover
+        from = -1
+        hover = -1
+        offsetY = 0f
+        return if (f >= 0 && t >= 0 && f != t) f to t else null
+    }
+
+    fun cancel() {
+        from = -1
+        hover = -1
+        offsetY = 0f
+    }
+}
 
 @Composable
 fun QueuePanel(
@@ -47,16 +85,17 @@ fun QueuePanel(
     onRemoveCold: (Int) -> Unit,
     modifier: Modifier = Modifier
 ) {
-    val listState = rememberLazyListState()
     val density = LocalDensity.current
     val rowHeightPx = with(density) { 56.dp.toPx() }
+    val hotDrag = remember { SectionDragState() }
+    val coldDrag = remember { SectionDragState() }
 
-    LazyColumn(modifier = modifier, state = listState) {
+    LazyColumn(modifier = modifier, state = rememberLazyListState()) {
         item { SectionHeader("Queue · ${snapshot.hotQueue.size}") }
         if (snapshot.hotQueue.isEmpty()) {
             item {
                 Text(
-                    "Swipe right on a song in the library to add it here. Long-press & drag to reorder.",
+                    "Swipe right on a song to queue it. Long-press & drag to reorder.",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f),
                     modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
@@ -65,17 +104,18 @@ fun QueuePanel(
         }
         itemsIndexed(
             snapshot.hotQueue,
-            key = { i, s -> "hot-${s.id}-$i-${s.path}" }
+            key = { _, s -> "hot-${s.id}-${s.path}" }
         ) { index, song ->
             val isCurrent = snapshot.lane == QueueLane.HOT && snapshot.indexInLane == index
-            DraggableQueueRow(
+            LiveReorderRow(
                 song = song,
+                index = index,
+                listSize = snapshot.hotQueue.size,
                 isCurrent = isCurrent,
                 rowHeightPx = rowHeightPx,
-                listSize = snapshot.hotQueue.size,
+                drag = hotDrag,
                 onClick = { onPlayItem(QueueLane.HOT, index) },
-                onMove = { from, to -> onMoveHot(from, to) },
-                index = index
+                onCommitMove = { f, t -> onMoveHot(f, t) }
             )
         }
 
@@ -100,68 +140,79 @@ fun QueuePanel(
         }
         itemsIndexed(
             snapshot.coldQueue,
-            key = { i, s -> "cold-${s.id}-$i-${s.path}" }
+            key = { _, s -> "cold-${s.id}-${s.path}" }
         ) { index, song ->
             val isCurrent = snapshot.lane == QueueLane.COLD && snapshot.indexInLane == index
-            DraggableQueueRow(
+            LiveReorderRow(
                 song = song,
+                index = index,
+                listSize = snapshot.coldQueue.size,
                 isCurrent = isCurrent,
                 rowHeightPx = rowHeightPx,
-                listSize = snapshot.coldQueue.size,
+                drag = coldDrag,
                 onClick = { onPlayItem(QueueLane.COLD, index) },
-                onMove = { from, to -> onMoveCold(from, to) },
-                index = index
+                onCommitMove = { f, t -> onMoveCold(f, t) }
             )
         }
     }
 }
 
 @Composable
-private fun DraggableQueueRow(
+private fun LiveReorderRow(
     song: Song,
-    isCurrent: Boolean,
     index: Int,
     listSize: Int,
+    isCurrent: Boolean,
     rowHeightPx: Float,
+    drag: SectionDragState,
     onClick: () -> Unit,
-    onMove: (from: Int, to: Int) -> Unit
+    onCommitMove: (from: Int, to: Int) -> Unit
 ) {
-    var dragOffset by remember { mutableFloatStateOf(0f) }
-    var dragging by remember { mutableStateOf(false) }
-    var fromIndex by remember { mutableIntStateOf(index) }
+    val isDragged = drag.active && drag.from == index
+
+    // Live gap: items between from and hover shift aside
+    val targetShift = when {
+        !drag.active || isDragged -> 0f
+        drag.from < drag.hover && index in (drag.from + 1)..drag.hover -> -rowHeightPx
+        drag.from > drag.hover && index in drag.hover until drag.from -> rowHeightPx
+        else -> 0f
+    }
+    val shift by animateFloatAsState(
+        targetValue = if (isDragged) drag.offsetY else targetShift,
+        animationSpec = spring(stiffness = 600f, dampingRatio = 0.85f),
+        label = "rowShift"
+    )
 
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .zIndex(if (dragging) 1f else 0f)
+            .zIndex(if (isDragged) 10f else 0f)
             .graphicsLayer {
-                translationY = dragOffset
-                shadowElevation = if (dragging) 8f else 0f
-                alpha = if (dragging) 0.95f else 1f
+                translationY = shift
+                shadowElevation = if (isDragged) 12f else 0f
+                scaleX = if (isDragged) 1.02f else 1f
+                scaleY = if (isDragged) 1.02f else 1f
             }
-            .offset { IntOffset(0, 0) }
-            .clickable(enabled = !dragging, onClick = onClick)
+            .then(
+                if (isDragged) Modifier
+                    .shadow(8.dp, RoundedCornerShape(8.dp))
+                    .background(
+                        MaterialTheme.colorScheme.surface,
+                        RoundedCornerShape(8.dp)
+                    )
+                else Modifier
+            )
+            .clickable(enabled = !drag.active, onClick = onClick)
             .pointerInput(index, listSize) {
                 detectDragGesturesAfterLongPress(
-                    onDragStart = {
-                        dragging = true
-                        fromIndex = index
-                        dragOffset = 0f
-                    },
+                    onDragStart = { drag.start(index) },
                     onDragEnd = {
-                        val deltaRows = (dragOffset / rowHeightPx).roundToInt()
-                        val to = (fromIndex + deltaRows).coerceIn(0, listSize - 1)
-                        if (to != fromIndex) onMove(fromIndex, to)
-                        dragging = false
-                        dragOffset = 0f
+                        drag.end()?.let { (f, t) -> onCommitMove(f, t) }
                     },
-                    onDragCancel = {
-                        dragging = false
-                        dragOffset = 0f
-                    },
-                    onDrag = { change, dragAmount ->
+                    onDragCancel = { drag.cancel() },
+                    onDrag = { change, amount ->
                         change.consume()
-                        dragOffset += dragAmount.y
+                        drag.drag(amount.y, rowHeightPx, listSize)
                     }
                 )
             }
