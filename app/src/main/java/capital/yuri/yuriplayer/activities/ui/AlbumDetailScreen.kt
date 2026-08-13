@@ -4,6 +4,7 @@ import android.widget.Toast
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -11,6 +12,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
@@ -19,7 +21,6 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Album
@@ -43,18 +44,17 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.lerp
 import androidx.compose.ui.unit.sp
 import capital.yuri.yuriplayer.data.AlbumItem
 import capital.yuri.yuriplayer.data.Song
 import capital.yuri.yuriplayer.data.theme.ThemeService
 import org.koin.compose.koinInject
-import kotlin.math.min
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -73,7 +73,8 @@ fun AlbumDetailScreen(
     val listState = rememberLazyListState()
     val density = LocalDensity.current
 
-    val collapseRangePx = with(density) { 160.dp.toPx() }
+    // Scroll range ≈ expanded header body height
+    val collapseRangePx = with(density) { 220.dp.toPx() }
     val collapseFraction by remember {
         derivedStateOf {
             val idx = listState.firstVisibleItemIndex
@@ -92,8 +93,8 @@ fun AlbumDetailScreen(
 
     val discs = remember(album.songs) { groupByDisc(album.songs) }
     val multiDisc = discs.size > 1 || discs.keys.any { it != null && it > 1 }
-
     val scheme = playerColorScheme(themeColors, base)
+    val tagLine = albumTagLine(album.trackCount)
 
     MaterialTheme(colorScheme = scheme) {
         Box(
@@ -102,19 +103,28 @@ fun AlbumDetailScreen(
                 .background(scheme.background)
                 .statusBarsPadding()
         ) {
+            // Sticky morphing header (always on top of list content)
+            MorphingAlbumHeader(
+                album = album,
+                tagLine = tagLine,
+                fraction = collapseFraction,
+                onBack = onBack,
+                onPlay = { onPlayAlbum(album.songs, 0) },
+                onMore = { showMenu = true },
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .align(Alignment.TopCenter)
+            )
+
+            val headerPad = lerp(320.dp, 64.dp, collapseFraction)
             LazyColumn(
                 state = listState,
                 modifier = Modifier.fillMaxSize(),
-                contentPadding = PaddingValues(bottom = 96.dp)
+                contentPadding = PaddingValues(top = headerPad, bottom = 96.dp)
             ) {
-                // Tall header
+                // Spacer item so scrolling drives collapseFraction
                 item {
-                    AlbumHeroHeader(
-                        album = album,
-                        collapseFraction = collapseFraction,
-                        onPlay = { onPlayAlbum(album.songs, 0) },
-                        onMore = { showMenu = true }
-                    )
+                    Spacer(modifier = Modifier.height(1.dp))
                 }
 
                 discs.forEach { (disc, tracks) ->
@@ -126,7 +136,7 @@ fun AlbumDetailScreen(
                     itemsIndexed(
                         tracks,
                         key = { _, s -> "${s.id}-${s.path}" }
-                    ) { indexInDisc, song ->
+                    ) { _, song ->
                         val globalIndex = album.songs.indexOfFirst {
                             (it.path != null && it.path == song.path) || it.id == song.id
                         }.coerceAtLeast(0)
@@ -143,28 +153,19 @@ fun AlbumDetailScreen(
                 }
             }
 
-            // Collapsed thin bar (fades in)
-            CollapsedAlbumBar(
+            // Re-draw header above list so it stays pinned
+            MorphingAlbumHeader(
                 album = album,
+                tagLine = tagLine,
                 fraction = collapseFraction,
                 onBack = onBack,
                 onPlay = { onPlayAlbum(album.songs, 0) },
-                onMore = { showMenu = true }
+                onMore = { showMenu = true },
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .align(Alignment.TopCenter)
+                    .background(scheme.background.copy(alpha = 0.5f + 0.5f * collapseFraction))
             )
-
-            // Back always visible when not collapsed enough
-            if (collapseFraction < 0.5f) {
-                IconButton(
-                    onClick = onBack,
-                    modifier = Modifier.padding(4.dp)
-                ) {
-                    Icon(
-                        Icons.AutoMirrored.Filled.ArrowBack,
-                        contentDescription = "Back",
-                        tint = scheme.onBackground
-                    )
-                }
-            }
 
             if (showMenu) {
                 ModalBottomSheet(
@@ -197,68 +198,147 @@ fun AlbumDetailScreen(
     }
 }
 
+/**
+ * Single header that continuously morphs between expanded (sketch) and collapsed bar.
+ *
+ * Expanded:
+ *   [←]
+ *        [ big art ]
+ *   [▶]  LP · 16tr
+ *        Album
+ *        Artist          [⋮]
+ *
+ * Collapsed:
+ *   [←] [art] LP·16tr / Album / Artist  [▶] [⋮]
+ *   art height ≈ text block height
+ */
 @Composable
-private fun AlbumHeroHeader(
+private fun MorphingAlbumHeader(
     album: AlbumItem,
-    collapseFraction: Float,
+    tagLine: String,
+    fraction: Float,
+    onBack: () -> Unit,
     onPlay: () -> Unit,
-    onMore: () -> Unit
+    onMore: () -> Unit,
+    modifier: Modifier = Modifier
 ) {
-    val scale = 1f - 0.15f * collapseFraction
-    val alpha = 1f - collapseFraction
-    Column(
-        modifier = Modifier
+    val f = fraction.coerceIn(0f, 1f)
+    val headerHeight = lerp(312.dp, 64.dp, f)
+    // Art: large square → fills ~3 text lines
+    val artSize = lerp(180.dp, 52.dp, f)
+    val playSize = lerp(52.dp, 40.dp, f)
+    val titleStyle = if (f < 0.5f) {
+        MaterialTheme.typography.headlineSmall.copy(fontWeight = FontWeight.Bold)
+    } else {
+        MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.SemiBold)
+    }
+    val artistStyle = if (f < 0.5f) {
+        MaterialTheme.typography.titleMedium
+    } else {
+        MaterialTheme.typography.bodySmall
+    }
+
+    BoxWithConstraints(
+        modifier = modifier
+            .height(headerHeight)
             .fillMaxWidth()
-            .graphicsLayer {
-                this.alpha = alpha
-                scaleX = scale
-                scaleY = scale
-            }
-            .padding(horizontal = 20.dp, vertical = 12.dp),
-        horizontalAlignment = Alignment.CenterHorizontally
     ) {
-        Spacer(modifier = Modifier.height(40.dp))
-        AlbumArt(
-            song = album.songs.firstOrNull(),
-            size = 200.dp,
-            corner = 12.dp
-        )
-        Spacer(modifier = Modifier.height(20.dp))
-        Text(
-            text = buildString {
-                append(guessReleaseType(album.trackCount))
-                // genre tags later
-            },
-            style = MaterialTheme.typography.labelSmall,
-            color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.55f)
-        )
-        MarqueeText(
-            text = album.displayName,
-            style = MaterialTheme.typography.headlineSmall.copy(fontWeight = FontWeight.Bold),
-            color = MaterialTheme.colorScheme.onBackground
-        )
-        MarqueeText(
-            text = album.displayArtist,
-            style = MaterialTheme.typography.titleMedium,
-            color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.7f)
-        )
-        Spacer(modifier = Modifier.height(16.dp))
+        val width = maxWidth
+
+        // —— Back (always top-start) ——
+        IconButton(
+            onClick = onBack,
+            modifier = Modifier.align(Alignment.TopStart)
+        ) {
+            Icon(
+                Icons.AutoMirrored.Filled.ArrowBack,
+                contentDescription = "Back",
+                tint = MaterialTheme.colorScheme.onBackground
+            )
+        }
+
+        // —— Album art: center (expanded) → left after back (collapsed) ——
+        val artStartX = lerp(48.dp, 48.dp, f) // after back button when collapsed
+        val artExpandedX = (width - artSize) / 2
+        val artX = lerp(artExpandedX, artStartX, f)
+        val artY = lerp(44.dp, 6.dp, f)
+        Box(
+            modifier = Modifier
+                .offset(x = artX, y = artY)
+                .size(artSize)
+        ) {
+            AlbumArt(
+                song = album.songs.firstOrNull(),
+                size = artSize,
+                corner = lerp(12.dp, 6.dp, f)
+            )
+        }
+
+        // —— Meta + controls ——
+        // Expanded: row under art — play | text | more
+        // Collapsed: text to the right of art; play+more on trailing edge
+        val metaTop = lerp(44.dp + 180.dp + 16.dp, 6.dp, f)
+        val metaStart = lerp(16.dp, 48.dp + 52.dp + 10.dp, f)
+
         Row(
-            horizontalArrangement = Arrangement.spacedBy(12.dp),
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(start = metaStart, end = 4.dp)
+                .offset(y = metaTop),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            IconButton(
-                onClick = onPlay,
-                modifier = Modifier
-                    .size(56.dp)
-                    .background(MaterialTheme.colorScheme.primary, CircleShape)
-            ) {
-                Icon(
-                    Icons.Default.PlayArrow,
-                    contentDescription = "Play",
-                    tint = MaterialTheme.colorScheme.onPrimary,
-                    modifier = Modifier.size(32.dp)
+            // Play — left of text when expanded; slides to trailing side when collapsed
+            if (f < 0.55f) {
+                IconButton(
+                    onClick = onPlay,
+                    modifier = Modifier
+                        .size(playSize)
+                        .background(MaterialTheme.colorScheme.primary, CircleShape)
+                ) {
+                    Icon(
+                        Icons.Default.PlayArrow,
+                        contentDescription = "Play",
+                        tint = MaterialTheme.colorScheme.onPrimary,
+                        modifier = Modifier.size(playSize * 0.55f)
+                    )
+                }
+                Spacer(modifier = Modifier.width(12.dp))
+            }
+
+            Column(modifier = Modifier.weight(1f)) {
+                MarqueeText(
+                    text = tagLine,
+                    style = MaterialTheme.typography.labelSmall.copy(
+                        fontSize = lerp(11.sp, 10.sp, f)
+                    ),
+                    color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.55f)
                 )
+                MarqueeText(
+                    text = album.displayName,
+                    style = titleStyle,
+                    color = MaterialTheme.colorScheme.onBackground
+                )
+                MarqueeText(
+                    text = album.displayArtist,
+                    style = artistStyle,
+                    color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.65f)
+                )
+            }
+
+            if (f >= 0.55f) {
+                IconButton(
+                    onClick = onPlay,
+                    modifier = Modifier
+                        .size(playSize)
+                        .background(MaterialTheme.colorScheme.primary, CircleShape)
+                ) {
+                    Icon(
+                        Icons.Default.PlayArrow,
+                        contentDescription = "Play",
+                        tint = MaterialTheme.colorScheme.onPrimary,
+                        modifier = Modifier.size(playSize * 0.55f)
+                    )
+                }
             }
             IconButton(onClick = onMore) {
                 Icon(
@@ -268,78 +348,13 @@ private fun AlbumHeroHeader(
                 )
             }
         }
-        Spacer(modifier = Modifier.height(8.dp))
-        Text(
-            "${album.trackCount} tracks",
-            style = MaterialTheme.typography.labelMedium,
-            color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.5f)
-        )
-        Spacer(modifier = Modifier.height(12.dp))
-        HorizontalDivider(color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.12f))
-    }
-}
 
-@Composable
-private fun CollapsedAlbumBar(
-    album: AlbumItem,
-    fraction: Float,
-    onBack: () -> Unit,
-    onPlay: () -> Unit,
-    onMore: () -> Unit
-) {
-    if (fraction <= 0.01f) return
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .graphicsLayer { alpha = fraction }
-            .background(MaterialTheme.colorScheme.background.copy(alpha = 0.94f))
-            .padding(horizontal = 4.dp, vertical = 6.dp),
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        IconButton(onClick = onBack) {
-            Icon(
-                Icons.AutoMirrored.Filled.ArrowBack,
-                contentDescription = "Back",
-                tint = MaterialTheme.colorScheme.onBackground
-            )
-        }
-        AlbumArt(song = album.songs.firstOrNull(), size = 40.dp, corner = 4.dp)
-        Spacer(modifier = Modifier.width(10.dp))
-        Column(modifier = Modifier.weight(1f)) {
-            Text(
-                text = guessReleaseType(album.trackCount),
-                style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.sp),
-                color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.5f),
-                maxLines = 1
-            )
-            MarqueeText(
-                text = album.displayName,
-                style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.SemiBold),
-                color = MaterialTheme.colorScheme.onBackground
-            )
-            MarqueeText(
-                text = album.displayArtist,
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.65f)
-            )
-        }
-        IconButton(
-            onClick = onPlay,
-            modifier = Modifier
-                .size(40.dp)
-                .background(MaterialTheme.colorScheme.primary, CircleShape)
-        ) {
-            Icon(
-                Icons.Default.PlayArrow,
-                contentDescription = "Play",
-                tint = MaterialTheme.colorScheme.onPrimary
-            )
-        }
-        IconButton(onClick = onMore) {
-            Icon(
-                Icons.Default.MoreVert,
-                contentDescription = "More",
-                tint = MaterialTheme.colorScheme.onBackground
+        if (f < 0.85f) {
+            HorizontalDivider(
+                modifier = Modifier
+                    .align(Alignment.BottomCenter)
+                    .padding(horizontal = 16.dp),
+                color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.12f * (1f - f))
             )
         }
     }
@@ -371,12 +386,23 @@ private fun DiscSectionHeader(discNumber: Int) {
 
 private fun groupByDisc(songs: List<Song>): Map<Int?, List<Song>> {
     val grouped = songs.groupBy { it.discNumber }
-    // Preserve disc order: nulls last as disc 1-equivalent when alone
     return grouped.toSortedMap(compareBy { it ?: 1 })
 }
 
 private fun guessReleaseType(trackCount: Int): String = when {
-    trackCount <= 3 -> "Single"
+    trackCount <= 3 -> "SINGLE"
     trackCount <= 8 -> "EP"
     else -> "LP"
 }
+
+/** Tags: TYPE · Ntr · (genre later) */
+private fun albumTagLine(trackCount: Int): String {
+    val type = guessReleaseType(trackCount)
+    return "$type · ${trackCount}tr"
+}
+
+private fun lerp(start: Dp, stop: Dp, fraction: Float): Dp =
+    androidx.compose.ui.unit.lerp(start, stop, fraction.coerceIn(0f, 1f))
+
+private fun lerp(start: androidx.compose.ui.unit.TextUnit, stop: androidx.compose.ui.unit.TextUnit, fraction: Float) =
+    androidx.compose.ui.unit.lerp(start, stop, fraction.coerceIn(0f, 1f))
