@@ -254,7 +254,8 @@ fun YuriApp(
                     TopTab.Library -> LibraryScreen(
                         library = library,
                         onPlay = { songs, index -> player.playSource(songs, index) },
-                        onAddToQueue = { player.addToHotQueue(it) }
+                        onAddToQueue = { player.addToHotQueue(it) },
+                        onAddAlbumToQueue = { player.addToHotQueue(it) }
                     )
                     TopTab.MyStuff -> PlaceholderScreen(
                         "My Stuff",
@@ -299,6 +300,7 @@ fun YuriApp(
                 onRemoveHot = { player.removeFromHot(it) },
                 onRemoveCold = { player.removeFromCold(it) },
                 onMoveColdToHot = { player.moveColdToHot(it) },
+                onClearHotQueue = { player.clearHotQueue() },
                 onPlayHistorySong = { s -> player.playSource(listOf(s), 0) },
                 onClearHistory = { player.clearHistory() }
             )
