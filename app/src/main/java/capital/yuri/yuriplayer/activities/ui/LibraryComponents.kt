@@ -242,7 +242,8 @@ private fun SongList(
                 SwipeAddSongRow(
                     song = song,
                     onClick = { onPlay(songs, index) },
-                    onSwipeAdd = { onAddToQueue(song) }
+                    onSwipeAdd = { onAddToQueue(song) },
+                    showTrackNumber = false
                 )
             }
         }
@@ -253,7 +254,9 @@ private fun SongList(
 fun SwipeAddSongRow(
     song: Song,
     onClick: () -> Unit,
-    onSwipeAdd: () -> Unit
+    onSwipeAdd: () -> Unit,
+    /** Track numbers only on album tracklists — off for search / Songs / Untagged. */
+    showTrackNumber: Boolean = false
 ) {
     var offsetX by remember { mutableFloatStateOf(0f) }
     val density = LocalDensity.current
@@ -295,9 +298,10 @@ fun SwipeAddSongRow(
             Spacer(modifier = Modifier.width(12.dp))
             Column(modifier = Modifier.weight(1f)) {
                 MarqueeText(
-                    text = buildString {
-                        song.trackNumber?.let { append("$it. ") }
-                        append(song.displayTitle)
+                    text = if (showTrackNumber && song.trackNumber != null) {
+                        "${song.trackNumber}. ${song.displayTitle}"
+                    } else {
+                        song.displayTitle
                     },
                     style = MaterialTheme.typography.bodyLarge
                 )
