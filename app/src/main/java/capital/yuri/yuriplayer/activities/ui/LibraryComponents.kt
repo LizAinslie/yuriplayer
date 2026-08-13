@@ -60,7 +60,6 @@ import kotlin.math.roundToInt
 
 enum class LibrarySection { Songs, Albums, Artists, Untagged }
 
-/** Full-width thin sort picker — avoids OutlinedTextField min-height clipping. */
 @Composable
 fun SortDropdown(sortMode: SortMode, onSortModeChange: (SortMode) -> Unit) {
     var expanded by remember { mutableStateOf(false) }
@@ -127,7 +126,9 @@ fun LibraryScreen(
     library: LibraryIndex,
     onPlay: (List<Song>, Int) -> Unit,
     onAddToQueue: (Song) -> Unit,
-    onAddAlbumToQueue: (List<Song>) -> Unit = {}
+    onAddAlbumToQueue: (List<Song>) -> Unit = {},
+    onOpenAlbum: (AlbumItem) -> Unit = {},
+    onOpenArtist: (ArtistItem) -> Unit = {}
 ) {
     val allSongs by library.songs.collectAsState()
     val loading by library.isLoading.collectAsState()
@@ -214,7 +215,7 @@ fun LibraryScreen(
                     items(albums, key = { "${it.name}|${it.artist}" }) { album ->
                         SwipeAddAlbumRow(
                             album = album,
-                            onClick = { onPlay(album.songs, 0) },
+                            onClick = { onOpenAlbum(album) },
                             onSwipeAdd = {
                                 onAddAlbumToQueue(album.songs)
                                 Toast.makeText(
@@ -231,7 +232,7 @@ fun LibraryScreen(
                 if (artists.isEmpty()) Text("No artists match.", modifier = Modifier.padding(16.dp))
                 else LazyColumn(modifier = Modifier.fillMaxSize()) {
                     items(artists, key = { it.name?.lowercase() ?: "_" }) { artist ->
-                        ArtistRow(artist) { onPlay(artist.songs, 0) }
+                        ArtistRow(artist) { onOpenArtist(artist) }
                     }
                 }
             }
@@ -267,7 +268,6 @@ fun SwipeAddSongRow(
     song: Song,
     onClick: () -> Unit,
     onSwipeAdd: () -> Unit,
-    /** Track numbers only on album tracklists — off for search / Songs / Untagged. */
     showTrackNumber: Boolean = false
 ) {
     var offsetX by remember { mutableFloatStateOf(0f) }
@@ -327,7 +327,6 @@ fun SwipeAddSongRow(
     }
 }
 
-/** Swipe right to queue every track on the album. Tap to play. */
 @Composable
 fun SwipeAddAlbumRow(
     album: AlbumItem,
