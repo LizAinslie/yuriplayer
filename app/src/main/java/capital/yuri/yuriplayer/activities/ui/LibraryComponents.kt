@@ -177,7 +177,7 @@ fun LibraryScreen(
             }
             LibrarySection.Albums -> {
                 if (albums.isEmpty()) Text("No albums match.", modifier = Modifier.padding(16.dp))
-                else LazyColumn(Modifier = Modifier.fillMaxSize()) {
+                else LazyColumn(modifier = Modifier.fillMaxSize()) {
                     items(albums, key = { "${it.name}|${it.artist}" }) { album ->
                         AlbumRow(album) { onPlay(album.songs, 0) }
                     }
