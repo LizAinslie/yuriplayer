@@ -322,8 +322,7 @@ fun NowPlayingScreen(
                         ) {
                             Icon(
                                 if (playing) Icons.Default.Pause else Icons.Default.PlayArrow,
-                                if (playing) Icons.Default.Pause else Icons.Default.PlayArrow,
-                                if (playing) "Pause" else "Play",
+                                contentDescription = if (playing) "Pause" else "Play",
                                 modifier = Modifier.size(40.dp),
                                 tint = scheme.onPrimary
                             )
