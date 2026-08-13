@@ -15,6 +15,10 @@ import kotlin.random.Random
  *
  * [playedStack] remembers consumed tracks so Previous can walk back
  * (Spotify-style: >3s restarts current, otherwise previous in play order).
+ *
+ * Previous does **not** use a side-channel "floating" playhead: the prior track
+ * is placed at the head of the active lane and the interrupted track is pushed
+ * in right after it, so it shows in the queue UI and is the natural next.
  */
 class QueueManager {
 
@@ -26,9 +30,9 @@ class QueueManager {
     private var indexInLane = -1
     private var shuffleEnabled = false
     private var repeatMode = RepeatMode.OFF
+    /** Only used when hot is cleared while that song is still playing. */
     private var floatingCurrent: Song? = null
 
-    /** Songs consumed by [advance], newest at the end — used for Previous. */
     private val playedStack = mutableListOf<Song>()
 
     private val _snapshot = MutableStateFlow(QueueSnapshot())
@@ -47,8 +51,6 @@ class QueueManager {
     fun coldSource(): ColdSource? = coldSource
 
     fun peekNext(): Song? {
-        // Repeat-one: UI may still show next, but the player window does not
-        // prebuffer a duplicate URI (silent-loop bug on some devices).
         if (repeatMode == RepeatMode.ONE) return null
         if (floatingCurrent != null) {
             if (hotQueue.isNotEmpty()) return hotQueue.first()
@@ -390,13 +392,12 @@ class QueueManager {
             }
         }
 
-        // Previous walks put us on floatingCurrent with indexInLane = -1.
-        // Leaving that state must pick the head of hot/cold — the old path
-        // required fromIndex in coldQueue.indices and returned finished=true.
         if (wasFloating) {
             return resolveNextFromHeads()
         }
 
+        // After removing current at fromIndex, the next item in that lane
+        // slides into fromIndex (list shrinks left).
         if (fromLane == QueueLane.HOT && fromIndex in hotQueue.indices) {
             lane = QueueLane.HOT
             indexInLane = fromIndex
@@ -418,14 +419,6 @@ class QueueManager {
             return AdvanceResult(song = coldQueue[indexInLane])
         }
 
-        if (fromLane != QueueLane.COLD && coldQueue.isNotEmpty()) {
-            lane = QueueLane.COLD
-            indexInLane = 0
-            publish()
-            return AdvanceResult(song = coldQueue[0])
-        }
-
-        // Cold lane but index was invalid / emptied — still try heads
         if (coldQueue.isNotEmpty()) {
             lane = QueueLane.COLD
             indexInLane = 0
@@ -446,7 +439,6 @@ class QueueManager {
         return AdvanceResult(finished = true)
     }
 
-    /** Next track after leaving a floating (previous-stack) current. */
     private fun resolveNextFromHeads(): AdvanceResult {
         if (hotQueue.isNotEmpty()) {
             lane = QueueLane.HOT
@@ -472,6 +464,11 @@ class QueueManager {
         return AdvanceResult(finished = true)
     }
 
+    /**
+     * Previous track: place [prev] at the head of the active lane as the new
+     * current, and re-insert the interrupted track immediately after it so it
+     * appears in the queue UI and is the natural next on advance.
+     */
     fun skipPrevious(currentPositionMs: Long): AdvanceResult {
         val current = currentSong()
         if (currentPositionMs > PREV_RESTART_MS || playedStack.isEmpty()) {
@@ -480,37 +477,41 @@ class QueueManager {
 
         val prev = playedStack.removeAt(playedStack.lastIndex)
 
-        if (current != null) {
-            if (floatingCurrent != null) {
-                floatingCurrent = null
-            } else {
-                when (lane) {
-                    QueueLane.HOT -> {
-                        if (indexInLane in hotQueue.indices) {
-                            hotQueue.removeAt(indexInLane)
-                        }
-                    }
-                    QueueLane.COLD -> {
-                        if (indexInLane in coldQueue.indices) {
-                            coldQueue.removeAt(indexInLane)
-                        }
-                    }
+        // Detach whatever is currently playing from the lists
+        if (floatingCurrent != null) {
+            floatingCurrent = null
+        } else {
+            when (lane) {
+                QueueLane.HOT -> {
+                    if (indexInLane in hotQueue.indices) hotQueue.removeAt(indexInLane)
                 }
-            }
-            // Push the interrupted track back so Next returns to it
-            if (coldSource != null || coldQueue.isNotEmpty() || coldOriginal.isNotEmpty()) {
-                coldQueue.add(0, current)
-                lane = QueueLane.COLD
-            } else {
-                hotQueue.add(0, current)
-                lane = QueueLane.HOT
+                QueueLane.COLD -> {
+                    if (indexInLane in coldQueue.indices) coldQueue.removeAt(indexInLane)
+                }
             }
         }
 
-        floatingCurrent = prev
-        indexInLane = -1
+        val useCold = coldSource != null || coldQueue.isNotEmpty() || coldOriginal.isNotEmpty()
+        if (useCold) {
+            // [prev (now playing), interrupted current, ...rest]
+            if (current != null) coldQueue.add(0, current)
+            coldQueue.add(0, prev)
+            lane = QueueLane.COLD
+            indexInLane = 0
+        } else {
+            if (current != null) hotQueue.add(0, current)
+            hotQueue.add(0, prev)
+            lane = QueueLane.HOT
+            indexInLane = 0
+        }
+        floatingCurrent = null
+
         publish()
-        Log.i(TAG, "skipPrevious → '${prev.displayTitle}' (stack=${playedStack.size})")
+        Log.i(
+            TAG,
+            "skipPrevious → '${prev.displayTitle}' next='${current?.displayTitle}' " +
+                "lane=$lane cold=${coldQueue.size} hot=${hotQueue.size}"
+        )
         return AdvanceResult(song = prev)
     }
 
