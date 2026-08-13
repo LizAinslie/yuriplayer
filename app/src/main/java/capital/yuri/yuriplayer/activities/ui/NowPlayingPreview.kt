@@ -8,6 +8,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -26,7 +27,6 @@ import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.shadow
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.unit.dp
 import capital.yuri.yuriplayer.data.PlayerThemeStore
@@ -36,9 +36,10 @@ import org.koin.compose.koinInject
 /**
  * Compact now-playing strip.
  *
- * Chrome (surface, text, structure) follows the ambient app theme.
- * Accents only — progress track + play/pause — use album-art Material colors.
- * Album art gets a soft colored drop shadow from the same palette.
+ * Chrome follows the ambient app theme. Accents (progress + play) use album-art
+ * colors. Surface paints edge-to-edge under the system gesture / nav bar so
+ * sticky or transparent bars always sit on the mini-player color; interactive
+ * content is inset with [navigationBarsPadding].
  */
 @Composable
 fun NowPlayingPreview(
@@ -50,6 +51,8 @@ fun NowPlayingPreview(
     onOpen: () -> Unit,
     modifier: Modifier = Modifier,
     enableSwipeUp: Boolean = false,
+    /** When true (shell bottom bar), draw under system bars. */
+    edgeToEdgeBottom: Boolean = false,
     tonalElevation: androidx.compose.ui.unit.Dp = 3.dp,
     shadowElevation: androidx.compose.ui.unit.Dp = 6.dp
 ) {
@@ -77,7 +80,9 @@ fun NowPlayingPreview(
                 } else Modifier
             )
     ) {
-        Column {
+        Column(
+            modifier = if (edgeToEdgeBottom) Modifier.navigationBarsPadding() else Modifier
+        ) {
             PlaybackProgress(
                 positionMs = positionMs,
                 durationMs = durationMs,
@@ -92,7 +97,6 @@ fun NowPlayingPreview(
                     .padding(horizontal = 12.dp, vertical = 8.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                // Colored ambient shadow behind the art tile
                 Box(
                     modifier = Modifier
                         .shadow(
@@ -136,7 +140,7 @@ fun NowPlayingPreview(
     }
 }
 
-/** Alias used by the main shell bottom bar. */
+/** Shell bottom bar — always edge-to-edge under the gesture / nav bar. */
 @Composable
 fun MiniPlayerBar(
     song: Song?,
@@ -153,6 +157,7 @@ fun MiniPlayerBar(
         durationMs = durationMs,
         onToggle = onToggle,
         onOpen = onExpand,
-        enableSwipeUp = true
+        enableSwipeUp = true,
+        edgeToEdgeBottom = true
     )
 }
