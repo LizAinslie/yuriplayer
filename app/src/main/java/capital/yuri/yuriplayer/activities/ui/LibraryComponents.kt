@@ -313,8 +313,8 @@ fun SwipeAddSongRow(
     onSwipeAdd: () -> Unit,
     showTrackNumber: Boolean = false,
     isPlaying: Boolean = false,
-    /** When true (album pages with gradient), row bg is transparent unless playing. */
-    transparentSurface: Boolean = false
+    transparentSurface: Boolean = false,
+    surfaceColor: Color? = null
 ) {
     var offsetX by remember { mutableFloatStateOf(0f) }
     val density = LocalDensity.current
@@ -322,25 +322,35 @@ fun SwipeAddSongRow(
     val accent = MaterialTheme.colorScheme.primary
     val onSurface = MaterialTheme.colorScheme.onSurface
 
+    val revealAlpha = (offsetX / (threshold * 0.35f)).coerceIn(0f, 1f)
+
     val rowBg = when {
         isPlaying -> accent.copy(alpha = 0.18f)
         transparentSurface -> Color.Transparent
+        surfaceColor != null -> surfaceColor
         else -> MaterialTheme.colorScheme.surface
     }
     val titleColor = if (isPlaying) accent else onSurface
     val titleWeight = if (isPlaying) FontWeight.SemiBold else FontWeight.Normal
 
-    Box(
-        modifier = Modifier
-            .fillMaxWidth()
-            .background(MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.35f))
-    ) {
-        Text(
-            "+ Queue",
-            style = MaterialTheme.typography.labelLarge,
-            color = accent,
-            modifier = Modifier.align(Alignment.CenterStart).padding(start = 16.dp)
-        )
+    Box(modifier = Modifier.fillMaxWidth()) {
+        // Only paint the reveal while the user is actually swiping
+        if (revealAlpha > 0.01f) {
+            Box(
+                modifier = Modifier
+                    .matchParentSize()
+                    .background(
+                        MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.45f * revealAlpha)
+                    )
+            ) {
+                Text(
+                    "+ Queue",
+                    style = MaterialTheme.typography.labelLarge,
+                    color = accent.copy(alpha = revealAlpha),
+                    modifier = Modifier.align(Alignment.CenterStart).padding(start = 16.dp)
+                )
+            }
+        }
         Row(
             modifier = Modifier
                 .offset { IntOffset(offsetX.roundToInt(), 0) }
@@ -402,18 +412,26 @@ fun SwipeAddAlbumRow(
     var offsetX by remember { mutableFloatStateOf(0f) }
     val density = LocalDensity.current
     val threshold = with(density) { 96.dp.toPx() }
+    val revealAlpha = (offsetX / (threshold * 0.35f)).coerceIn(0f, 1f)
+    val accent = MaterialTheme.colorScheme.primary
 
-    Box(
-        modifier = Modifier
-            .fillMaxWidth()
-            .background(MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.35f))
-    ) {
-        Text(
-            "+ Queue all",
-            style = MaterialTheme.typography.labelLarge,
-            color = MaterialTheme.colorScheme.primary,
-            modifier = Modifier.align(Alignment.CenterStart).padding(start = 16.dp)
-        )
+    Box(modifier = Modifier.fillMaxWidth()) {
+        if (revealAlpha > 0.01f) {
+            Box(
+                modifier = Modifier
+                    .matchParentSize()
+                    .background(
+                        MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.45f * revealAlpha)
+                    )
+            ) {
+                Text(
+                    "+ Queue all",
+                    style = MaterialTheme.typography.labelLarge,
+                    color = accent.copy(alpha = revealAlpha),
+                    modifier = Modifier.align(Alignment.CenterStart).padding(start = 16.dp)
+                )
+            }
+        }
         Row(
             modifier = Modifier
                 .offset { IntOffset(offsetX.roundToInt(), 0) }
