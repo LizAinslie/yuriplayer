@@ -44,7 +44,9 @@ class QueueManager {
     fun coldSource(): ColdSource? = coldSource
 
     fun peekNext(): Song? {
-        if (repeatMode == RepeatMode.ONE) return currentSong()
+        // Repeat-one: never prebuffer a second copy of the same URI — that
+        // caused silent loops after seekTo(0) on the duplicate item.
+        if (repeatMode == RepeatMode.ONE) return null
         if (floatingCurrent != null) {
             if (hotQueue.isNotEmpty()) return hotQueue.first()
             if (coldQueue.isNotEmpty()) return coldQueue.first()
@@ -93,10 +95,8 @@ class QueueManager {
     }
 
     private fun pushPlayed(song: Song) {
-        // Dedup consecutive duplicates (e.g. rapid next)
         if (playedStack.lastOrNull()?.let { sameSong(it, song) } == true) return
         playedStack.add(song)
-        // Cap so long sessions do not grow forever
         while (playedStack.size > MAX_PLAYED_STACK) {
             playedStack.removeAt(0)
         }
@@ -147,12 +147,10 @@ class QueueManager {
         } else {
             coldQueue.addAll(songs)
             indexInLane = startIndex.coerceIn(0, coldQueue.lastIndex)
-            // Tracks before the start index are "already behind us" for Previous
             if (indexInLane > 0) {
                 for (i in 0 until indexInLane) {
                     pushPlayed(coldQueue[i])
                 }
-                // Remove them from cold so consume model stays consistent
                 repeat(indexInLane) { coldQueue.removeAt(0) }
                 indexInLane = 0
             }
@@ -362,10 +360,6 @@ class QueueManager {
         publish()
     }
 
-    /**
-     * Consume current and move to the next song.
-     * Consumed tracks are pushed onto [playedStack] for Previous.
-     */
     fun advance(userInitiated: Boolean): AdvanceResult {
         if (repeatMode == RepeatMode.ONE && !userInitiated) {
             return AdvanceResult(song = currentSong(), reload = true)
@@ -433,12 +427,6 @@ class QueueManager {
         return AdvanceResult(finished = true)
     }
 
-    /**
-     * Spotify-style Previous:
-     * - If more than [PREV_RESTART_MS] into the track → restart current
-     * - Else pop [playedStack] and make that the current song, re-queuing the
-     *   song we left so Next returns to it
-     */
     fun skipPrevious(currentPositionMs: Long): AdvanceResult {
         val current = currentSong()
         if (currentPositionMs > PREV_RESTART_MS || playedStack.isEmpty()) {
@@ -447,7 +435,6 @@ class QueueManager {
 
         val prev = playedStack.removeAt(playedStack.lastIndex)
 
-        // Stash current so it plays again after prev (Next / natural advance)
         if (current != null) {
             if (floatingCurrent != null) {
                 floatingCurrent = null
@@ -465,8 +452,6 @@ class QueueManager {
                     }
                 }
             }
-            // Prefer putting it back on cold so album order is preserved when
-            // walking previous within a cold source; fall back to hot head.
             if (coldSource != null || coldQueue.isNotEmpty() || coldOriginal.isNotEmpty()) {
                 coldQueue.add(0, current)
                 lane = QueueLane.COLD
@@ -517,7 +502,6 @@ class QueueManager {
 
     companion object {
         private const val TAG = "YuriPlayer.Queue"
-        /** Spotify-ish: restart current if deeper than this into the track. */
         private const val PREV_RESTART_MS = 3_000L
         private const val MAX_PLAYED_STACK = 200
     }
