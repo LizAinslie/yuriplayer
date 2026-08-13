@@ -39,6 +39,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
@@ -156,7 +157,6 @@ fun NowPlayingScreen(
                         )
                     }
 
-                    // Tabs + lists — preview sits outside this block
                     QueuePanel(
                         snapshot = snapshot,
                         onPlayItem = onPlayItem,
@@ -171,7 +171,6 @@ fun NowPlayingScreen(
                             .padding(horizontal = 16.dp)
                     )
 
-                    // Shared preview under both tabs — tap returns to full now playing
                     NowPlayingPreview(
                         song = song,
                         playing = playing,
@@ -279,7 +278,7 @@ fun NowPlayingScreen(
                             if (durationMs > 0) onSeek((sliderPosition * durationMs).toLong())
                         },
                         activeColor = scheme.primary,
-                        inactiveColor = shownColors.muted.copy(alpha = 0.35f)
+                        inactiveColor = Color.White.copy(alpha = 0.28f)
                     )
 
                     Row(
