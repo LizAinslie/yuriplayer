@@ -19,6 +19,7 @@ import androidx.media3.exoplayer.DefaultLoadControl
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.session.MediaSession
 import androidx.media3.session.MediaSessionService
+import androidx.media3.session.MediaStyleNotificationHelper
 import capital.yuri.yuriplayer.activities.MainActivity
 import capital.yuri.yuriplayer.data.Song
 import kotlinx.coroutines.CoroutineScope
@@ -41,7 +42,6 @@ class MusicService : MediaSessionService() {
     private var mediaSession: MediaSession? = null
     private lateinit var stateStore: PlaybackStateStore
 
-    // Dual queue
     private val hotQueue = mutableListOf<Song>()
     private var coldOriginal: List<Song> = emptyList()
     private val coldQueue = mutableListOf<Song>()
@@ -73,7 +73,7 @@ class MusicService : MediaSessionService() {
         stateStore = PlaybackStateStore(applicationContext)
 
         createNotificationChannel()
-        startForeground(NOTIFICATION_ID, buildPlaceholderNotification("Yuri Player", "Starting…"))
+        startForeground(NOTIFICATION_ID, buildMediaNotification(null, false))
 
         val audioAttributes = AudioAttributes.Builder()
             .setUsage(C.USAGE_MEDIA)
@@ -94,11 +94,7 @@ class MusicService : MediaSessionService() {
 
         player = exo
 
-        val sessionActivity = PendingIntent.getActivity(
-            this, 0,
-            Intent(this, MainActivity::class.java),
-            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
-        )
+        val sessionActivity = openPlayerPendingIntent()
         mediaSession = MediaSession.Builder(this, exo)
             .setSessionActivity(sessionActivity)
             .build()
@@ -108,14 +104,20 @@ class MusicService : MediaSessionService() {
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        val song = _nowPlaying.value
-        startForeground(
-            NOTIFICATION_ID,
-            buildPlaceholderNotification(
-                song?.displayTitle ?: "Yuri Player",
-                song?.displayArtist ?: "Playing in background"
-            )
-        )
+        when (intent?.action) {
+            ACTION_PLAY -> play()
+            ACTION_PAUSE -> pause()
+            ACTION_TOGGLE -> togglePlayPause()
+            ACTION_NEXT -> skipToNext()
+            ACTION_PREV -> skipToPrevious()
+            else -> {
+                // Keep foreground alive
+                startForeground(
+                    NOTIFICATION_ID,
+                    buildMediaNotification(_nowPlaying.value, _isPlaying.value)
+                )
+            }
+        }
         super.onStartCommand(intent, flags, startId)
         return START_STICKY
     }
@@ -157,14 +159,12 @@ class MusicService : MediaSessionService() {
         persistState()
     }
 
-    /** Replace cold queue with a source list (album / playlist) and start playing. Hot queue kept. */
     fun playSource(songs: List<Song>, startIndex: Int = 0, autoPlay: Boolean = true) {
         if (songs.isEmpty()) return
         coldOriginal = songs.toList()
         coldQueue.clear()
         if (shuffleEnabled) {
             coldQueue.addAll(songs.shuffled())
-            // Prefer starting with the tapped song even when shuffled
             val tapped = songs.getOrNull(startIndex)
             if (tapped != null) {
                 coldQueue.removeAll { sameSong(it, tapped) }
@@ -176,8 +176,6 @@ class MusicService : MediaSessionService() {
             indexInLane = startIndex.coerceIn(0, coldQueue.lastIndex)
         }
         lane = QueueLane.COLD
-        // If hot queue has items, user might still want them first — only jump to cold when playing a source
-        // Spec: hot plays before cold when advancing; starting a source plays that source now.
         loadCurrent(0L, autoPlay)
     }
 
@@ -222,7 +220,6 @@ class MusicService : MediaSessionService() {
         if (index !in coldQueue.indices) return
         val removingCurrent = lane == QueueLane.COLD && index == indexInLane
         val song = coldQueue.removeAt(index)
-        // Keep original in sync by id/path when possible
         coldOriginal = coldOriginal.filterNot { sameSong(it, song) }
         if (lane == QueueLane.COLD) {
             when {
@@ -274,8 +271,6 @@ class MusicService : MediaSessionService() {
                 else -> indexInLane
             }
         }
-        // Manual reorder while shuffled: treat current cold order as the play order;
-        // original order still used when shuffle is turned off.
         publishSnapshot()
         persistState()
     }
@@ -313,7 +308,6 @@ class MusicService : MediaSessionService() {
                 coldQueue.addAll(shuffled)
             }
         } else {
-            // Restore original source order in place
             coldQueue.clear()
             coldQueue.addAll(coldOriginal)
             if (current != null && lane == QueueLane.COLD) {
@@ -382,7 +376,6 @@ class MusicService : MediaSessionService() {
                     indexInLane--
                     loadCurrent(0L, autoPlay = true)
                 } else if (hotQueue.isNotEmpty()) {
-                    // Jump to end of hot queue
                     lane = QueueLane.HOT
                     indexInLane = hotQueue.lastIndex
                     loadCurrent(0L, autoPlay = true)
@@ -415,15 +408,14 @@ class MusicService : MediaSessionService() {
                     indexInLane = 0
                     loadCurrent(0L, autoPlay = true)
                 } else if (repeatMode == RepeatMode.COLD && coldOriginal.isNotEmpty()) {
-                    // No cold currently but original exists — rebuild
                     rebuildColdFromOriginal()
                     lane = QueueLane.COLD
                     indexInLane = 0
                     loadCurrent(0L, autoPlay = true)
                 } else {
-                    // End of everything
                     player?.pause()
                     publishSnapshot()
+                    updateForegroundNotification()
                 }
             }
             QueueLane.COLD -> {
@@ -436,6 +428,7 @@ class MusicService : MediaSessionService() {
                 } else {
                     player?.pause()
                     publishSnapshot()
+                    updateForegroundNotification()
                 }
             }
         }
@@ -483,7 +476,6 @@ class MusicService : MediaSessionService() {
             shuffleEnabled = saved.snapshot.shuffleEnabled
             repeatMode = saved.snapshot.repeatMode
 
-            // Clamp index
             val max = when (lane) {
                 QueueLane.HOT -> hotQueue.lastIndex
                 QueueLane.COLD -> coldQueue.lastIndex
@@ -529,13 +521,9 @@ class MusicService : MediaSessionService() {
     }
 
     private fun updateForegroundNotification() {
-        val song = _nowPlaying.value
         startForeground(
             NOTIFICATION_ID,
-            buildPlaceholderNotification(
-                song?.displayTitle ?: "Yuri Player",
-                song?.displayArtist ?: if (_isPlaying.value) "Playing" else "Paused"
-            )
+            buildMediaNotification(_nowPlaying.value, _isPlaying.value)
         )
     }
 
@@ -544,28 +532,77 @@ class MusicService : MediaSessionService() {
             val channel = NotificationChannel(
                 CHANNEL_ID, "Playback", NotificationManager.IMPORTANCE_LOW
             ).apply {
-                description = "Music playback"
+                description = "Music playback controls"
                 setShowBadge(false)
+                setSound(null, null)
             }
             getSystemService(NotificationManager::class.java).createNotificationChannel(channel)
         }
     }
 
-    private fun buildPlaceholderNotification(title: String, text: String): Notification {
-        val pending = PendingIntent.getActivity(
-            this, 0,
-            Intent(this, MainActivity::class.java),
+    private fun openPlayerPendingIntent(): PendingIntent {
+        val intent = Intent(this, MainActivity::class.java).apply {
+            flags = Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP
+            putExtra(MainActivity.EXTRA_OPEN_PLAYER, true)
+        }
+        return PendingIntent.getActivity(
+            this,
+            REQUEST_OPEN_PLAYER,
+            intent,
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
-        return NotificationCompat.Builder(this, CHANNEL_ID)
+    }
+
+    private fun serviceActionPending(action: String, requestCode: Int): PendingIntent {
+        val intent = Intent(this, MusicService::class.java).setAction(action)
+        return PendingIntent.getService(
+            this,
+            requestCode,
+            intent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+    }
+
+    @OptIn(UnstableApi::class)
+    private fun buildMediaNotification(song: Song?, playing: Boolean): Notification {
+        val title = song?.displayTitle ?: "Yuri Player"
+        val text = song?.displayArtist ?: if (playing) "Playing" else "Paused"
+
+        val prev = serviceActionPending(ACTION_PREV, REQUEST_PREV)
+        val toggle = serviceActionPending(ACTION_TOGGLE, REQUEST_TOGGLE)
+        val next = serviceActionPending(ACTION_NEXT, REQUEST_NEXT)
+
+        val playPauseIcon = if (playing) {
+            android.R.drawable.ic_media_pause
+        } else {
+            android.R.drawable.ic_media_play
+        }
+        val playPauseLabel = if (playing) "Pause" else "Play"
+
+        val builder = NotificationCompat.Builder(this, CHANNEL_ID)
             .setContentTitle(title)
             .setContentText(text)
             .setSmallIcon(android.R.drawable.ic_media_play)
-            .setContentIntent(pending)
-            .setOngoing(true)
+            .setContentIntent(openPlayerPendingIntent())
+            .setDeleteIntent(serviceActionPending(ACTION_PAUSE, REQUEST_DELETE))
+            .setOngoing(playing)
             .setOnlyAlertOnce(true)
             .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
-            .build()
+            .setCategory(NotificationCompat.CATEGORY_TRANSPORT)
+            .setPriority(NotificationCompat.PRIORITY_LOW)
+            .addAction(android.R.drawable.ic_media_previous, "Previous", prev)
+            .addAction(playPauseIcon, playPauseLabel, toggle)
+            .addAction(android.R.drawable.ic_media_next, "Next", next)
+
+        val session = mediaSession
+        if (session != null) {
+            builder.setStyle(
+                MediaStyleNotificationHelper.MediaStyle(session)
+                    .setShowActionsInCompactView(0, 1, 2)
+            )
+        }
+
+        return builder.build()
     }
 
     override fun onGetSession(controllerInfo: MediaSession.ControllerInfo): MediaSession? = mediaSession
@@ -574,15 +611,12 @@ class MusicService : MediaSessionService() {
         return if (intent?.action == null) binder else super.onBind(intent) ?: binder
     }
 
-    // --- Compatibility / query helpers ---
-
     fun isPlaying(): Boolean = player?.isPlaying == true
     fun getCurrentSong(): Song? = currentSong()
     fun getPositionMs(): Long = player?.currentPosition?.coerceAtLeast(0L) ?: 0L
     fun getDurationMs(): Long = player?.duration?.takeIf { it > 0 } ?: 0L
     fun getQueueSnapshot(): QueueSnapshot = _queueSnapshot.value
 
-    /** @deprecated use playSource */
     fun setPlaylist(songs: List<Song>, startIndex: Int = 0) {
         playSource(songs, startIndex, autoPlay = false)
     }
@@ -619,5 +653,17 @@ class MusicService : MediaSessionService() {
     companion object {
         const val CHANNEL_ID = "yuri_playback"
         const val NOTIFICATION_ID = 42
+
+        const val ACTION_PLAY = "capital.yuri.yuriplayer.action.PLAY"
+        const val ACTION_PAUSE = "capital.yuri.yuriplayer.action.PAUSE"
+        const val ACTION_TOGGLE = "capital.yuri.yuriplayer.action.TOGGLE"
+        const val ACTION_NEXT = "capital.yuri.yuriplayer.action.NEXT"
+        const val ACTION_PREV = "capital.yuri.yuriplayer.action.PREV"
+
+        private const val REQUEST_OPEN_PLAYER = 100
+        private const val REQUEST_PREV = 101
+        private const val REQUEST_TOGGLE = 102
+        private const val REQUEST_NEXT = 103
+        private const val REQUEST_DELETE = 104
     }
 }
