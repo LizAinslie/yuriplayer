@@ -1,18 +1,21 @@
 package capital.yuri.yuriplayer.activities.ui
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.gestures.detectVerticalDragGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.QueueMusic
 import androidx.compose.material.icons.filled.ExpandMore
@@ -39,7 +42,9 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.lerp
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import capital.yuri.yuriplayer.data.PlayerThemeStore
@@ -77,6 +82,7 @@ fun NowPlayingScreen(
     val context = LocalContext.current
     val themeStore: PlayerThemeStore = koinInject()
     val baseScheme = MaterialTheme.colorScheme
+    val density = LocalDensity.current
 
     val theme by themeStore.current.collectAsState()
     val nextTheme by themeStore.peekNext.collectAsState()
@@ -87,6 +93,9 @@ fun NowPlayingScreen(
     var sliding by remember { mutableStateOf(false) }
     var hFrac by remember { mutableFloatStateOf(0f) }
     var dismissFrac by remember { mutableFloatStateOf(0f) }
+    var topPull by remember { mutableFloatStateOf(0f) }
+
+    val dismissThreshold = with(density) { 140.dp.toPx() }
 
     LaunchedEffect(song?.id, song?.path) {
         themeStore.updateCurrent(context, song, baseScheme)
@@ -113,13 +122,12 @@ fun NowPlayingScreen(
     } else playerColors
 
     val scheme = playerColorScheme(shownColors, baseScheme)
-
     ThemedStatusBar(color = scheme.background, enabled = true)
 
     MaterialTheme(colorScheme = scheme) {
         Surface(
             modifier = Modifier.fillMaxSize(),
-            color = scheme.background.copy(alpha = 1f - dismissFrac * 0.2f)
+            color = scheme.background.copy(alpha = 1f - maxOf(dismissFrac, topPull / dismissThreshold) * 0.2f)
         ) {
             if (showQueue) {
                 Column(
@@ -158,41 +166,73 @@ fun NowPlayingScreen(
                 return@Surface
             }
 
-            Column(modifier = Modifier.fillMaxSize()) {
-                Box(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .statusBarsPadding()
-                        .padding(horizontal = 8.dp),
-                    contentAlignment = Alignment.Center
-                ) {
-                    IconButton(onClick = onCollapse) {
-                        Icon(Icons.Default.ExpandMore, "Close", tint = scheme.onBackground)
-                    }
-                }
-
-                SwipeableAlbumArt(
-                    current = theme,
-                    next = nextTheme,
-                    prev = prevTheme,
-                    onSwipeNext = onNext,
-                    onSwipePrev = onPrev,
-                    onDismiss = onCollapse,
-                    onHorizontalFraction = { hFrac = it },
-                    onDismissFraction = { dismissFrac = it },
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .aspectRatio(1f)
-                )
-
+            // Full-height essentials column — controls pinned to bottom
+            Column(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .statusBarsPadding()
+                    .navigationBarsPadding()
+            ) {
+                // Top region: chevron + art — vertical dismiss works anywhere here
                 Column(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .weight(1f)
-                        .padding(horizontal = 16.dp, vertical = 12.dp)
+                        .pointerInput(Unit) {
+                            detectVerticalDragGestures(
+                                onDragEnd = {
+                                    if (topPull > dismissThreshold) onCollapse()
+                                    topPull = 0f
+                                    dismissFrac = 0f
+                                },
+                                onDragCancel = {
+                                    topPull = 0f
+                                    dismissFrac = 0f
+                                },
+                                onVerticalDrag = { change, amount ->
+                                    change.consume()
+                                    // Only pull-down (positive)
+                                    if (amount > 0 || topPull > 0f) {
+                                        topPull = (topPull + amount).coerceAtLeast(0f)
+                                        dismissFrac = (topPull / dismissThreshold).coerceIn(0f, 1.5f)
+                                    }
+                                }
+                            )
+                        }
                 ) {
-                    Spacer(modifier = Modifier.height(12.dp))
+                    Box(
+                        modifier = Modifier.fillMaxWidth(),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        IconButton(onClick = onCollapse) {
+                            Icon(Icons.Default.ExpandMore, "Close", tint = scheme.onBackground)
+                        }
+                    }
 
+                    // Padded card size; swipe anim still uses screen edges inside
+                    SwipeableAlbumArt(
+                        current = theme,
+                        next = nextTheme,
+                        prev = prevTheme,
+                        onSwipeNext = onNext,
+                        onSwipePrev = onPrev,
+                        onDismiss = onCollapse,
+                        onHorizontalFraction = { hFrac = it },
+                        onDismissFraction = { dismissFrac = it },
+                        horizontalInset = 20.dp,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                }
+
+                // Flexible gap — future lyrics can scroll in a middle region
+                Spacer(modifier = Modifier.weight(1f))
+
+                // Bottom-anchored playback chrome
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 16.dp)
+                        .padding(bottom = 8.dp)
+                ) {
                     MarqueeText(
                         text = song?.displayTitle ?: "Not playing",
                         style = MaterialTheme.typography.headlineSmall,
@@ -210,7 +250,7 @@ fun NowPlayingScreen(
                         color = shownColors.muted.copy(alpha = 0.75f)
                     )
 
-                    Spacer(modifier = Modifier.height(20.dp))
+                    Spacer(modifier = Modifier.height(16.dp))
 
                     WavySeekBar(
                         progress = sliderPosition,
@@ -235,7 +275,7 @@ fun NowPlayingScreen(
                         Text(formatTime(durationMs), style = MaterialTheme.typography.labelSmall, color = shownColors.muted)
                     }
 
-                    Spacer(modifier = Modifier.height(12.dp))
+                    Spacer(modifier = Modifier.height(8.dp))
 
                     Row(
                         modifier = Modifier.fillMaxWidth(),
@@ -293,22 +333,19 @@ fun NowPlayingScreen(
                         }
                     }
 
-                    Text(
-                        buildString {
-                            append(repeatLabel(snapshot.repeatMode))
-                            if (snapshot.shuffleEnabled) append(" · Shuffle")
-                        },
-                        style = MaterialTheme.typography.labelSmall,
-                        color = shownColors.muted,
-                        modifier = Modifier.align(Alignment.CenterHorizontally).padding(top = 4.dp)
-                    )
-
-                    Spacer(modifier = Modifier.weight(1f))
-
                     Row(
                         modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.End
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
                     ) {
+                        Text(
+                            buildString {
+                                append(repeatLabel(snapshot.repeatMode))
+                                if (snapshot.shuffleEnabled) append(" · Shuffle")
+                            },
+                            style = MaterialTheme.typography.labelSmall,
+                            color = shownColors.muted
+                        )
                         IconButton(onClick = { showQueue = true }) {
                             Icon(
                                 Icons.AutoMirrored.Filled.QueueMusic,
