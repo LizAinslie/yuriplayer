@@ -77,6 +77,7 @@ fun NowPlayingScreen(
     onMoveCold: (Int, Int) -> Unit,
     onRemoveHot: (Int) -> Unit,
     onRemoveCold: (Int) -> Unit,
+    onMoveColdToHot: (Int) -> Unit = {},
     onPlayHistorySong: (Song) -> Unit = {},
     onClearHistory: () -> Unit = {}
 ) {
@@ -164,6 +165,7 @@ fun NowPlayingScreen(
                         onMoveCold = onMoveCold,
                         onRemoveHot = onRemoveHot,
                         onRemoveCold = onRemoveCold,
+                        onMoveColdToHot = onMoveColdToHot,
                         onPlayHistorySong = onPlayHistorySong,
                         onClearHistory = onClearHistory,
                         modifier = Modifier
@@ -171,16 +173,12 @@ fun NowPlayingScreen(
                             .padding(horizontal = 16.dp)
                     )
 
-                    NowPlayingPreview(
-                        song = song,
+                    // Compact transport — full preview is redundant here
+                    QueueTransportBar(
                         playing = playing,
-                        positionMs = positionMs,
-                        durationMs = durationMs,
+                        onPrev = onPrev,
                         onToggle = onToggle,
-                        onOpen = { showQueue = false },
-                        enableSwipeUp = false,
-                        tonalElevation = 2.dp,
-                        shadowElevation = 4.dp
+                        onNext = onNext
                     )
                 }
                 return@Surface
