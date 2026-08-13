@@ -7,17 +7,6 @@ import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
 
-/**
- * On-disk library index in the app's [Context.getCacheDir].
- *
- * Flow:
- * - Full MediaStore/filesystem scan → [save]
- * - App start → [load] into memory ([LibraryIndex])
- * - Sort / search / albums / artists only use the in-memory list
- *
- * Android may clear cacheDir under storage pressure; the next [LibraryIndex.refresh]
- * rebuilds it. For a more permanent store we can move to filesDir later.
- */
 class LibraryCache(context: Context) {
 
     private val cacheDir = context.cacheDir
@@ -34,7 +23,7 @@ class LibraryCache(context: Context) {
             for (i in 0 until arr.length()) {
                 songs += songFromJson(arr.getJSONObject(i))
             }
-            Log.d(TAG, "Loaded ${songs.size} songs from cache (scannedAt=$scannedAt)")
+            Log.d(TAG, "Loaded ${songs.size} songs from cache")
             CachedLibrary(songs, scannedAt)
         } catch (e: Exception) {
             Log.w(TAG, "Failed to load library cache", e)
@@ -53,7 +42,6 @@ class LibraryCache(context: Context) {
                 .put("scannedAt", System.currentTimeMillis())
                 .put("songs", arr)
 
-            // Atomic-ish write: temp file then rename over the real one
             tmpFile.writeText(root.toString())
             if (!tmpFile.renameTo(file)) {
                 tmpFile.copyTo(file, overwrite = true)
@@ -84,6 +72,7 @@ class LibraryCache(context: Context) {
             .put("id", song.id)
             .put("title", song.title)
             .put("artist", song.artist)
+            .put("albumArtist", song.albumArtist)
             .put("album", song.album)
             .put("durationMs", song.durationMs)
             .put("contentUri", song.contentUri.toString())
@@ -106,6 +95,7 @@ class LibraryCache(context: Context) {
             id = obj.getLong("id"),
             title = obj.getString("title"),
             artist = obj.getString("artist"),
+            albumArtist = obj.optString("albumArtist", ""),
             album = obj.getString("album"),
             durationMs = obj.getLong("durationMs"),
             contentUri = Uri.parse(obj.getString("contentUri")),
@@ -120,7 +110,7 @@ class LibraryCache(context: Context) {
     companion object {
         private const val TAG = "LibraryCache"
         private const val FILE_NAME = "library_index.json"
-        private const val CACHE_VERSION = 1
+        private const val CACHE_VERSION = 2
     }
 }
 
