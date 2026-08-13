@@ -2,6 +2,7 @@ package capital.yuri.yuriplayer.activities.ui
 
 import android.graphics.Bitmap
 import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
@@ -21,8 +22,12 @@ import androidx.compose.material.icons.filled.Album
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -39,9 +44,17 @@ import kotlinx.coroutines.launch
 import kotlin.math.abs
 import kotlin.math.roundToInt
 
+/** Spotify-ish slide duration for skip (button or fling settle). */
+private val SkipSpec = tween<Float>(durationMillis = 260, easing = FastOutSlowInEasing)
+
 /**
- * Album art keeps inset size (rounded card), but horizontal swipe peeks
- * neighbors from the **true screen edge**. Vertical drag dismisses.
+ * Album art card with edge-to-edge neighbor peeks.
+ *
+ * - Finger drag follows the touch; settle eases off-screen then promotes theme.
+ * - [skipToken] + [skipDirection] drive the same animation for transport buttons
+ *   (-1 = next / from right, +1 = previous / from left).
+ * - [onPromoteNext]/[onPromotePrev] must update the theme store *before*
+ *   playback advances so the art never snaps back to the old cover.
  */
 @Composable
 fun SwipeableAlbumArt(
@@ -50,17 +63,22 @@ fun SwipeableAlbumArt(
     prev: PlayerThemeStore.Theme?,
     onSwipeNext: () -> Unit,
     onSwipePrev: () -> Unit,
+    onPromoteNext: () -> Unit,
+    onPromotePrev: () -> Unit,
     onDismiss: () -> Unit,
     onHorizontalFraction: (Float) -> Unit,
     onDismissFraction: (Float) -> Unit,
+    skipToken: Long = 0L,
+    skipDirection: Int = 0,
+    onSkipConsumed: () -> Unit = {},
     modifier: Modifier = Modifier,
-    /** Horizontal inset so the card matches the old padded size. */
     horizontalInset: androidx.compose.ui.unit.Dp = 20.dp
 ) {
     val scope = rememberCoroutineScope()
     val density = LocalDensity.current
     val offsetX = remember { Animatable(0f) }
     val offsetY = remember { Animatable(0f) }
+    var animatingSkip by remember { mutableIntStateOf(0) }
 
     val dismissThreshold = with(density) { 140.dp.toPx() }
     val trackThreshold = with(density) { 96.dp.toPx() }
@@ -68,8 +86,26 @@ fun SwipeableAlbumArt(
         LocalConfiguration.current.screenWidthDp.dp.toPx()
     }
 
+    suspend fun finishNext() {
+        // Paint incoming theme as current before snapping offset home.
+        onPromoteNext()
+        onHorizontalFraction(0f)
+        offsetX.snapTo(0f)
+        offsetY.snapTo(0f)
+        onSwipeNext()
+    }
+
+    suspend fun finishPrev() {
+        onPromotePrev()
+        onHorizontalFraction(0f)
+        offsetX.snapTo(0f)
+        offsetY.snapTo(0f)
+        onSwipePrev()
+    }
+
     fun settle() {
         scope.launch {
+            if (animatingSkip != 0) return@launch
             val x = offsetX.value
             val y = offsetY.value
             when {
@@ -82,18 +118,16 @@ fun SwipeableAlbumArt(
                     onHorizontalFraction(0f)
                 }
                 x < -trackThreshold && next != null -> {
-                    offsetX.animateTo(-screenWidthPx, tween(220))
-                    onSwipeNext()
-                    offsetX.snapTo(0f)
-                    offsetY.snapTo(0f)
-                    onHorizontalFraction(0f)
+                    animatingSkip = -1
+                    offsetX.animateTo(-screenWidthPx, SkipSpec)
+                    finishNext()
+                    animatingSkip = 0
                 }
                 x > trackThreshold && prev != null -> {
-                    offsetX.animateTo(screenWidthPx, tween(220))
-                    onSwipePrev()
-                    offsetX.snapTo(0f)
-                    offsetY.snapTo(0f)
-                    onHorizontalFraction(0f)
+                    animatingSkip = 1
+                    offsetX.animateTo(screenWidthPx, SkipSpec)
+                    finishPrev()
+                    animatingSkip = 0
                 }
                 else -> {
                     offsetX.animateTo(0f, spring(stiffness = Spring.StiffnessMedium))
@@ -105,11 +139,43 @@ fun SwipeableAlbumArt(
         }
     }
 
-    // Full-width gesture surface; visual card is inset
+    // Transport buttons: same path as a completed fling, eased.
+    LaunchedEffect(skipToken) {
+        if (skipToken == 0L || skipDirection == 0) return@LaunchedEffect
+        if (animatingSkip != 0) {
+            onSkipConsumed()
+            return@LaunchedEffect
+        }
+        when {
+            skipDirection < 0 && next != null -> {
+                animatingSkip = -1
+                // Nudge fraction so theme blend kicks in immediately
+                onHorizontalFraction(-0.05f)
+                offsetX.animateTo(-screenWidthPx, SkipSpec)
+                finishNext()
+                animatingSkip = 0
+            }
+            skipDirection > 0 && prev != null -> {
+                animatingSkip = 1
+                onHorizontalFraction(0.05f)
+                offsetX.animateTo(screenWidthPx, SkipSpec)
+                finishPrev()
+                animatingSkip = 0
+            }
+            skipDirection < 0 -> {
+                // No preloaded next — still advance playback without art slide
+                onSwipeNext()
+            }
+            skipDirection > 0 -> onSwipePrev()
+        }
+        onSkipConsumed()
+    }
+
     BoxWithConstraints(
         modifier = modifier
             .fillMaxWidth()
-            .pointerInput(next, prev) {
+            .pointerInput(next, prev, animatingSkip) {
+                if (animatingSkip != 0) return@pointerInput
                 detectDragGestures(
                     onDragEnd = { settle() },
                     onDragCancel = { settle() },
@@ -138,7 +204,6 @@ fun SwipeableAlbumArt(
     ) {
         val hFrac = offsetX.value
 
-        // Neighbor cards travel from absolute screen edge
         if (hFrac < 0f && next != null) {
             ArtCard(
                 bitmap = next.bitmap,
@@ -149,7 +214,7 @@ fun SwipeableAlbumArt(
                     .align(Alignment.Center)
                     .graphicsLayer {
                         translationX = screenWidthPx + hFrac
-                        alpha = (-hFrac / (screenWidthPx * 0.4f)).coerceIn(0f, 1f)
+                        alpha = (-hFrac / (screenWidthPx * 0.35f)).coerceIn(0f, 1f)
                     }
             )
         }
@@ -163,7 +228,7 @@ fun SwipeableAlbumArt(
                     .align(Alignment.Center)
                     .graphicsLayer {
                         translationX = -screenWidthPx + hFrac
-                        alpha = (hFrac / (screenWidthPx * 0.4f)).coerceIn(0f, 1f)
+                        alpha = (hFrac / (screenWidthPx * 0.35f)).coerceIn(0f, 1f)
                     }
             )
         }
