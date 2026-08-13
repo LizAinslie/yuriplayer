@@ -24,9 +24,12 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.WindowInsetsSides
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.only
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.systemBars
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.Home
@@ -39,7 +42,6 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
-import androidx.compose.material3.ScaffoldDefaults
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
@@ -100,7 +102,6 @@ class MainActivity : ComponentActivity() {
         if (granted) libraryIndex.refresh()
     }
 
-    /** API 33+ needs READ_MEDIA_AUDIO; older devices use READ_EXTERNAL_STORAGE. */
     private fun audioReadPermission(): String =
         if (Build.VERSION.SDK_INT >= 33) Manifest.permission.READ_MEDIA_AUDIO
         else Manifest.permission.READ_EXTERNAL_STORAGE
@@ -194,7 +195,6 @@ fun YuriApp(
     val themeStore: PlayerThemeStore = koinInject()
     val baseScheme = MaterialTheme.colorScheme
 
-    // Base status-bar color = app background. Deeper routes push on top.
     val statusBarStack = remember(baseScheme.background) {
         StatusBarColorStack(baseScheme.background)
     }
@@ -310,10 +310,14 @@ fun YuriApp(
                 modifier = Modifier.fillMaxSize(),
                 containerColor = if (edgeToEdgeDetail) Color.Transparent
                 else MaterialTheme.colorScheme.background,
+                // Mini-player owns the bottom edge (paints under gesture bar).
+                // Only apply top + horizontal system insets here.
                 contentWindowInsets = if (edgeToEdgeDetail) {
                     WindowInsets(0, 0, 0, 0)
                 } else {
-                    ScaffoldDefaults.contentWindowInsets
+                    WindowInsets.systemBars.only(
+                        WindowInsetsSides.Horizontal + WindowInsetsSides.Top
+                    )
                 },
                 topBar = {
                     if (detail == null) {
