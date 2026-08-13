@@ -8,34 +8,33 @@ import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
 
-/**
- * Persists the current queue + position so playback can resume after process death.
- * Stored under filesDir (not cache) so it is not wiped with the library cache.
- */
 class PlaybackStateStore(context: Context) {
 
     private val file = File(context.filesDir, FILE_NAME)
 
     fun save(
-        queue: List<Song>,
-        index: Int,
+        snapshot: QueueSnapshot,
         positionMs: Long,
         playWhenReady: Boolean
     ) {
-        if (queue.isEmpty() || index < 0) {
+        if (snapshot.hotQueue.isEmpty() && snapshot.coldQueue.isEmpty()) {
             clear()
             return
         }
         try {
-            val arr = JSONArray()
-            queue.forEach { arr.put(songToJson(it)) }
             val root = JSONObject()
                 .put("version", VERSION)
-                .put("index", index)
                 .put("positionMs", positionMs.coerceAtLeast(0L))
                 .put("playWhenReady", playWhenReady)
+                .put("lane", snapshot.lane.name)
+                .put("indexInLane", snapshot.indexInLane)
+                .put("shuffleEnabled", snapshot.shuffleEnabled)
+                .put("repeatMode", snapshot.repeatMode.name)
                 .put("savedAt", System.currentTimeMillis())
-                .put("queue", arr)
+                .put("hotQueue", songsToJson(snapshot.hotQueue))
+                .put("coldQueue", songsToJson(snapshot.coldQueue))
+                .put("coldOriginal", songsToJson(snapshot.coldOriginal))
+
             val tmp = File(file.parentFile, "$FILE_NAME.tmp")
             tmp.writeText(root.toString())
             if (!tmp.renameTo(file)) {
@@ -51,15 +50,37 @@ class PlaybackStateStore(context: Context) {
         if (!file.exists()) return null
         return try {
             val root = JSONObject(file.readText())
-            val arr = root.getJSONArray("queue")
-            val queue = ArrayList<Song>(arr.length())
-            for (i in 0 until arr.length()) {
-                queue += songFromJson(arr.getJSONObject(i))
+            // Legacy v1: single "queue" array
+            if (root.has("queue") && !root.has("coldQueue")) {
+                return loadLegacy(root)
             }
-            if (queue.isEmpty()) return null
+
+            val hot = jsonToSongs(root.optJSONArray("hotQueue"))
+            val cold = jsonToSongs(root.optJSONArray("coldQueue"))
+            val coldOriginal = jsonToSongs(root.optJSONArray("coldOriginal")).ifEmpty { cold }
+            if (hot.isEmpty() && cold.isEmpty()) return null
+
+            val lane = try {
+                QueueLane.valueOf(root.optString("lane", QueueLane.COLD.name))
+            } catch (_: Exception) {
+                QueueLane.COLD
+            }
+            val repeat = try {
+                RepeatMode.valueOf(root.optString("repeatMode", RepeatMode.OFF.name))
+            } catch (_: Exception) {
+                RepeatMode.OFF
+            }
+
             SavedPlayback(
-                queue = queue,
-                index = root.optInt("index", 0).coerceIn(0, queue.lastIndex),
+                snapshot = QueueSnapshot(
+                    hotQueue = hot,
+                    coldQueue = cold,
+                    coldOriginal = coldOriginal,
+                    lane = lane,
+                    indexInLane = root.optInt("indexInLane", 0),
+                    shuffleEnabled = root.optBoolean("shuffleEnabled", false),
+                    repeatMode = repeat
+                ),
                 positionMs = root.optLong("positionMs", 0L),
                 playWhenReady = root.optBoolean("playWhenReady", false)
             )
@@ -69,11 +90,45 @@ class PlaybackStateStore(context: Context) {
         }
     }
 
+    private fun loadLegacy(root: JSONObject): SavedPlayback? {
+        val queue = jsonToSongs(root.optJSONArray("queue"))
+        if (queue.isEmpty()) return null
+        val index = root.optInt("index", 0).coerceIn(0, queue.lastIndex)
+        return SavedPlayback(
+            snapshot = QueueSnapshot(
+                hotQueue = emptyList(),
+                coldQueue = queue,
+                coldOriginal = queue,
+                lane = QueueLane.COLD,
+                indexInLane = index,
+                shuffleEnabled = false,
+                repeatMode = RepeatMode.OFF
+            ),
+            positionMs = root.optLong("positionMs", 0L),
+            playWhenReady = root.optBoolean("playWhenReady", false)
+        )
+    }
+
     fun clear() {
         try {
             if (file.exists()) file.delete()
         } catch (_: Exception) {
         }
+    }
+
+    private fun songsToJson(songs: List<Song>): JSONArray {
+        val arr = JSONArray()
+        songs.forEach { arr.put(songToJson(it)) }
+        return arr
+    }
+
+    private fun jsonToSongs(arr: JSONArray?): List<Song> {
+        if (arr == null) return emptyList()
+        val list = ArrayList<Song>(arr.length())
+        for (i in 0 until arr.length()) {
+            list += songFromJson(arr.getJSONObject(i))
+        }
+        return list
     }
 
     private fun songToJson(song: Song): JSONObject {
@@ -123,8 +178,7 @@ class PlaybackStateStore(context: Context) {
     }
 
     data class SavedPlayback(
-        val queue: List<Song>,
-        val index: Int,
+        val snapshot: QueueSnapshot,
         val positionMs: Long,
         val playWhenReady: Boolean
     )
@@ -132,6 +186,6 @@ class PlaybackStateStore(context: Context) {
     companion object {
         private const val TAG = "PlaybackStateStore"
         private const val FILE_NAME = "playback_state.json"
-        private const val VERSION = 1
+        private const val VERSION = 2
     }
 }
