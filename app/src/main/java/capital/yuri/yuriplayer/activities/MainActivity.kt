@@ -293,6 +293,7 @@ fun YuriApp(
                 onMoveCold = { f, t -> player.moveCold(f, t) },
                 onRemoveHot = { player.removeFromHot(it) },
                 onRemoveCold = { player.removeFromCold(it) },
+                onMoveColdToHot = { player.moveColdToHot(it) },
                 onPlayHistorySong = { s -> player.playSource(listOf(s), 0) },
                 onClearHistory = { player.clearHistory() }
             )
