@@ -137,8 +137,28 @@ class QueueManager {
     }
 
     fun addToQueue(songs: List<Song>) {
+        if (songs.isEmpty()) return
+        Log.i(TAG, "queue add ${songs.size} tracks")
         hotQueue.addAll(songs)
         publish()
+    }
+
+    /**
+     * Clear the user Queue only. Cold context is untouched.
+     * @return true if the currently playing track was in hot and playback must jump to cold.
+     */
+    fun clearHotQueue(): Boolean {
+        val wasPlayingHot = lane == QueueLane.HOT
+        hotQueue.clear()
+        if (wasPlayingHot) {
+            resumeColdPointer()
+            publish()
+            Log.i(TAG, "clearHot wasPlayingHot → resume cold index=$indexInLane")
+            return true
+        }
+        publish()
+        Log.i(TAG, "clearHot (cold unaffected)")
+        return false
     }
 
     fun removeFromQueue(index: Int): Boolean {
