@@ -12,7 +12,6 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
@@ -45,7 +44,6 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.zIndex
 import capital.yuri.yuriplayer.data.Song
@@ -64,7 +62,6 @@ private class SectionDragState {
     var from by mutableIntStateOf(-1)
     var hover by mutableIntStateOf(-1)
     var offsetY by mutableFloatStateOf(0f)
-    /** When dragging cold items: true if finger is in the hot section zone. */
     var promoteToHot by mutableStateOf(false)
     val active: Boolean get() = from >= 0
 
@@ -116,6 +113,7 @@ fun QueuePanel(
     onRemoveHot: (Int) -> Unit,
     onRemoveCold: (Int) -> Unit,
     onMoveColdToHot: (Int) -> Unit = {},
+    onClearHotQueue: () -> Unit = {},
     onPlayHistorySong: (Song) -> Unit = {},
     onClearHistory: () -> Unit = {},
     modifier: Modifier = Modifier
@@ -143,6 +141,12 @@ fun QueuePanel(
                 label = { Text("Recently Played") }
             )
             Spacer(modifier = Modifier.weight(1f))
+            if (tab == QueueTab.Queue && snapshot.hotQueue.isNotEmpty()) {
+                TextButton(onClick = onClearHotQueue) {
+                    Icon(Icons.Default.DeleteSweep, null, modifier = Modifier.padding(end = 4.dp))
+                    Text("Clear")
+                }
+            }
             if (tab == QueueTab.History && history.isNotEmpty()) {
                 TextButton(onClick = onClearHistory) {
                     Icon(Icons.Default.DeleteSweep, null, modifier = Modifier.padding(end = 4.dp))
@@ -193,7 +197,7 @@ private fun QueueTabContent(
         if (snapshot.hotQueue.isEmpty()) {
             item {
                 Text(
-                    "Swipe right on a library song to add. Swipe left to remove. Long-press & drag to reorder.",
+                    "Swipe right on a song or album to add. Swipe left to remove. Long-press & drag to reorder.",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f),
                     modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
@@ -308,7 +312,6 @@ private fun SwipeableQueueRow(
             .fillMaxWidth()
             .zIndex(if (isDragged) 10f else 0f)
     ) {
-        // Underlay: left = promote, right = remove
         Row(
             modifier = Modifier
                 .matchParentSize()
@@ -396,8 +399,7 @@ private fun SwipeableQueueRow(
                         onDragCancel = { swipeX = 0f },
                         onHorizontalDrag = { _, amount ->
                             val max = swipeThreshold * 1.4f
-                            val min = if (onSwipePromote != null) -max else -max
-                            swipeX = (swipeX + amount).coerceIn(min, max)
+                            swipeX = (swipeX + amount).coerceIn(-max, max)
                         }
                     )
                 }
