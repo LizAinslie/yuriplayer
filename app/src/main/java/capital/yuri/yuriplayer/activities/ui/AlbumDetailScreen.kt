@@ -66,6 +66,7 @@ import capital.yuri.yuriplayer.data.Song
 import capital.yuri.yuriplayer.data.theme.ThemeService
 import capital.yuri.yuriplayer.ui.formatTrackCount
 import org.koin.compose.koinInject
+import kotlin.math.sqrt
 
 /** Expanded header content height (below status bar). */
 private val ExpandedHeaderBody = 400.dp
@@ -101,6 +102,11 @@ fun AlbumDetailScreen(
     val collapseRangePx = with(density) { (ExpandedHeaderBody - CollapsedBarHeight).toPx() }
     var collapsePx by remember { mutableFloatStateOf(0f) }
     val f = (collapsePx / collapseRangePx).coerceIn(0f, 1f)
+
+    // Height collapses faster than linear so space under the art snaps up as
+    // the art fades (sqrt curve: ~half height gone by f=0.25).
+    val heightF = sqrt(f.toDouble()).toFloat()
+    val headerBodyH = ExpandedHeaderBody * (1f - heightF) + CollapsedBarHeight * heightF
 
     val nestedScroll = remember(collapseRangePx) {
         object : NestedScrollConnection {
@@ -154,9 +160,10 @@ fun AlbumDetailScreen(
         else onPlayAlbum(album.songs, 0)
     }
 
-    val headerBodyH = ExpandedHeaderBody * (1f - f) + CollapsedBarHeight * f
     val fadePx = with(density) { GradientFadeLength.toPx() }
 
+    // Pushes onto the app-wide status-bar stack; pops on leave so library
+    // and now-playing handoffs can't leave a stale tint behind.
     ThemedStatusBar(color = albumBg, enabled = true)
 
     MaterialTheme(colorScheme = scheme) {
@@ -164,26 +171,18 @@ fun AlbumDetailScreen(
             modifier = Modifier
                 .fillMaxSize()
                 .nestedScroll(nestedScroll)
-                // Base is default page color; album gradient is painted on top of it
                 .background(defaultBg)
                 .drawBehind {
-                    // Status bar + header body are solid album color.
-                    // From header bottom, a long smooth fade into defaultBg.
-                    // Pure draw — does not consume layout height.
-                    val headerEnd = headerBodyH.toPx() // statusBars handled by content pad
-                    // Approximate status-bar height via density-independent top inset isn't
-                    // available here; paint a tall solid region then fade.
-                    val solidEnd = headerEnd + with(density) { 48.dp.toPx() } // covers status bar
+                    val headerEnd = headerBodyH.toPx()
+                    val solidEnd = headerEnd + with(density) { 48.dp.toPx() }
                     val fadeEnd = solidEnd + fadePx
 
-                    // Solid album band (status bar + header)
                     drawRect(
                         color = albumBg,
                         topLeft = Offset.Zero,
                         size = Size(size.width, solidEnd.coerceAtMost(size.height))
                     )
 
-                    // Long vertical fade under the header
                     if (fadeEnd > solidEnd) {
                         drawRect(
                             brush = Brush.verticalGradient(
@@ -198,13 +197,15 @@ fun AlbumDetailScreen(
                                 endY = fadeEnd
                             ),
                             topLeft = Offset(0f, solidEnd),
-                            size = Size(size.width, (fadeEnd - solidEnd).coerceAtMost(size.height - solidEnd))
+                            size = Size(
+                                size.width,
+                                (fadeEnd - solidEnd).coerceAtMost(size.height - solidEnd)
+                            )
                         )
                     }
                 }
         ) {
             Column(modifier = Modifier.fillMaxSize()) {
-                // Header chrome — transparent so the drawn gradient shows through
                 Box(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -216,11 +217,12 @@ fun AlbumDetailScreen(
                             .height(headerBodyH)
                             .clipToBounds()
                     ) {
+                        // Hero fades with height so they disappear together
                         Box(
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .graphicsLayer {
-                                    alpha = (1f - f * 1.8f).coerceIn(0f, 1f)
+                                    alpha = (1f - heightF * 1.6f).coerceIn(0f, 1f)
                                 }
                         ) {
                             SpotifyAlbumHero(
@@ -236,7 +238,7 @@ fun AlbumDetailScreen(
                             )
                         }
 
-                        if (f > 0.15f) {
+                        if (heightF > 0.2f) {
                             CollapsedSpotifyBar(
                                 album = album,
                                 showPause = showPause,
@@ -246,18 +248,20 @@ fun AlbumDetailScreen(
                                 modifier = Modifier
                                     .align(Alignment.TopCenter)
                                     .graphicsLayer {
-                                        alpha = ((f - 0.15f) / 0.35f).coerceIn(0f, 1f)
+                                        alpha = ((heightF - 0.2f) / 0.35f).coerceIn(0f, 1f)
                                     }
                             )
                         }
 
-                        if (f < 0.45f) {
+                        if (heightF < 0.5f) {
                             IconButton(
                                 onClick = onBack,
                                 modifier = Modifier
                                     .align(Alignment.TopStart)
                                     .padding(4.dp)
-                                    .graphicsLayer { alpha = (1f - f * 2.2f).coerceIn(0f, 1f) }
+                                    .graphicsLayer {
+                                        alpha = (1f - heightF * 2.2f).coerceIn(0f, 1f)
+                                    }
                             ) {
                                 Icon(
                                     Icons.AutoMirrored.Filled.ArrowBack,
@@ -269,7 +273,6 @@ fun AlbumDetailScreen(
                     }
                 }
 
-                // Track list — transparent rows so the gradient shows behind early tracks
                 LazyColumn(
                     state = listState,
                     modifier = Modifier.fillMaxSize(),
