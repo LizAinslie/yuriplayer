@@ -27,6 +27,7 @@ import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.LibraryMusic
 import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
@@ -49,17 +50,23 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.zIndex
 import androidx.core.content.ContextCompat
+import capital.yuri.yuriplayer.activities.ui.AlbumDetailScreen
+import capital.yuri.yuriplayer.activities.ui.ArtistDetailScreen
 import capital.yuri.yuriplayer.activities.ui.LibraryScreen
 import capital.yuri.yuriplayer.activities.ui.MiniPlayerBar
 import capital.yuri.yuriplayer.activities.ui.NowPlayingScreen
 import capital.yuri.yuriplayer.activities.ui.PlaceholderScreen
+import capital.yuri.yuriplayer.activities.ui.SettingsScreen
 import capital.yuri.yuriplayer.activities.ui.theme.YuriPlayerTheme
 import capital.yuri.yuriplayer.data.ActivityTitleFormat
+import capital.yuri.yuriplayer.data.AlbumItem
+import capital.yuri.yuriplayer.data.ArtistItem
 import capital.yuri.yuriplayer.data.LibraryIndex
 import capital.yuri.yuriplayer.data.PlayerThemeStore
 import capital.yuri.yuriplayer.data.Song
 import capital.yuri.yuriplayer.player.PlayerController
 import capital.yuri.yuriplayer.player.QueueSnapshot
+import capital.yuri.yuriplayer.player.RepeatMode
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import org.koin.android.ext.android.inject
@@ -139,6 +146,12 @@ private enum class TopTab(val label: String, val icon: ImageVector) {
     MyStuff("My Stuff", Icons.Default.Favorite)
 }
 
+private sealed class DetailRoute {
+    data class Album(val album: AlbumItem) : DetailRoute()
+    data class Artist(val artist: ArtistItem) : DetailRoute()
+    data object Settings : DetailRoute()
+}
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun YuriApp(
@@ -154,6 +167,7 @@ fun YuriApp(
 
     var topTab by remember { mutableStateOf(TopTab.Library) }
     var playerExpanded by remember { mutableStateOf(false) }
+    var detail by remember { mutableStateOf<DetailRoute?>(null) }
 
     LaunchedEffect(openPlayerInitially) {
         if (openPlayerInitially) {
@@ -196,46 +210,58 @@ fun YuriApp(
     }
 
     BackHandler(enabled = playerExpanded) { playerExpanded = false }
+    BackHandler(enabled = !playerExpanded && detail != null) { detail = null }
+
+    fun playAlbumFrom(songs: List<Song>, index: Int) {
+        // Album page: cold queue = album, start at track, repeat all by default
+        player.setRepeatMode(RepeatMode.COLD)
+        player.playSource(songs, index)
+    }
 
     Box(modifier = Modifier.fillMaxSize()) {
         Scaffold(
             modifier = Modifier.fillMaxSize(),
             topBar = {
-                TopAppBar(
-                    title = {
-                        Row(
-                            horizontalArrangement = Arrangement.spacedBy(4.dp),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            TopTab.entries.forEach { tab ->
-                                val selected = topTab == tab
-                                IconButton(onClick = { topTab = tab }) {
-                                    Icon(
-                                        imageVector = tab.icon,
-                                        contentDescription = tab.label,
-                                        tint = if (selected) MaterialTheme.colorScheme.primary
-                                        else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.45f)
-                                    )
+                if (detail == null) {
+                    TopAppBar(
+                        title = {
+                            Row(
+                                horizontalArrangement = Arrangement.spacedBy(4.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                TopTab.entries.forEach { tab ->
+                                    val selected = topTab == tab
+                                    IconButton(onClick = { topTab = tab }) {
+                                        Icon(
+                                            imageVector = tab.icon,
+                                            contentDescription = tab.label,
+                                            tint = if (selected) MaterialTheme.colorScheme.primary
+                                            else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.45f)
+                                        )
+                                    }
                                 }
                             }
-                        }
-                    },
-                    actions = {
-                        if (topTab == TopTab.Library) {
-                            val loading by library.isLoading.collectAsState()
-                            IconButton(onClick = { library.refresh() }) {
-                                if (loading) {
-                                    CircularProgressIndicator(
-                                        modifier = Modifier.size(20.dp),
-                                        strokeWidth = 2.dp
-                                    )
-                                } else {
-                                    Icon(Icons.Default.Refresh, contentDescription = "Refresh library")
+                        },
+                        actions = {
+                            if (topTab == TopTab.Library) {
+                                val loading by library.isLoading.collectAsState()
+                                IconButton(onClick = { library.refresh() }) {
+                                    if (loading) {
+                                        CircularProgressIndicator(
+                                            modifier = Modifier.size(20.dp),
+                                            strokeWidth = 2.dp
+                                        )
+                                    } else {
+                                        Icon(Icons.Default.Refresh, contentDescription = "Refresh library")
+                                    }
                                 }
                             }
+                            IconButton(onClick = { detail = DetailRoute.Settings }) {
+                                Icon(Icons.Default.Settings, contentDescription = "Settings")
+                            }
                         }
-                    }
-                )
+                    )
+                }
             },
             bottomBar = {
                 MiniPlayerBar(
@@ -249,18 +275,42 @@ fun YuriApp(
             }
         ) { innerPadding ->
             Box(modifier = Modifier.fillMaxSize().padding(innerPadding)) {
-                when (topTab) {
-                    TopTab.Home -> PlaceholderScreen("Home", "Pin playlists and shortcuts here later.")
-                    TopTab.Library -> LibraryScreen(
-                        library = library,
-                        onPlay = { songs, index -> player.playSource(songs, index) },
-                        onAddToQueue = { player.addToHotQueue(it) },
+                when (val d = detail) {
+                    is DetailRoute.Album -> AlbumDetailScreen(
+                        album = d.album,
+                        onBack = { detail = null },
+                        onPlayAlbum = { songs, index -> playAlbumFrom(songs, index) },
+                        onAddSongToQueue = { player.addToHotQueue(it) },
                         onAddAlbumToQueue = { player.addToHotQueue(it) }
                     )
-                    TopTab.MyStuff -> PlaceholderScreen(
-                        "My Stuff",
-                        "Favorites, playlists, and saved albums/artists will live here."
-                    )
+                    is DetailRoute.Artist -> {
+                        val albums = library.albums().filter {
+                            it.artist.equals(d.artist.name, ignoreCase = true)
+                        }
+                        ArtistDetailScreen(
+                            artist = d.artist,
+                            albums = albums,
+                            onBack = { detail = null },
+                            onOpenAlbum = { detail = DetailRoute.Album(it) },
+                            onPlaySongs = { songs, i -> playAlbumFrom(songs, i) }
+                        )
+                    }
+                    is DetailRoute.Settings -> SettingsScreen(onBack = { detail = null })
+                    null -> when (topTab) {
+                        TopTab.Home -> PlaceholderScreen("Home", "Pin playlists and shortcuts here later.")
+                        TopTab.Library -> LibraryScreen(
+                            library = library,
+                            onPlay = { songs, index -> player.playSource(songs, index) },
+                            onAddToQueue = { player.addToHotQueue(it) },
+                            onAddAlbumToQueue = { player.addToHotQueue(it) },
+                            onOpenAlbum = { detail = DetailRoute.Album(it) },
+                            onOpenArtist = { detail = DetailRoute.Artist(it) }
+                        )
+                        TopTab.MyStuff -> PlaceholderScreen(
+                            "My Stuff",
+                            "Favorites, playlists, and saved albums/artists will live here."
+                        )
+                    }
                 }
             }
         }
