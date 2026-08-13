@@ -17,6 +17,8 @@ data class Song(
     val contentUri: Uri,
     val albumArtUri: Uri? = null,
     val trackNumber: Int? = null,
+    /** Disc / media set number (1-based). Null = single-disc or unknown. */
+    val discNumber: Int? = null,
     val year: Int? = null,
     val path: String? = null,
     val mimeType: String? = null
@@ -34,7 +36,6 @@ data class Song(
     val displayAlbum: String
         get() = album?.takeIf { it.isMeaningfulTag() } ?: "Unknown Album"
 
-    /** Album artist if present, else track artist (may be null). */
     val effectiveAlbumArtist: String?
         get() = albumArtist?.takeIf { it.isMeaningfulTag() }
             ?: artist?.takeIf { it.isMeaningfulTag() }
@@ -42,7 +43,6 @@ data class Song(
     val displayAlbumArtist: String
         get() = effectiveAlbumArtist ?: "Unknown Artist"
 
-    /** Any artist/album metadata beyond a bare filename. */
     val isTagged: Boolean
         get() = artist.isMeaningfulTag() ||
             albumArtist.isMeaningfulTag() ||
@@ -76,4 +76,11 @@ fun SortMode.label(): String = when (this) {
     SortMode.ARTIST -> "Artist"
     SortMode.ALBUM -> "Album"
     SortMode.TRACK -> "Track #"
+}
+
+/** Stable key for album prefs / navigation. */
+fun albumKey(name: String?, artist: String?): String {
+    val a = (artist ?: "").trim().lowercase()
+    val n = (name ?: "").trim().lowercase()
+    return "$a|$n"
 }
