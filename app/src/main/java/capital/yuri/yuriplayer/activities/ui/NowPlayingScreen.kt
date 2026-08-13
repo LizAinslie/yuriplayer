@@ -161,6 +161,7 @@ fun NowPlayingScreen(
 
                     QueuePanel(
                         snapshot = snapshot,
+                        nowPlaying = song,
                         onPlayItem = onPlayItem,
                         onMoveHot = onMoveHot,
                         onMoveCold = onMoveCold,
