@@ -219,11 +219,6 @@ class MusicService : MediaSessionService() {
         historyStore.record(song)
     }
 
-    /**
-     * Prefer seamless seekToNext when the next media item is already buffered;
-     * otherwise force a rebuffer. Never mutate the timeline with removeMediaItem
-     * mid-stream — that caused discontinuity beeps.
-     */
     private fun applyAdvance(result: QueueManager.AdvanceResult, autoPlay: Boolean = true) {
         val p = player
         when {
@@ -236,17 +231,27 @@ class MusicService : MediaSessionService() {
             result.seekToStart -> {
                 p?.seekTo(0)
                 if (autoPlay) p?.play()
+                // Keep now-playing pointing at the same track
+                _nowPlaying.value = queueManager.currentSong() ?: result.song
+                updateForegroundNotification()
                 persistState()
             }
             result.reload -> {
-                // Repeat-one: restart the same item in place
                 Log.i(TAG, "repeat-one seekTo(0)")
                 p?.seekTo(0)
                 if (autoPlay) p?.play()
+                _nowPlaying.value = queueManager.currentSong() ?: result.song
+                updateForegroundNotification()
                 persistState()
             }
             result.song != null -> {
                 val target = result.song
+                // Publish UI-facing now-playing *before* touching the player so
+                // the next poll / collector sees the new track immediately.
+                _nowPlaying.value = target
+                maybeRecordHistory(target)
+                updateForegroundNotification()
+
                 val nextItemUri = mediaItemUriAt(1)
                 val canSeamless =
                     p != null &&
@@ -257,12 +262,8 @@ class MusicService : MediaSessionService() {
                 if (canSeamless) {
                     Log.i(TAG, "seamless advance → '${target.displayTitle}'")
                     p.seekToNextMediaItem()
-                    _nowPlaying.value = target
-                    maybeRecordHistory(target)
                     if (autoPlay) p.play()
-                    updateForegroundNotification()
                     persistState()
-                    // Rebuild [current, next] after the transition settles
                     serviceScope.launch {
                         delay(150)
                         val pl = player ?: return@launch
@@ -533,8 +534,9 @@ class MusicService : MediaSessionService() {
         }
 
         override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) {
-            val song = queueManager.currentSong()
-            if (song != null && _nowPlaying.value?.contentUri != song.contentUri) {
+            // Prefer queue manager truth; fall back to matching media id
+            val song = queueManager.currentSong() ?: _nowPlaying.value
+            if (song != null) {
                 _nowPlaying.value = song
                 maybeRecordHistory(song)
                 updateForegroundNotification()
@@ -650,7 +652,10 @@ class MusicService : MediaSessionService() {
     }
 
     fun isPlaying(): Boolean = player?.isPlaying == true
-    fun getCurrentSong(): Song? = queueManager.currentSong()
+
+    /** Prefer the UI-facing now-playing slot so advances show up immediately. */
+    fun getCurrentSong(): Song? = _nowPlaying.value ?: queueManager.currentSong()
+
     fun getPositionMs(): Long = player?.currentPosition?.coerceAtLeast(0L) ?: 0L
     fun getDurationMs(): Long = player?.duration?.takeIf { it > 0 } ?: 0L
     fun getQueueSnapshot(): QueueSnapshot = queueManager.getSnapshot()
