@@ -20,7 +20,9 @@ import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -36,6 +38,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.ScaffoldDefaults
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -188,6 +191,7 @@ fun YuriApp(
     }
 
     val detail = detailStack.lastOrNull()
+    val edgeToEdgeDetail = detail is DetailRoute.Album || detail is DetailRoute.Artist
 
     LaunchedEffect(openPlayerInitially) {
         if (openPlayerInitially) {
@@ -277,6 +281,12 @@ fun YuriApp(
     Box(modifier = Modifier.fillMaxSize()) {
         Scaffold(
             modifier = Modifier.fillMaxSize(),
+            // Album/artist paint under the status bar themselves
+            contentWindowInsets = if (edgeToEdgeDetail) {
+                WindowInsets(0, 0, 0, 0)
+            } else {
+                ScaffoldDefaults.contentWindowInsets
+            },
             topBar = {
                 if (detail == null) {
                     TopAppBar(
@@ -330,7 +340,13 @@ fun YuriApp(
                 )
             }
         ) { innerPadding ->
-            Box(modifier = Modifier.fillMaxSize().padding(innerPadding)) {
+            // For edge-to-edge detail pages keep only the bottom inset (mini player)
+            val contentPadding = if (edgeToEdgeDetail) {
+                PaddingValues(bottom = innerPadding.calculateBottomPadding())
+            } else {
+                innerPadding
+            }
+            Box(modifier = Modifier.fillMaxSize().padding(contentPadding)) {
                 when (val d = detail) {
                     is DetailRoute.Album -> {
                         val key = albumKey(d.album.name, d.album.artist)
