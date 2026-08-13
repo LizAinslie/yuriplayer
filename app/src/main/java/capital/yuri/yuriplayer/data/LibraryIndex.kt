@@ -78,14 +78,14 @@ class LibraryIndex(
         val q = query.trim()
         val base = sorted(mode, taggedOnly)
         if (q.isEmpty()) return base
-        return base.filter { song ->
-            song.displayTitle.contains(q, true) ||
-                (song.artist?.contains(q, true) == true) ||
-                (song.albumArtist?.contains(q, true) == true) ||
-                (song.album?.contains(q, true) == true)
-        }
+        return base.filter { songMatches(it, q) }
     }
 
+    /**
+     * One row per album title (normalized), not per track-artist combo.
+     * Album artist = majority of explicit albumArtist tags, else majority of track artists.
+     * That stops MILDRED-style feature tracks from splitting the album.
+     */
     fun albums(query: String = "", taggedOnly: Boolean = true): List<AlbumItem> {
         val q = query.trim()
         val source = if (taggedOnly) {
@@ -93,14 +93,51 @@ class LibraryIndex(
         } else {
             _songs.value
         }
+
         return source
-            .groupBy { (it.album ?: "") to (it.effectiveAlbumArtist ?: "") }
-            .map { (key, tracks) ->
+            .groupBy { normalizeKey(it.album) }
+            .mapNotNull { (albumKey, tracks) ->
+                if (albumKey == null) return@mapNotNull null
+
+                // Prefer explicit albumArtist tags for the display artist
+                val albumArtistVotes = tracks
+                    .mapNotNull { it.albumArtist?.let { a -> normalizeKey(a) to a } }
+                    .groupingBy { it.first }
+                    .eachCount()
+                val trackArtistVotes = tracks
+                    .mapNotNull { it.artist?.let { a -> normalizeKey(a) to a } }
+                    .groupingBy { it.first }
+                    .eachCount()
+
+                val bestAlbumArtistKey = albumArtistVotes.maxByOrNull { it.value }?.key
+                val bestTrackArtistKey = trackArtistVotes.maxByOrNull { it.value }?.key
+                val displayArtist = when {
+                    bestAlbumArtistKey != null ->
+                        tracks.firstOrNull { normalizeKey(it.albumArtist) == bestAlbumArtistKey }?.albumArtist
+                    bestTrackArtistKey != null ->
+                        tracks.firstOrNull { normalizeKey(it.artist) == bestTrackArtistKey }?.artist
+                    else -> null
+                }
+
+                // Canonical album title: most common original casing among tracks
+                val displayName = tracks
+                    .mapNotNull { it.album }
+                    .groupingBy { it }
+                    .eachCount()
+                    .maxByOrNull { it.value }
+                    ?.key
+                    ?: tracks.firstOrNull()?.album
+
+                // Dedupe tracks that appear twice (MediaStore + filesystem)
+                val deduped = tracks.distinctBy {
+                    it.path?.lowercase() ?: it.contentUri.toString()
+                }
+
                 AlbumItem(
-                    name = key.first.ifBlank { null },
-                    artist = key.second.ifBlank { null },
-                    trackCount = tracks.size,
-                    songs = tracks.sortedWith(
+                    name = displayName,
+                    artist = displayArtist,
+                    trackCount = deduped.size,
+                    songs = deduped.sortedWith(
                         compareBy<Song> { it.trackNumber ?: Int.MAX_VALUE }
                             .thenBy(String.CASE_INSENSITIVE_ORDER) { it.displayTitle }
                     )
@@ -123,14 +160,26 @@ class LibraryIndex(
         val source = if (taggedOnly) {
             _songs.value.filter { it.hasArtist }
         } else _songs.value
+
         return source
-            .groupBy { it.effectiveAlbumArtist }
-            .map { (artist, tracks) ->
+            .groupBy { normalizeKey(it.effectiveAlbumArtist) }
+            .mapNotNull { (artistKey, tracks) ->
+                if (artistKey == null) return@mapNotNull null
+                val displayName = tracks
+                    .mapNotNull { it.effectiveAlbumArtist }
+                    .groupingBy { it }
+                    .eachCount()
+                    .maxByOrNull { it.value }
+                    ?.key
+                val deduped = tracks.distinctBy {
+                    it.path?.lowercase() ?: it.contentUri.toString()
+                }
+                val albumKeys = deduped.mapNotNull { normalizeKey(it.album) }.toSet()
                 ArtistItem(
-                    name = artist,
-                    trackCount = tracks.size,
-                    albumCount = tracks.mapNotNull { it.album }.distinct().size,
-                    songs = tracks
+                    name = displayName,
+                    trackCount = deduped.size,
+                    albumCount = albumKeys.size,
+                    songs = deduped
                 )
             }
             .filter { q.isEmpty() || (it.name?.contains(q, true) == true) }
@@ -147,14 +196,24 @@ class LibraryIndex(
         private const val TAG = "LibraryIndex"
         const val DEFAULT_STALE_MS = 12L * 60 * 60 * 1000
 
-        /**
-         * Items missing the sort-key field are pushed to the bottom
-         * ("untagged for this sort").
-         */
+        /** Lowercase + collapse whitespace for stable grouping keys. */
+        fun normalizeKey(value: String?): String? {
+            if (value == null) return null
+            val t = value.trim().replace(Regex("\\s+"), " ").lowercase()
+            return t.takeIf { it.isNotEmpty() }
+        }
+
+        private fun songMatches(song: Song, q: String): Boolean {
+            return song.displayTitle.contains(q, true) ||
+                (song.artist?.contains(q, true) == true) ||
+                (song.albumArtist?.contains(q, true) == true) ||
+                (song.album?.contains(q, true) == true)
+        }
+
         fun sortSongs(songs: List<Song>, mode: SortMode): List<Song> {
             return when (mode) {
                 SortMode.TITLE -> songs.sortedWith(
-                    compareBy<Song> { !it.hasTitle } // no title tag → bottom
+                    compareBy<Song> { !it.hasTitle }
                         .thenBy(String.CASE_INSENSITIVE_ORDER) { it.displayTitle }
                 )
                 SortMode.ARTIST -> songs.sortedWith(
@@ -165,7 +224,7 @@ class LibraryIndex(
                         .thenBy(String.CASE_INSENSITIVE_ORDER) { it.displayTitle }
                 )
                 SortMode.ALBUM -> songs.sortedWith(
-                    compareBy<Song> { !it.hasAlbum } // no album → bottom
+                    compareBy<Song> { !it.hasAlbum }
                         .thenBy(String.CASE_INSENSITIVE_ORDER) { it.displayAlbumArtist }
                         .thenBy(String.CASE_INSENSITIVE_ORDER) { it.displayAlbum }
                         .thenBy { it.trackNumber ?: Int.MAX_VALUE }
