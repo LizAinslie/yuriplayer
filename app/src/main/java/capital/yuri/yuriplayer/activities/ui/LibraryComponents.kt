@@ -27,11 +27,13 @@ import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowDropDown
+import androidx.compose.material.icons.filled.Clear
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
@@ -46,9 +48,6 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.focus.FocusRequester
-import androidx.compose.ui.focus.focusRequester
-import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
@@ -148,17 +147,15 @@ fun LibraryScreen(
     val context = LocalContext.current
     val focusManager = LocalFocusManager.current
     val keyboard = LocalSoftwareKeyboardController.current
-    val searchFocus = remember { FocusRequester() }
 
     var query by remember { mutableStateOf("") }
     var sortMode by remember { mutableStateOf(SortMode.TITLE) }
     var section by remember { mutableStateOf(LibrarySection.Songs) }
-    var searchActive by remember { mutableStateOf(false) }
 
+    // Hide keyboard on first open without locking the field read-only.
     LaunchedEffect(Unit) {
         focusManager.clearFocus(force = true)
         keyboard?.hide()
-        searchActive = false
     }
 
     val taggedSongs = remember(allSongs, sortMode, query) {
@@ -176,26 +173,20 @@ fun LibraryScreen(
             onValueChange = { query = it },
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(horizontal = 12.dp, vertical = 8.dp)
-                .focusRequester(searchFocus)
-                .onFocusChanged { state ->
-                    if (!state.isFocused) {
-                        searchActive = false
-                        keyboard?.hide()
+                .padding(horizontal = 12.dp, vertical = 8.dp),
+            singleLine = true,
+            leadingIcon = { Icon(Icons.Default.Search, contentDescription = null) },
+            trailingIcon = {
+                if (query.isNotEmpty()) {
+                    IconButton(onClick = { query = "" }) {
+                        Icon(Icons.Default.Clear, contentDescription = "Clear search")
                     }
                 }
-                .clickable {
-                    searchActive = true
-                    searchFocus.requestFocus()
-                },
-            singleLine = true,
-            readOnly = !searchActive,
-            leadingIcon = { Icon(Icons.Default.Search, null) },
+            },
             placeholder = { Text("Filter songs, albums, artists\u2026") },
             keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
             keyboardActions = KeyboardActions(
                 onSearch = {
-                    searchActive = false
                     focusManager.clearFocus()
                     keyboard?.hide()
                 }
@@ -378,8 +369,6 @@ fun SwipeAddSongRow(
                 }
                 .clickable(onClick = onClick)
                 .padding(
-                    // Slightly tighter start when showing track #s so the number
-                    // sits in the middle of the left gutter, not hugging the title.
                     start = if (showTrackNumber) 8.dp else 16.dp,
                     end = 16.dp,
                     top = 10.dp,
@@ -391,7 +380,6 @@ fun SwipeAddSongRow(
                 AlbumArt(song = song, size = 40.dp, corner = 4.dp)
                 Spacer(modifier = Modifier.width(12.dp))
             } else {
-                // Wide left column: number / bars centered in the gutter
                 Box(
                     modifier = Modifier
                         .width(48.dp)
