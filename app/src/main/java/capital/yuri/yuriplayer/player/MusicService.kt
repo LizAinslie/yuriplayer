@@ -83,14 +83,8 @@ class MusicService : MediaSessionService() {
             .setContentType(C.AUDIO_CONTENT_TYPE_MUSIC)
             .build()
 
-        // Generous buffer so the next track is already decoded when we advance
         val loadControl = DefaultLoadControl.Builder()
-            .setBufferDurationsMs(
-                /* minBufferMs */ 20_000,
-                /* maxBufferMs */ 60_000,
-                /* bufferForPlaybackMs */ 1_000,
-                /* bufferForPlaybackAfterRebufferMs */ 2_000
-            )
+            .setBufferDurationsMs(20_000, 60_000, 1_000, 2_000)
             .setPrioritizeTimeOverSizeThresholds(true)
             .build()
 
@@ -142,10 +136,6 @@ class MusicService : MediaSessionService() {
         return p.getMediaItemAt(index).localConfiguration?.uri
     }
 
-    /**
-     * Keep ExoPlayer's timeline as [current, next?] so the next track is already
-     * buffered. Called after every queue mutation so the window stays correct.
-     */
     private fun rebufferWindow(
         startPositionMs: Long = 0L,
         autoPlay: Boolean = false,
@@ -174,7 +164,6 @@ class MusicService : MediaSessionService() {
                 p.currentMediaItemIndex == 0
 
         if (alreadySynced) {
-            // Window is correct — only ensure play state / position if requested
             if (startPositionMs > 0L && kotlin.math.abs(p.currentPosition - startPositionMs) > 400L) {
                 p.seekTo(startPositionMs)
             }
@@ -212,7 +201,6 @@ class MusicService : MediaSessionService() {
         persistState()
     }
 
-    /** Full stop+reload path used for recovery and restore. */
     private fun hardLoad(song: Song?, startPositionMs: Long = 0L, autoPlay: Boolean = false) {
         if (song == null) {
             player?.stop()
@@ -221,7 +209,6 @@ class MusicService : MediaSessionService() {
             updateForegroundNotification()
             return
         }
-        // Point queue at this song context already done by caller; just force window
         rebufferWindow(startPositionMs, autoPlay, forceReload = true)
     }
 
@@ -233,27 +220,29 @@ class MusicService : MediaSessionService() {
     }
 
     /**
-     * Prefer seamless seekToNext when the next media item is already the one
-     * QueueManager selected; otherwise force a rebuffer.
+     * Prefer seamless seekToNext when the next media item is already buffered;
+     * otherwise force a rebuffer. Never mutate the timeline with removeMediaItem
+     * mid-stream — that caused discontinuity beeps.
      */
     private fun applyAdvance(result: QueueManager.AdvanceResult, autoPlay: Boolean = true) {
         val p = player
         when {
-            result.seekToStart -> {
-                p?.seekTo(0)
-                if (autoPlay) p?.play()
-                // Still refresh next window after a one-track loop
-                rebufferWindow(
-                    startPositionMs = p?.currentPosition ?: 0L,
-                    autoPlay = autoPlay,
-                    forceReload = false
-                )
-                persistState()
-            }
             result.finished -> {
                 p?.pause()
                 _nowPlaying.value = queueManager.currentSong()
                 updateForegroundNotification()
+                persistState()
+            }
+            result.seekToStart -> {
+                p?.seekTo(0)
+                if (autoPlay) p?.play()
+                persistState()
+            }
+            result.reload -> {
+                // Repeat-one: restart the same item in place
+                Log.i(TAG, "repeat-one seekTo(0)")
+                p?.seekTo(0)
+                if (autoPlay) p?.play()
                 persistState()
             }
             result.song != null -> {
@@ -270,28 +259,24 @@ class MusicService : MediaSessionService() {
                     p.seekToNextMediaItem()
                     _nowPlaying.value = target
                     maybeRecordHistory(target)
-                    // Drop the old current and append the new next without stopping
-                    if (p.currentMediaItemIndex > 0) {
-                        p.removeMediaItem(0)
-                    }
-                    val newNext = queueManager.peekNext()
-                    // Ensure timeline is exactly [current, next?]
-                    while (p.mediaItemCount > 1) {
-                        p.removeMediaItem(p.mediaItemCount - 1)
-                    }
-                    if (newNext != null) {
-                        p.addMediaItem(toMediaItem(newNext))
-                    }
                     if (autoPlay) p.play()
                     updateForegroundNotification()
                     persistState()
+                    // Rebuild [current, next] after the transition settles
+                    serviceScope.launch {
+                        delay(150)
+                        val pl = player ?: return@launch
+                        val pos = pl.currentPosition.coerceAtLeast(0L)
+                        rebufferWindow(
+                            startPositionMs = pos,
+                            autoPlay = pl.playWhenReady,
+                            forceReload = true
+                        )
+                    }
                 } else {
                     Log.i(TAG, "fallback rebuffer advance → '${target.displayTitle}'")
                     rebufferWindow(0L, autoPlay = autoPlay, forceReload = true)
                 }
-            }
-            result.reload -> {
-                rebufferWindow(0L, autoPlay = autoPlay, forceReload = true)
             }
         }
     }
@@ -404,7 +389,6 @@ class MusicService : MediaSessionService() {
 
     fun setShuffle(enabled: Boolean) {
         queueManager.setShuffle(enabled)
-        // Shuffle changes cold order → next track may differ
         rebufferWindow(
             startPositionMs = player?.currentPosition ?: 0L,
             autoPlay = player?.playWhenReady == true,
@@ -549,7 +533,6 @@ class MusicService : MediaSessionService() {
         }
 
         override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) {
-            // Keep nowPlaying in sync when Exo advances inside the window
             val song = queueManager.currentSong()
             if (song != null && _nowPlaying.value?.contentUri != song.contentUri) {
                 _nowPlaying.value = song
