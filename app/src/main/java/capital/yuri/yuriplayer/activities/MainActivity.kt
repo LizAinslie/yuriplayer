@@ -256,7 +256,7 @@ fun YuriApp(
             )
         }
     ) { innerPadding ->
-        Box(Modifier = Modifier.fillMaxSize().padding(innerPadding)) {
+        Box(modifier = Modifier.fillMaxSize().padding(innerPadding)) {
             when (topTab) {
                 TopTab.Library -> LibraryScreen(
                     library = library,
