@@ -5,11 +5,14 @@ import androidx.compose.animation.core.spring
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
+import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
@@ -18,11 +21,12 @@ import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.DeleteSweep
 import androidx.compose.material.icons.filled.DragHandle
+import androidx.compose.material.icons.filled.PlaylistAdd
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -41,6 +45,7 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.zIndex
 import capital.yuri.yuriplayer.data.Song
@@ -59,33 +64,46 @@ private class SectionDragState {
     var from by mutableIntStateOf(-1)
     var hover by mutableIntStateOf(-1)
     var offsetY by mutableFloatStateOf(0f)
+    /** When dragging cold items: true if finger is in the hot section zone. */
+    var promoteToHot by mutableStateOf(false)
     val active: Boolean get() = from >= 0
 
     fun start(index: Int) {
         from = index
         hover = index
         offsetY = 0f
+        promoteToHot = false
     }
 
-    fun drag(deltaY: Float, rowHeight: Float, size: Int) {
+    fun drag(deltaY: Float, rowHeight: Float, size: Int, allowPromote: Boolean) {
         offsetY += deltaY
         val raw = from + (offsetY / rowHeight).roundToInt()
-        hover = raw.coerceIn(0, (size - 1).coerceAtLeast(0))
+        if (allowPromote && raw < 0) {
+            promoteToHot = true
+            hover = 0
+        } else {
+            promoteToHot = false
+            hover = raw.coerceIn(0, (size - 1).coerceAtLeast(0))
+        }
     }
 
-    fun end(): Pair<Int, Int>? {
+    fun end(): Triple<Int, Int, Boolean>? {
         val f = from
         val t = hover
+        val promote = promoteToHot
         from = -1
         hover = -1
         offsetY = 0f
-        return if (f >= 0 && t >= 0 && f != t) f to t else null
+        promoteToHot = false
+        if (f < 0) return null
+        return Triple(f, t, promote)
     }
 
     fun cancel() {
         from = -1
         hover = -1
         offsetY = 0f
+        promoteToHot = false
     }
 }
 
@@ -97,6 +115,7 @@ fun QueuePanel(
     onMoveCold: (from: Int, to: Int) -> Unit,
     onRemoveHot: (Int) -> Unit,
     onRemoveCold: (Int) -> Unit,
+    onMoveColdToHot: (Int) -> Unit = {},
     onPlayHistorySong: (Song) -> Unit = {},
     onClearHistory: () -> Unit = {},
     modifier: Modifier = Modifier
@@ -126,11 +145,7 @@ fun QueuePanel(
             Spacer(modifier = Modifier.weight(1f))
             if (tab == QueueTab.History && history.isNotEmpty()) {
                 TextButton(onClick = onClearHistory) {
-                    Icon(
-                        Icons.Default.DeleteSweep,
-                        contentDescription = null,
-                        modifier = Modifier.padding(end = 4.dp)
-                    )
+                    Icon(Icons.Default.DeleteSweep, null, modifier = Modifier.padding(end = 4.dp))
                     Text("Clear")
                 }
             }
@@ -142,6 +157,9 @@ fun QueuePanel(
                 onPlayItem = onPlayItem,
                 onMoveHot = onMoveHot,
                 onMoveCold = onMoveCold,
+                onRemoveHot = onRemoveHot,
+                onRemoveCold = onRemoveCold,
+                onMoveColdToHot = onMoveColdToHot,
                 modifier = Modifier.weight(1f)
             )
             QueueTab.History -> HistoryTabContent(
@@ -160,6 +178,9 @@ private fun QueueTabContent(
     onPlayItem: (QueueLane, Int) -> Unit,
     onMoveHot: (from: Int, to: Int) -> Unit,
     onMoveCold: (from: Int, to: Int) -> Unit,
+    onRemoveHot: (Int) -> Unit,
+    onRemoveCold: (Int) -> Unit,
+    onMoveColdToHot: (Int) -> Unit,
     modifier: Modifier = Modifier
 ) {
     val density = LocalDensity.current
@@ -172,7 +193,7 @@ private fun QueueTabContent(
         if (snapshot.hotQueue.isEmpty()) {
             item {
                 Text(
-                    "Swipe right on a song to queue it. Long-press & drag to reorder.",
+                    "Swipe right on a library song to add. Swipe left to remove. Long-press & drag to reorder.",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f),
                     modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
@@ -184,15 +205,19 @@ private fun QueueTabContent(
             key = { _, s -> "hot-${s.id}-${s.path}" }
         ) { index, song ->
             val isCurrent = snapshot.lane == QueueLane.HOT && snapshot.indexInLane == index
-            LiveReorderRow(
+            SwipeableQueueRow(
                 song = song,
                 index = index,
                 listSize = snapshot.hotQueue.size,
                 isCurrent = isCurrent,
                 rowHeightPx = rowHeightPx,
                 drag = hotDrag,
+                allowPromoteToHot = false,
+                showPromoteHint = false,
                 onClick = { onPlayItem(QueueLane.HOT, index) },
-                onCommitMove = { f, t -> onMoveHot(f, t) }
+                onCommitMove = { f, t -> onMoveHot(f, t) },
+                onSwipeRemove = { onRemoveHot(index) },
+                onSwipePromote = null
             )
         }
 
@@ -203,6 +228,12 @@ private fun QueueTabContent(
             SectionHeader(
                 "$contextLabel · ${snapshot.coldQueue.size}" +
                     if (snapshot.shuffleEnabled) " · shuffled" else ""
+            )
+            Text(
+                "Swipe left to remove · swipe right or drag up into Queue to promote",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.4f),
+                modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp)
             )
         }
         if (snapshot.coldQueue.isEmpty()) {
@@ -220,16 +251,181 @@ private fun QueueTabContent(
             key = { _, s -> "cold-${s.id}-${s.path}" }
         ) { index, song ->
             val isCurrent = snapshot.lane == QueueLane.COLD && snapshot.indexInLane == index
-            LiveReorderRow(
+            SwipeableQueueRow(
                 song = song,
                 index = index,
                 listSize = snapshot.coldQueue.size,
                 isCurrent = isCurrent,
                 rowHeightPx = rowHeightPx,
                 drag = coldDrag,
+                allowPromoteToHot = true,
+                showPromoteHint = coldDrag.active && coldDrag.promoteToHot && coldDrag.from == index,
                 onClick = { onPlayItem(QueueLane.COLD, index) },
-                onCommitMove = { f, t -> onMoveCold(f, t) }
+                onCommitMove = { f, t -> onMoveCold(f, t) },
+                onSwipeRemove = { onRemoveCold(index) },
+                onSwipePromote = { onMoveColdToHot(index) },
+                onDragPromote = { onMoveColdToHot(it) }
             )
+        }
+    }
+}
+
+@Composable
+private fun SwipeableQueueRow(
+    song: Song,
+    index: Int,
+    listSize: Int,
+    isCurrent: Boolean,
+    rowHeightPx: Float,
+    drag: SectionDragState,
+    allowPromoteToHot: Boolean,
+    showPromoteHint: Boolean,
+    onClick: () -> Unit,
+    onCommitMove: (from: Int, to: Int) -> Unit,
+    onSwipeRemove: () -> Unit,
+    onSwipePromote: (() -> Unit)?,
+    onDragPromote: ((Int) -> Unit)? = null
+) {
+    val density = LocalDensity.current
+    val swipeThreshold = with(density) { 96.dp.toPx() }
+    var swipeX by remember { mutableFloatStateOf(0f) }
+    val isDragged = drag.active && drag.from == index
+
+    val targetShift = when {
+        !drag.active || isDragged -> 0f
+        drag.from < drag.hover && index in (drag.from + 1)..drag.hover -> -rowHeightPx
+        drag.from > drag.hover && index in drag.hover until drag.from -> rowHeightPx
+        else -> 0f
+    }
+    val shift by animateFloatAsState(
+        targetValue = if (isDragged) drag.offsetY else targetShift,
+        animationSpec = spring(stiffness = 600f, dampingRatio = 0.85f),
+        label = "rowShift"
+    )
+
+    Box(
+        modifier = Modifier
+            .fillMaxWidth()
+            .zIndex(if (isDragged) 10f else 0f)
+    ) {
+        // Underlay: left = promote, right = remove
+        Row(
+            modifier = Modifier
+                .matchParentSize()
+                .padding(vertical = 2.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            if (onSwipePromote != null) {
+                Box(
+                    modifier = Modifier
+                        .weight(1f)
+                        .padding(end = 4.dp)
+                        .background(
+                            MaterialTheme.colorScheme.primaryContainer,
+                            RoundedCornerShape(8.dp)
+                        )
+                        .padding(horizontal = 16.dp, vertical = 12.dp),
+                    contentAlignment = Alignment.CenterStart
+                ) {
+                    Icon(Icons.Default.PlaylistAdd, "Add to queue", tint = MaterialTheme.colorScheme.primary)
+                }
+            } else {
+                Spacer(modifier = Modifier.weight(1f))
+            }
+            Box(
+                modifier = Modifier
+                    .weight(1f)
+                    .padding(start = 4.dp)
+                    .background(
+                        MaterialTheme.colorScheme.errorContainer,
+                        RoundedCornerShape(8.dp)
+                    )
+                    .padding(horizontal = 16.dp, vertical = 12.dp),
+                contentAlignment = Alignment.CenterEnd
+            ) {
+                Icon(Icons.Default.Delete, "Remove", tint = MaterialTheme.colorScheme.error)
+            }
+        }
+
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .graphicsLayer {
+                    translationY = shift
+                    translationX = swipeX
+                    shadowElevation = if (isDragged || showPromoteHint) 12f else 0f
+                    scaleX = if (isDragged) 1.02f else 1f
+                    scaleY = if (isDragged) 1.02f else 1f
+                }
+                .then(
+                    if (isDragged || showPromoteHint) Modifier
+                        .shadow(8.dp, RoundedCornerShape(8.dp))
+                        .background(
+                            if (showPromoteHint) MaterialTheme.colorScheme.primaryContainer
+                            else MaterialTheme.colorScheme.surface,
+                            RoundedCornerShape(8.dp)
+                        )
+                    else Modifier.background(MaterialTheme.colorScheme.surface)
+                )
+                .clickable(enabled = !drag.active && swipeX == 0f, onClick = onClick)
+                .pointerInput(index, listSize) {
+                    detectDragGesturesAfterLongPress(
+                        onDragStart = { drag.start(index) },
+                        onDragEnd = {
+                            drag.end()?.let { (f, t, promote) ->
+                                if (promote && allowPromoteToHot) onDragPromote?.invoke(f)
+                                else if (f != t) onCommitMove(f, t)
+                            }
+                        },
+                        onDragCancel = { drag.cancel() },
+                        onDrag = { change, amount ->
+                            change.consume()
+                            drag.drag(amount.y, rowHeightPx, listSize, allowPromoteToHot)
+                        }
+                    )
+                }
+                .pointerInput(index) {
+                    detectHorizontalDragGestures(
+                        onDragEnd = {
+                            when {
+                                swipeX < -swipeThreshold -> onSwipeRemove()
+                                swipeX > swipeThreshold && onSwipePromote != null -> onSwipePromote()
+                            }
+                            swipeX = 0f
+                        },
+                        onDragCancel = { swipeX = 0f },
+                        onHorizontalDrag = { _, amount ->
+                            val max = swipeThreshold * 1.4f
+                            val min = if (onSwipePromote != null) -max else -max
+                            swipeX = (swipeX + amount).coerceIn(min, max)
+                        }
+                    )
+                }
+                .padding(vertical = 6.dp, horizontal = 4.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Icon(
+                Icons.Default.DragHandle,
+                contentDescription = "Drag to reorder",
+                tint = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.4f),
+                modifier = Modifier.padding(end = 8.dp)
+            )
+            Column(modifier = Modifier.weight(1f)) {
+                MarqueeText(
+                    text = buildString {
+                        if (isCurrent) append("▶ ")
+                        if (showPromoteHint) append("↑ Queue · ")
+                        append(song.displayTitle)
+                    },
+                    style = MaterialTheme.typography.bodyMedium,
+                    fontWeight = if (isCurrent) FontWeight.Bold else FontWeight.Normal
+                )
+                MarqueeText(
+                    text = song.displayArtist,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
+                )
+            }
         }
     }
 }
@@ -290,88 +486,6 @@ private fun HistoryTabContent(
                     color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.45f)
                 )
             }
-        }
-    }
-}
-
-@Composable
-private fun LiveReorderRow(
-    song: Song,
-    index: Int,
-    listSize: Int,
-    isCurrent: Boolean,
-    rowHeightPx: Float,
-    drag: SectionDragState,
-    onClick: () -> Unit,
-    onCommitMove: (from: Int, to: Int) -> Unit
-) {
-    val isDragged = drag.active && drag.from == index
-
-    val targetShift = when {
-        !drag.active || isDragged -> 0f
-        drag.from < drag.hover && index in (drag.from + 1)..drag.hover -> -rowHeightPx
-        drag.from > drag.hover && index in drag.hover until drag.from -> rowHeightPx
-        else -> 0f
-    }
-    val shift by animateFloatAsState(
-        targetValue = if (isDragged) drag.offsetY else targetShift,
-        animationSpec = spring(stiffness = 600f, dampingRatio = 0.85f),
-        label = "rowShift"
-    )
-
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .zIndex(if (isDragged) 10f else 0f)
-            .graphicsLayer {
-                translationY = shift
-                shadowElevation = if (isDragged) 12f else 0f
-                scaleX = if (isDragged) 1.02f else 1f
-                scaleY = if (isDragged) 1.02f else 1f
-            }
-            .then(
-                if (isDragged) Modifier
-                    .shadow(8.dp, RoundedCornerShape(8.dp))
-                    .background(MaterialTheme.colorScheme.surface, RoundedCornerShape(8.dp))
-                else Modifier
-            )
-            .clickable(enabled = !drag.active, onClick = onClick)
-            .pointerInput(index, listSize) {
-                detectDragGesturesAfterLongPress(
-                    onDragStart = { drag.start(index) },
-                    onDragEnd = {
-                        drag.end()?.let { (f, t) -> onCommitMove(f, t) }
-                    },
-                    onDragCancel = { drag.cancel() },
-                    onDrag = { change, amount ->
-                        change.consume()
-                        drag.drag(amount.y, rowHeightPx, listSize)
-                    }
-                )
-            }
-            .padding(vertical = 6.dp, horizontal = 4.dp),
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        Icon(
-            Icons.Default.DragHandle,
-            contentDescription = "Drag to reorder",
-            tint = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.4f),
-            modifier = Modifier.padding(end = 8.dp)
-        )
-        Column(modifier = Modifier.weight(1f)) {
-            MarqueeText(
-                text = buildString {
-                    if (isCurrent) append("▶ ")
-                    append(song.displayTitle)
-                },
-                style = MaterialTheme.typography.bodyMedium,
-                fontWeight = if (isCurrent) FontWeight.Bold else FontWeight.Normal
-            )
-            MarqueeText(
-                text = song.displayArtist,
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
-            )
         }
     }
 }
