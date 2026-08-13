@@ -9,6 +9,7 @@ import androidx.compose.ui.graphics.toArgb
 import androidx.palette.graphics.Palette
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import kotlin.math.max
 
 data class PlayerColors(
     val container: Color,
@@ -32,21 +33,33 @@ suspend fun extractPlayerColors(bitmap: Bitmap?, fallback: ColorScheme): PlayerC
         }
 
         val dominant = palette.getDominantColor(fallback.primary.toArgb())
-        val vibrant = palette.getVibrantColor(dominant)
+        val vibrant = palette.getVibrantColor(
+            palette.getLightVibrantColor(
+                palette.getMutedColor(dominant)
+            )
+        )
+        val lightVibrant = palette.getLightVibrantColor(vibrant)
         val darkVibrant = palette.getDarkVibrantColor(dominant)
         val mutedSwatch = palette.getDarkMutedColor(palette.getMutedColor(dominant))
 
-        val accent = Color(vibrant)
-        val container = Color(darkVibrant).copy(alpha = 1f)
-        val surface = Color(mutedSwatch)
-
+        val containerRaw = Color(darkVibrant)
         // Prefer a dark stage so white text stays readable (Spotify-like)
-        val stage = if (container.luminance() > 0.35f) {
-            container.copy(red = container.red * 0.35f, green = container.green * 0.35f, blue = container.blue * 0.35f)
-        } else container
+        val stage = if (containerRaw.luminance() > 0.35f) {
+            containerRaw.copy(
+                red = containerRaw.red * 0.35f,
+                green = containerRaw.green * 0.35f,
+                blue = containerRaw.blue * 0.35f
+            )
+        } else containerRaw
 
+        // Accent must pop on the dark stage — lift lightness if palette is muddy
+        val accent = ensureAccentOnDark(
+            primary = Color(vibrant),
+            fallback = Color(lightVibrant),
+            stage = stage
+        )
         val onStage = if (stage.luminance() > 0.5f) Color.Black else Color.White
-        val onAccent = if (accent.luminance() > 0.5f) Color.Black else Color.White
+        val onAccent = if (accent.luminance() > 0.55f) Color.Black else Color.White
 
         PlayerColors(
             container = stage,
@@ -54,10 +67,49 @@ suspend fun extractPlayerColors(bitmap: Bitmap?, fallback: ColorScheme): PlayerC
             accent = accent,
             onAccent = onAccent,
             muted = onStage.copy(alpha = 0.55f),
-            surface = surface,
+            surface = Color(mutedSwatch),
             onSurface = onStage
         )
     }
+
+/**
+ * Dark album art often yields near-black "vibrant" swatches. Boost so controls
+ * stay visible on the dark now-playing stage.
+ */
+fun ensureAccentOnDark(primary: Color, fallback: Color, stage: Color): Color {
+    val candidates = listOf(primary, fallback)
+    val usable = candidates.firstOrNull { c ->
+        c.luminance() > 0.22f && contrastRatio(c, stage) >= 3.0f
+    }
+    if (usable != null) return usable
+
+    // Force a readable accent by lifting HSL-ish lightness toward the mid-tones
+    val base = if (primary.luminance() >= fallback.luminance()) primary else fallback
+    return liftColor(base, minLuminance = 0.42f)
+}
+
+private fun liftColor(c: Color, minLuminance: Float): Color {
+    if (c.luminance() >= minLuminance) return c
+    // Mix toward white until luminance clears the floor
+    var t = 0.15f
+    var out = c
+    while (out.luminance() < minLuminance && t <= 0.85f) {
+        out = Color(
+            red = c.red + (1f - c.red) * t,
+            green = c.green + (1f - c.green) * t,
+            blue = c.blue + (1f - c.blue) * t,
+            alpha = 1f
+        )
+        t += 0.1f
+    }
+    return out
+}
+
+private fun contrastRatio(a: Color, b: Color): Float {
+    val l1 = a.luminance() + 0.05f
+    val l2 = b.luminance() + 0.05f
+    return max(l1, l2) / kotlin.math.min(l1, l2)
+}
 
 fun fallbackPlayerColors(scheme: ColorScheme): PlayerColors = PlayerColors(
     container = scheme.surface,

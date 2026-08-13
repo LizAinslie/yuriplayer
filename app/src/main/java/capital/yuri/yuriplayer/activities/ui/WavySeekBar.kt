@@ -48,7 +48,6 @@ fun WavySeekBar(
     var dragging by remember { mutableFloatStateOf(-1f) }
     val shown = if (dragging >= 0f) dragging else progress.coerceIn(0f, 1f)
 
-    // Amplitude 0 = flat, 1 = full wave
     val amplitudeFactor = remember { Animatable(if (playing) 1f else 0f) }
     LaunchedEffect(playing) {
         amplitudeFactor.animateTo(
@@ -68,7 +67,6 @@ fun WavySeekBar(
         label = "phase"
     )
 
-    // Only apply phase while playing (or while flattening out)
     val effectivePhase = if (amplitudeFactor.value > 0.01f) phase else 0f
 
     Canvas(
@@ -108,12 +106,15 @@ fun WavySeekBar(
         val midY = size.height / 2f
         val amp = maxWaveAmplitude * density * amplitudeFactor.value
         val len = waveLength * density
+        val strokeInactive = 3.5f * density
+        val strokeActive = 5.5f * density
 
         fun waveY(x: Float): Float {
             if (amp < 0.5f) return midY
             return midY + amp * sin(2f * PI.toFloat() * x / len + effectivePhase).toFloat()
         }
 
+        // Full inactive track first (must stay visible on dark stages)
         val inactivePath = Path().apply {
             moveTo(0f, waveY(0f))
             var x = 0f
@@ -125,11 +126,11 @@ fun WavySeekBar(
         drawPath(
             path = inactivePath,
             color = inactiveColor,
-            style = Stroke(width = 4f * density, cap = StrokeCap.Round)
+            style = Stroke(width = strokeInactive, cap = StrokeCap.Round)
         )
 
         val endX = w * shown
-        if (endX > 0f) {
+        if (endX > 1f) {
             val activePath = Path().apply {
                 moveTo(0f, waveY(0f))
                 var x = 0f
@@ -141,19 +142,25 @@ fun WavySeekBar(
             drawPath(
                 path = activePath,
                 color = activeColor,
-                style = Stroke(width = 5.5f * density, cap = StrokeCap.Round)
+                style = Stroke(width = strokeActive, cap = StrokeCap.Round)
             )
         }
 
-        val thumbX = endX
+        val thumbX = endX.coerceIn(0f, w)
         val thumbY = waveY(thumbX)
+        // Soft glow so the thumb reads on any stage
+        drawCircle(
+            color = activeColor.copy(alpha = 0.35f),
+            radius = 12f * density,
+            center = Offset(thumbX, thumbY)
+        )
         drawCircle(
             color = activeColor,
             radius = 8f * density,
             center = Offset(thumbX, thumbY)
         )
         drawCircle(
-            color = Color.White.copy(alpha = 0.92f),
+            color = Color.White.copy(alpha = 0.95f),
             radius = 3.5f * density,
             center = Offset(thumbX, thumbY)
         )

@@ -1,13 +1,18 @@
 package capital.yuri.yuriplayer.activities.ui
 
+import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectVerticalDragGestures
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
@@ -16,17 +21,24 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.shadow
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.unit.dp
+import capital.yuri.yuriplayer.data.PlayerThemeStore
 import capital.yuri.yuriplayer.data.Song
+import org.koin.compose.koinInject
 
 /**
- * Compact now-playing strip shared by the main shell and the queue page.
+ * Compact now-playing strip.
  *
- * @param onOpen called when the strip is tapped (or swiped up if [enableSwipeUp]).
- *               Main UI → open full player; queue page → close queue back to full NP.
+ * Chrome (surface, text, structure) follows the ambient app theme.
+ * Accents only — progress track + play/pause — use album-art Material colors.
+ * Album art gets a soft colored drop shadow from the same palette.
  */
 @Composable
 fun NowPlayingPreview(
@@ -41,9 +53,18 @@ fun NowPlayingPreview(
     tonalElevation: androidx.compose.ui.unit.Dp = 3.dp,
     shadowElevation: androidx.compose.ui.unit.Dp = 6.dp
 ) {
+    val themeStore: PlayerThemeStore = koinInject()
+    val theme by themeStore.current.collectAsState()
+    val ambient = MaterialTheme.colorScheme
+    val accent = theme?.colors?.accent ?: ambient.primary
+    val onAccent = theme?.colors?.onAccent ?: ambient.onPrimary
+    val trackInactive = ambient.onSurface.copy(alpha = 0.2f)
+
     Surface(
         tonalElevation = tonalElevation,
         shadowElevation = shadowElevation,
+        color = ambient.surface,
+        contentColor = ambient.onSurface,
         modifier = modifier
             .fillMaxWidth()
             .then(
@@ -60,7 +81,9 @@ fun NowPlayingPreview(
             PlaybackProgress(
                 positionMs = positionMs,
                 durationMs = durationMs,
-                style = ProgressStyle.LINEAR
+                style = ProgressStyle.LINEAR,
+                activeColor = accent,
+                inactiveColor = trackInactive
             )
             Row(
                 modifier = Modifier
@@ -69,31 +92,51 @@ fun NowPlayingPreview(
                     .padding(horizontal = 12.dp, vertical = 8.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                AlbumArt(song = song, size = 44.dp, corner = 6.dp)
+                // Colored ambient shadow behind the art tile
+                Box(
+                    modifier = Modifier
+                        .shadow(
+                            elevation = 10.dp,
+                            shape = RoundedCornerShape(6.dp),
+                            ambientColor = accent.copy(alpha = 0.55f),
+                            spotColor = accent.copy(alpha = 0.65f)
+                        )
+                ) {
+                    AlbumArt(song = song, size = 44.dp, corner = 6.dp)
+                }
                 Spacer(modifier = Modifier.width(12.dp))
                 Column(modifier = Modifier.weight(1f)) {
                     MarqueeText(
                         text = song?.displayTitle ?: "Not playing",
-                        style = MaterialTheme.typography.bodyMedium
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = ambient.onSurface
                     )
                     MarqueeText(
                         text = song?.displayArtist ?: "",
                         style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
+                        color = ambient.onSurface.copy(alpha = 0.6f)
                     )
                 }
                 IconButton(onClick = onToggle) {
-                    Icon(
-                        if (playing) Icons.Default.Pause else Icons.Default.PlayArrow,
-                        contentDescription = if (playing) "Pause" else "Play"
-                    )
+                    Box(
+                        modifier = Modifier
+                            .size(40.dp)
+                            .background(accent, CircleShape),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Icon(
+                            if (playing) Icons.Default.Pause else Icons.Default.PlayArrow,
+                            contentDescription = if (playing) "Pause" else "Play",
+                            tint = onAccent
+                        )
+                    }
                 }
             }
         }
     }
 }
 
-/** @deprecated Use [NowPlayingPreview]. Kept as a thin alias for older call sites. */
+/** Alias used by the main shell bottom bar. */
 @Composable
 fun MiniPlayerBar(
     song: Song?,
