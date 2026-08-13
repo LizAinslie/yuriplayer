@@ -40,7 +40,6 @@ import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.rememberModalBottomSheetState
-import androidx.compose.material3.ripple
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -63,7 +62,6 @@ import androidx.compose.ui.input.nestedscroll.NestedScrollSource
 import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
-import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
@@ -75,16 +73,11 @@ import capital.yuri.yuriplayer.ui.formatTrackCount
 import org.koin.compose.koinInject
 import kotlin.math.sqrt
 
-private val ExpandedHeaderBody = 400.dp
+private val ExpandedHeaderBody = 420.dp
 private val CollapsedBarHeight = 56.dp
 private val GradientFadeLength = 220.dp
 
-/**
- * Guaranteed circle play/pause.
- *
- * Uses [Surface] + [CircleShape] + [requiredSize]/[aspectRatio] so parent
- * Rows cannot stretch it into a pill (IconButton min-size was doing that).
- */
+/** Guaranteed circle play/pause. */
 @Composable
 private fun CircularPlayButton(
     showPause: Boolean,
@@ -313,7 +306,7 @@ fun AlbumDetailScreen(
                 LazyColumn(
                     state = listState,
                     modifier = Modifier.fillMaxSize(),
-                    contentPadding = PaddingValues(bottom = 96.dp)
+                    contentPadding = PaddingValues(top = 8.dp, bottom = 96.dp)
                 ) {
                     discs.forEach { (disc, tracks) ->
                         if (multiDisc) {
@@ -404,7 +397,7 @@ private fun SpotifyAlbumHero(
         modifier = Modifier
             .fillMaxWidth()
             .padding(horizontal = 20.dp)
-            .padding(top = 36.dp, bottom = 4.dp),
+            .padding(top = 36.dp, bottom = 20.dp),
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
         AlbumArt(
