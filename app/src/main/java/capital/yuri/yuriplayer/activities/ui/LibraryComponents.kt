@@ -43,7 +43,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
-import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import capital.yuri.yuriplayer.data.AlbumItem
@@ -262,21 +261,17 @@ fun SwipeAddSongRow(
             AlbumArt(song = song, size = 40.dp, corner = 4.dp)
             Spacer(modifier = Modifier.width(12.dp))
             Column(modifier = Modifier.weight(1f)) {
-                Text(
-                    buildString {
+                MarqueeText(
+                    text = buildString {
                         song.trackNumber?.let { append("$it. ") }
                         append(song.displayTitle)
                     },
-                    style = MaterialTheme.typography.bodyLarge,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis
+                    style = MaterialTheme.typography.bodyLarge
                 )
-                Text(
-                    "${song.displayArtist} • ${song.displayAlbum}",
+                MarqueeText(
+                    text = "${song.displayArtist} • ${song.displayAlbum}",
                     style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis
+                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
                 )
             }
         }
@@ -294,10 +289,13 @@ fun AlbumRow(album: AlbumItem, onClick: () -> Unit) {
     ) {
         AlbumArt(song = album.songs.firstOrNull(), size = 48.dp)
         Spacer(modifier = Modifier.width(12.dp))
-        Column {
-            Text(album.displayName, style = MaterialTheme.typography.bodyLarge, maxLines = 1, overflow = TextOverflow.Ellipsis)
-            Text(
-                "${album.displayArtist} · ${album.trackCount} tracks",
+        Column(modifier = Modifier.weight(1f)) {
+            MarqueeText(
+                text = album.displayName,
+                style = MaterialTheme.typography.bodyLarge
+            )
+            MarqueeText(
+                text = "${album.displayArtist} · ${album.trackCount} tracks",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
             )
@@ -313,7 +311,10 @@ fun ArtistRow(artist: ArtistItem, onClick: () -> Unit) {
             .clickable(onClick = onClick)
             .padding(horizontal = 16.dp, vertical = 12.dp)
     ) {
-        Text(artist.displayName, style = MaterialTheme.typography.bodyLarge, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        MarqueeText(
+            text = artist.displayName,
+            style = MaterialTheme.typography.bodyLarge
+        )
         Text(
             "${artist.albumCount} albums · ${artist.trackCount} tracks",
             style = MaterialTheme.typography.bodySmall,
