@@ -35,6 +35,16 @@ class PlaybackStateStore(context: Context) {
                 .put("coldQueue", songsToJson(snapshot.coldQueue))
                 .put("coldOriginal", songsToJson(snapshot.coldOriginal))
 
+            snapshot.coldSource?.let { src ->
+                root.put(
+                    "coldSource",
+                    JSONObject()
+                        .put("type", src.type.name)
+                        .put("id", src.id)
+                        .put("title", src.title ?: JSONObject.NULL)
+                )
+            }
+
             val tmp = File(file.parentFile, "$FILE_NAME.tmp")
             tmp.writeText(root.toString())
             if (!tmp.renameTo(file)) {
@@ -50,7 +60,6 @@ class PlaybackStateStore(context: Context) {
         if (!file.exists()) return null
         return try {
             val root = JSONObject(file.readText())
-            // Legacy v1: single "queue" array
             if (root.has("queue") && !root.has("coldQueue")) {
                 return loadLegacy(root)
             }
@@ -71,11 +80,24 @@ class PlaybackStateStore(context: Context) {
                 RepeatMode.OFF
             }
 
+            val coldSource = root.optJSONObject("coldSource")?.let { obj ->
+                try {
+                    ColdSource(
+                        type = ColdSourceType.valueOf(obj.optString("type", ColdSourceType.UNKNOWN.name)),
+                        id = obj.optString("id", ""),
+                        title = obj.optString("title", null)?.takeIf { it.isNotBlank() && it != "null" }
+                    ).takeIf { it.id.isNotBlank() }
+                } catch (_: Exception) {
+                    null
+                }
+            }
+
             SavedPlayback(
                 snapshot = QueueSnapshot(
                     hotQueue = hot,
                     coldQueue = cold,
                     coldOriginal = coldOriginal,
+                    coldSource = coldSource,
                     lane = lane,
                     indexInLane = root.optInt("indexInLane", 0),
                     shuffleEnabled = root.optBoolean("shuffleEnabled", false),
@@ -186,6 +208,6 @@ class PlaybackStateStore(context: Context) {
     companion object {
         private const val TAG = "PlaybackStateStore"
         private const val FILE_NAME = "playback_state.json"
-        private const val VERSION = 2
+        private const val VERSION = 3
     }
 }
