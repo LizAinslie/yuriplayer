@@ -38,6 +38,8 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -108,7 +110,21 @@ fun NowPlayingScreen(
     var dismissFrac by remember { mutableFloatStateOf(0f) }
     var topPull by remember { mutableFloatStateOf(0f) }
 
+    // Button-driven art slide: token bumps, direction -1=next +1=prev
+    var skipToken by remember { mutableLongStateOf(0L) }
+    var skipDirection by remember { mutableIntStateOf(0) }
+
     val dismissThreshold = with(density) { 140.dp.toPx() }
+
+    fun requestSkipNext() {
+        skipDirection = -1
+        skipToken++
+    }
+
+    fun requestSkipPrev() {
+        skipDirection = 1
+        skipToken++
+    }
 
     LaunchedEffect(song?.id, song?.path) {
         themeStore.updateCurrent(context, song, baseScheme)
@@ -143,11 +159,12 @@ fun NowPlayingScreen(
             color = scheme.background.copy(alpha = 1f - maxOf(dismissFrac, topPull / dismissThreshold) * 0.2f)
         ) {
             if (showQueue) {
+                // No navigationBarsPadding on the column — transport bar owns the inset
+                // so its surface can paint under the gesture bar.
                 Column(
                     modifier = Modifier
                         .fillMaxSize()
                         .statusBarsPadding()
-                        .navigationBarsPadding()
                 ) {
                     Box(
                         modifier = Modifier
@@ -242,9 +259,16 @@ fun NowPlayingScreen(
                         prev = prevTheme,
                         onSwipeNext = onNext,
                         onSwipePrev = onPrev,
+                        onPromoteNext = { themeStore.promoteNext() },
+                        onPromotePrev = { themeStore.promotePrev() },
                         onDismiss = onCollapse,
                         onHorizontalFraction = { hFrac = it },
                         onDismissFraction = { dismissFrac = it },
+                        skipToken = skipToken,
+                        skipDirection = skipDirection,
+                        onSkipConsumed = {
+                            skipDirection = 0
+                        },
                         horizontalInset = 20.dp,
                         modifier = Modifier.fillMaxWidth()
                     )
@@ -315,7 +339,7 @@ fun NowPlayingScreen(
                                 else scheme.onBackground.copy(alpha = 0.7f)
                             )
                         }
-                        IconButton(onClick = onPrev) {
+                        IconButton(onClick = { requestSkipPrev() }) {
                             Icon(
                                 Icons.Default.SkipPrevious,
                                 "Previous",
@@ -336,7 +360,7 @@ fun NowPlayingScreen(
                                 tint = scheme.onPrimary
                             )
                         }
-                        IconButton(onClick = onNext) {
+                        IconButton(onClick = { requestSkipNext() }) {
                             Icon(
                                 Icons.Default.SkipNext,
                                 "Next",
