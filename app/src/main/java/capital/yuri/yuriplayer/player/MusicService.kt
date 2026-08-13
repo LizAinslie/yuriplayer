@@ -201,6 +201,37 @@ class MusicService : MediaSessionService() {
         persistState()
     }
 
+    /**
+     * Swap only the upcoming media item without touching the currently playing
+     * item. Used for shuffle/repeat toggles and queue mutations that only
+     * change what comes *next* — avoids the setMediaItems hiccup.
+     */
+    private fun updateNextMediaItemOnly() {
+        val p = player ?: return
+        val current = queueManager.currentSong() ?: return
+        val playingUri = mediaItemUriAt(p.currentMediaItemIndex)
+        if (playingUri != songUri(current)) {
+            // Playing something unexpected — full sync
+            rebufferWindow(
+                startPositionMs = p.currentPosition.coerceAtLeast(0L),
+                autoPlay = p.playWhenReady,
+                forceReload = true
+            )
+            return
+        }
+
+        val next = queueManager.peekNext()
+        // Drop anything after the current item
+        while (p.mediaItemCount > p.currentMediaItemIndex + 1) {
+            p.removeMediaItem(p.mediaItemCount - 1)
+        }
+        if (next != null) {
+            p.addMediaItem(toMediaItem(next))
+        }
+        _nowPlaying.value = current
+        updateForegroundNotification()
+    }
+
     private fun hardLoad(song: Song?, startPositionMs: Long = 0L, autoPlay: Boolean = false) {
         if (song == null) {
             player?.stop()
@@ -229,19 +260,21 @@ class MusicService : MediaSessionService() {
                 persistState()
             }
             result.seekToStart -> {
-                p?.seekTo(0)
-                if (autoPlay) p?.play()
-                _nowPlaying.value = queueManager.currentSong() ?: result.song
-                updateForegroundNotification()
-                persistState()
+                // Restart in place when possible; full reload if player is ENDED
+                if (p != null && p.playbackState != Player.STATE_ENDED) {
+                    p.seekTo(0)
+                    if (autoPlay) p.play()
+                    _nowPlaying.value = queueManager.currentSong() ?: result.song
+                    updateForegroundNotification()
+                    persistState()
+                } else {
+                    rebufferWindow(0L, autoPlay = autoPlay, forceReload = true)
+                }
             }
             result.reload -> {
-                Log.i(TAG, "repeat-one seekTo(0)")
-                p?.seekTo(0)
-                if (autoPlay) p?.play()
-                _nowPlaying.value = queueManager.currentSong() ?: result.song
-                updateForegroundNotification()
-                persistState()
+                // Repeat-one: always full reload — bare seekTo after ENDED goes silent
+                Log.i(TAG, "repeat-one full restart")
+                rebufferWindow(0L, autoPlay = autoPlay, forceReload = true)
             }
             result.song != null -> {
                 val target = result.song
@@ -279,10 +312,6 @@ class MusicService : MediaSessionService() {
         }
     }
 
-    /**
-     * Exo already moved to the next prebuffered item. Advance our queue to match
-     * without seeking the player again, then rebuild the [current, next] window.
-     */
     private fun syncQueueAfterExoAutoAdvance() {
         if (advancing) return
         advancing = true
@@ -290,12 +319,8 @@ class MusicService : MediaSessionService() {
             val result = queueManager.advance(userInitiated = false)
             when {
                 result.reload -> {
-                    Log.i(TAG, "auto-transition + repeat-one → seekTo(0)")
-                    player?.seekTo(0)
-                    player?.play()
-                    _nowPlaying.value = result.song ?: queueManager.currentSong()
-                    updateForegroundNotification()
-                    persistState()
+                    Log.i(TAG, "auto-transition + repeat-one → full restart")
+                    rebufferWindow(0L, autoPlay = true, forceReload = true)
                 }
                 result.finished -> {
                     player?.pause()
@@ -337,92 +362,68 @@ class MusicService : MediaSessionService() {
 
     fun updateColdFromSource(songs: List<Song>, sourceId: String) {
         if (queueManager.updateColdFromSource(songs, sourceId)) {
-            rebufferWindow(
-                startPositionMs = player?.currentPosition ?: 0L,
-                autoPlay = player?.playWhenReady == true,
-                forceReload = false
-            )
+            updateNextMediaItemOnly()
             persistState()
         }
     }
 
     fun addToHotQueue(song: Song) {
         queueManager.addToQueue(song)
-        rebufferWindow(
-            startPositionMs = player?.currentPosition ?: 0L,
-            autoPlay = player?.playWhenReady == true,
-            forceReload = false
-        )
+        updateNextMediaItemOnly()
         persistState()
     }
 
     fun addToHotQueue(songs: List<Song>) {
         queueManager.addToQueue(songs)
-        rebufferWindow(
-            startPositionMs = player?.currentPosition ?: 0L,
-            autoPlay = player?.playWhenReady == true,
-            forceReload = false
-        )
+        updateNextMediaItemOnly()
         persistState()
     }
 
     fun clearHotQueue() {
         queueManager.clearHotQueue()
-        rebufferWindow(
-            startPositionMs = player?.currentPosition ?: 0L,
-            autoPlay = player?.playWhenReady == true,
-            forceReload = false
-        )
+        updateNextMediaItemOnly()
         persistState()
     }
 
     fun removeFromHot(index: Int) {
         val needReload = queueManager.removeFromQueue(index)
-        rebufferWindow(
-            startPositionMs = if (needReload) 0L else player?.currentPosition ?: 0L,
-            autoPlay = player?.playWhenReady == true,
-            forceReload = needReload
-        )
+        if (needReload) {
+            rebufferWindow(0L, autoPlay = player?.playWhenReady == true, forceReload = true)
+        } else {
+            updateNextMediaItemOnly()
+        }
         persistState()
     }
 
     fun removeFromCold(index: Int) {
         val needReload = queueManager.removeFromContext(index)
-        rebufferWindow(
-            startPositionMs = if (needReload) 0L else player?.currentPosition ?: 0L,
-            autoPlay = player?.playWhenReady == true,
-            forceReload = needReload
-        )
+        if (needReload) {
+            rebufferWindow(0L, autoPlay = player?.playWhenReady == true, forceReload = true)
+        } else {
+            updateNextMediaItemOnly()
+        }
         persistState()
     }
 
     fun moveHot(from: Int, to: Int) {
         queueManager.moveInQueue(from, to)
-        rebufferWindow(
-            startPositionMs = player?.currentPosition ?: 0L,
-            autoPlay = player?.playWhenReady == true,
-            forceReload = false
-        )
+        updateNextMediaItemOnly()
         persistState()
     }
 
     fun moveCold(from: Int, to: Int) {
         queueManager.moveInContext(from, to)
-        rebufferWindow(
-            startPositionMs = player?.currentPosition ?: 0L,
-            autoPlay = player?.playWhenReady == true,
-            forceReload = false
-        )
+        updateNextMediaItemOnly()
         persistState()
     }
 
     fun moveColdToHot(index: Int) {
         val needReload = queueManager.moveColdToHot(index)
-        rebufferWindow(
-            startPositionMs = if (needReload) 0L else player?.currentPosition ?: 0L,
-            autoPlay = player?.playWhenReady == true,
-            forceReload = needReload
-        )
+        if (needReload) {
+            rebufferWindow(0L, autoPlay = player?.playWhenReady == true, forceReload = true)
+        } else {
+            updateNextMediaItemOnly()
+        }
         persistState()
     }
 
@@ -433,33 +434,22 @@ class MusicService : MediaSessionService() {
 
     fun setShuffle(enabled: Boolean) {
         queueManager.setShuffle(enabled)
-        rebufferWindow(
-            startPositionMs = player?.currentPosition ?: 0L,
-            autoPlay = player?.playWhenReady == true,
-            forceReload = false
-        )
+        // Only the upcoming track may change — don't rebuild current
+        updateNextMediaItemOnly()
         persistState()
     }
 
     fun cycleRepeatMode() {
         queueManager.cycleRepeatMode()
         player?.repeatMode = Player.REPEAT_MODE_OFF
-        rebufferWindow(
-            startPositionMs = player?.currentPosition ?: 0L,
-            autoPlay = player?.playWhenReady == true,
-            forceReload = false
-        )
+        updateNextMediaItemOnly()
         persistState()
     }
 
     fun setRepeatMode(mode: RepeatMode) {
         queueManager.setRepeatMode(mode)
         player?.repeatMode = Player.REPEAT_MODE_OFF
-        rebufferWindow(
-            startPositionMs = player?.currentPosition ?: 0L,
-            autoPlay = player?.playWhenReady == true,
-            forceReload = false
-        )
+        updateNextMediaItemOnly()
         persistState()
     }
 
@@ -577,8 +567,6 @@ class MusicService : MediaSessionService() {
         }
 
         override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) {
-            // Exo auto-advanced into the prebuffered next item. Queue was still on
-            // the previous song — that is why the UI lagged until the user hit next.
             if (reason == Player.MEDIA_ITEM_TRANSITION_REASON_AUTO) {
                 syncQueueAfterExoAutoAdvance()
                 return
@@ -593,7 +581,6 @@ class MusicService : MediaSessionService() {
         }
 
         override fun onPlaybackStateChanged(playbackState: Int) {
-            // True end of timeline (no prebuffered next). Advance via full path.
             if (playbackState == Player.STATE_ENDED && !advancing) {
                 advancing = true
                 try {
