@@ -41,6 +41,7 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.ScaffoldDefaults
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -57,12 +58,15 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.zIndex
 import androidx.core.content.ContextCompat
 import capital.yuri.yuriplayer.activities.ui.AlbumDetailScreen
+import capital.yuri.yuriplayer.activities.ui.ApplyStatusBarStack
 import capital.yuri.yuriplayer.activities.ui.ArtistDetailScreen
 import capital.yuri.yuriplayer.activities.ui.LibraryScreen
+import capital.yuri.yuriplayer.activities.ui.LocalStatusBarStack
 import capital.yuri.yuriplayer.activities.ui.MiniPlayerBar
 import capital.yuri.yuriplayer.activities.ui.NowPlayingScreen
 import capital.yuri.yuriplayer.activities.ui.PlaceholderScreen
 import capital.yuri.yuriplayer.activities.ui.SettingsScreen
+import capital.yuri.yuriplayer.activities.ui.StatusBarColorStack
 import capital.yuri.yuriplayer.activities.ui.theme.YuriPlayerTheme
 import capital.yuri.yuriplayer.data.ActivityTitleFormat
 import capital.yuri.yuriplayer.data.AlbumItem
@@ -179,6 +183,14 @@ fun YuriApp(
     val themeStore: PlayerThemeStore = koinInject()
     val baseScheme = MaterialTheme.colorScheme
 
+    // Base status-bar color = app background. Deeper routes push on top.
+    val statusBarStack = remember(baseScheme.background) {
+        StatusBarColorStack(baseScheme.background)
+    }
+    LaunchedEffect(baseScheme.background) {
+        statusBarStack.replaceBase(baseScheme.background)
+    }
+
     var topTab by remember { mutableStateOf(TopTab.Library) }
     var playerExpanded by remember { mutableStateOf(false) }
     var detailStack by remember { mutableStateOf<List<DetailRoute>>(emptyList()) }
@@ -279,193 +291,197 @@ fun YuriApp(
         pushDetail(DetailRoute.Artist(found))
     }
 
-    Box(modifier = Modifier.fillMaxSize()) {
-        Scaffold(
-            modifier = Modifier.fillMaxSize(),
-            containerColor = if (edgeToEdgeDetail) Color.Transparent
-            else MaterialTheme.colorScheme.background,
-            contentWindowInsets = if (edgeToEdgeDetail) {
-                WindowInsets(0, 0, 0, 0)
-            } else {
-                ScaffoldDefaults.contentWindowInsets
-            },
-            topBar = {
-                if (detail == null) {
-                    TopAppBar(
-                        title = {
-                            Row(
-                                horizontalArrangement = Arrangement.spacedBy(4.dp),
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                TopTab.entries.forEach { tab ->
-                                    val selected = topTab == tab
-                                    IconButton(onClick = { topTab = tab }) {
-                                        Icon(
-                                            imageVector = tab.icon,
-                                            contentDescription = tab.label,
-                                            tint = if (selected) MaterialTheme.colorScheme.primary
-                                            else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.45f)
-                                        )
+    CompositionLocalProvider(LocalStatusBarStack provides statusBarStack) {
+        ApplyStatusBarStack(statusBarStack)
+
+        Box(modifier = Modifier.fillMaxSize()) {
+            Scaffold(
+                modifier = Modifier.fillMaxSize(),
+                containerColor = if (edgeToEdgeDetail) Color.Transparent
+                else MaterialTheme.colorScheme.background,
+                contentWindowInsets = if (edgeToEdgeDetail) {
+                    WindowInsets(0, 0, 0, 0)
+                } else {
+                    ScaffoldDefaults.contentWindowInsets
+                },
+                topBar = {
+                    if (detail == null) {
+                        TopAppBar(
+                            title = {
+                                Row(
+                                    horizontalArrangement = Arrangement.spacedBy(4.dp),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    TopTab.entries.forEach { tab ->
+                                        val selected = topTab == tab
+                                        IconButton(onClick = { topTab = tab }) {
+                                            Icon(
+                                                imageVector = tab.icon,
+                                                contentDescription = tab.label,
+                                                tint = if (selected) MaterialTheme.colorScheme.primary
+                                                else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.45f)
+                                            )
+                                        }
                                     }
                                 }
-                            }
-                        },
-                        actions = {
-                            if (topTab == TopTab.Library) {
-                                val loading by library.isLoading.collectAsState()
-                                IconButton(onClick = { library.refresh() }) {
-                                    if (loading) {
-                                        CircularProgressIndicator(
-                                            modifier = Modifier.size(20.dp),
-                                            strokeWidth = 2.dp
-                                        )
-                                    } else {
-                                        Icon(Icons.Default.Refresh, contentDescription = "Refresh library")
+                            },
+                            actions = {
+                                if (topTab == TopTab.Library) {
+                                    val loading by library.isLoading.collectAsState()
+                                    IconButton(onClick = { library.refresh() }) {
+                                        if (loading) {
+                                            CircularProgressIndicator(
+                                                modifier = Modifier.size(20.dp),
+                                                strokeWidth = 2.dp
+                                            )
+                                        } else {
+                                            Icon(Icons.Default.Refresh, contentDescription = "Refresh library")
+                                        }
                                     }
                                 }
+                                IconButton(onClick = { pushDetail(DetailRoute.Settings) }) {
+                                    Icon(Icons.Default.Settings, contentDescription = "Settings")
+                                }
                             }
-                            IconButton(onClick = { pushDetail(DetailRoute.Settings) }) {
-                                Icon(Icons.Default.Settings, contentDescription = "Settings")
-                            }
-                        }
+                        )
+                    }
+                },
+                bottomBar = {
+                    MiniPlayerBar(
+                        song = currentSong,
+                        playing = playing,
+                        positionMs = positionMs,
+                        durationMs = durationMs,
+                        onToggle = { player.togglePlayPause() },
+                        onExpand = { playerExpanded = true }
                     )
                 }
-            },
-            bottomBar = {
-                MiniPlayerBar(
+            ) { innerPadding ->
+                val contentPadding = if (edgeToEdgeDetail) {
+                    PaddingValues(bottom = innerPadding.calculateBottomPadding())
+                } else {
+                    innerPadding
+                }
+                Box(modifier = Modifier.fillMaxSize().padding(contentPadding)) {
+                    when (val d = detail) {
+                        is DetailRoute.Album -> {
+                            val key = albumKey(d.album.name, d.album.artist)
+                            LaunchedEffect(d.album.songs.size, key) {
+                                player.updateColdFromSource(d.album.songs, key)
+                            }
+                            AlbumDetailScreen(
+                                album = d.album,
+                                nowPlaying = currentSong,
+                                isSourceActive = snapshot.isPlayingFromAlbum(key),
+                                isPlaying = playing,
+                                shuffleEnabled = snapshot.shuffleEnabled,
+                                onBack = { popDetail() },
+                                onPlayAlbum = { songs, index -> playAlbumFrom(d.album, songs, index) },
+                                onTogglePlayPause = { player.togglePlayPause() },
+                                onToggleShuffle = { player.toggleShuffle() },
+                                onFavorite = {
+                                    Toast.makeText(context, "My Stuff coming soon", Toast.LENGTH_SHORT).show()
+                                },
+                                onOpenArtist = {
+                                    val name = d.album.artist ?: return@AlbumDetailScreen
+                                    pushDetail(
+                                        DetailRoute.Artist(
+                                            library.artists().firstOrNull {
+                                                it.name.equals(name, ignoreCase = true)
+                                            } ?: ArtistItem(name, 0, 0, emptyList())
+                                        )
+                                    )
+                                },
+                                onAddSongToQueue = { player.addToHotQueue(it) },
+                                onAddAlbumToQueue = { player.addToHotQueue(it) }
+                            )
+                        }
+                        is DetailRoute.Artist -> {
+                            val albums = library.albums().filter {
+                                it.artist.equals(d.artist.name, ignoreCase = true)
+                            }
+                            ArtistDetailScreen(
+                                artist = d.artist,
+                                albums = albums,
+                                onBack = { popDetail() },
+                                onOpenAlbum = { pushDetail(DetailRoute.Album(it)) },
+                                onPlaySongs = { songs, i ->
+                                    player.setRepeatMode(RepeatMode.COLD)
+                                    player.playSource(
+                                        songs, i,
+                                        ColdSource(ColdSourceType.ARTIST, d.artist.name ?: "", d.artist.name)
+                                    )
+                                }
+                            )
+                        }
+                        is DetailRoute.Settings -> SettingsScreen(onBack = { popDetail() })
+                        null -> when (topTab) {
+                            TopTab.Home -> PlaceholderScreen("Home", "Pin playlists and shortcuts here later.")
+                            TopTab.Library -> LibraryScreen(
+                                library = library,
+                                nowPlaying = currentSong,
+                                isPlaybackActive = playing,
+                                onPlay = { songs, index -> player.playSource(songs, index) },
+                                onAddToQueue = { player.addToHotQueue(it) },
+                                onAddAlbumToQueue = { player.addToHotQueue(it) },
+                                onOpenAlbum = { pushDetail(DetailRoute.Album(it)) },
+                                onOpenArtist = { pushDetail(DetailRoute.Artist(it)) }
+                            )
+                            TopTab.MyStuff -> PlaceholderScreen(
+                                "My Stuff",
+                                "Favorites, playlists, and saved albums/artists will live here."
+                            )
+                        }
+                    }
+                }
+            }
+
+            AnimatedVisibility(
+                visible = playerExpanded,
+                modifier = Modifier
+                    .fillMaxSize()
+                    .zIndex(2f),
+                enter = slideInVertically(
+                    animationSpec = tween(320),
+                    initialOffsetY = { fullHeight -> fullHeight }
+                ) + fadeIn(animationSpec = tween(200)),
+                exit = slideOutVertically(
+                    animationSpec = tween(280),
+                    targetOffsetY = { fullHeight -> fullHeight }
+                ) + fadeOut(animationSpec = tween(180))
+            ) {
+                NowPlayingScreen(
                     song = currentSong,
                     playing = playing,
                     positionMs = positionMs,
                     durationMs = durationMs,
+                    snapshot = snapshot,
+                    peekNextSong = peekNext,
+                    peekPrevSong = peekPrev,
+                    onCollapse = { playerExpanded = false },
                     onToggle = { player.togglePlayPause() },
-                    onExpand = { playerExpanded = true }
+                    onPrev = { player.skipToPrevious() },
+                    onNext = { player.skipToNext() },
+                    onSeek = { player.seekTo(it) },
+                    onToggleShuffle = { player.toggleShuffle() },
+                    onCycleRepeat = { player.cycleRepeatMode() },
+                    onPlayItem = { lane, index -> player.playQueueItem(lane, index) },
+                    onMoveHot = { f, t -> player.moveHot(f, t) },
+                    onMoveCold = { f, t -> player.moveCold(f, t) },
+                    onRemoveHot = { player.removeFromHot(it) },
+                    onRemoveCold = { player.removeFromCold(it) },
+                    onMoveColdToHot = { player.moveColdToHot(it) },
+                    onClearHotQueue = { player.clearHotQueue() },
+                    onPlayHistorySong = { s -> player.playSource(listOf(s), 0) },
+                    onAddToQueue = { player.addToHotQueue(it) },
+                    onClearHistory = { player.clearHistory() },
+                    onGoToAlbum = { openAlbumForSong(it) },
+                    onGoToArtist = { openArtistForSong(it) },
+                    onAddToPlaylist = {
+                        Toast.makeText(context, "Playlists coming soon", Toast.LENGTH_SHORT).show()
+                    }
                 )
             }
-        ) { innerPadding ->
-            val contentPadding = if (edgeToEdgeDetail) {
-                PaddingValues(bottom = innerPadding.calculateBottomPadding())
-            } else {
-                innerPadding
-            }
-            Box(modifier = Modifier.fillMaxSize().padding(contentPadding)) {
-                when (val d = detail) {
-                    is DetailRoute.Album -> {
-                        val key = albumKey(d.album.name, d.album.artist)
-                        LaunchedEffect(d.album.songs.size, key) {
-                            player.updateColdFromSource(d.album.songs, key)
-                        }
-                        AlbumDetailScreen(
-                            album = d.album,
-                            nowPlaying = currentSong,
-                            isSourceActive = snapshot.isPlayingFromAlbum(key),
-                            isPlaying = playing,
-                            shuffleEnabled = snapshot.shuffleEnabled,
-                            onBack = { popDetail() },
-                            onPlayAlbum = { songs, index -> playAlbumFrom(d.album, songs, index) },
-                            onTogglePlayPause = { player.togglePlayPause() },
-                            onToggleShuffle = { player.toggleShuffle() },
-                            onFavorite = {
-                                Toast.makeText(context, "My Stuff coming soon", Toast.LENGTH_SHORT).show()
-                            },
-                            onOpenArtist = {
-                                val name = d.album.artist ?: return@AlbumDetailScreen
-                                pushDetail(
-                                    DetailRoute.Artist(
-                                        library.artists().firstOrNull {
-                                            it.name.equals(name, ignoreCase = true)
-                                        } ?: ArtistItem(name, 0, 0, emptyList())
-                                    )
-                                )
-                            },
-                            onAddSongToQueue = { player.addToHotQueue(it) },
-                            onAddAlbumToQueue = { player.addToHotQueue(it) }
-                        )
-                    }
-                    is DetailRoute.Artist -> {
-                        val albums = library.albums().filter {
-                            it.artist.equals(d.artist.name, ignoreCase = true)
-                        }
-                        ArtistDetailScreen(
-                            artist = d.artist,
-                            albums = albums,
-                            onBack = { popDetail() },
-                            onOpenAlbum = { pushDetail(DetailRoute.Album(it)) },
-                            onPlaySongs = { songs, i ->
-                                player.setRepeatMode(RepeatMode.COLD)
-                                player.playSource(
-                                    songs, i,
-                                    ColdSource(ColdSourceType.ARTIST, d.artist.name ?: "", d.artist.name)
-                                )
-                            }
-                        )
-                    }
-                    is DetailRoute.Settings -> SettingsScreen(onBack = { popDetail() })
-                    null -> when (topTab) {
-                        TopTab.Home -> PlaceholderScreen("Home", "Pin playlists and shortcuts here later.")
-                        TopTab.Library -> LibraryScreen(
-                            library = library,
-                            nowPlaying = currentSong,
-                            isPlaybackActive = playing,
-                            onPlay = { songs, index -> player.playSource(songs, index) },
-                            onAddToQueue = { player.addToHotQueue(it) },
-                            onAddAlbumToQueue = { player.addToHotQueue(it) },
-                            onOpenAlbum = { pushDetail(DetailRoute.Album(it)) },
-                            onOpenArtist = { pushDetail(DetailRoute.Artist(it)) }
-                        )
-                        TopTab.MyStuff -> PlaceholderScreen(
-                            "My Stuff",
-                            "Favorites, playlists, and saved albums/artists will live here."
-                        )
-                    }
-                }
-            }
-        }
-
-        AnimatedVisibility(
-            visible = playerExpanded,
-            modifier = Modifier
-                .fillMaxSize()
-                .zIndex(2f),
-            enter = slideInVertically(
-                animationSpec = tween(320),
-                initialOffsetY = { fullHeight -> fullHeight }
-            ) + fadeIn(animationSpec = tween(200)),
-            exit = slideOutVertically(
-                animationSpec = tween(280),
-                targetOffsetY = { fullHeight -> fullHeight }
-            ) + fadeOut(animationSpec = tween(180))
-        ) {
-            NowPlayingScreen(
-                song = currentSong,
-                playing = playing,
-                positionMs = positionMs,
-                durationMs = durationMs,
-                snapshot = snapshot,
-                peekNextSong = peekNext,
-                peekPrevSong = peekPrev,
-                onCollapse = { playerExpanded = false },
-                onToggle = { player.togglePlayPause() },
-                onPrev = { player.skipToPrevious() },
-                onNext = { player.skipToNext() },
-                onSeek = { player.seekTo(it) },
-                onToggleShuffle = { player.toggleShuffle() },
-                onCycleRepeat = { player.cycleRepeatMode() },
-                onPlayItem = { lane, index -> player.playQueueItem(lane, index) },
-                onMoveHot = { f, t -> player.moveHot(f, t) },
-                onMoveCold = { f, t -> player.moveCold(f, t) },
-                onRemoveHot = { player.removeFromHot(it) },
-                onRemoveCold = { player.removeFromCold(it) },
-                onMoveColdToHot = { player.moveColdToHot(it) },
-                onClearHotQueue = { player.clearHotQueue() },
-                onPlayHistorySong = { s -> player.playSource(listOf(s), 0) },
-                onAddToQueue = { player.addToHotQueue(it) },
-                onClearHistory = { player.clearHistory() },
-                onGoToAlbum = { openAlbumForSong(it) },
-                onGoToArtist = { openArtistForSong(it) },
-                onAddToPlaylist = {
-                    Toast.makeText(context, "Playlists coming soon", Toast.LENGTH_SHORT).show()
-                }
-            )
         }
     }
 }
