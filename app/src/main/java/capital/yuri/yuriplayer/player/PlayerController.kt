@@ -22,7 +22,6 @@ class PlayerController(
     private val _isConnected = MutableStateFlow(false)
     val isConnected: StateFlow<Boolean> = _isConnected.asStateFlow()
 
-    /** Always available — history lives outside the service process binding. */
     val historyEntries: StateFlow<List<HistoryEntry>> get() = historyStore.entries
 
     private val connection = object : ServiceConnection {
@@ -83,6 +82,8 @@ class PlayerController(
     fun removeFromCold(index: Int) = service?.removeFromCold(index)
     fun moveHot(from: Int, to: Int) = service?.moveHot(from, to)
     fun moveCold(from: Int, to: Int) = service?.moveCold(from, to)
+    fun moveColdToHot(index: Int) = service?.moveColdToHot(index)
+
     fun playQueueItem(lane: QueueLane, index: Int) {
         ensureServiceStarted()
         service?.playQueueItem(lane, index)
