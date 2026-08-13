@@ -94,7 +94,6 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
-        // Never pop the soft keyboard on cold start
         window.setSoftInputMode(
             WindowManager.LayoutParams.SOFT_INPUT_STATE_ALWAYS_HIDDEN or
                 WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE
@@ -178,7 +177,6 @@ fun YuriApp(
 
     var topTab by remember { mutableStateOf(TopTab.Library) }
     var playerExpanded by remember { mutableStateOf(false) }
-    // Stack so album/artist/playlist layers return to the previous page
     var detailStack by remember { mutableStateOf<List<DetailRoute>>(emptyList()) }
 
     fun pushDetail(route: DetailRoute) {
@@ -341,6 +339,7 @@ fun YuriApp(
                         }
                         AlbumDetailScreen(
                             album = d.album,
+                            nowPlaying = currentSong,
                             isSourceActive = snapshot.isPlayingFromAlbum(key),
                             isPlaying = playing,
                             shuffleEnabled = snapshot.shuffleEnabled,
@@ -388,6 +387,7 @@ fun YuriApp(
                         TopTab.Home -> PlaceholderScreen("Home", "Pin playlists and shortcuts here later.")
                         TopTab.Library -> LibraryScreen(
                             library = library,
+                            nowPlaying = currentSong,
                             onPlay = { songs, index -> player.playSource(songs, index) },
                             onAddToQueue = { player.addToHotQueue(it) },
                             onAddAlbumToQueue = { player.addToHotQueue(it) },
