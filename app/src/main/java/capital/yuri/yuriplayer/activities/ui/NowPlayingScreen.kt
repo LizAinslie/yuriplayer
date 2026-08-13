@@ -17,6 +17,7 @@ import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.QueueMusic
 import androidx.compose.material.icons.filled.ExpandMore
+import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Repeat
@@ -24,11 +25,16 @@ import androidx.compose.material.icons.filled.RepeatOne
 import androidx.compose.material.icons.filled.Shuffle
 import androidx.compose.material.icons.filled.SkipNext
 import androidx.compose.material.icons.filled.SkipPrevious
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
+import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -56,6 +62,7 @@ import java.util.Locale
 import java.util.concurrent.TimeUnit
 import kotlin.math.abs
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun NowPlayingScreen(
     song: Song?,
@@ -81,7 +88,10 @@ fun NowPlayingScreen(
     onClearHotQueue: () -> Unit = {},
     onPlayHistorySong: (Song) -> Unit = {},
     onAddToQueue: (Song) -> Unit = {},
-    onClearHistory: () -> Unit = {}
+    onClearHistory: () -> Unit = {},
+    onGoToAlbum: (Song) -> Unit = {},
+    onGoToArtist: (Song) -> Unit = {},
+    onAddToPlaylist: (Song) -> Unit = {}
 ) {
     val context = LocalContext.current
     val themeStore: PlayerThemeStore = koinInject()
@@ -93,6 +103,7 @@ fun NowPlayingScreen(
     val prevTheme by themeStore.peekPrev.collectAsState()
 
     var showQueue by remember { mutableStateOf(false) }
+    var showSongMenu by remember { mutableStateOf(false) }
     var sliderPosition by remember { mutableFloatStateOf(0f) }
     var sliding by remember { mutableStateOf(false) }
     var hFrac by remember { mutableFloatStateOf(0f) }
@@ -349,30 +360,103 @@ fun NowPlayingScreen(
                         }
                     }
 
+                    // [⋯]   Repeat · Shuffle   [queue]   — lyrics slot later below
                     Row(
                         modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
                         verticalAlignment = Alignment.CenterVertically
                     ) {
+                        IconButton(
+                            onClick = { if (song != null) showSongMenu = true },
+                            enabled = song != null
+                        ) {
+                            Icon(
+                                Icons.Default.MoreVert,
+                                contentDescription = "More",
+                                tint = scheme.onBackground.copy(alpha = if (song != null) 0.85f else 0.35f)
+                            )
+                        }
+
                         Text(
                             buildString {
                                 append(repeatLabel(snapshot.repeatMode))
                                 if (snapshot.shuffleEnabled) append(" · Shuffle")
                             },
                             style = MaterialTheme.typography.labelSmall,
-                            color = shownColors.muted
+                            color = shownColors.muted,
+                            modifier = Modifier.weight(1f),
+                            textAlign = androidx.compose.ui.text.style.TextAlign.Center
                         )
+
                         IconButton(onClick = { showQueue = true }) {
                             Icon(
                                 Icons.AutoMirrored.Filled.QueueMusic,
-                                "Queue",
+                                contentDescription = "Queue",
                                 tint = scheme.onBackground.copy(alpha = 0.85f)
                             )
                         }
                     }
+
+                    // Lyrics placeholder (future)
+                    // Spacer + lyric preview will sit here
+                }
+            }
+
+            if (showSongMenu && song != null) {
+                ModalBottomSheet(
+                    onDismissRequest = { showSongMenu = false },
+                    sheetState = rememberModalBottomSheetState()
+                ) {
+                    Text(
+                        song.displayTitle,
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.SemiBold,
+                        modifier = Modifier.padding(horizontal = 24.dp, vertical = 4.dp)
+                    )
+                    Text(
+                        "${song.displayArtist} · ${song.displayAlbum}",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
+                        modifier = Modifier.padding(horizontal = 24.dp, vertical = 2.dp)
+                    )
+                    HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
+
+                    NowPlayingMenuItem("Go to album") {
+                        showSongMenu = false
+                        onGoToAlbum(song)
+                    }
+                    NowPlayingMenuItem("Go to artist") {
+                        showSongMenu = false
+                        onGoToArtist(song)
+                    }
+                    NowPlayingMenuItem("Add to playlist") {
+                        showSongMenu = false
+                        onAddToPlaylist(song)
+                    }
+                    NowPlayingMenuItem("Add to queue") {
+                        showSongMenu = false
+                        onAddToQueue(song)
+                    }
+
+                    Spacer(modifier = Modifier.height(28.dp))
                 }
             }
         }
+    }
+}
+
+@Composable
+private fun NowPlayingMenuItem(label: String, onClick: () -> Unit) {
+    TextButton(
+        onClick = onClick,
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 8.dp)
+    ) {
+        Text(
+            label,
+            modifier = Modifier.fillMaxWidth(),
+            style = MaterialTheme.typography.bodyLarge
+        )
     }
 }
 
