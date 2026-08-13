@@ -14,8 +14,6 @@ import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
-import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.QueueMusic
 import androidx.compose.material.icons.filled.ExpandMore
@@ -77,7 +75,9 @@ fun NowPlayingScreen(
     onMoveHot: (Int, Int) -> Unit,
     onMoveCold: (Int, Int) -> Unit,
     onRemoveHot: (Int) -> Unit,
-    onRemoveCold: (Int) -> Unit
+    onRemoveCold: (Int) -> Unit,
+    onPlayHistorySong: (Song) -> Unit = {},
+    onClearHistory: () -> Unit = {}
 ) {
     val context = LocalContext.current
     val themeStore: PlayerThemeStore = koinInject()
@@ -160,20 +160,20 @@ fun NowPlayingScreen(
                         onMoveCold = onMoveCold,
                         onRemoveHot = onRemoveHot,
                         onRemoveCold = onRemoveCold,
+                        onPlayHistorySong = onPlayHistorySong,
+                        onClearHistory = onClearHistory,
                         modifier = Modifier.weight(1f)
                     )
                 }
                 return@Surface
             }
 
-            // Full-height essentials column — controls pinned to bottom
             Column(
                 modifier = Modifier
                     .fillMaxSize()
                     .statusBarsPadding()
                     .navigationBarsPadding()
             ) {
-                // Top region: chevron + art — vertical dismiss works anywhere here
                 Column(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -190,7 +190,6 @@ fun NowPlayingScreen(
                                 },
                                 onVerticalDrag = { change, amount ->
                                     change.consume()
-                                    // Only pull-down (positive)
                                     if (amount > 0 || topPull > 0f) {
                                         topPull = (topPull + amount).coerceAtLeast(0f)
                                         dismissFrac = (topPull / dismissThreshold).coerceIn(0f, 1.5f)
@@ -208,7 +207,6 @@ fun NowPlayingScreen(
                         }
                     }
 
-                    // Padded card size; swipe anim still uses screen edges inside
                     SwipeableAlbumArt(
                         current = theme,
                         next = nextTheme,
@@ -223,10 +221,8 @@ fun NowPlayingScreen(
                     )
                 }
 
-                // Flexible gap — future lyrics can scroll in a middle region
                 Spacer(modifier = Modifier.weight(1f))
 
-                // Bottom-anchored playback chrome
                 Column(
                     modifier = Modifier
                         .fillMaxWidth()
