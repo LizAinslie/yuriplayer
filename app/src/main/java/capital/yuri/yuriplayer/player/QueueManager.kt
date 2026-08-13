@@ -10,6 +10,9 @@ import kotlin.random.Random
 /**
  * Dual-queue with consume-on-play semantics + cold [ColdSource] tracking.
  *
+ * Pure playback/queue state — UI only observes [snapshot] and issues commands
+ * via the service (play, skip, reorder). No UI types or view concerns live here.
+ *
  * [playedStack] remembers consumed tracks so Previous can walk back
  * (Spotify-style: >3s restarts current, otherwise previous in play order).
  */
@@ -44,8 +47,8 @@ class QueueManager {
     fun coldSource(): ColdSource? = coldSource
 
     fun peekNext(): Song? {
-        // Repeat-one: never prebuffer a second copy of the same URI — that
-        // caused silent loops after seekTo(0) on the duplicate item.
+        // Repeat-one: UI may still show next, but the player window does not
+        // prebuffer a duplicate URI (silent-loop bug on some devices).
         if (repeatMode == RepeatMode.ONE) return null
         if (floatingCurrent != null) {
             if (hotQueue.isNotEmpty()) return hotQueue.first()
@@ -365,6 +368,7 @@ class QueueManager {
             return AdvanceResult(song = currentSong(), reload = true)
         }
 
+        val wasFloating = floatingCurrent != null
         val fromLane = lane
         val fromIndex = indexInLane
 
@@ -384,6 +388,13 @@ class QueueManager {
                     }
                 }
             }
+        }
+
+        // Previous walks put us on floatingCurrent with indexInLane = -1.
+        // Leaving that state must pick the head of hot/cold — the old path
+        // required fromIndex in coldQueue.indices and returned finished=true.
+        if (wasFloating) {
+            return resolveNextFromHeads()
         }
 
         if (fromLane == QueueLane.HOT && fromIndex in hotQueue.indices) {
@@ -414,6 +425,14 @@ class QueueManager {
             return AdvanceResult(song = coldQueue[0])
         }
 
+        // Cold lane but index was invalid / emptied — still try heads
+        if (coldQueue.isNotEmpty()) {
+            lane = QueueLane.COLD
+            indexInLane = 0
+            publish()
+            return AdvanceResult(song = coldQueue[0])
+        }
+
         if (repeatMode == RepeatMode.COLD && coldOriginal.isNotEmpty()) {
             repopulateCold()
             lane = QueueLane.COLD
@@ -422,6 +441,32 @@ class QueueManager {
             return AdvanceResult(song = coldQueue[0])
         }
 
+        indexInLane = -1
+        publish()
+        return AdvanceResult(finished = true)
+    }
+
+    /** Next track after leaving a floating (previous-stack) current. */
+    private fun resolveNextFromHeads(): AdvanceResult {
+        if (hotQueue.isNotEmpty()) {
+            lane = QueueLane.HOT
+            indexInLane = 0
+            publish()
+            return AdvanceResult(song = hotQueue[0])
+        }
+        if (coldQueue.isNotEmpty()) {
+            lane = QueueLane.COLD
+            indexInLane = 0
+            publish()
+            return AdvanceResult(song = coldQueue[0])
+        }
+        if (repeatMode == RepeatMode.COLD && coldOriginal.isNotEmpty()) {
+            repopulateCold()
+            lane = QueueLane.COLD
+            indexInLane = 0
+            publish()
+            return AdvanceResult(song = coldQueue[0])
+        }
         indexInLane = -1
         publish()
         return AdvanceResult(finished = true)
@@ -452,6 +497,7 @@ class QueueManager {
                     }
                 }
             }
+            // Push the interrupted track back so Next returns to it
             if (coldSource != null || coldQueue.isNotEmpty() || coldOriginal.isNotEmpty()) {
                 coldQueue.add(0, current)
                 lane = QueueLane.COLD
