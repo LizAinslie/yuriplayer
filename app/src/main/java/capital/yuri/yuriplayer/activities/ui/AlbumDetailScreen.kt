@@ -11,6 +11,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
@@ -45,12 +46,16 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import capital.yuri.yuriplayer.data.AlbumItem
@@ -58,6 +63,16 @@ import capital.yuri.yuriplayer.data.Song
 import capital.yuri.yuriplayer.data.theme.ThemeService
 import capital.yuri.yuriplayer.ui.formatTrackCount
 import org.koin.compose.koinInject
+import kotlin.math.roundToInt
+
+/** Approximate expanded hero content height (art + meta + actions). */
+private val ExpandedHeroHeight = 430.dp
+/** Collapsed sticky bar height. */
+private val CollapsedBarHeight = 56.dp
+/** Long soft fade under the header into the list. */
+private val GradientFadeHeight = 320.dp
+/** How early the fade begins inside the expanded hero (pulls vignette up a bit). */
+private val ExpandedEarlyStart = 72.dp
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -122,133 +137,213 @@ fun AlbumDetailScreen(
         else onPlayAlbum(album.songs, 0)
     }
 
+    val f = collapseFraction.coerceIn(0f, 1f)
+    // Sticky gradient top: under expanded hero (with early start) → under collapsed bar
+    val gradientTopDp = ExpandedHeroHeight - ExpandedEarlyStart +
+        (CollapsedBarHeight - (ExpandedHeroHeight - ExpandedEarlyStart)) * f
+
     MaterialTheme(colorScheme = scheme) {
+        // Album color through the status-bar region; page body is default below the fade
         Box(
             modifier = Modifier
                 .fillMaxSize()
-                .background(defaultBg)
-                .statusBarsPadding()
+                .background(albumBg)
         ) {
-            LazyColumn(
-                state = listState,
-                modifier = Modifier.fillMaxSize(),
-                contentPadding = PaddingValues(bottom = 96.dp)
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .statusBarsPadding()
             ) {
-                item(key = "hero") {
-                    Column(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .background(albumBg)
-                    ) {
-                        SpotifyAlbumHero(
-                            album = album,
-                            metaLine = metaLine,
-                            collapseFraction = collapseFraction,
-                            showPause = showPause,
-                            shuffleEnabled = shuffleEnabled,
-                            onPrimary = onPrimary,
-                            onToggleShuffle = onToggleShuffle,
-                            onFavorite = onFavorite,
-                            onMore = { showMenu = true },
-                            onOpenArtist = onOpenArtist
-                        )
-                        // Short scroll-linked fade into the track list / default bg
-                        Box(
+                // Default page color fills under the sticky gradient so the list meshes with mini-player
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .offset {
+                            IntOffset(
+                                0,
+                                with(density) { gradientTopDp.toPx().roundToInt() }
+                            )
+                        }
+                        .background(defaultBg)
+                )
+
+                LazyColumn(
+                    state = listState,
+                    modifier = Modifier.fillMaxSize(),
+                    contentPadding = PaddingValues(bottom = 96.dp)
+                ) {
+                    item(key = "hero") {
+                        Column(
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .height(96.dp)
-                                .background(
-                                    Brush.verticalGradient(
-                                        colors = listOf(albumBg, defaultBg)
-                                    )
-                                )
-                        )
-                    }
-                }
-
-                discs.forEach { (disc, tracks) ->
-                    if (multiDisc) {
-                        item(key = "disc-$disc") {
-                            DiscSectionHeader(discNumber = disc ?: 1)
+                                .background(albumBg)
+                        ) {
+                            SpotifyAlbumHero(
+                                album = album,
+                                metaLine = metaLine,
+                                collapseFraction = collapseFraction,
+                                showPause = showPause,
+                                shuffleEnabled = shuffleEnabled,
+                                onPrimary = onPrimary,
+                                onToggleShuffle = onToggleShuffle,
+                                onFavorite = onFavorite,
+                                onMore = { showMenu = true },
+                                onOpenArtist = onOpenArtist
+                            )
+                            // Spacer matching collapsed sticky gradient length so tracks start after the fade zone
+                            Spacer(modifier = Modifier.height(GradientFadeHeight - ExpandedEarlyStart))
                         }
                     }
-                    itemsIndexed(
-                        tracks,
-                        key = { _, s -> "${s.id}-${s.path}" }
-                    ) { _, song ->
-                        val globalIndex = album.songs.indexOfFirst {
-                            (it.path != null && it.path == song.path) || it.id == song.id
-                        }.coerceAtLeast(0)
-                        SwipeAddSongRow(
-                            song = song,
-                            onClick = { onPlayAlbum(album.songs, globalIndex) },
-                            onSwipeAdd = {
-                                onAddSongToQueue(song)
-                                Toast.makeText(context, "Added to queue", Toast.LENGTH_SHORT).show()
-                            },
-                            showTrackNumber = true,
-                            isPlaying = song.isSameAs(nowPlaying),
-                            transparentSurface = false,
-                            surfaceColor = defaultBg
+
+                    discs.forEach { (disc, tracks) ->
+                        if (multiDisc) {
+                            item(key = "disc-$disc") {
+                                DiscSectionHeader(discNumber = disc ?: 1)
+                            }
+                        }
+                        itemsIndexed(
+                            tracks,
+                            key = { _, s -> "${s.id}-${s.path}" }
+                        ) { _, song ->
+                            val globalIndex = album.songs.indexOfFirst {
+                                (it.path != null && it.path == song.path) || it.id == song.id
+                            }.coerceAtLeast(0)
+                            SwipeAddSongRow(
+                                song = song,
+                                onClick = { onPlayAlbum(album.songs, globalIndex) },
+                                onSwipeAdd = {
+                                    onAddSongToQueue(song)
+                                    Toast.makeText(context, "Added to queue", Toast.LENGTH_SHORT).show()
+                                },
+                                showTrackNumber = true,
+                                isPlaying = song.isSameAs(nowPlaying),
+                                transparentSurface = false,
+                                surfaceColor = defaultBg
+                            )
+                        }
+                    }
+                }
+
+                // Sticky vignette: stays under the header whether expanded or collapsed
+                StickyAlbumGradient(
+                    albumBg = albumBg,
+                    defaultBg = defaultBg,
+                    top = gradientTopDp,
+                    height = GradientFadeHeight
+                )
+
+                CollapsedSpotifyBar(
+                    album = album,
+                    fraction = collapseFraction,
+                    showPause = showPause,
+                    barColor = albumBg,
+                    onBack = onBack,
+                    onPrimary = onPrimary
+                )
+
+                if (collapseFraction < 0.55f) {
+                    IconButton(
+                        onClick = onBack,
+                        modifier = Modifier.padding(4.dp)
+                    ) {
+                        Icon(
+                            Icons.AutoMirrored.Filled.ArrowBack,
+                            contentDescription = "Back",
+                            tint = scheme.onBackground
                         )
                     }
                 }
-            }
 
-            CollapsedSpotifyBar(
-                album = album,
-                fraction = collapseFraction,
-                showPause = showPause,
-                barColor = defaultBg,
-                onBack = onBack,
-                onPrimary = onPrimary
-            )
-
-            if (collapseFraction < 0.55f) {
-                IconButton(
-                    onClick = onBack,
-                    modifier = Modifier.padding(4.dp)
-                ) {
-                    Icon(
-                        Icons.AutoMirrored.Filled.ArrowBack,
-                        contentDescription = "Back",
-                        tint = scheme.onBackground
-                    )
-                }
-            }
-
-            if (showMenu) {
-                ModalBottomSheet(
-                    onDismissRequest = { showMenu = false },
-                    sheetState = rememberModalBottomSheetState()
-                ) {
-                    MediaSheetHeader(
-                        song = album.songs.firstOrNull(),
-                        title = album.displayName,
-                        subtitle = album.displayArtist
-                    )
-                    MediaSheetItem("Add to queue") {
-                        onAddAlbumToQueue(album.songs)
-                        Toast.makeText(
-                            context,
-                            "Queued ${formatTrackCount(album.songs.size)}",
-                            Toast.LENGTH_SHORT
-                        ).show()
-                        showMenu = false
+                if (showMenu) {
+                    ModalBottomSheet(
+                        onDismissRequest = { showMenu = false },
+                        sheetState = rememberModalBottomSheetState()
+                    ) {
+                        MediaSheetHeader(
+                            song = album.songs.firstOrNull(),
+                            title = album.displayName,
+                            subtitle = album.displayArtist
+                        )
+                        MediaSheetItem("Add to queue") {
+                            onAddAlbumToQueue(album.songs)
+                            Toast.makeText(
+                                context,
+                                "Queued ${formatTrackCount(album.songs.size)}",
+                                Toast.LENGTH_SHORT
+                            ).show()
+                            showMenu = false
+                        }
+                        MediaSheetItem("Go to artist") {
+                            showMenu = false
+                            onOpenArtist()
+                        }
+                        MediaSheetItem("Add to playlist") {
+                            showMenu = false
+                            Toast.makeText(context, "Playlists coming soon", Toast.LENGTH_SHORT).show()
+                        }
+                        MediaSheetBottomPad()
                     }
-                    MediaSheetItem("Go to artist") {
-                        showMenu = false
-                        onOpenArtist()
-                    }
-                    MediaSheetItem("Add to playlist") {
-                        showMenu = false
-                        Toast.makeText(context, "Playlists coming soon", Toast.LENGTH_SHORT).show()
-                    }
-                    MediaSheetBottomPad()
                 }
             }
         }
     }
+}
+
+/**
+ * Long, smooth vertical fade with a soft radial vignette so the album color
+ * pools under the header and dissolves into the default page background.
+ * Positioned sticky under the (expanded or collapsed) header.
+ */
+@Composable
+private fun StickyAlbumGradient(
+    albumBg: Color,
+    defaultBg: Color,
+    top: androidx.compose.ui.unit.Dp,
+    height: androidx.compose.ui.unit.Dp
+) {
+    Box(
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(height)
+            .offset { IntOffset(0, with(LocalDensity.current) { top.toPx().roundToInt() }) }
+            .drawBehind {
+                // Multi-stop vertical for a slower dissolve
+                drawRect(
+                    brush = Brush.verticalGradient(
+                        colorStops = arrayOf(
+                            0.00f to albumBg,
+                            0.18f to albumBg.copy(alpha = 0.92f),
+                            0.40f to lerpColor(albumBg, defaultBg, 0.35f),
+                            0.65f to lerpColor(albumBg, defaultBg, 0.72f),
+                            0.85f to defaultBg.copy(alpha = 0.92f),
+                            1.00f to defaultBg
+                        )
+                    )
+                )
+                // Soft radial vignette centered near the top — edges fall off a touch earlier
+                drawRect(
+                    brush = Brush.radialGradient(
+                        colors = listOf(
+                            albumBg.copy(alpha = 0.35f),
+                            albumBg.copy(alpha = 0.12f),
+                            Color.Transparent
+                        ),
+                        center = Offset(size.width / 2f, 0f),
+                        radius = size.maxDimension * 0.95f
+                    )
+                )
+            }
+    )
+}
+
+private fun lerpColor(a: Color, b: Color, t: Float): Color {
+    val x = t.coerceIn(0f, 1f)
+    return Color(
+        red = a.red + (b.red - a.red) * x,
+        green = a.green + (b.green - a.green) * x,
+        blue = a.blue + (b.blue - a.blue) * x,
+        alpha = a.alpha + (b.alpha - a.alpha) * x
+    )
 }
 
 @Composable
