@@ -338,10 +338,10 @@ class QueueManager {
     /**
      * Consume current and move to the next song.
      *
-     * After removing the current item at [indexInLane], the *next* item slides
-     * into that same index — so we keep the index when it is still valid.
-     * If we just consumed the last item of a lane, we fall through to the other
-     * lane / repopulate / finished. Never coerce onto a previous track.
+     * After removeAt(index), the next unplayed item sits at the same index when
+     * we were not on the last item. If we *were* on the last item, the index is
+     * out of range — do **not** wrap to earlier tracks; fall through to the other
+     * lane, repopulate (repeat all), or finished.
      */
     fun advance(userInitiated: Boolean): AdvanceResult {
         if (repeatMode == RepeatMode.ONE && !userInitiated) {
@@ -364,32 +364,42 @@ class QueueManager {
             }
         }
 
-        // Hot still has items: next is at the same index if we were on hot and
-        // the index is still in range; otherwise take the head.
-        if (hotQueue.isNotEmpty()) {
+        // Hot still has a song at the same index (next slid down)
+        if (fromLane == QueueLane.HOT && fromIndex in hotQueue.indices) {
             lane = QueueLane.HOT
-            indexInLane = if (fromLane == QueueLane.HOT && fromIndex in hotQueue.indices) {
-                fromIndex
-            } else {
-                0
-            }
+            indexInLane = fromIndex
             publish()
             return AdvanceResult(song = hotQueue[indexInLane])
         }
 
-        // Cold still has items after consume
-        if (coldQueue.isNotEmpty()) {
+        // Hot has items but we exhausted the previous lane's position → head of hot
+        if (hotQueue.isNotEmpty() && fromLane != QueueLane.HOT) {
+            lane = QueueLane.HOT
+            indexInLane = 0
+            publish()
+            return AdvanceResult(song = hotQueue[0])
+        }
+
+        // Hot remaining after consuming last hot item — only if index still valid (handled above).
+        // If from hot and index out of range, hot is exhausted past the end.
+
+        // Cold: next at same index if still valid
+        if (fromLane == QueueLane.COLD && fromIndex in coldQueue.indices) {
             lane = QueueLane.COLD
-            indexInLane = if (fromLane == QueueLane.COLD && fromIndex in coldQueue.indices) {
-                fromIndex
-            } else {
-                0
-            }
+            indexInLane = fromIndex
             publish()
             return AdvanceResult(song = coldQueue[indexInLane])
         }
 
-        // Both empty — loop cold source if repeat-all
+        // Came from hot (exhausted) or floating → start of remaining cold
+        if (fromLane != QueueLane.COLD && coldQueue.isNotEmpty()) {
+            lane = QueueLane.COLD
+            indexInLane = 0
+            publish()
+            return AdvanceResult(song = coldQueue[0])
+        }
+
+        // Cold exhausted (consumed last item) — repopulate or finish
         if (repeatMode == RepeatMode.COLD && coldOriginal.isNotEmpty()) {
             repopulateCold()
             lane = QueueLane.COLD
