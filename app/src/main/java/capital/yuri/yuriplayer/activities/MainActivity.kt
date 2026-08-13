@@ -46,6 +46,8 @@ import capital.yuri.yuriplayer.activities.ui.theme.YuriPlayerTheme
 import capital.yuri.yuriplayer.data.MusicRepository
 import capital.yuri.yuriplayer.data.Song
 import capital.yuri.yuriplayer.player.PlayerController
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
 import org.koin.android.ext.android.inject
 
 class MainActivity : ComponentActivity() {
@@ -57,7 +59,7 @@ class MainActivity : ComponentActivity() {
 
     private val permissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestPermission()
-    ) { /* recomposition picks up songs after grant via retry below */ }
+    ) { /* library reload happens in LaunchedEffect below when permission flips */ }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -114,19 +116,19 @@ fun PlayerScreen(
     var hasPermission by remember { mutableStateOf(true) }
     var loading by remember { mutableStateOf(true) }
 
+    var currentSong by remember { mutableStateOf<Song?>(null) }
+    var playing by remember { mutableStateOf(false) }
+
     val connected by player.isConnected.collectAsState()
 
-    // Re-read service flows when connected
-    val currentSong by if (connected) {
-        player.nowPlaying.collectAsState()
-    } else {
-        remember { mutableStateOf<Song?>(null) }
-    }
-
-    val playing by if (connected) {
-        player.isPlaying.collectAsState()
-    } else {
-        remember { mutableStateOf(false) }
+    // Lightweight state sync only while connected — avoids blocking the UI thread
+    LaunchedEffect(connected) {
+        if (!connected) return@LaunchedEffect
+        while (isActive) {
+            currentSong = player.getCurrentSong()
+            playing = player.isPlayingNow()
+            delay(400)
+        }
     }
 
     LaunchedEffect(Unit) {
@@ -219,7 +221,6 @@ fun PlayerScreen(
                     LazyColumn(modifier = Modifier.fillMaxSize()) {
                         itemsIndexed(songs, key = { _, song -> song.id }) { index, song ->
                             SongRow(song = song) {
-                                // Playlist build is async inside the service — safe on click
                                 player.setPlaylist(songs, index)
                                 player.play()
                             }
