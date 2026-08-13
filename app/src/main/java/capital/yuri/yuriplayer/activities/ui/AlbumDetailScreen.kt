@@ -54,6 +54,7 @@ import androidx.compose.ui.unit.sp
 import capital.yuri.yuriplayer.data.AlbumItem
 import capital.yuri.yuriplayer.data.Song
 import capital.yuri.yuriplayer.data.theme.ThemeService
+import capital.yuri.yuriplayer.ui.formatTrackCount
 import org.koin.compose.koinInject
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -107,7 +108,7 @@ fun AlbumDetailScreen(
     val metaLine = buildString {
         append(releaseType)
         if (releaseYear != null) append(" · $releaseYear")
-        append(" · ${album.trackCount} tracks")
+        append(" · ${formatTrackCount(album.trackCount)}")
     }
 
     val showPause = isSourceActive && isPlaying
@@ -204,7 +205,7 @@ fun AlbumDetailScreen(
                         onAddAlbumToQueue(album.songs)
                         Toast.makeText(
                             context,
-                            "Queued ${album.songs.size} tracks",
+                            "Queued ${formatTrackCount(album.songs.size)}",
                             Toast.LENGTH_SHORT
                         ).show()
                         showMenu = false
