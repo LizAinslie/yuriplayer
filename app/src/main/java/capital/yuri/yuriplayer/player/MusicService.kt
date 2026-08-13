@@ -41,20 +41,27 @@ class MusicService : MediaSessionService() {
     private var mediaSession: MediaSession? = null
     private lateinit var stateStore: PlaybackStateStore
 
-    private var currentPlaylist: List<Song> = emptyList()
-    private var restoredOnce = false
+    // Dual queue
+    private val hotQueue = mutableListOf<Song>()
+    private var coldOriginal: List<Song> = emptyList()
+    private val coldQueue = mutableListOf<Song>()
+    private var lane = QueueLane.COLD
+    private var indexInLane = -1
+    private var shuffleEnabled = false
+    private var repeatMode = RepeatMode.OFF
 
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private var persistJob: Job? = null
+    private var restoredOnce = false
+
+    private val _queueSnapshot = MutableStateFlow(QueueSnapshot())
+    val queueSnapshot: StateFlow<QueueSnapshot> = _queueSnapshot.asStateFlow()
 
     private val _nowPlaying = MutableStateFlow<Song?>(null)
     val nowPlaying: StateFlow<Song?> = _nowPlaying.asStateFlow()
 
     private val _isPlaying = MutableStateFlow(false)
     val isPlaying: StateFlow<Boolean> = _isPlaying.asStateFlow()
-
-    private val _queue = MutableStateFlow<List<Song>>(emptyList())
-    val queue: StateFlow<List<Song>> = _queue.asStateFlow()
 
     inner class LocalBinder : Binder() {
         fun getService(): MusicService = this@MusicService
@@ -78,7 +85,7 @@ class MusicService : MediaSessionService() {
             .build()
 
         val exo = ExoPlayer.Builder(this)
-            .setAudioAttributes(audioAttributes, /* handleAudioFocus = */ true)
+            .setAudioAttributes(audioAttributes, true)
             .setHandleAudioBecomingNoisy(true)
             .setWakeMode(C.WAKE_MODE_LOCAL)
             .setLoadControl(loadControl)
@@ -92,7 +99,6 @@ class MusicService : MediaSessionService() {
             Intent(this, MainActivity::class.java),
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
-
         mediaSession = MediaSession.Builder(this, exo)
             .setSessionActivity(sessionActivity)
             .build()
@@ -114,27 +120,378 @@ class MusicService : MediaSessionService() {
         return START_STICKY
     }
 
+    private fun publishSnapshot() {
+        val snap = QueueSnapshot(
+            hotQueue = hotQueue.toList(),
+            coldQueue = coldQueue.toList(),
+            coldOriginal = coldOriginal,
+            lane = lane,
+            indexInLane = indexInLane,
+            shuffleEnabled = shuffleEnabled,
+            repeatMode = repeatMode
+        )
+        _queueSnapshot.value = snap
+        _nowPlaying.value = snap.currentSong
+    }
+
+    private fun currentSong(): Song? = when (lane) {
+        QueueLane.HOT -> hotQueue.getOrNull(indexInLane)
+        QueueLane.COLD -> coldQueue.getOrNull(indexInLane)
+    }
+
+    private fun loadCurrent(startPositionMs: Long = 0L, autoPlay: Boolean = false) {
+        val song = currentSong() ?: run {
+            player?.stop()
+            publishSnapshot()
+            updateForegroundNotification()
+            return
+        }
+        val item = toMediaItem(song)
+        player?.apply {
+            setMediaItem(item, startPositionMs)
+            prepare()
+            playWhenReady = autoPlay
+        }
+        publishSnapshot()
+        updateForegroundNotification()
+        persistState()
+    }
+
+    /** Replace cold queue with a source list (album / playlist) and start playing. Hot queue kept. */
+    fun playSource(songs: List<Song>, startIndex: Int = 0, autoPlay: Boolean = true) {
+        if (songs.isEmpty()) return
+        coldOriginal = songs.toList()
+        coldQueue.clear()
+        if (shuffleEnabled) {
+            coldQueue.addAll(songs.shuffled())
+            // Prefer starting with the tapped song even when shuffled
+            val tapped = songs.getOrNull(startIndex)
+            if (tapped != null) {
+                coldQueue.removeAll { sameSong(it, tapped) }
+                coldQueue.add(0, tapped)
+            }
+            indexInLane = 0
+        } else {
+            coldQueue.addAll(songs)
+            indexInLane = startIndex.coerceIn(0, coldQueue.lastIndex)
+        }
+        lane = QueueLane.COLD
+        // If hot queue has items, user might still want them first — only jump to cold when playing a source
+        // Spec: hot plays before cold when advancing; starting a source plays that source now.
+        loadCurrent(0L, autoPlay)
+    }
+
+    fun addToHotQueue(song: Song) {
+        hotQueue.add(song)
+        publishSnapshot()
+        persistState()
+    }
+
+    fun addToHotQueue(songs: List<Song>) {
+        hotQueue.addAll(songs)
+        publishSnapshot()
+        persistState()
+    }
+
+    fun removeFromHot(index: Int) {
+        if (index !in hotQueue.indices) return
+        val removingCurrent = lane == QueueLane.HOT && index == indexInLane
+        hotQueue.removeAt(index)
+        if (lane == QueueLane.HOT) {
+            when {
+                hotQueue.isEmpty() -> {
+                    lane = QueueLane.COLD
+                    indexInLane = indexInLane.coerceAtMost(coldQueue.lastIndex)
+                    if (removingCurrent) loadCurrent(0L, player?.playWhenReady == true)
+                    else publishSnapshot()
+                }
+                index < indexInLane -> {
+                    indexInLane--
+                    publishSnapshot()
+                }
+                removingCurrent -> loadCurrent(0L, player?.playWhenReady == true)
+                else -> publishSnapshot()
+            }
+        } else {
+            publishSnapshot()
+        }
+        persistState()
+    }
+
+    fun removeFromCold(index: Int) {
+        if (index !in coldQueue.indices) return
+        val removingCurrent = lane == QueueLane.COLD && index == indexInLane
+        val song = coldQueue.removeAt(index)
+        // Keep original in sync by id/path when possible
+        coldOriginal = coldOriginal.filterNot { sameSong(it, song) }
+        if (lane == QueueLane.COLD) {
+            when {
+                coldQueue.isEmpty() -> {
+                    indexInLane = -1
+                    if (removingCurrent) {
+                        player?.stop()
+                        publishSnapshot()
+                    } else publishSnapshot()
+                }
+                index < indexInLane -> {
+                    indexInLane--
+                    publishSnapshot()
+                }
+                removingCurrent -> loadCurrent(0L, player?.playWhenReady == true)
+                else -> publishSnapshot()
+            }
+        } else {
+            publishSnapshot()
+        }
+        persistState()
+    }
+
+    fun moveHot(from: Int, to: Int) {
+        if (from !in hotQueue.indices || to !in hotQueue.indices || from == to) return
+        val item = hotQueue.removeAt(from)
+        hotQueue.add(to, item)
+        if (lane == QueueLane.HOT) {
+            indexInLane = when {
+                indexInLane == from -> to
+                from < indexInLane && to >= indexInLane -> indexInLane - 1
+                from > indexInLane && to <= indexInLane -> indexInLane + 1
+                else -> indexInLane
+            }
+        }
+        publishSnapshot()
+        persistState()
+    }
+
+    fun moveCold(from: Int, to: Int) {
+        if (from !in coldQueue.indices || to !in coldQueue.indices || from == to) return
+        val item = coldQueue.removeAt(from)
+        coldQueue.add(to, item)
+        if (lane == QueueLane.COLD) {
+            indexInLane = when {
+                indexInLane == from -> to
+                from < indexInLane && to >= indexInLane -> indexInLane - 1
+                from > indexInLane && to <= indexInLane -> indexInLane + 1
+                else -> indexInLane
+            }
+        }
+        // Manual reorder while shuffled: treat current cold order as the play order;
+        // original order still used when shuffle is turned off.
+        publishSnapshot()
+        persistState()
+    }
+
+    fun playQueueItem(laneTarget: QueueLane, index: Int) {
+        when (laneTarget) {
+            QueueLane.HOT -> {
+                if (index !in hotQueue.indices) return
+                lane = QueueLane.HOT
+                indexInLane = index
+            }
+            QueueLane.COLD -> {
+                if (index !in coldQueue.indices) return
+                lane = QueueLane.COLD
+                indexInLane = index
+            }
+        }
+        loadCurrent(0L, autoPlay = true)
+    }
+
+    fun setShuffle(enabled: Boolean) {
+        if (shuffleEnabled == enabled) return
+        val current = currentSong()
+        shuffleEnabled = enabled
+        if (enabled) {
+            val shuffled = coldOriginal.shuffled().toMutableList()
+            if (current != null && lane == QueueLane.COLD) {
+                shuffled.removeAll { sameSong(it, current) }
+                shuffled.add(0, current)
+                coldQueue.clear()
+                coldQueue.addAll(shuffled)
+                indexInLane = 0
+            } else {
+                coldQueue.clear()
+                coldQueue.addAll(shuffled)
+            }
+        } else {
+            // Restore original source order in place
+            coldQueue.clear()
+            coldQueue.addAll(coldOriginal)
+            if (current != null && lane == QueueLane.COLD) {
+                val idx = coldQueue.indexOfFirst { sameSong(it, current) }
+                indexInLane = if (idx >= 0) idx else 0
+            }
+        }
+        publishSnapshot()
+        persistState()
+    }
+
+    fun cycleRepeatMode() {
+        repeatMode = when (repeatMode) {
+            RepeatMode.OFF -> RepeatMode.ONE
+            RepeatMode.ONE -> RepeatMode.COLD
+            RepeatMode.COLD -> RepeatMode.OFF
+        }
+        publishSnapshot()
+        persistState()
+    }
+
+    fun setRepeatMode(mode: RepeatMode) {
+        repeatMode = mode
+        publishSnapshot()
+        persistState()
+    }
+
+    fun play() {
+        player?.play()
+        updateForegroundNotification()
+        persistState()
+    }
+
+    fun pause() {
+        player?.pause()
+        updateForegroundNotification()
+        persistState()
+    }
+
+    fun togglePlayPause() {
+        player?.let { if (it.isPlaying) it.pause() else it.play() }
+        updateForegroundNotification()
+        persistState()
+    }
+
+    fun skipToNext() = advance(userInitiated = true)
+
+    fun skipToPrevious() {
+        val p = player
+        if (p != null && p.currentPosition > 3000L) {
+            p.seekTo(0)
+            persistState()
+            return
+        }
+        when (lane) {
+            QueueLane.HOT -> {
+                if (indexInLane > 0) {
+                    indexInLane--
+                    loadCurrent(0L, autoPlay = true)
+                } else {
+                    p?.seekTo(0)
+                }
+            }
+            QueueLane.COLD -> {
+                if (indexInLane > 0) {
+                    indexInLane--
+                    loadCurrent(0L, autoPlay = true)
+                } else if (hotQueue.isNotEmpty()) {
+                    // Jump to end of hot queue
+                    lane = QueueLane.HOT
+                    indexInLane = hotQueue.lastIndex
+                    loadCurrent(0L, autoPlay = true)
+                } else {
+                    p?.seekTo(0)
+                }
+            }
+        }
+    }
+
+    fun seekTo(positionMs: Long) {
+        player?.seekTo(positionMs.coerceAtLeast(0L))
+        persistState()
+    }
+
+    private fun advance(userInitiated: Boolean) {
+        if (repeatMode == RepeatMode.ONE && !userInitiated) {
+            player?.seekTo(0)
+            player?.play()
+            return
+        }
+
+        when (lane) {
+            QueueLane.HOT -> {
+                if (indexInLane < hotQueue.lastIndex) {
+                    indexInLane++
+                    loadCurrent(0L, autoPlay = true)
+                } else if (coldQueue.isNotEmpty()) {
+                    lane = QueueLane.COLD
+                    indexInLane = 0
+                    loadCurrent(0L, autoPlay = true)
+                } else if (repeatMode == RepeatMode.COLD && coldOriginal.isNotEmpty()) {
+                    // No cold currently but original exists — rebuild
+                    rebuildColdFromOriginal()
+                    lane = QueueLane.COLD
+                    indexInLane = 0
+                    loadCurrent(0L, autoPlay = true)
+                } else {
+                    // End of everything
+                    player?.pause()
+                    publishSnapshot()
+                }
+            }
+            QueueLane.COLD -> {
+                if (indexInLane < coldQueue.lastIndex) {
+                    indexInLane++
+                    loadCurrent(0L, autoPlay = true)
+                } else if (repeatMode == RepeatMode.COLD && coldQueue.isNotEmpty()) {
+                    indexInLane = 0
+                    loadCurrent(0L, autoPlay = true)
+                } else {
+                    player?.pause()
+                    publishSnapshot()
+                }
+            }
+        }
+    }
+
+    private fun rebuildColdFromOriginal() {
+        coldQueue.clear()
+        if (shuffleEnabled) coldQueue.addAll(coldOriginal.shuffled())
+        else coldQueue.addAll(coldOriginal)
+    }
+
+    private fun sameSong(a: Song, b: Song): Boolean {
+        if (a.path != null && b.path != null) return a.path == b.path
+        return a.contentUri == b.contentUri || a.id == b.id
+    }
+
+    private fun toMediaItem(song: Song): MediaItem {
+        return MediaItem.Builder()
+            .setUri(song.contentUri)
+            .setMediaId(song.id.toString())
+            .setMediaMetadata(
+                androidx.media3.common.MediaMetadata.Builder()
+                    .setTitle(song.displayTitle)
+                    .setArtist(song.displayArtist)
+                    .setAlbumTitle(song.displayAlbum)
+                    .setAlbumArtist(song.displayAlbumArtist)
+                    .setArtworkUri(song.albumArtUri)
+                    .build()
+            )
+            .build()
+    }
+
     private fun restorePlaybackState() {
         if (restoredOnce) return
         restoredOnce = true
         serviceScope.launch {
             val saved = withContext(Dispatchers.IO) { stateStore.load() } ?: return@launch
-            currentPlaylist = saved.queue
-            _queue.value = saved.queue
+            hotQueue.clear()
+            hotQueue.addAll(saved.snapshot.hotQueue)
+            coldOriginal = saved.snapshot.coldOriginal.ifEmpty { saved.snapshot.coldQueue }
+            coldQueue.clear()
+            coldQueue.addAll(saved.snapshot.coldQueue)
+            lane = saved.snapshot.lane
+            indexInLane = saved.snapshot.indexInLane
+            shuffleEnabled = saved.snapshot.shuffleEnabled
+            repeatMode = saved.snapshot.repeatMode
 
-            val mediaItems = withContext(Dispatchers.Default) {
-                saved.queue.map { toMediaItem(it) }
+            // Clamp index
+            val max = when (lane) {
+                QueueLane.HOT -> hotQueue.lastIndex
+                QueueLane.COLD -> coldQueue.lastIndex
             }
+            if (max < 0) return@launch
+            indexInLane = indexInLane.coerceIn(0, max)
 
-            player?.apply {
-                setMediaItems(mediaItems, saved.index, saved.positionMs)
-                prepare()
-                // Never auto-resume audio after process death — restore position only.
-                // User can press play; avoids surprise audio in the car.
-                playWhenReady = false
-            }
-            _nowPlaying.value = saved.queue.getOrNull(saved.index)
-            updateForegroundNotification()
+            loadCurrent(saved.positionMs, autoPlay = false)
         }
     }
 
@@ -149,15 +506,11 @@ class MusicService : MediaSessionService() {
     }
 
     private fun persistState() {
-        val p = player ?: return
-        if (currentPlaylist.isEmpty()) return
-        val index = p.currentMediaItemIndex
-        if (index < 0) return
+        val p = player
         stateStore.save(
-            queue = currentPlaylist,
-            index = index,
-            positionMs = p.currentPosition.coerceAtLeast(0L),
-            playWhenReady = p.playWhenReady
+            snapshot = _queueSnapshot.value,
+            positionMs = p?.currentPosition?.coerceAtLeast(0L) ?: 0L,
+            playWhenReady = p?.playWhenReady == true
         )
     }
 
@@ -168,18 +521,9 @@ class MusicService : MediaSessionService() {
             persistState()
         }
 
-        override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) {
-            val index = player?.currentMediaItemIndex ?: -1
-            _nowPlaying.value = currentPlaylist.getOrNull(index)
-            updateForegroundNotification()
-            persistState()
-        }
-
         override fun onPlaybackStateChanged(playbackState: Int) {
-            if (playbackState == Player.STATE_READY || playbackState == Player.STATE_BUFFERING) {
-                val index = player?.currentMediaItemIndex ?: -1
-                _nowPlaying.value = currentPlaylist.getOrNull(index)
-                updateForegroundNotification()
+            if (playbackState == Player.STATE_ENDED) {
+                advance(userInitiated = false)
             }
         }
     }
@@ -230,89 +574,27 @@ class MusicService : MediaSessionService() {
         return if (intent?.action == null) binder else super.onBind(intent) ?: binder
     }
 
-    private fun toMediaItem(song: Song): MediaItem {
-        return MediaItem.Builder()
-            .setUri(song.contentUri)
-            .setMediaId(song.id.toString())
-            .setMediaMetadata(
-                androidx.media3.common.MediaMetadata.Builder()
-                    .setTitle(song.displayTitle)
-                    .setArtist(song.displayArtist)
-                    .setAlbumTitle(song.displayAlbum)
-                    .setAlbumArtist(song.displayAlbumArtist)
-                    .setArtworkUri(song.albumArtUri)
-                    .build()
-            )
-            .build()
-    }
-
-    fun setPlaylist(songs: List<Song>, startIndex: Int = 0) {
-        serviceScope.launch {
-            val safeIndex = startIndex.coerceIn(0, (songs.size - 1).coerceAtLeast(0))
-            currentPlaylist = songs
-            _queue.value = songs
-
-            val mediaItems = withContext(Dispatchers.Default) {
-                songs.map { toMediaItem(it) }
-            }
-
-            player?.apply {
-                setMediaItems(mediaItems, safeIndex, 0L)
-                prepare()
-            }
-
-            _nowPlaying.value = songs.getOrNull(safeIndex)
-            updateForegroundNotification()
-            persistState()
-        }
-    }
-
-    fun play() {
-        player?.play()
-        updateForegroundNotification()
-        persistState()
-    }
-
-    fun pause() {
-        player?.pause()
-        updateForegroundNotification()
-        persistState()
-    }
-
-    fun togglePlayPause() {
-        player?.let { if (it.isPlaying) it.pause() else it.play() }
-        updateForegroundNotification()
-        persistState()
-    }
-
-    fun skipToNext() {
-        player?.seekToNextMediaItem()
-        player?.play()
-    }
-
-    fun skipToPrevious() {
-        player?.let {
-            if (it.currentPosition > 3000L) it.seekTo(0)
-            else if (it.hasPreviousMediaItem()) it.seekToPreviousMediaItem()
-            else it.seekTo(0)
-            it.play()
-        }
-    }
-
-    fun seekTo(positionMs: Long) {
-        player?.seekTo(positionMs.coerceAtLeast(0L))
-        persistState()
-    }
+    // --- Compatibility / query helpers ---
 
     fun isPlaying(): Boolean = player?.isPlaying == true
-    fun getCurrentSong(): Song? {
-        val index = player?.currentMediaItemIndex ?: return null
-        return currentPlaylist.getOrNull(index)
-    }
-    fun getCurrentIndex(): Int = player?.currentMediaItemIndex ?: -1
+    fun getCurrentSong(): Song? = currentSong()
     fun getPositionMs(): Long = player?.currentPosition?.coerceAtLeast(0L) ?: 0L
     fun getDurationMs(): Long = player?.duration?.takeIf { it > 0 } ?: 0L
-    fun getQueue(): List<Song> = currentPlaylist
+    fun getQueueSnapshot(): QueueSnapshot = _queueSnapshot.value
+
+    /** @deprecated use playSource */
+    fun setPlaylist(songs: List<Song>, startIndex: Int = 0) {
+        playSource(songs, startIndex, autoPlay = false)
+    }
+
+    fun getQueue(): List<Song> = _queueSnapshot.value.flatQueue
+    fun getCurrentIndex(): Int {
+        val snap = _queueSnapshot.value
+        return when (snap.lane) {
+            QueueLane.HOT -> snap.indexInLane
+            QueueLane.COLD -> snap.hotQueue.size + snap.indexInLane
+        }
+    }
 
     override fun onTaskRemoved(rootIntent: Intent?) {
         persistState()

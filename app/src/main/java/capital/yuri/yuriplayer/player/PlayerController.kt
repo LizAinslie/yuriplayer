@@ -36,14 +36,12 @@ class PlayerController(private val context: Context) {
 
     fun bind() {
         val intent = Intent(context, MusicService::class.java)
-        // Foreground service from the start so Oreo cannot kill us when the UI backgrounds
         ContextCompat.startForegroundService(context, intent)
         if (!bound) {
             context.bindService(intent, connection, Context.BIND_AUTO_CREATE)
         }
     }
 
-    /** Only call from Activity.onDestroy — keep bound across onStop so playback survives. */
     fun unbind() {
         if (!bound) return
         try {
@@ -55,10 +53,44 @@ class PlayerController(private val context: Context) {
         _isConnected.value = false
     }
 
+    /** Play an album / playlist as the cold queue. */
     fun setPlaylist(songs: List<Song>, startIndex: Int = 0) {
         ensureServiceStarted()
-        service?.setPlaylist(songs, startIndex)
+        service?.playSource(songs, startIndex, autoPlay = true)
     }
+
+    fun playSource(songs: List<Song>, startIndex: Int = 0) {
+        ensureServiceStarted()
+        service?.playSource(songs, startIndex, autoPlay = true)
+    }
+
+    fun addToHotQueue(song: Song) {
+        ensureServiceStarted()
+        service?.addToHotQueue(song)
+    }
+
+    fun addToHotQueue(songs: List<Song>) {
+        ensureServiceStarted()
+        service?.addToHotQueue(songs)
+    }
+
+    fun removeFromHot(index: Int) = service?.removeFromHot(index)
+    fun removeFromCold(index: Int) = service?.removeFromCold(index)
+    fun moveHot(from: Int, to: Int) = service?.moveHot(from, to)
+    fun moveCold(from: Int, to: Int) = service?.moveCold(from, to)
+    fun playQueueItem(lane: QueueLane, index: Int) {
+        ensureServiceStarted()
+        service?.playQueueItem(lane, index)
+    }
+
+    fun setShuffle(enabled: Boolean) = service?.setShuffle(enabled)
+    fun toggleShuffle() {
+        val snap = service?.getQueueSnapshot()
+        service?.setShuffle(!(snap?.shuffleEnabled ?: false))
+    }
+
+    fun cycleRepeatMode() = service?.cycleRepeatMode()
+    fun setRepeatMode(mode: RepeatMode) = service?.setRepeatMode(mode)
 
     fun play() {
         ContextCompat.startForegroundService(
@@ -71,11 +103,8 @@ class PlayerController(private val context: Context) {
     fun pause() = service?.pause()
 
     fun togglePlayPause() {
-        if (service?.isPlaying() == true) {
-            service?.pause()
-        } else {
-            play()
-        }
+        if (service?.isPlaying() == true) service?.pause()
+        else play()
     }
 
     fun skipToNext() {
@@ -88,9 +117,7 @@ class PlayerController(private val context: Context) {
         service?.skipToPrevious()
     }
 
-    fun seekTo(positionMs: Long) {
-        service?.seekTo(positionMs)
-    }
+    fun seekTo(positionMs: Long) = service?.seekTo(positionMs)
 
     fun isPlayingNow(): Boolean = service?.isPlaying() == true
     fun getCurrentSong(): Song? = service?.getCurrentSong()
@@ -98,6 +125,10 @@ class PlayerController(private val context: Context) {
     fun getPositionMs(): Long = service?.getPositionMs() ?: 0L
     fun getDurationMs(): Long = service?.getDurationMs() ?: 0L
     fun getQueue(): List<Song> = service?.getQueue() ?: emptyList()
+    fun getQueueSnapshot(): QueueSnapshot =
+        service?.getQueueSnapshot() ?: QueueSnapshot()
+
+    fun queueSnapshotFlow(): StateFlow<QueueSnapshot>? = service?.queueSnapshot
 
     private fun ensureServiceStarted() {
         ContextCompat.startForegroundService(
