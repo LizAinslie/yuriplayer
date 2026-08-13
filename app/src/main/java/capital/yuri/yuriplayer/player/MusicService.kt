@@ -136,6 +136,23 @@ class MusicService : MediaSessionService() {
         return p.getMediaItemAt(index).localConfiguration?.uri
     }
 
+    /**
+     * Mirror our queue repeat mode onto ExoPlayer.
+     * Repeat-one must use [Player.REPEAT_MODE_ONE] so the decoder loops in place
+     * instead of hitting STATE_ENDED + a brittle reload (which went silent).
+     */
+    private fun syncPlayerRepeatMode() {
+        val mode = queueManager.getSnapshot().repeatMode
+        val exo = when (mode) {
+            RepeatMode.ONE -> Player.REPEAT_MODE_ONE
+            else -> Player.REPEAT_MODE_OFF
+        }
+        if (player?.repeatMode != exo) {
+            player?.repeatMode = exo
+            Log.i(TAG, "player.repeatMode → ${if (exo == Player.REPEAT_MODE_ONE) "ONE" else "OFF"}")
+        }
+    }
+
     private fun rebufferWindow(
         startPositionMs: Long = 0L,
         autoPlay: Boolean = false,
@@ -151,7 +168,10 @@ class MusicService : MediaSessionService() {
             return
         }
 
-        val next = queueManager.peekNext()
+        // Never prebuffer a next item while repeat-one is active
+        val next = if (queueManager.getSnapshot().repeatMode == RepeatMode.ONE) null
+        else queueManager.peekNext()
+
         val wantUris = buildList {
             add(songUri(current))
             if (next != null) add(songUri(next))
@@ -168,6 +188,7 @@ class MusicService : MediaSessionService() {
                 p.seekTo(startPositionMs)
             }
             if (autoPlay && !p.isPlaying) p.play()
+            syncPlayerRepeatMode()
             _nowPlaying.value = current
             maybeRecordHistory(current)
             updateForegroundNotification()
@@ -189,6 +210,7 @@ class MusicService : MediaSessionService() {
             val wasPlaying = autoPlay || p.playWhenReady
             p.setMediaItems(items, /* startIndex */ 0, startPositionMs.coerceAtLeast(0L))
             p.prepare()
+            syncPlayerRepeatMode()
             p.playWhenReady = wasPlaying
             if (wasPlaying) p.play()
         } catch (e: Exception) {
@@ -201,17 +223,11 @@ class MusicService : MediaSessionService() {
         persistState()
     }
 
-    /**
-     * Swap only the upcoming media item without touching the currently playing
-     * item. Used for shuffle/repeat toggles and queue mutations that only
-     * change what comes *next* — avoids the setMediaItems hiccup.
-     */
     private fun updateNextMediaItemOnly() {
         val p = player ?: return
         val current = queueManager.currentSong() ?: return
         val playingUri = mediaItemUriAt(p.currentMediaItemIndex)
         if (playingUri != songUri(current)) {
-            // Playing something unexpected — full sync
             rebufferWindow(
                 startPositionMs = p.currentPosition.coerceAtLeast(0L),
                 autoPlay = p.playWhenReady,
@@ -220,14 +236,16 @@ class MusicService : MediaSessionService() {
             return
         }
 
-        val next = queueManager.peekNext()
-        // Drop anything after the current item
+        val next = if (queueManager.getSnapshot().repeatMode == RepeatMode.ONE) null
+        else queueManager.peekNext()
+
         while (p.mediaItemCount > p.currentMediaItemIndex + 1) {
             p.removeMediaItem(p.mediaItemCount - 1)
         }
         if (next != null) {
             p.addMediaItem(toMediaItem(next))
         }
+        syncPlayerRepeatMode()
         _nowPlaying.value = current
         updateForegroundNotification()
     }
@@ -260,7 +278,6 @@ class MusicService : MediaSessionService() {
                 persistState()
             }
             result.seekToStart -> {
-                // Restart in place when possible; full reload if player is ENDED
                 if (p != null && p.playbackState != Player.STATE_ENDED) {
                     p.seekTo(0)
                     if (autoPlay) p.play()
@@ -272,8 +289,12 @@ class MusicService : MediaSessionService() {
                 }
             }
             result.reload -> {
-                // Repeat-one: always full reload — bare seekTo after ENDED goes silent
-                Log.i(TAG, "repeat-one full restart")
+                // Fallback only — normal ONE looping is handled by Exo REPEAT_MODE_ONE.
+                Log.i(TAG, "repeat-one fallback restart")
+                try {
+                    p?.stop()
+                    p?.clearMediaItems()
+                } catch (_: Exception) {}
                 rebufferWindow(0L, autoPlay = autoPlay, forceReload = true)
             }
             result.song != null -> {
@@ -293,6 +314,7 @@ class MusicService : MediaSessionService() {
                     Log.i(TAG, "seamless advance → '${target.displayTitle}'")
                     p.seekToNextMediaItem()
                     if (autoPlay) p.play()
+                    syncPlayerRepeatMode()
                     persistState()
                     serviceScope.launch {
                         delay(150)
@@ -319,7 +341,11 @@ class MusicService : MediaSessionService() {
             val result = queueManager.advance(userInitiated = false)
             when {
                 result.reload -> {
-                    Log.i(TAG, "auto-transition + repeat-one → full restart")
+                    Log.i(TAG, "auto-transition + repeat-one → fallback restart")
+                    try {
+                        player?.stop()
+                        player?.clearMediaItems()
+                    } catch (_: Exception) {}
                     rebufferWindow(0L, autoPlay = true, forceReload = true)
                 }
                 result.finished -> {
@@ -434,21 +460,18 @@ class MusicService : MediaSessionService() {
 
     fun setShuffle(enabled: Boolean) {
         queueManager.setShuffle(enabled)
-        // Only the upcoming track may change — don't rebuild current
         updateNextMediaItemOnly()
         persistState()
     }
 
     fun cycleRepeatMode() {
         queueManager.cycleRepeatMode()
-        player?.repeatMode = Player.REPEAT_MODE_OFF
-        updateNextMediaItemOnly()
+        updateNextMediaItemOnly() // drops/adds next + syncPlayerRepeatMode
         persistState()
     }
 
     fun setRepeatMode(mode: RepeatMode) {
         queueManager.setRepeatMode(mode)
-        player?.repeatMode = Player.REPEAT_MODE_OFF
         updateNextMediaItemOnly()
         persistState()
     }
@@ -567,6 +590,15 @@ class MusicService : MediaSessionService() {
         }
 
         override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) {
+            // Exo looping the same item under REPEAT_MODE_ONE — stay on current song
+            if (reason == Player.MEDIA_ITEM_TRANSITION_REASON_REPEAT) {
+                val song = queueManager.currentSong() ?: _nowPlaying.value
+                if (song != null) {
+                    _nowPlaying.value = song
+                    updateForegroundNotification()
+                }
+                return
+            }
             if (reason == Player.MEDIA_ITEM_TRANSITION_REASON_AUTO) {
                 syncQueueAfterExoAutoAdvance()
                 return
@@ -581,7 +613,15 @@ class MusicService : MediaSessionService() {
         }
 
         override fun onPlaybackStateChanged(playbackState: Int) {
+            // With REPEAT_MODE_ONE, Exo should not end — but if it does, let it loop
+            // via Exo rather than our reload path.
             if (playbackState == Player.STATE_ENDED && !advancing) {
+                if (player?.repeatMode == Player.REPEAT_MODE_ONE) {
+                    Log.i(TAG, "STATE_ENDED under REPEAT_MODE_ONE — seekTo(0)")
+                    player?.seekTo(0)
+                    player?.play()
+                    return
+                }
                 advancing = true
                 try {
                     applyAdvance(queueManager.advance(userInitiated = false))
