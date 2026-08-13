@@ -3,6 +3,7 @@ package capital.yuri.yuriplayer.activities
 import android.Manifest
 import android.content.pm.PackageManager
 import android.os.Bundle
+import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
@@ -10,6 +11,7 @@ import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.gestures.detectVerticalDragGestures
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
@@ -21,6 +23,7 @@ import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -35,11 +38,13 @@ import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.LibraryMusic
-import androidx.compose.material.icons.filled.MusicNote
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.Repeat
+import androidx.compose.material.icons.filled.RepeatOne
 import androidx.compose.material.icons.filled.Search
+import androidx.compose.material.icons.filled.Shuffle
 import androidx.compose.material.icons.filled.SkipNext
 import androidx.compose.material.icons.filled.SkipPrevious
 import androidx.compose.material3.CircularProgressIndicator
@@ -69,13 +74,17 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
+import capital.yuri.yuriplayer.activities.ui.AlbumArt
+import capital.yuri.yuriplayer.activities.ui.QueuePanel
 import capital.yuri.yuriplayer.activities.ui.theme.YuriPlayerTheme
 import capital.yuri.yuriplayer.data.AlbumItem
 import capital.yuri.yuriplayer.data.ArtistItem
@@ -84,6 +93,9 @@ import capital.yuri.yuriplayer.data.Song
 import capital.yuri.yuriplayer.data.SortMode
 import capital.yuri.yuriplayer.data.label
 import capital.yuri.yuriplayer.player.PlayerController
+import capital.yuri.yuriplayer.player.QueueLane
+import capital.yuri.yuriplayer.player.QueueSnapshot
+import capital.yuri.yuriplayer.player.RepeatMode
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import org.koin.android.ext.android.inject
@@ -91,6 +103,7 @@ import java.text.DateFormat
 import java.util.Date
 import java.util.Locale
 import java.util.concurrent.TimeUnit
+import kotlin.math.roundToInt
 
 class MainActivity : ComponentActivity() {
 
@@ -148,10 +161,7 @@ class MainActivity : ComponentActivity() {
     }
 }
 
-private enum class TopTab(
-    val label: String,
-    val icon: ImageVector
-) {
+private enum class TopTab(val label: String, val icon: ImageVector) {
     Home("Home", Icons.Default.Home),
     Library("Library", Icons.Default.LibraryMusic),
     MyStuff("My Stuff", Icons.Default.Favorite)
@@ -173,8 +183,7 @@ fun YuriApp(
     var playing by remember { mutableStateOf(false) }
     var positionMs by remember { mutableLongStateOf(0L) }
     var durationMs by remember { mutableLongStateOf(0L) }
-    var queue by remember { mutableStateOf<List<Song>>(emptyList()) }
-    var currentIndex by remember { mutableStateOf(-1) }
+    var snapshot by remember { mutableStateOf(QueueSnapshot()) }
 
     val connected by player.isConnected.collectAsState()
 
@@ -185,8 +194,7 @@ fun YuriApp(
             playing = player.isPlayingNow()
             positionMs = player.getPositionMs()
             durationMs = player.getDurationMs()
-            queue = player.getQueue()
-            currentIndex = player.getCurrentIndex()
+            snapshot = player.getQueueSnapshot()
             delay(400)
         }
     }
@@ -199,19 +207,19 @@ fun YuriApp(
             playing = playing,
             positionMs = positionMs,
             durationMs = durationMs,
-            queue = queue,
-            currentIndex = currentIndex,
+            snapshot = snapshot,
             onCollapse = { playerExpanded = false },
             onToggle = { player.togglePlayPause() },
             onPrev = { player.skipToPrevious() },
             onNext = { player.skipToNext() },
             onSeek = { player.seekTo(it) },
-            onQueueItem = { index ->
-                if (queue.isNotEmpty()) {
-                    player.setPlaylist(queue, index)
-                    player.play()
-                }
-            }
+            onToggleShuffle = { player.toggleShuffle() },
+            onCycleRepeat = { player.cycleRepeatMode() },
+            onPlayItem = { lane, index -> player.playQueueItem(lane, index) },
+            onMoveHot = { f, t -> player.moveHot(f, t) },
+            onMoveCold = { f, t -> player.moveCold(f, t) },
+            onRemoveHot = { player.removeFromHot(it) },
+            onRemoveCold = { player.removeFromCold(it) }
         )
         return
     }
@@ -231,11 +239,8 @@ fun YuriApp(
                                 Icon(
                                     imageVector = tab.icon,
                                     contentDescription = tab.label,
-                                    tint = if (selected) {
-                                        MaterialTheme.colorScheme.primary
-                                    } else {
-                                        MaterialTheme.colorScheme.onSurface.copy(alpha = 0.45f)
-                                    }
+                                    tint = if (selected) MaterialTheme.colorScheme.primary
+                                    else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.45f)
                                 )
                             }
                         }
@@ -246,10 +251,7 @@ fun YuriApp(
                         val loading by library.isLoading.collectAsState()
                         IconButton(onClick = { library.refresh() }) {
                             if (loading) {
-                                CircularProgressIndicator(
-                                    modifier = Modifier.size(20.dp),
-                                    strokeWidth = 2.dp
-                                )
+                                CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp)
                             } else {
                                 Icon(Icons.Default.Refresh, contentDescription = "Refresh library")
                             }
@@ -271,20 +273,15 @@ fun YuriApp(
     ) { innerPadding ->
         Box(modifier = Modifier.fillMaxSize().padding(innerPadding)) {
             when (topTab) {
-                TopTab.Home -> PlaceholderScreen(
-                    title = "Home",
-                    body = "Pin playlists and shortcuts here later."
-                )
+                TopTab.Home -> PlaceholderScreen("Home", "Pin playlists and shortcuts here later.")
                 TopTab.Library -> LibraryScreen(
                     library = library,
-                    onPlay = { songs, index ->
-                        player.setPlaylist(songs, index)
-                        player.play()
-                    }
+                    onPlay = { songs, index -> player.playSource(songs, index) },
+                    onAddToHot = { player.addToHotQueue(it) }
                 )
                 TopTab.MyStuff -> PlaceholderScreen(
-                    title = "My Stuff",
-                    body = "Favorites, playlists, and saved albums/artists will live here."
+                    "My Stuff",
+                    "Favorites, playlists, and saved albums/artists will live here."
                 )
             }
         }
@@ -294,9 +291,7 @@ fun YuriApp(
 @Composable
 fun PlaceholderScreen(title: String, body: String) {
     Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .padding(24.dp),
+        modifier = Modifier.fillMaxSize().padding(24.dp),
         verticalArrangement = Arrangement.Center,
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
@@ -312,17 +307,12 @@ fun PlaceholderScreen(title: String, body: String) {
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun SortDropdown(
-    sortMode: SortMode,
-    onSortModeChange: (SortMode) -> Unit
-) {
+fun SortDropdown(sortMode: SortMode, onSortModeChange: (SortMode) -> Unit) {
     var expanded by remember { mutableStateOf(false) }
     ExposedDropdownMenuBox(
         expanded = expanded,
         onExpandedChange = { expanded = it },
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(horizontal = 12.dp, vertical = 4.dp)
+        modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp)
     ) {
         OutlinedTextField(
             value = "Sort: ${sortMode.label()}",
@@ -330,16 +320,10 @@ fun SortDropdown(
             readOnly = true,
             singleLine = true,
             trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = expanded) },
-            modifier = Modifier
-                .menuAnchor()
-                .fillMaxWidth()
-                .height(48.dp),
+            modifier = Modifier.menuAnchor().fillMaxWidth().height(48.dp),
             textStyle = MaterialTheme.typography.bodyMedium
         )
-        ExposedDropdownMenu(
-            expanded = expanded,
-            onDismissRequest = { expanded = false }
-        ) {
+        ExposedDropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
             SortMode.entries.forEach { mode ->
                 DropdownMenuItem(
                     text = { Text(mode.label()) },
@@ -362,50 +346,34 @@ fun MiniPlayerBar(
     onToggle: () -> Unit,
     onExpand: () -> Unit
 ) {
-    val progress = if (durationMs > 0) (positionMs.toFloat() / durationMs.toFloat()).coerceIn(0f, 1f) else 0f
-
+    val progress = if (durationMs > 0) (positionMs.toFloat() / durationMs).coerceIn(0f, 1f) else 0f
     Surface(
         tonalElevation = 3.dp,
         shadowElevation = 6.dp,
-        modifier = Modifier
-            .fillMaxWidth()
-            .pointerInput(Unit) {
-                detectVerticalDragGestures { _, dragAmount ->
-                    if (dragAmount < -12f) onExpand()
-                }
+        modifier = Modifier.fillMaxWidth().pointerInput(Unit) {
+            detectVerticalDragGestures { _, dragAmount ->
+                if (dragAmount < -12f) onExpand()
             }
+        }
     ) {
         Column {
             LinearProgressIndicator(progress = { progress }, modifier = Modifier.fillMaxWidth())
             Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .clickable(onClick = onExpand)
+                modifier = Modifier.fillMaxWidth().clickable(onClick = onExpand)
                     .padding(horizontal = 12.dp, vertical = 8.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Box(
-                    modifier = Modifier
-                        .size(44.dp)
-                        .clip(RoundedCornerShape(6.dp))
-                        .background(MaterialTheme.colorScheme.primaryContainer),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Icon(
-                        Icons.Default.MusicNote, null,
-                        tint = MaterialTheme.colorScheme.onPrimaryContainer
-                    )
-                }
+                AlbumArt(song = song, size = 44.dp, corner = 6.dp)
                 Spacer(modifier = Modifier.width(12.dp))
                 Column(modifier = Modifier.weight(1f)) {
                     Text(
-                        text = song?.displayTitle ?: "Not playing",
+                        song?.displayTitle ?: "Not playing",
                         style = MaterialTheme.typography.bodyMedium,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis
                     )
                     Text(
-                        text = song?.displayArtist ?: "",
+                        song?.displayArtist ?: "",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
                         maxLines = 1,
@@ -429,14 +397,19 @@ fun FullPlayerScreen(
     playing: Boolean,
     positionMs: Long,
     durationMs: Long,
-    queue: List<Song>,
-    currentIndex: Int,
+    snapshot: QueueSnapshot,
     onCollapse: () -> Unit,
     onToggle: () -> Unit,
     onPrev: () -> Unit,
     onNext: () -> Unit,
     onSeek: (Long) -> Unit,
-    onQueueItem: (Int) -> Unit
+    onToggleShuffle: () -> Unit,
+    onCycleRepeat: () -> Unit,
+    onPlayItem: (QueueLane, Int) -> Unit,
+    onMoveHot: (Int, Int) -> Unit,
+    onMoveCold: (Int, Int) -> Unit,
+    onRemoveHot: (Int) -> Unit,
+    onRemoveCold: (Int) -> Unit
 ) {
     var showQueue by remember { mutableStateOf(false) }
     var sliderPosition by remember { mutableFloatStateOf(0f) }
@@ -444,7 +417,7 @@ fun FullPlayerScreen(
 
     LaunchedEffect(positionMs, durationMs, sliding) {
         if (!sliding && durationMs > 0) {
-            sliderPosition = (positionMs.toFloat() / durationMs.toFloat()).coerceIn(0f, 1f)
+            sliderPosition = (positionMs.toFloat() / durationMs).coerceIn(0f, 1f)
         }
     }
 
@@ -464,45 +437,25 @@ fun FullPlayerScreen(
             }
 
             if (showQueue) {
-                Text("Queue", style = MaterialTheme.typography.titleMedium, modifier = Modifier.padding(vertical = 8.dp))
-                LazyColumn(modifier = Modifier.weight(1f)) {
-                    itemsIndexed(queue, key = { i, s -> s.id to i }) { index, item ->
-                        val isCurrent = index == currentIndex
-                        Text(
-                            text = buildString {
-                                if (isCurrent) append("▶ ")
-                                append(item.displayTitle)
-                                append(" — ")
-                                append(item.displayArtist)
-                            },
-                            style = MaterialTheme.typography.bodyMedium,
-                            fontWeight = if (isCurrent) FontWeight.Bold else FontWeight.Normal,
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .clickable { onQueueItem(index) }
-                                .padding(vertical = 10.dp, horizontal = 4.dp),
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis
-                        )
-                    }
-                }
+                QueuePanel(
+                    snapshot = snapshot,
+                    onPlayItem = onPlayItem,
+                    onMoveHot = onMoveHot,
+                    onMoveCold = onMoveCold,
+                    onRemoveHot = onRemoveHot,
+                    onRemoveCold = onRemoveCold,
+                    modifier = Modifier.weight(1f)
+                )
             } else {
                 Spacer(modifier = Modifier.height(12.dp))
-                Box(
+                AlbumArt(
+                    song = song,
                     modifier = Modifier
                         .fillMaxWidth()
                         .padding(horizontal = 24.dp)
-                        .aspectRatio(1f)
-                        .clip(RoundedCornerShape(12.dp))
-                        .background(MaterialTheme.colorScheme.primaryContainer),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Icon(
-                        Icons.Default.MusicNote, null,
-                        modifier = Modifier.size(96.dp),
-                        tint = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.5f)
-                    )
-                }
+                        .aspectRatio(1f),
+                    corner = 12.dp
+                )
                 Spacer(modifier = Modifier.height(28.dp))
                 Text(
                     song?.displayTitle ?: "Not playing",
@@ -544,12 +497,20 @@ fun FullPlayerScreen(
                     Text(formatTime(positionMs), style = MaterialTheme.typography.labelSmall)
                     Text(formatTime(durationMs), style = MaterialTheme.typography.labelSmall)
                 }
-                Spacer(modifier = Modifier.height(12.dp))
+                Spacer(modifier = Modifier.height(8.dp))
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.SpaceEvenly,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
+                    IconButton(onClick = onToggleShuffle) {
+                        Icon(
+                            Icons.Default.Shuffle,
+                            contentDescription = "Shuffle cold queue",
+                            tint = if (snapshot.shuffleEnabled) MaterialTheme.colorScheme.primary
+                            else MaterialTheme.colorScheme.onSurface
+                        )
+                    }
                     IconButton(onClick = onPrev) {
                         Icon(Icons.Default.SkipPrevious, "Previous", modifier = Modifier.size(36.dp))
                     }
@@ -563,10 +524,33 @@ fun FullPlayerScreen(
                     IconButton(onClick = onNext) {
                         Icon(Icons.Default.SkipNext, "Next", modifier = Modifier.size(36.dp))
                     }
+                    IconButton(onClick = onCycleRepeat) {
+                        val (icon, tintOn) = when (snapshot.repeatMode) {
+                            RepeatMode.OFF -> Icons.Default.Repeat to false
+                            RepeatMode.ONE -> Icons.Default.RepeatOne to true
+                            RepeatMode.COLD -> Icons.Default.Repeat to true
+                        }
+                        Icon(
+                            icon,
+                            contentDescription = "Repeat: ${snapshot.repeatMode.name}",
+                            tint = if (tintOn) MaterialTheme.colorScheme.primary
+                            else MaterialTheme.colorScheme.onSurface
+                        )
+                    }
                 }
+                Text(
+                    when (snapshot.repeatMode) {
+                        RepeatMode.OFF -> "Repeat off"
+                        RepeatMode.ONE -> "Repeat one"
+                        RepeatMode.COLD -> "Repeat cold queue"
+                    } + if (snapshot.shuffleEnabled) " · Shuffle on" else "",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f),
+                    modifier = Modifier.align(Alignment.CenterHorizontally)
+                )
                 Spacer(modifier = Modifier.weight(1f))
                 Text(
-                    "Lyrics coming later (tags / local files)",
+                    "Lyrics coming later",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.4f),
                     modifier = Modifier.align(Alignment.CenterHorizontally)
@@ -579,12 +563,14 @@ fun FullPlayerScreen(
 @Composable
 fun LibraryScreen(
     library: LibraryIndex,
-    onPlay: (List<Song>, Int) -> Unit
+    onPlay: (List<Song>, Int) -> Unit,
+    onAddToHot: (Song) -> Unit
 ) {
     val allSongs by library.songs.collectAsState()
     val loading by library.isLoading.collectAsState()
     val lastScanned by library.lastScannedAt.collectAsState()
     val error by library.error.collectAsState()
+    val context = LocalContext.current
 
     var query by remember { mutableStateOf("") }
     var sortMode by remember { mutableStateOf(SortMode.TITLE) }
@@ -603,18 +589,14 @@ fun LibraryScreen(
         OutlinedTextField(
             value = query,
             onValueChange = { query = it },
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 12.dp, vertical = 8.dp),
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp),
             singleLine = true,
-            leadingIcon = { Icon(Icons.Default.Search, contentDescription = null) },
+            leadingIcon = { Icon(Icons.Default.Search, null) },
             placeholder = { Text("Filter songs, albums, artists…") }
         )
 
         Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .horizontalScroll(rememberScrollState())
+            modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState())
                 .padding(horizontal = 12.dp, vertical = 4.dp),
             horizontalArrangement = Arrangement.spacedBy(8.dp)
         ) {
@@ -632,7 +614,7 @@ fun LibraryScreen(
         }
 
         if (section == LibrarySection.Songs || section == LibrarySection.Untagged) {
-            SortDropdown(sortMode = sortMode, onSortModeChange = { sortMode = it })
+            SortDropdown(sortMode) { sortMode = it }
         }
 
         val statusText = when {
@@ -646,113 +628,159 @@ fun LibraryScreen(
             else -> "${allSongs.size} tracks"
         }
         Text(
-            text = statusText,
+            statusText,
             style = MaterialTheme.typography.labelMedium,
             modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
             color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
         )
 
         when (section) {
-            LibrarySection.Songs -> SongList(taggedSongs, loading, onPlay)
-            LibrarySection.Untagged -> SongList(untaggedSongs, loading, onPlay)
+            LibrarySection.Songs -> SongList(
+                taggedSongs, loading, onPlay,
+                onAddToHot = {
+                    onAddToHot(it)
+                    Toast.makeText(context, "Added to hot queue", Toast.LENGTH_SHORT).show()
+                }
+            )
+            LibrarySection.Untagged -> SongList(
+                untaggedSongs, loading, onPlay,
+                onAddToHot = {
+                    onAddToHot(it)
+                    Toast.makeText(context, "Added to hot queue", Toast.LENGTH_SHORT).show()
+                }
+            )
             LibrarySection.Albums -> {
-                if (albums.isEmpty()) {
-                    Text("No albums match.", modifier = Modifier.padding(16.dp))
-                } else {
-                    LazyColumn(modifier = Modifier.fillMaxSize()) {
-                        items(albums, key = { normalizeAlbumKey(it) }) { album ->
-                            AlbumRow(album) { onPlay(album.songs, 0) }
-                        }
+                if (albums.isEmpty()) Text("No albums match.", modifier = Modifier.padding(16.dp))
+                else LazyColumn(modifier = Modifier.fillMaxSize()) {
+                    items(albums, key = { "${it.name}|${it.artist}" }) { album ->
+                        AlbumRow(album) { onPlay(album.songs, 0) }
                     }
                 }
             }
             LibrarySection.Artists -> {
-                if (artists.isEmpty()) {
-                    Text("No artists match.", modifier = Modifier.padding(16.dp))
-                } else {
-                    LazyColumn(modifier = Modifier.fillMaxSize()) {
-                        items(artists, key = { it.name?.lowercase() ?: "_" }) { artist ->
-                            ArtistRow(artist) { onPlay(artist.songs, 0) }
-                        }
+                if (artists.isEmpty()) Text("No artists match.", modifier = Modifier.padding(16.dp))
+                else LazyColumn(modifier = Modifier.fillMaxSize()) {
+                    items(artists, key = { it.name?.lowercase() ?: "_" }) { artist ->
+                        ArtistRow(artist) { onPlay(artist.songs, 0) }
                     }
                 }
             }
         }
     }
-}
-
-private fun normalizeAlbumKey(album: AlbumItem): String {
-    return listOf(album.name, album.artist)
-        .joinToString("|") { it?.trim()?.lowercase().orEmpty() }
 }
 
 @Composable
 private fun SongList(
     songs: List<Song>,
     loading: Boolean,
-    onPlay: (List<Song>, Int) -> Unit
+    onPlay: (List<Song>, Int) -> Unit,
+    onAddToHot: (Song) -> Unit
 ) {
     if (songs.isEmpty() && !loading) {
         Text("Nothing here yet.", modifier = Modifier.padding(16.dp))
     } else {
         LazyColumn(modifier = Modifier.fillMaxSize()) {
             itemsIndexed(songs, key = { _, s -> s.id to s.path }) { index, song ->
-                SongRow(song) { onPlay(songs, index) }
+                SwipeAddSongRow(
+                    song = song,
+                    onClick = { onPlay(songs, index) },
+                    onSwipeAdd = { onAddToHot(song) }
+                )
             }
         }
     }
 }
 
 @Composable
-fun SongRow(song: Song, onClick: () -> Unit) {
-    Column(
+fun SwipeAddSongRow(
+    song: Song,
+    onClick: () -> Unit,
+    onSwipeAdd: () -> Unit
+) {
+    var offsetX by remember { mutableFloatStateOf(0f) }
+    val density = LocalDensity.current
+    val threshold = with(density) { 96.dp.toPx() }
+
+    Box(
         modifier = Modifier
             .fillMaxWidth()
-            .clickable(onClick = onClick)
-            .padding(horizontal = 16.dp, vertical = 10.dp)
+            .background(MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.35f))
     ) {
         Text(
-            text = buildString {
-                song.trackNumber?.let { append("$it. ") }
-                append(song.displayTitle)
-            },
-            style = MaterialTheme.typography.bodyLarge,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis
+            "+ Hot queue",
+            style = MaterialTheme.typography.labelLarge,
+            color = MaterialTheme.colorScheme.primary,
+            modifier = Modifier.align(Alignment.CenterStart).padding(start = 16.dp)
         )
-        Text(
-            text = "${song.displayArtist} • ${song.displayAlbum}",
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis
-        )
+        Row(
+            modifier = Modifier
+                .offset { IntOffset(offsetX.roundToInt(), 0) }
+                .fillMaxWidth()
+                .background(MaterialTheme.colorScheme.surface)
+                .pointerInput(song) {
+                    detectHorizontalDragGestures(
+                        onDragEnd = {
+                            if (offsetX > threshold) onSwipeAdd()
+                            offsetX = 0f
+                        },
+                        onDragCancel = { offsetX = 0f },
+                        onHorizontalDrag = { _, dragAmount ->
+                            offsetX = (offsetX + dragAmount).coerceIn(0f, threshold * 1.5f)
+                        }
+                    )
+                }
+                .clickable(onClick = onClick)
+                .padding(horizontal = 16.dp, vertical = 10.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            AlbumArt(song = song, size = 40.dp, corner = 4.dp)
+            Spacer(modifier = Modifier.width(12.dp))
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    buildString {
+                        song.trackNumber?.let { append("$it. ") }
+                        append(song.displayTitle)
+                    },
+                    style = MaterialTheme.typography.bodyLarge,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+                Text(
+                    "${song.displayArtist} • ${song.displayAlbum}",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
+        }
     }
 }
 
 @Composable
 fun AlbumRow(album: AlbumItem, onClick: () -> Unit) {
-    Column(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clickable(onClick = onClick)
-            .padding(horizontal = 16.dp, vertical = 12.dp)
+    Row(
+        modifier = Modifier.fillMaxWidth().clickable(onClick = onClick)
+            .padding(horizontal = 16.dp, vertical = 12.dp),
+        verticalAlignment = Alignment.CenterVertically
     ) {
-        Text(album.displayName, style = MaterialTheme.typography.bodyLarge, maxLines = 1, overflow = TextOverflow.Ellipsis)
-        Text(
-            "${album.displayArtist} · ${album.trackCount} tracks",
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
-        )
+        AlbumArt(song = album.songs.firstOrNull(), size = 48.dp)
+        Spacer(modifier = Modifier.width(12.dp))
+        Column {
+            Text(album.displayName, style = MaterialTheme.typography.bodyLarge, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Text(
+                "${album.displayArtist} · ${album.trackCount} tracks",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
+            )
+        }
     }
 }
 
 @Composable
 fun ArtistRow(artist: ArtistItem, onClick: () -> Unit) {
     Column(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clickable(onClick = onClick)
+        modifier = Modifier.fillMaxWidth().clickable(onClick = onClick)
             .padding(horizontal = 16.dp, vertical = 12.dp)
     ) {
         Text(artist.displayName, style = MaterialTheme.typography.bodyLarge, maxLines = 1, overflow = TextOverflow.Ellipsis)
