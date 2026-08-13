@@ -47,7 +47,8 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
-import androidx.compose.ui.focus.focusProperties
+import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
@@ -114,10 +115,7 @@ fun SortDropdown(sortMode: SortMode, onSortModeChange: (SortMode) -> Unit) {
             SortMode.entries.forEach { mode ->
                 DropdownMenuItem(
                     text = {
-                        Text(
-                            mode.label(),
-                            style = MaterialTheme.typography.bodyMedium
-                        )
+                        Text(mode.label(), style = MaterialTheme.typography.bodyMedium)
                     },
                     onClick = {
                         onSortModeChange(mode)
@@ -145,15 +143,18 @@ fun LibraryScreen(
     val context = LocalContext.current
     val focusManager = LocalFocusManager.current
     val keyboard = LocalSoftwareKeyboardController.current
+    val searchFocus = remember { FocusRequester() }
 
     var query by remember { mutableStateOf("") }
     var sortMode by remember { mutableStateOf(SortMode.TITLE) }
     var section by remember { mutableStateOf(LibrarySection.Songs) }
+    var searchActive by remember { mutableStateOf(false) }
 
-    // Never steal focus / open IME on first composition
+    // Keep IME closed unless the user explicitly activates search
     LaunchedEffect(Unit) {
         focusManager.clearFocus(force = true)
         keyboard?.hide()
+        searchActive = false
     }
 
     val taggedSongs = remember(allSongs, sortMode, query) {
@@ -172,13 +173,25 @@ fun LibraryScreen(
             modifier = Modifier
                 .fillMaxWidth()
                 .padding(horizontal = 12.dp, vertical = 8.dp)
-                .focusProperties { canFocus = true },
+                .focusRequester(searchFocus)
+                .onFocusChanged { state ->
+                    if (!state.isFocused) {
+                        searchActive = false
+                        keyboard?.hide()
+                    }
+                }
+                .clickable {
+                    searchActive = true
+                    searchFocus.requestFocus()
+                },
             singleLine = true,
+            readOnly = !searchActive,
             leadingIcon = { Icon(Icons.Default.Search, null) },
             placeholder = { Text("Filter songs, albums, artists…") },
             keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
             keyboardActions = KeyboardActions(
                 onSearch = {
+                    searchActive = false
                     focusManager.clearFocus()
                     keyboard?.hide()
                 }
@@ -338,9 +351,7 @@ fun SwipeAddSongRow(
                 MarqueeText(
                     text = if (showTrackNumber && song.trackNumber != null) {
                         "${song.trackNumber}. ${song.displayTitle}"
-                    } else {
-                        song.displayTitle
-                    },
+                    } else song.displayTitle,
                     style = MaterialTheme.typography.bodyLarge
                 )
                 MarqueeText(
@@ -398,10 +409,7 @@ fun SwipeAddAlbumRow(
             AlbumArt(song = album.songs.firstOrNull(), size = 48.dp)
             Spacer(modifier = Modifier.width(12.dp))
             Column(modifier = Modifier.weight(1f)) {
-                MarqueeText(
-                    text = album.displayName,
-                    style = MaterialTheme.typography.bodyLarge
-                )
+                MarqueeText(text = album.displayName, style = MaterialTheme.typography.bodyLarge)
                 MarqueeText(
                     text = "${album.displayArtist} · ${album.trackCount} tracks",
                     style = MaterialTheme.typography.bodySmall,
@@ -424,10 +432,7 @@ fun AlbumRow(album: AlbumItem, onClick: () -> Unit) {
         AlbumArt(song = album.songs.firstOrNull(), size = 48.dp)
         Spacer(modifier = Modifier.width(12.dp))
         Column(modifier = Modifier.weight(1f)) {
-            MarqueeText(
-                text = album.displayName,
-                style = MaterialTheme.typography.bodyLarge
-            )
+            MarqueeText(text = album.displayName, style = MaterialTheme.typography.bodyLarge)
             MarqueeText(
                 text = "${album.displayArtist} · ${album.trackCount} tracks",
                 style = MaterialTheme.typography.bodySmall,
@@ -445,10 +450,7 @@ fun ArtistRow(artist: ArtistItem, onClick: () -> Unit) {
             .clickable(onClick = onClick)
             .padding(horizontal = 16.dp, vertical = 12.dp)
     ) {
-        MarqueeText(
-            text = artist.displayName,
-            style = MaterialTheme.typography.bodyLarge
-        )
+        MarqueeText(text = artist.displayName, style = MaterialTheme.typography.bodyLarge)
         Text(
             "${artist.albumCount} albums · ${artist.trackCount} tracks",
             style = MaterialTheme.typography.bodySmall,

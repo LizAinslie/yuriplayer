@@ -26,15 +26,13 @@
             android:theme="@style/Theme.YuriPlayer"
             android:launchMode="singleTop"
             android:configChanges="orientation|screenSize|keyboardHidden|screenLayout"
-            android:windowSoftInputMode="adjustResize">
+            android:windowSoftInputMode="stateAlwaysHidden|adjustResize">
 
-            <!-- Normal launcher entry -->
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
 
-            <!-- Car control app entry point -->
             <intent-filter>
                 <action android:name="capital.yuri.yuriplayer.action.CAR_MODE" />
                 <category android:name="android.intent.category.DEFAULT" />
