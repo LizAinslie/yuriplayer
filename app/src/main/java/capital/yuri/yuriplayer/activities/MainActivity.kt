@@ -50,6 +50,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
@@ -281,7 +282,10 @@ fun YuriApp(
     Box(modifier = Modifier.fillMaxSize()) {
         Scaffold(
             modifier = Modifier.fillMaxSize(),
-            // Album/artist paint under the status bar themselves
+            // Transparent so album/artist can paint under the status bar;
+            // otherwise Scaffold's surface shows through the inset band.
+            containerColor = if (edgeToEdgeDetail) Color.Transparent
+            else MaterialTheme.colorScheme.background,
             contentWindowInsets = if (edgeToEdgeDetail) {
                 WindowInsets(0, 0, 0, 0)
             } else {
@@ -340,7 +344,6 @@ fun YuriApp(
                 )
             }
         ) { innerPadding ->
-            // For edge-to-edge detail pages keep only the bottom inset (mini player)
             val contentPadding = if (edgeToEdgeDetail) {
                 PaddingValues(bottom = innerPadding.calculateBottomPadding())
             } else {
