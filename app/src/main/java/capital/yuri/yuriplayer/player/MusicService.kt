@@ -42,6 +42,9 @@ class MusicService : MediaSessionService() {
     private val _isPlaying = MutableStateFlow(false)
     val isPlaying: StateFlow<Boolean> = _isPlaying.asStateFlow()
 
+    private val _queue = MutableStateFlow<List<Song>>(emptyList())
+    val queue: StateFlow<List<Song>> = _queue.asStateFlow()
+
     inner class LocalBinder : Binder() {
         fun getService(): MusicService = this@MusicService
     }
@@ -88,7 +91,6 @@ class MusicService : MediaSessionService() {
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         super.onStartCommand(intent, flags, startId)
-        // Keep running after the UI goes away; system may restart us if killed under memory pressure
         return START_STICKY
     }
 
@@ -122,13 +124,11 @@ class MusicService : MediaSessionService() {
         }
     }
 
-    /**
-     * Build MediaItems off the main thread to avoid ANRs on large libraries.
-     */
     fun setPlaylist(songs: List<Song>, startIndex: Int = 0) {
         serviceScope.launch {
             val safeIndex = startIndex.coerceIn(0, (songs.size - 1).coerceAtLeast(0))
             currentPlaylist = songs
+            _queue.value = songs
 
             val mediaItems = withContext(Dispatchers.Default) {
                 songs.map { song ->
@@ -188,6 +188,10 @@ class MusicService : MediaSessionService() {
         }
     }
 
+    fun seekTo(positionMs: Long) {
+        player?.seekTo(positionMs.coerceAtLeast(0L))
+    }
+
     fun isPlaying(): Boolean = player?.isPlaying == true
 
     fun getCurrentSong(): Song? {
@@ -195,8 +199,21 @@ class MusicService : MediaSessionService() {
         return currentPlaylist.getOrNull(index)
     }
 
+    fun getCurrentIndex(): Int = player?.currentMediaItemIndex ?: -1
+
+    fun getPositionMs(): Long {
+        val pos = player?.currentPosition ?: 0L
+        return if (pos < 0) 0L else pos
+    }
+
+    fun getDurationMs(): Long {
+        val dur = player?.duration ?: 0L
+        return if (dur < 0) 0L else dur
+    }
+
+    fun getQueue(): List<Song> = currentPlaylist
+
     override fun onTaskRemoved(rootIntent: Intent?) {
-        // User swiped the app away — keep audio going if something is playing.
         if (player?.isPlaying != true) {
             stopSelf()
         }

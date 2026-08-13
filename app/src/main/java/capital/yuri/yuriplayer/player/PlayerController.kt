@@ -11,14 +11,6 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 
-/**
- * Facade over [MusicService].
- *
- * Lifecycle model:
- * - [bind] starts the service (so it survives Activity onStop) and binds for commands
- * - [play] promotes it to a foreground media service via startForegroundService
- * - [unbind] only drops the Activity connection; playback keeps running
- */
 class PlayerController(private val context: Context) {
 
     private var service: MusicService? = null
@@ -44,8 +36,6 @@ class PlayerController(private val context: Context) {
 
     fun bind() {
         val intent = Intent(context, MusicService::class.java)
-        // startService keeps the service alive after the last client unbinds.
-        // (BIND_AUTO_CREATE alone would destroy it when MainActivity unbinds.)
         context.startService(intent)
         if (!bound) {
             context.bindService(intent, connection, Context.BIND_AUTO_CREATE)
@@ -57,10 +47,8 @@ class PlayerController(private val context: Context) {
         try {
             context.unbindService(connection)
         } catch (_: IllegalArgumentException) {
-            // Already unbound
         }
         bound = false
-        // Intentionally keep [service] reference nullled but do NOT stop the service.
         service = null
         _isConnected.value = false
     }
@@ -71,8 +59,6 @@ class PlayerController(private val context: Context) {
     }
 
     fun play() {
-        // Promote to foreground so Android allows ongoing playback with a notification.
-        // MediaSessionService will call startForeground once the player is playing.
         ContextCompat.startForegroundService(
             context,
             Intent(context, MusicService::class.java)
@@ -100,8 +86,16 @@ class PlayerController(private val context: Context) {
         service?.skipToPrevious()
     }
 
+    fun seekTo(positionMs: Long) {
+        service?.seekTo(positionMs)
+    }
+
     fun isPlayingNow(): Boolean = service?.isPlaying() == true
     fun getCurrentSong(): Song? = service?.getCurrentSong()
+    fun getCurrentIndex(): Int = service?.getCurrentIndex() ?: -1
+    fun getPositionMs(): Long = service?.getPositionMs() ?: 0L
+    fun getDurationMs(): Long = service?.getDurationMs() ?: 0L
+    fun getQueue(): List<Song> = service?.getQueue() ?: emptyList()
 
     private fun ensureServiceStarted() {
         context.startService(Intent(context, MusicService::class.java))
