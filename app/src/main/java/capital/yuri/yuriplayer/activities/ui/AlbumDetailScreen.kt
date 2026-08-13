@@ -4,6 +4,7 @@ import android.widget.Toast
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -45,6 +46,8 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
@@ -56,11 +59,16 @@ import capital.yuri.yuriplayer.data.Song
 import capital.yuri.yuriplayer.data.theme.ThemeService
 import capital.yuri.yuriplayer.ui.formatTrackCount
 import org.koin.compose.koinInject
+import kotlin.math.min
+
+/** Approximate expanded hero height (art + title + actions). */
+private val AlbumHeroHeight = 420.dp
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun AlbumDetailScreen(
     album: AlbumItem,
+    nowPlaying: Song? = null,
     isSourceActive: Boolean = false,
     isPlaying: Boolean = false,
     shuffleEnabled: Boolean = false,
@@ -100,6 +108,8 @@ fun AlbumDetailScreen(
     val discs = remember(album.songs) { groupByDisc(album.songs) }
     val multiDisc = discs.size > 1 || discs.keys.any { it != null && it > 1 }
     val scheme = playerColorScheme(themeColors, base)
+    val albumBg = scheme.background
+    val defaultBg = base.background
 
     val releaseYear = remember(album.songs) {
         album.songs.mapNotNull { it.year }.maxOrNull()
@@ -118,12 +128,42 @@ fun AlbumDetailScreen(
     }
 
     MaterialTheme(colorScheme = scheme) {
-        Box(
+        BoxWithConstraints(
             modifier = Modifier
                 .fillMaxSize()
-                .background(scheme.background)
+                .background(defaultBg)
                 .statusBarsPadding()
         ) {
+            val viewportPx = constraints.maxHeight.toFloat()
+            val headerPx = with(density) { AlbumHeroHeight.toPx() }
+            // Fade distance = full header height, capped so it fits under the header in the viewport
+            val fadePx = min(headerPx, (viewportPx - headerPx).coerceAtLeast(0f))
+            val fadeDp = with(density) { fadePx.toDp() }
+
+            // Solid album color behind the hero
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(AlbumHeroHeight)
+                    .align(Alignment.TopCenter)
+                    .background(albumBg)
+            )
+            // Gradient from bottom of header downward into default bg
+            if (fadePx > 0f) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(fadeDp)
+                        .padding(top = AlbumHeroHeight)
+                        .align(Alignment.TopCenter)
+                        .background(
+                            Brush.verticalGradient(
+                                colors = listOf(albumBg, defaultBg)
+                            )
+                        )
+                )
+            }
+
             LazyColumn(
                 state = listState,
                 modifier = Modifier.fillMaxSize(),
@@ -164,7 +204,9 @@ fun AlbumDetailScreen(
                                 onAddSongToQueue(song)
                                 Toast.makeText(context, "Added to queue", Toast.LENGTH_SHORT).show()
                             },
-                            showTrackNumber = true
+                            showTrackNumber = true,
+                            isPlaying = song.isSameAs(nowPlaying),
+                            transparentSurface = true
                         )
                     }
                 }
@@ -369,7 +411,6 @@ private fun CollapsedSpotifyBar(
             .fillMaxWidth()
             .graphicsLayer { alpha = fraction }
             .background(MaterialTheme.colorScheme.background.copy(alpha = 0.96f))
-            // Match page gutters (~16–20dp); keep back control near the left edge
             .padding(start = 4.dp, end = 16.dp, top = 6.dp, bottom = 6.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
