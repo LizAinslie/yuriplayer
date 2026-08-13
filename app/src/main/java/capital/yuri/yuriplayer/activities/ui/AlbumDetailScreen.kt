@@ -53,7 +53,6 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
-import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
@@ -141,6 +140,7 @@ fun AlbumDetailScreen(
     // Sticky gradient top: under expanded hero (with early start) → under collapsed bar
     val gradientTopDp = ExpandedHeroHeight - ExpandedEarlyStart +
         (CollapsedBarHeight - (ExpandedHeroHeight - ExpandedEarlyStart)) * f
+    val gradientTopPx = with(density) { gradientTopDp.toPx().roundToInt() }
 
     MaterialTheme(colorScheme = scheme) {
         // Album color through the status-bar region; page body is default below the fade
@@ -158,12 +158,7 @@ fun AlbumDetailScreen(
                 Box(
                     modifier = Modifier
                         .fillMaxSize()
-                        .offset {
-                            IntOffset(
-                                0,
-                                with(density) { gradientTopDp.toPx().roundToInt() }
-                            )
-                        }
+                        .offset { IntOffset(0, gradientTopPx) }
                         .background(defaultBg)
                 )
 
@@ -190,7 +185,7 @@ fun AlbumDetailScreen(
                                 onMore = { showMenu = true },
                                 onOpenArtist = onOpenArtist
                             )
-                            // Spacer matching collapsed sticky gradient length so tracks start after the fade zone
+                            // Spacer so tracks start after the fade zone
                             Spacer(modifier = Modifier.height(GradientFadeHeight - ExpandedEarlyStart))
                         }
                     }
@@ -228,7 +223,7 @@ fun AlbumDetailScreen(
                 StickyAlbumGradient(
                     albumBg = albumBg,
                     defaultBg = defaultBg,
-                    top = gradientTopDp,
+                    topPx = gradientTopPx,
                     height = GradientFadeHeight
                 )
 
@@ -254,42 +249,33 @@ fun AlbumDetailScreen(
                     }
                 }
 
-            if (showMenu) {
-                ModalBottomSheet(
-                    onDismissRequest = { showMenu = false },
-                    sheetState = rememberModalBottomSheetState()
-                ) {
-                    MediaSheetHeader(
-                        song = album.songs.firstOrNull(),
-                        title = album.displayName,
-                        subtitle = album.displayArtist
-                    )
-                    MediaSheetItem(
-                        label = "Add to queue",
-                            onClick =  {
+                if (showMenu) {
+                    ModalBottomSheet(
+                        onDismissRequest = { showMenu = false },
+                        sheetState = rememberModalBottomSheetState()
+                    ) {
+                        MediaSheetHeader(
+                            song = album.songs.firstOrNull(),
+                            title = album.displayName,
+                            subtitle = album.displayArtist
+                        )
+                        MediaSheetItem("Add to queue") {
                             onAddAlbumToQueue(album.songs)
                             Toast.makeText(
                                 context,
-                                "Queued ${formatTrackCount(album.songs.size)} tracks",
+                                "Queued ${formatTrackCount(album.songs.size)}",
                                 Toast.LENGTH_SHORT
                             ).show()
                             showMenu = false
                         }
-                    )
-                    MediaSheetItem(
-                        label = "Go to artist",
-                            onClick = {
+                        MediaSheetItem("Go to artist") {
                             showMenu = false
                             onOpenArtist()
                         }
-                    )
-                    MediaSheetItem(
-                        label = "Add to playlist",
-                        onClick = {
+                        MediaSheetItem("Add to playlist") {
                             showMenu = false
                             Toast.makeText(context, "Playlists coming soon", Toast.LENGTH_SHORT).show()
                         }
-                        )
                         MediaSheetBottomPad()
                     }
                 }
@@ -307,16 +293,16 @@ fun AlbumDetailScreen(
 private fun StickyAlbumGradient(
     albumBg: Color,
     defaultBg: Color,
-    top: androidx.compose.ui.unit.Dp,
+    topPx: Int,
     height: androidx.compose.ui.unit.Dp
 ) {
     Box(
         modifier = Modifier
             .fillMaxWidth()
             .height(height)
-            .offset { IntOffset(0, with(LocalDensity.current) { top.toPx().roundToInt() }) }
+            // offset lambda is Density.() -> IntOffset — not a @Composable scope
+            .offset { IntOffset(0, topPx) }
             .drawBehind {
-                // Multi-stop vertical for a slower dissolve
                 drawRect(
                     brush = Brush.verticalGradient(
                         colorStops = arrayOf(
@@ -329,7 +315,6 @@ private fun StickyAlbumGradient(
                         )
                     )
                 )
-                // Soft radial vignette centered near the top — edges fall off a touch earlier
                 drawRect(
                     brush = Brush.radialGradient(
                         colors = listOf(
