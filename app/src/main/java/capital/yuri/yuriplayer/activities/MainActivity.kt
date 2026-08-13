@@ -4,6 +4,7 @@ import android.Manifest
 import android.app.Activity
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.os.Build
 import android.os.Bundle
 import android.view.WindowManager
 import android.widget.Toast
@@ -99,6 +100,20 @@ class MainActivity : ComponentActivity() {
         if (granted) libraryIndex.refresh()
     }
 
+    /** API 33+ needs READ_MEDIA_AUDIO; older devices use READ_EXTERNAL_STORAGE. */
+    private fun audioReadPermission(): String =
+        if (Build.VERSION.SDK_INT >= 33) Manifest.permission.READ_MEDIA_AUDIO
+        else Manifest.permission.READ_EXTERNAL_STORAGE
+
+    private fun ensureAudioPermission() {
+        val perm = audioReadPermission()
+        if (ContextCompat.checkSelfPermission(this, perm) == PackageManager.PERMISSION_GRANTED) {
+            libraryIndex.refresh()
+        } else {
+            permissionLauncher.launch(perm)
+        }
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
@@ -111,11 +126,7 @@ class MainActivity : ComponentActivity() {
                 intent?.getBooleanExtra("car_mode", false) == true
         openPlayerState.value = intent?.getBooleanExtra(EXTRA_OPEN_PLAYER, false) == true
 
-        if (ContextCompat.checkSelfPermission(this, Manifest.permission.READ_EXTERNAL_STORAGE)
-            != PackageManager.PERMISSION_GRANTED
-        ) {
-            permissionLauncher.launch(Manifest.permission.READ_EXTERNAL_STORAGE)
-        }
+        ensureAudioPermission()
 
         title = "YuriPlayer"
         enableEdgeToEdge()
