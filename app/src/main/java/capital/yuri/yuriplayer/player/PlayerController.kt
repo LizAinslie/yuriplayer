@@ -36,12 +36,14 @@ class PlayerController(private val context: Context) {
 
     fun bind() {
         val intent = Intent(context, MusicService::class.java)
-        context.startService(intent)
+        // Foreground service from the start so Oreo cannot kill us when the UI backgrounds
+        ContextCompat.startForegroundService(context, intent)
         if (!bound) {
             context.bindService(intent, connection, Context.BIND_AUTO_CREATE)
         }
     }
 
+    /** Only call from Activity.onDestroy — keep bound across onStop so playback survives. */
     fun unbind() {
         if (!bound) return
         try {
@@ -98,7 +100,10 @@ class PlayerController(private val context: Context) {
     fun getQueue(): List<Song> = service?.getQueue() ?: emptyList()
 
     private fun ensureServiceStarted() {
-        context.startService(Intent(context, MusicService::class.java))
+        ContextCompat.startForegroundService(
+            context,
+            Intent(context, MusicService::class.java)
+        )
         if (!bound) {
             context.bindService(
                 Intent(context, MusicService::class.java),

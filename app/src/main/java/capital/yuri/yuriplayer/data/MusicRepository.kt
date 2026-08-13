@@ -10,10 +10,6 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.io.File
 
-/**
- * Scans MediaStore + configured filesystem roots.
- * Prefer [LibraryIndex] for UI — this class is the slow path used only on refresh.
- */
 class MusicRepository(
     private val context: Context,
     private val settings: LibrarySettings
@@ -24,9 +20,11 @@ class MusicRepository(
             "flac", "mp3", "ogg", "opus", "m4a", "mp4", "aac",
             "wav", "aiff", "aif", "wma", "alac"
         )
+
+        // Column exists on many API 27 devices even without the MediaStore constant
+        private const val COL_ALBUM_ARTIST = "album_artist"
     }
 
-    /** Full scan used by LibraryIndex.refresh(). Not for sort/search. */
     suspend fun scanLibrary(): List<Song> = withContext(Dispatchers.IO) {
         val byKey = LinkedHashMap<String, Song>()
 
@@ -45,10 +43,6 @@ class MusicRepository(
         byKey.values.toList()
     }
 
-    /** @deprecated Use LibraryIndex — kept for any direct callers */
-    suspend fun getAllSongs(sortMode: SortMode = SortMode.TITLE): List<Song> =
-        LibraryIndex.sortSongs(scanLibrary(), sortMode)
-
     private fun queryMediaStore(): List<Song> {
         val songs = mutableListOf<Song>()
         val collection = MediaStore.Audio.Media.EXTERNAL_CONTENT_URI
@@ -63,7 +57,8 @@ class MusicRepository(
             MediaStore.Audio.Media.TRACK,
             MediaStore.Audio.Media.YEAR,
             MediaStore.Audio.Media.DATA,
-            MediaStore.Audio.Media.MIME_TYPE
+            MediaStore.Audio.Media.MIME_TYPE,
+            COL_ALBUM_ARTIST
         )
 
         val selection = buildString {
@@ -77,49 +72,64 @@ class MusicRepository(
             append(" AND (${MediaStore.Audio.Media.DURATION} IS NULL OR ${MediaStore.Audio.Media.DURATION} > 1000)")
         }
 
-        context.contentResolver.query(
-            collection,
-            projection,
-            selection,
-            null,
-            null
-        )?.use { cursor ->
-            val idCol = cursor.getColumnIndexOrThrow(MediaStore.Audio.Media._ID)
-            val titleCol = cursor.getColumnIndexOrThrow(MediaStore.Audio.Media.TITLE)
-            val artistCol = cursor.getColumnIndexOrThrow(MediaStore.Audio.Media.ARTIST)
-            val albumCol = cursor.getColumnIndexOrThrow(MediaStore.Audio.Media.ALBUM)
-            val durationCol = cursor.getColumnIndexOrThrow(MediaStore.Audio.Media.DURATION)
-            val albumIdCol = cursor.getColumnIndexOrThrow(MediaStore.Audio.Media.ALBUM_ID)
-            val trackCol = cursor.getColumnIndexOrThrow(MediaStore.Audio.Media.TRACK)
-            val yearCol = cursor.getColumnIndexOrThrow(MediaStore.Audio.Media.YEAR)
-            val dataCol = cursor.getColumnIndexOrThrow(MediaStore.Audio.Media.DATA)
-            val mimeCol = cursor.getColumnIndexOrThrow(MediaStore.Audio.Media.MIME_TYPE)
+        // Prefer projection without album_artist if the OEM column is missing
+        val cursor = try {
+            context.contentResolver.query(collection, projection, selection, null, null)
+        } catch (_: IllegalArgumentException) {
+            context.contentResolver.query(
+                collection,
+                projection.copyOfRange(0, projection.size - 1),
+                selection,
+                null,
+                null
+            )
+        } ?: return songs
 
-            while (cursor.moveToNext()) {
-                val id = cursor.getLong(idCol)
-                val path = cursor.getString(dataCol)
-                val mime = cursor.getString(mimeCol)
+        cursor.use {
+            val idCol = it.getColumnIndexOrThrow(MediaStore.Audio.Media._ID)
+            val titleCol = it.getColumnIndexOrThrow(MediaStore.Audio.Media.TITLE)
+            val artistCol = it.getColumnIndexOrThrow(MediaStore.Audio.Media.ARTIST)
+            val albumCol = it.getColumnIndexOrThrow(MediaStore.Audio.Media.ALBUM)
+            val durationCol = it.getColumnIndexOrThrow(MediaStore.Audio.Media.DURATION)
+            val albumIdCol = it.getColumnIndexOrThrow(MediaStore.Audio.Media.ALBUM_ID)
+            val trackCol = it.getColumnIndexOrThrow(MediaStore.Audio.Media.TRACK)
+            val yearCol = it.getColumnIndexOrThrow(MediaStore.Audio.Media.YEAR)
+            val dataCol = it.getColumnIndexOrThrow(MediaStore.Audio.Media.DATA)
+            val mimeCol = it.getColumnIndexOrThrow(MediaStore.Audio.Media.MIME_TYPE)
+            val albumArtistCol = it.getColumnIndex(COL_ALBUM_ARTIST)
+
+            while (it.moveToNext()) {
+                val id = it.getLong(idCol)
+                val path = it.getString(dataCol)
+                val mime = it.getString(mimeCol)
 
                 if (path != null && !isAudioPath(path) && mime?.startsWith("audio/") != true) {
                     continue
                 }
 
-                var title = cursor.getString(titleCol)
-                var artist = cursor.getString(artistCol)
-                var album = cursor.getString(albumCol)
-                var duration = cursor.getLong(durationCol)
-                var track = cursor.getInt(trackCol)
+                var title = it.getString(titleCol)
+                var artist = it.getString(artistCol)
+                var album = it.getString(albumCol)
+                var albumArtist = if (albumArtistCol >= 0) it.getString(albumArtistCol) else null
+                var duration = it.getLong(durationCol)
+                var track = it.getInt(trackCol)
                 if (track >= 1000) track %= 1000
-                val year = cursor.getInt(yearCol)
-                val albumId = cursor.getLong(albumIdCol)
+                val year = it.getInt(yearCol)
+                val albumId = it.getLong(albumIdCol)
 
-                if (path != null && needsTagRefresh(title, artist, album, path)) {
+                // Always prefer file tags for album artist when possible (Oreo MediaStore is spotty)
+                if (path != null) {
                     val tags = readTagsFromFile(path)
-                    title = tags.title ?: title
-                    artist = tags.artist ?: artist
-                    album = tags.album ?: album
-                    if (duration <= 0 && tags.durationMs > 0) duration = tags.durationMs
-                    if (track <= 0 && tags.trackNumber > 0) track = tags.trackNumber
+                    if (needsTagRefresh(title, artist, album, path)) {
+                        title = tags.title ?: title
+                        artist = tags.artist ?: artist
+                        album = tags.album ?: album
+                        if (duration <= 0 && tags.durationMs > 0) duration = tags.durationMs
+                        if (track <= 0 && tags.trackNumber > 0) track = tags.trackNumber
+                    }
+                    if (albumArtist.isNullOrBlank()) {
+                        albumArtist = tags.albumArtist
+                    }
                 }
 
                 val contentUri = ContentUris.withAppendedId(
@@ -133,11 +143,15 @@ class MusicRepository(
                     )
                 } else null
 
+                val cleanArtist = artist?.takeIf { a -> a.isNotBlank() && a != "<unknown>" } ?: "Unknown Artist"
+                val cleanAlbumArtist = albumArtist?.takeIf { a -> a.isNotBlank() && a != "<unknown>" } ?: ""
+
                 songs += Song(
                     id = id,
-                    title = title?.takeIf { it.isNotBlank() } ?: fileNameTitle(path),
-                    artist = artist?.takeIf { it.isNotBlank() && it != "<unknown>" } ?: "Unknown Artist",
-                    album = album?.takeIf { it.isNotBlank() && it != "<unknown>" } ?: "Unknown Album",
+                    title = title?.takeIf { t -> t.isNotBlank() } ?: fileNameTitle(path),
+                    artist = cleanArtist,
+                    albumArtist = cleanAlbumArtist,
+                    album = album?.takeIf { a -> a.isNotBlank() && a != "<unknown>" } ?: "Unknown Album",
                     durationMs = duration,
                     contentUri = contentUri,
                     albumArtUri = albumArtUri,
@@ -168,16 +182,14 @@ class MusicRepository(
                     if (!seen.add(path.lowercase())) return@forEach
 
                     val tags = readTagsFromFile(path)
-                    val uri = Uri.fromFile(file)
-                    val id = path.hashCode().toLong()
-
                     songs += Song(
-                        id = id,
+                        id = path.hashCode().toLong(),
                         title = tags.title ?: file.nameWithoutExtension,
                         artist = tags.artist ?: "Unknown Artist",
+                        albumArtist = tags.albumArtist ?: "",
                         album = tags.album ?: "Unknown Album",
                         durationMs = tags.durationMs,
-                        contentUri = uri,
+                        contentUri = Uri.fromFile(file),
                         albumArtUri = null,
                         trackNumber = tags.trackNumber,
                         year = tags.year,
@@ -193,6 +205,7 @@ class MusicRepository(
     private data class FileTags(
         val title: String? = null,
         val artist: String? = null,
+        val albumArtist: String? = null,
         val album: String? = null,
         val durationMs: Long = 0,
         val trackNumber: Int = 0,
@@ -205,7 +218,7 @@ class MusicRepository(
             retriever.setDataSource(path)
             val title = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_TITLE)
             val artist = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_ARTIST)
-                ?: retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_ALBUMARTIST)
+            val albumArtist = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_ALBUMARTIST)
             val album = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_ALBUM)
             val duration = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION)
                 ?.toLongOrNull() ?: 0L
@@ -213,7 +226,7 @@ class MusicRepository(
                 ?.let { parseTrackNumber(it) } ?: 0
             val year = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_YEAR)
                 ?.take(4)?.toIntOrNull() ?: 0
-            FileTags(title, artist, album, duration, track, year)
+            FileTags(title, artist, albumArtist, album, duration, track, year)
         } catch (_: Exception) {
             FileTags()
         } finally {

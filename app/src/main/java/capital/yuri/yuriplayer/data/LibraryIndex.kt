@@ -10,12 +10,6 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
-/**
- * Library state:
- * 1. Disk: [LibraryCache] in app cacheDir (survives process death)
- * 2. Memory: [songs] StateFlow — sort/search/group use this only
- * 3. Refresh: rescans device, then overwrites disk + memory
- */
 class LibraryIndex(
     private val repository: MusicRepository,
     private val cache: LibraryCache
@@ -35,26 +29,22 @@ class LibraryIndex(
     private val _error = MutableStateFlow<String?>(null)
     val error: StateFlow<String?> = _error.asStateFlow()
 
-    /** Load cache from disk immediately, then refresh if missing or stale. */
     fun bootstrap(staleAfterMs: Long = DEFAULT_STALE_MS) {
         scope.launch {
             val cached = withContext(Dispatchers.IO) { cache.load() }
             if (cached != null && cached.songs.isNotEmpty()) {
                 _songs.value = cached.songs
                 _lastScannedAt.value = cached.scannedAt
-                Log.d(TAG, "Bootstrap: ${cached.songs.size} songs from disk cache")
             }
 
             val age = System.currentTimeMillis() - (cached?.scannedAt ?: 0L)
             val needsScan = cached == null || cached.songs.isEmpty() || age > staleAfterMs
             if (needsScan) {
-                Log.d(TAG, "Bootstrap: cache missing/stale (age=${age}ms) → refresh")
                 refresh()
             }
         }
     }
 
-    /** Full device scan, then write to cacheDir and update memory. */
     fun refresh() {
         if (_isLoading.value) return
         scope.launch {
@@ -68,7 +58,7 @@ class LibraryIndex(
                 }
                 _songs.value = scanned
                 _lastScannedAt.value = System.currentTimeMillis()
-                Log.d(TAG, "Refresh complete: ${scanned.size} songs cached at ${cache.cacheFilePath()}")
+                Log.d(TAG, "Refresh: ${scanned.size} songs → ${cache.cacheFilePath()}")
             } catch (e: SecurityException) {
                 _error.value = "Storage permission required"
             } catch (e: Exception) {
@@ -80,32 +70,41 @@ class LibraryIndex(
         }
     }
 
-    /** In-memory only — does not read/write disk. */
-    fun sorted(mode: SortMode): List<Song> = sortSongs(_songs.value, mode)
+    fun sorted(mode: SortMode, taggedOnly: Boolean? = null): List<Song> {
+        val base = when (taggedOnly) {
+            true -> _songs.value.filter { it.isTagged }
+            false -> _songs.value.filter { !it.isTagged }
+            null -> _songs.value
+        }
+        return sortSongs(base, mode)
+    }
 
-    /** In-memory only. */
-    fun search(query: String, mode: SortMode = SortMode.TITLE): List<Song> {
+    fun search(query: String, mode: SortMode = SortMode.TITLE, taggedOnly: Boolean? = null): List<Song> {
         val q = query.trim()
-        val base = sorted(mode)
+        val base = sorted(mode, taggedOnly)
         if (q.isEmpty()) return base
         return base.filter { song ->
             song.title.contains(q, ignoreCase = true) ||
                 song.artist.contains(q, ignoreCase = true) ||
+                song.albumArtist.contains(q, ignoreCase = true) ||
                 song.album.contains(q, ignoreCase = true)
         }
     }
 
-    /** In-memory only. */
-    fun albums(query: String = ""): List<AlbumItem> {
+    /** Group by album title + album artist (not track artist) so features do not split albums. */
+    fun albums(query: String = "", taggedOnly: Boolean = true): List<AlbumItem> {
         val q = query.trim()
-        return _songs.value
-            .groupBy { it.album to it.artist }
+        val source = if (taggedOnly) _songs.value.filter { it.isTagged } else _songs.value
+        return source
+            .groupBy { it.album to it.effectiveAlbumArtist }
             .map { (key, tracks) ->
                 AlbumItem(
                     name = key.first,
                     artist = key.second,
                     trackCount = tracks.size,
-                    songs = tracks.sortedBy { it.trackNumber }
+                    songs = tracks.sortedWith(
+                        compareBy<Song> { it.trackNumber }.thenBy(String.CASE_INSENSITIVE_ORDER) { it.title }
+                    )
                 )
             }
             .filter {
@@ -113,14 +112,17 @@ class LibraryIndex(
                     it.name.contains(q, ignoreCase = true) ||
                     it.artist.contains(q, ignoreCase = true)
             }
-            .sortedWith(compareBy(String.CASE_INSENSITIVE_ORDER) { it.name })
+            .sortedWith(
+                compareBy(String.CASE_INSENSITIVE_ORDER) { it.artist }
+                    .thenBy(String.CASE_INSENSITIVE_ORDER) { it.name }
+            )
     }
 
-    /** In-memory only. */
-    fun artists(query: String = ""): List<ArtistItem> {
+    fun artists(query: String = "", taggedOnly: Boolean = true): List<ArtistItem> {
         val q = query.trim()
-        return _songs.value
-            .groupBy { it.artist }
+        val source = if (taggedOnly) _songs.value.filter { it.isTagged } else _songs.value
+        return source
+            .groupBy { it.effectiveAlbumArtist }
             .map { (artist, tracks) ->
                 ArtistItem(
                     name = artist,
@@ -133,28 +135,37 @@ class LibraryIndex(
             .sortedWith(compareBy(String.CASE_INSENSITIVE_ORDER) { it.name })
     }
 
+    fun taggedCount(): Int = _songs.value.count { it.isTagged }
+    fun untaggedCount(): Int = _songs.value.count { !it.isTagged }
+
     companion object {
         private const val TAG = "LibraryIndex"
-        const val DEFAULT_STALE_MS = 12L * 60 * 60 * 1000 // 12 hours
+        const val DEFAULT_STALE_MS = 12L * 60 * 60 * 1000
 
         fun sortSongs(songs: List<Song>, mode: SortMode): List<Song> {
+            // Tagged first, then by requested mode
+            val taggedFirst = compareBy<Song> { !it.isTagged }
             return when (mode) {
                 SortMode.TITLE -> songs.sortedWith(
-                    compareBy(String.CASE_INSENSITIVE_ORDER) { it.title }
+                    taggedFirst.thenBy(String.CASE_INSENSITIVE_ORDER) { it.title }
                 )
                 SortMode.ARTIST -> songs.sortedWith(
-                    compareBy<Song, String>(String.CASE_INSENSITIVE_ORDER) { it.artist }
+                    taggedFirst
+                        .thenBy(String.CASE_INSENSITIVE_ORDER) { it.effectiveAlbumArtist }
                         .thenBy(String.CASE_INSENSITIVE_ORDER) { it.album }
                         .thenBy { it.trackNumber }
                         .thenBy(String.CASE_INSENSITIVE_ORDER) { it.title }
                 )
                 SortMode.ALBUM -> songs.sortedWith(
-                    compareBy<Song, String>(String.CASE_INSENSITIVE_ORDER) { it.album }
+                    taggedFirst
+                        .thenBy(String.CASE_INSENSITIVE_ORDER) { it.effectiveAlbumArtist }
+                        .thenBy(String.CASE_INSENSITIVE_ORDER) { it.album }
                         .thenBy { it.trackNumber }
                         .thenBy(String.CASE_INSENSITIVE_ORDER) { it.title }
                 )
                 SortMode.TRACK -> songs.sortedWith(
-                    compareBy<Song, String>(String.CASE_INSENSITIVE_ORDER) { it.album }
+                    taggedFirst
+                        .thenBy(String.CASE_INSENSITIVE_ORDER) { it.album }
                         .thenBy { it.trackNumber }
                         .thenBy(String.CASE_INSENSITIVE_ORDER) { it.title }
                 )
