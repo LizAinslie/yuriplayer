@@ -1,6 +1,5 @@
 package capital.yuri.yuriplayer.activities.ui
 
-import android.graphics.Bitmap
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -30,6 +29,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -37,17 +37,20 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import capital.yuri.yuriplayer.data.AlbumArtResolver
+import capital.yuri.yuriplayer.data.PlayerThemeStore
 import capital.yuri.yuriplayer.data.Song
 import capital.yuri.yuriplayer.player.QueueLane
 import capital.yuri.yuriplayer.player.QueueSnapshot
 import capital.yuri.yuriplayer.player.RepeatMode
+import org.koin.compose.koinInject
 import java.util.Locale
 import java.util.concurrent.TimeUnit
+import kotlin.math.abs
 
 @Composable
 fun NowPlayingScreen(
@@ -56,6 +59,8 @@ fun NowPlayingScreen(
     positionMs: Long,
     durationMs: Long,
     snapshot: QueueSnapshot,
+    peekNextSong: Song?,
+    peekPrevSong: Song?,
     onCollapse: () -> Unit,
     onToggle: () -> Unit,
     onPrev: () -> Unit,
@@ -70,19 +75,25 @@ fun NowPlayingScreen(
     onRemoveCold: (Int) -> Unit
 ) {
     val context = LocalContext.current
+    val themeStore: PlayerThemeStore = koinInject()
     val baseScheme = MaterialTheme.colorScheme
-    var playerColors by remember { mutableStateOf(fallbackPlayerColors(baseScheme)) }
+
+    val theme by themeStore.current.collectAsState()
+    val nextTheme by themeStore.peekNext.collectAsState()
+    val prevTheme by themeStore.peekPrev.collectAsState()
+
     var showQueue by remember { mutableStateOf(false) }
     var sliderPosition by remember { mutableFloatStateOf(0f) }
     var sliding by remember { mutableStateOf(false) }
+    var hFrac by remember { mutableFloatStateOf(0f) }
+    var dismissFrac by remember { mutableFloatStateOf(0f) }
 
-    LaunchedEffect(song?.path, song?.contentUri) {
-        if (song != null) {
-            val bmp: Bitmap? = AlbumArtResolver.load(context, song, maxSize = 768)
-            playerColors = extractPlayerColors(bmp, baseScheme)
-        } else {
-            playerColors = fallbackPlayerColors(baseScheme)
-        }
+    // Keep theme hot so reopening NP has no FOUC
+    LaunchedEffect(song?.id, song?.path) {
+        themeStore.updateCurrent(context, song, baseScheme)
+    }
+    LaunchedEffect(peekNextSong?.id, peekPrevSong?.id, song?.id) {
+        themeStore.updateNeighbors(context, peekNextSong, peekPrevSong, baseScheme)
     }
 
     LaunchedEffect(positionMs, durationMs, sliding) {
@@ -91,12 +102,24 @@ fun NowPlayingScreen(
         }
     }
 
-    val scheme = playerColorScheme(playerColors, baseScheme)
+    val playerColors = theme?.colors ?: fallbackPlayerColors(baseScheme)
+    // Blend toward neighbor palette while swiping
+    val blendTarget = when {
+        hFrac < -0.02f -> nextTheme?.colors
+        hFrac > 0.02f -> prevTheme?.colors
+        else -> null
+    }
+    val blendT = abs(hFrac).coerceIn(0f, 1f)
+    val shownColors = if (blendTarget != null && blendT > 0f) {
+        lerpPlayerColors(playerColors, blendTarget, blendT)
+    } else playerColors
+
+    val scheme = playerColorScheme(shownColors, baseScheme)
 
     MaterialTheme(colorScheme = scheme) {
         Surface(
             modifier = Modifier.fillMaxSize(),
-            color = scheme.background
+            color = scheme.background.copy(alpha = 1f - dismissFrac * 0.25f)
         ) {
             if (showQueue) {
                 Column(modifier = Modifier.fillMaxSize().padding(16.dp)) {
@@ -108,11 +131,7 @@ fun NowPlayingScreen(
                             onClick = { showQueue = false },
                             modifier = Modifier.align(Alignment.CenterStart)
                         ) {
-                            Icon(
-                                Icons.Default.ExpandMore,
-                                contentDescription = "Back",
-                                tint = scheme.onBackground
-                            )
+                            Icon(Icons.Default.ExpandMore, "Back", tint = scheme.onBackground)
                         }
                         Text(
                             "Queue",
@@ -135,33 +154,31 @@ fun NowPlayingScreen(
             }
 
             Column(modifier = Modifier.fillMaxSize().padding(16.dp)) {
-                // Centered collapse chevron (Spotify-style)
                 Box(
                     modifier = Modifier.fillMaxWidth(),
                     contentAlignment = Alignment.Center
                 ) {
                     IconButton(onClick = onCollapse) {
-                        Icon(
-                            Icons.Default.ExpandMore,
-                            contentDescription = "Close",
-                            tint = scheme.onBackground
-                        )
+                        Icon(Icons.Default.ExpandMore, "Close", tint = scheme.onBackground)
                     }
                 }
 
                 Spacer(modifier = Modifier.height(4.dp))
-                Box(
+
+                SwipeableAlbumArt(
+                    current = theme,
+                    next = nextTheme,
+                    prev = prevTheme,
+                    onSwipeNext = onNext,
+                    onSwipePrev = onPrev,
+                    onDismiss = onCollapse,
+                    onHorizontalFraction = { hFrac = it },
+                    onDismissFraction = { dismissFrac = it },
                     modifier = Modifier
                         .fillMaxWidth()
                         .padding(horizontal = 20.dp)
                         .aspectRatio(1f)
-                ) {
-                    AlbumArt(
-                        song = song,
-                        modifier = Modifier.fillMaxSize(),
-                        corner = 16.dp
-                    )
-                }
+                )
 
                 Spacer(modifier = Modifier.height(28.dp))
 
@@ -177,7 +194,7 @@ fun NowPlayingScreen(
                 Text(
                     song?.displayArtist ?: "",
                     style = MaterialTheme.typography.titleMedium,
-                    color = playerColors.muted,
+                    color = shownColors.muted,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                     modifier = Modifier.padding(horizontal = 8.dp)
@@ -185,7 +202,7 @@ fun NowPlayingScreen(
                 Text(
                     song?.displayAlbum ?: "",
                     style = MaterialTheme.typography.bodyMedium,
-                    color = playerColors.muted.copy(alpha = 0.75f),
+                    color = shownColors.muted.copy(alpha = 0.75f),
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                     modifier = Modifier.padding(horizontal = 8.dp)
@@ -205,7 +222,7 @@ fun NowPlayingScreen(
                         if (durationMs > 0) onSeek((sliderPosition * durationMs).toLong())
                     },
                     activeColor = scheme.primary,
-                    inactiveColor = playerColors.muted.copy(alpha = 0.35f),
+                    inactiveColor = shownColors.muted.copy(alpha = 0.35f),
                     modifier = Modifier.padding(horizontal = 4.dp)
                 )
 
@@ -213,8 +230,8 @@ fun NowPlayingScreen(
                     modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp),
                     horizontalArrangement = Arrangement.SpaceBetween
                 ) {
-                    Text(formatTime(positionMs), style = MaterialTheme.typography.labelSmall, color = playerColors.muted)
-                    Text(formatTime(durationMs), style = MaterialTheme.typography.labelSmall, color = playerColors.muted)
+                    Text(formatTime(positionMs), style = MaterialTheme.typography.labelSmall, color = shownColors.muted)
+                    Text(formatTime(durationMs), style = MaterialTheme.typography.labelSmall, color = shownColors.muted)
                 }
 
                 Spacer(modifier = Modifier.height(12.dp))
@@ -227,7 +244,7 @@ fun NowPlayingScreen(
                     IconButton(onClick = onToggleShuffle) {
                         Icon(
                             Icons.Default.Shuffle,
-                            contentDescription = "Shuffle",
+                            "Shuffle",
                             tint = if (snapshot.shuffleEnabled) scheme.primary
                             else scheme.onBackground.copy(alpha = 0.7f)
                         )
@@ -235,7 +252,7 @@ fun NowPlayingScreen(
                     IconButton(onClick = onPrev) {
                         Icon(
                             Icons.Default.SkipPrevious,
-                            contentDescription = "Previous",
+                            "Previous",
                             modifier = Modifier.size(40.dp),
                             tint = scheme.onBackground
                         )
@@ -248,7 +265,7 @@ fun NowPlayingScreen(
                     ) {
                         Icon(
                             if (playing) Icons.Default.Pause else Icons.Default.PlayArrow,
-                            contentDescription = if (playing) "Pause" else "Play",
+                            if (playing) "Pause" else "Play",
                             modifier = Modifier.size(40.dp),
                             tint = scheme.onPrimary
                         )
@@ -256,7 +273,7 @@ fun NowPlayingScreen(
                     IconButton(onClick = onNext) {
                         Icon(
                             Icons.Default.SkipNext,
-                            contentDescription = "Next",
+                            "Next",
                             modifier = Modifier.size(40.dp),
                             tint = scheme.onBackground
                         )
@@ -269,7 +286,7 @@ fun NowPlayingScreen(
                         }
                         Icon(
                             icon,
-                            contentDescription = repeatLabel(snapshot.repeatMode),
+                            repeatLabel(snapshot.repeatMode),
                             tint = if (active) scheme.primary else scheme.onBackground.copy(alpha = 0.7f)
                         )
                     }
@@ -281,13 +298,12 @@ fun NowPlayingScreen(
                         if (snapshot.shuffleEnabled) append(" · Shuffle")
                     },
                     style = MaterialTheme.typography.labelSmall,
-                    color = playerColors.muted,
+                    color = shownColors.muted,
                     modifier = Modifier.align(Alignment.CenterHorizontally).padding(top = 4.dp)
                 )
 
                 Spacer(modifier = Modifier.weight(1f))
 
-                // Queue control bottom-right (Spotify-style)
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.End
@@ -295,7 +311,7 @@ fun NowPlayingScreen(
                     IconButton(onClick = { showQueue = true }) {
                         Icon(
                             Icons.AutoMirrored.Filled.QueueMusic,
-                            contentDescription = "Queue",
+                            "Queue",
                             tint = scheme.onBackground.copy(alpha = 0.85f)
                         )
                     }
@@ -303,6 +319,19 @@ fun NowPlayingScreen(
             }
         }
     }
+}
+
+private fun lerpPlayerColors(a: PlayerColors, b: PlayerColors, t: Float): PlayerColors {
+    val x = t.coerceIn(0f, 1f)
+    return PlayerColors(
+        container = lerp(a.container, b.container, x),
+        onContainer = lerp(a.onContainer, b.onContainer, x),
+        accent = lerp(a.accent, b.accent, x),
+        onAccent = lerp(a.onAccent, b.onAccent, x),
+        muted = lerp(a.muted, b.muted, x),
+        surface = lerp(a.surface, b.surface, x),
+        onSurface = lerp(a.onSurface, b.onSurface, x)
+    )
 }
 
 private fun repeatLabel(mode: RepeatMode): String = when (mode) {

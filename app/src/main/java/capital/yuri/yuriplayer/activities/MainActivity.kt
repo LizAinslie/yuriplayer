@@ -38,6 +38,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
 import capital.yuri.yuriplayer.activities.ui.LibraryScreen
@@ -46,12 +47,14 @@ import capital.yuri.yuriplayer.activities.ui.NowPlayingScreen
 import capital.yuri.yuriplayer.activities.ui.PlaceholderScreen
 import capital.yuri.yuriplayer.activities.ui.theme.YuriPlayerTheme
 import capital.yuri.yuriplayer.data.LibraryIndex
+import capital.yuri.yuriplayer.data.PlayerThemeStore
 import capital.yuri.yuriplayer.data.Song
 import capital.yuri.yuriplayer.player.PlayerController
 import capital.yuri.yuriplayer.player.QueueSnapshot
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import org.koin.android.ext.android.inject
+import org.koin.compose.koinInject
 
 class MainActivity : ComponentActivity() {
 
@@ -134,6 +137,10 @@ fun YuriApp(
     openPlayerInitially: Boolean = false,
     onPlayerOpened: () -> Unit = {}
 ) {
+    val context = LocalContext.current
+    val themeStore: PlayerThemeStore = koinInject()
+    val baseScheme = MaterialTheme.colorScheme
+
     var topTab by remember { mutableStateOf(TopTab.Library) }
     var playerExpanded by remember { mutableStateOf(false) }
 
@@ -149,6 +156,8 @@ fun YuriApp(
     var positionMs by remember { mutableLongStateOf(0L) }
     var durationMs by remember { mutableLongStateOf(0L) }
     var snapshot by remember { mutableStateOf(QueueSnapshot()) }
+    var peekNext by remember { mutableStateOf<Song?>(null) }
+    var peekPrev by remember { mutableStateOf<Song?>(null) }
 
     val connected by player.isConnected.collectAsState()
 
@@ -160,8 +169,19 @@ fun YuriApp(
             positionMs = player.getPositionMs()
             durationMs = player.getDurationMs()
             snapshot = player.getQueueSnapshot()
+            peekNext = player.peekNext()
+            peekPrev = player.peekPrevious()
             delay(400)
         }
+    }
+
+    // Warm theme even when NP is collapsed — reopen has no FOUC
+    LaunchedEffect(currentSong?.id, currentSong?.path) {
+        themeStore.updateCurrent(context, currentSong, baseScheme)
+        themeStore.updateNeighbors(context, peekNext, peekPrev, baseScheme)
+    }
+    LaunchedEffect(peekNext?.id, peekPrev?.id) {
+        themeStore.updateNeighbors(context, peekNext, peekPrev, baseScheme)
     }
 
     BackHandler(enabled = playerExpanded) { playerExpanded = false }
@@ -173,6 +193,8 @@ fun YuriApp(
             positionMs = positionMs,
             durationMs = durationMs,
             snapshot = snapshot,
+            peekNextSong = peekNext,
+            peekPrevSong = peekPrev,
             onCollapse = { playerExpanded = false },
             onToggle = { player.togglePlayPause() },
             onPrev = { player.skipToPrevious() },
