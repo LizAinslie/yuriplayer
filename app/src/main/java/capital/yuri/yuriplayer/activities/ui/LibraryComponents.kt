@@ -379,31 +379,29 @@ fun SwipeAddSongRow(
                 .padding(horizontal = 16.dp, vertical = 10.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            when {
-                !showTrackNumber -> {
-                    AlbumArt(song = song, size = 40.dp, corner = 4.dp)
-                    Spacer(modifier = Modifier.width(12.dp))
-                }
-                isPlaying -> {
-                    Box(
-                        modifier = Modifier.width(28.dp),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        PlayingIndicator(
+            if (!showTrackNumber) {
+                AlbumArt(song = song, size = 40.dp, corner = 4.dp)
+                Spacer(modifier = Modifier.width(12.dp))
+            } else {
+                // Fixed slot: track numbers and equalizer share the same center.
+                Box(
+                    modifier = Modifier
+                        .width(28.dp)
+                        .height(40.dp),
+                    contentAlignment = Alignment.Center
+                ) {
+                    when {
+                        isPlaying -> PlayingIndicator(
                             color = accent,
                             animated = isPlaybackActive
                         )
+                        song.trackNumber != null -> Text(
+                            text = "${song.trackNumber}",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = onSurface.copy(alpha = 0.55f)
+                        )
                     }
                 }
-                song.trackNumber != null -> {
-                    Text(
-                        text = "${song.trackNumber}",
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = onSurface.copy(alpha = 0.55f),
-                        modifier = Modifier.width(28.dp)
-                    )
-                }
-                else -> Spacer(modifier = Modifier.width(28.dp))
             }
             Column(modifier = Modifier.weight(1f)) {
                 MarqueeText(
