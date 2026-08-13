@@ -63,9 +63,18 @@ class PlayerController(
         service?.playSource(songs, startIndex, autoPlay = true)
     }
 
-    fun playSource(songs: List<Song>, startIndex: Int = 0) {
+    fun playSource(
+        songs: List<Song>,
+        startIndex: Int = 0,
+        source: ColdSource? = null
+    ) {
         ensureServiceStarted()
-        service?.playSource(songs, startIndex, autoPlay = true)
+        service?.playSource(songs, startIndex, autoPlay = true, source = source)
+    }
+
+    fun updateColdFromSource(songs: List<Song>, sourceId: String) {
+        ensureServiceStarted()
+        service?.updateColdFromSource(songs, sourceId)
     }
 
     fun addToHotQueue(song: Song) {

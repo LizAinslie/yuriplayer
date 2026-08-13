@@ -181,9 +181,19 @@ class MusicService : MediaSessionService() {
         }
     }
 
-    fun playSource(songs: List<Song>, startIndex: Int = 0, autoPlay: Boolean = true) {
-        queueManager.playSource(songs, startIndex)
+    fun playSource(
+        songs: List<Song>,
+        startIndex: Int = 0,
+        autoPlay: Boolean = true,
+        source: ColdSource? = null
+    ) {
+        queueManager.playSource(songs, startIndex, source)
         hardLoad(queueManager.currentSong(), 0L, autoPlay)
+    }
+
+    /** Sync cold queue when the underlying album/playlist track list changes. */
+    fun updateColdFromSource(songs: List<Song>, sourceId: String) {
+        if (queueManager.updateColdFromSource(songs, sourceId)) persistState()
     }
 
     fun addToHotQueue(song: Song) {
@@ -197,7 +207,6 @@ class MusicService : MediaSessionService() {
     }
 
     fun clearHotQueue() {
-        // Never reloads — current track keeps playing if it was pulled out of hot
         queueManager.clearHotQueue()
         persistState()
     }
