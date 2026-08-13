@@ -40,7 +40,10 @@ import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.SkipNext
 import androidx.compose.material.icons.filled.SkipPrevious
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.ExposedDropdownMenuBox
+import androidx.compose.material3.ExposedDropdownMenuDefaults
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -76,6 +79,7 @@ import capital.yuri.yuriplayer.data.ArtistItem
 import capital.yuri.yuriplayer.data.LibraryIndex
 import capital.yuri.yuriplayer.data.Song
 import capital.yuri.yuriplayer.data.SortMode
+import capital.yuri.yuriplayer.data.label
 import capital.yuri.yuriplayer.player.PlayerController
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
@@ -127,7 +131,6 @@ class MainActivity : ComponentActivity() {
         playerController.bind()
     }
 
-    // Keep service bound across onStop so playback does not die when leaving the app.
     override fun onDestroy() {
         playerController.unbind()
         super.onDestroy()
@@ -138,9 +141,7 @@ class MainActivity : ComponentActivity() {
         setIntent(intent)
         val nowCar = intent.action == "capital.yuri.yuriplayer.action.CAR_MODE" ||
                 intent.getBooleanExtra("car_mode", false)
-        if (nowCar && !isCarMode) {
-            isCarMode = true
-        }
+        if (nowCar && !isCarMode) isCarMode = true
     }
 }
 
@@ -179,9 +180,7 @@ fun YuriApp(
         }
     }
 
-    BackHandler(enabled = playerExpanded) {
-        playerExpanded = false
-    }
+    BackHandler(enabled = playerExpanded) { playerExpanded = false }
 
     if (playerExpanded) {
         FullPlayerScreen(
@@ -257,11 +256,7 @@ fun YuriApp(
             )
         }
     ) { innerPadding ->
-        Box(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(innerPadding)
-        ) {
+        Box(Modifier = Modifier.fillMaxSize().padding(innerPadding)) {
             when (topTab) {
                 TopTab.Library -> LibraryScreen(
                     library = library,
@@ -275,6 +270,49 @@ fun YuriApp(
                     onPlay = { songs, index ->
                         player.setPlaylist(songs, index)
                         player.play()
+                    }
+                )
+            }
+        }
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun SortDropdown(
+    sortMode: SortMode,
+    onSortModeChange: (SortMode) -> Unit
+) {
+    var expanded by remember { mutableStateOf(false) }
+    ExposedDropdownMenuBox(
+        expanded = expanded,
+        onExpandedChange = { expanded = it },
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 12.dp, vertical = 4.dp)
+    ) {
+        OutlinedTextField(
+            value = "Sort: ${sortMode.label()}",
+            onValueChange = {},
+            readOnly = true,
+            singleLine = true,
+            trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = expanded) },
+            modifier = Modifier
+                .menuAnchor()
+                .fillMaxWidth()
+                .height(48.dp),
+            textStyle = MaterialTheme.typography.bodyMedium
+        )
+        ExposedDropdownMenu(
+            expanded = expanded,
+            onDismissRequest = { expanded = false }
+        ) {
+            SortMode.entries.forEach { mode ->
+                DropdownMenuItem(
+                    text = { Text(mode.label()) },
+                    onClick = {
+                        onSortModeChange(mode)
+                        expanded = false
                     }
                 )
             }
@@ -305,10 +343,7 @@ fun MiniPlayerBar(
             }
     ) {
         Column {
-            LinearProgressIndicator(
-                progress = { progress },
-                modifier = Modifier.fillMaxWidth()
-            )
+            LinearProgressIndicator(progress = { progress }, modifier = Modifier.fillMaxWidth())
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -324,21 +359,20 @@ fun MiniPlayerBar(
                     contentAlignment = Alignment.Center
                 ) {
                     Icon(
-                        Icons.Default.MusicNote,
-                        contentDescription = null,
+                        Icons.Default.MusicNote, null,
                         tint = MaterialTheme.colorScheme.onPrimaryContainer
                     )
                 }
                 Spacer(modifier = Modifier.width(12.dp))
                 Column(modifier = Modifier.weight(1f)) {
                     Text(
-                        text = song?.title ?: "Not playing",
+                        text = song?.displayTitle ?: "Not playing",
                         style = MaterialTheme.typography.bodyMedium,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis
                     )
                     Text(
-                        text = song?.artist ?: "",
+                        text = song?.displayArtist ?: "",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
                         maxLines = 1,
@@ -382,11 +416,7 @@ fun FullPlayerScreen(
     }
 
     Surface(modifier = Modifier.fillMaxSize()) {
-        Column(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(16.dp)
-        ) {
+        Column(modifier = Modifier.fillMaxSize().padding(16.dp)) {
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 verticalAlignment = Alignment.CenterVertically
@@ -401,20 +431,16 @@ fun FullPlayerScreen(
             }
 
             if (showQueue) {
-                Text(
-                    "Queue",
-                    style = MaterialTheme.typography.titleMedium,
-                    modifier = Modifier.padding(vertical = 8.dp)
-                )
+                Text("Queue", style = MaterialTheme.typography.titleMedium, modifier = Modifier.padding(vertical = 8.dp))
                 LazyColumn(modifier = Modifier.weight(1f)) {
                     itemsIndexed(queue, key = { i, s -> s.id to i }) { index, item ->
                         val isCurrent = index == currentIndex
                         Text(
                             text = buildString {
                                 if (isCurrent) append("▶ ")
-                                append(item.title)
+                                append(item.displayTitle)
                                 append(" — ")
-                                append(item.artist)
+                                append(item.displayArtist)
                             },
                             style = MaterialTheme.typography.bodyMedium,
                             fontWeight = if (isCurrent) FontWeight.Bold else FontWeight.Normal,
@@ -429,7 +455,6 @@ fun FullPlayerScreen(
                 }
             } else {
                 Spacer(modifier = Modifier.height(12.dp))
-
                 Box(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -440,24 +465,21 @@ fun FullPlayerScreen(
                     contentAlignment = Alignment.Center
                 ) {
                     Icon(
-                        Icons.Default.MusicNote,
-                        contentDescription = null,
+                        Icons.Default.MusicNote, null,
                         modifier = Modifier.size(96.dp),
                         tint = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.5f)
                     )
                 }
-
                 Spacer(modifier = Modifier.height(28.dp))
-
                 Text(
-                    text = song?.title ?: "Not playing",
+                    song?.displayTitle ?: "Not playing",
                     style = MaterialTheme.typography.headlineSmall,
                     maxLines = 2,
                     overflow = TextOverflow.Ellipsis,
                     modifier = Modifier.padding(horizontal = 8.dp)
                 )
                 Text(
-                    text = song?.artist ?: "",
+                    song?.displayArtist ?: "",
                     style = MaterialTheme.typography.titleMedium,
                     color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f),
                     maxLines = 1,
@@ -465,66 +487,53 @@ fun FullPlayerScreen(
                     modifier = Modifier.padding(horizontal = 8.dp)
                 )
                 Text(
-                    text = song?.album ?: "",
+                    song?.displayAlbum ?: "",
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f),
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                     modifier = Modifier.padding(horizontal = 8.dp)
                 )
-
                 Spacer(modifier = Modifier.height(20.dp))
-
                 Slider(
                     value = sliderPosition,
-                    onValueChange = {
-                        sliding = true
-                        sliderPosition = it
-                    },
+                    onValueChange = { sliding = true; sliderPosition = it },
                     onValueChangeFinished = {
                         sliding = false
-                        if (durationMs > 0) {
-                            onSeek((sliderPosition * durationMs).toLong())
-                        }
+                        if (durationMs > 0) onSeek((sliderPosition * durationMs).toLong())
                     },
                     modifier = Modifier.fillMaxWidth()
                 )
                 Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = 4.dp),
+                    modifier = Modifier.fillMaxWidth().padding(horizontal = 4.dp),
                     horizontalArrangement = Arrangement.SpaceBetween
                 ) {
                     Text(formatTime(positionMs), style = MaterialTheme.typography.labelSmall)
                     Text(formatTime(durationMs), style = MaterialTheme.typography.labelSmall)
                 }
-
                 Spacer(modifier = Modifier.height(12.dp))
-
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.SpaceEvenly,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     IconButton(onClick = onPrev) {
-                        Icon(Icons.Default.SkipPrevious, contentDescription = "Previous", modifier = Modifier.size(36.dp))
+                        Icon(Icons.Default.SkipPrevious, "Previous", modifier = Modifier.size(36.dp))
                     }
                     IconButton(onClick = onToggle) {
                         Icon(
                             if (playing) Icons.Default.Pause else Icons.Default.PlayArrow,
-                            contentDescription = if (playing) "Pause" else "Play",
+                            if (playing) "Pause" else "Play",
                             modifier = Modifier.size(48.dp)
                         )
                     }
                     IconButton(onClick = onNext) {
-                        Icon(Icons.Default.SkipNext, contentDescription = "Next", modifier = Modifier.size(36.dp))
+                        Icon(Icons.Default.SkipNext, "Next", modifier = Modifier.size(36.dp))
                     }
                 }
-
                 Spacer(modifier = Modifier.weight(1f))
-
                 Text(
-                    text = "Lyrics coming later (tags / local files)",
+                    "Lyrics coming later (tags / local files)",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.4f),
                     modifier = Modifier.align(Alignment.CenterHorizontally)
@@ -547,7 +556,6 @@ fun LibraryScreen(
     var sortMode by remember { mutableStateOf(SortMode.TITLE) }
     var section by remember { mutableStateOf(LibrarySection.Songs) }
 
-    // Tagged preferred; Untagged is its own section
     val taggedSongs = remember(allSongs, sortMode) { library.sorted(sortMode, taggedOnly = true) }
     val untaggedSongs = remember(allSongs, sortMode) { library.sorted(sortMode, taggedOnly = false) }
     val albums = remember(allSongs) { library.albums(taggedOnly = true) }
@@ -575,30 +583,7 @@ fun LibraryScreen(
         }
 
         if (section == LibrarySection.Songs || section == LibrarySection.Untagged) {
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .horizontalScroll(rememberScrollState())
-                    .padding(horizontal = 12.dp),
-                horizontalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
-                SortMode.entries.forEach { mode ->
-                    FilterChip(
-                        selected = sortMode == mode,
-                        onClick = { sortMode = mode },
-                        label = {
-                            Text(
-                                when (mode) {
-                                    SortMode.TITLE -> "Title"
-                                    SortMode.ARTIST -> "Artist"
-                                    SortMode.ALBUM -> "Album"
-                                    SortMode.TRACK -> "Track #"
-                                }
-                            )
-                        }
-                    )
-                }
-            }
+            SortDropdown(sortMode = sortMode, onSortModeChange = { sortMode = it })
         }
 
         val statusText = when {
@@ -623,14 +608,14 @@ fun LibraryScreen(
             LibrarySection.Untagged -> SongList(untaggedSongs, loading, onPlay)
             LibrarySection.Albums -> {
                 LazyColumn(modifier = Modifier.fillMaxSize()) {
-                    items(albums, key = { it.name + "|" + it.artist }) { album ->
+                    items(albums, key = { "${it.name}|${it.artist}" }) { album ->
                         AlbumRow(album) { onPlay(album.songs, 0) }
                     }
                 }
             }
             LibrarySection.Artists -> {
                 LazyColumn(modifier = Modifier.fillMaxSize()) {
-                    items(artists, key = { it.name }) { artist ->
+                    items(artists, key = { it.name ?: "_" }) { artist ->
                         ArtistRow(artist) { onPlay(artist.songs, 0) }
                     }
                 }
@@ -646,10 +631,7 @@ private fun SongList(
     onPlay: (List<Song>, Int) -> Unit
 ) {
     if (songs.isEmpty() && !loading) {
-        Text(
-            "Nothing here yet.",
-            modifier = Modifier.padding(16.dp)
-        )
+        Text("Nothing here yet.", modifier = Modifier.padding(16.dp))
     } else {
         LazyColumn(modifier = Modifier.fillMaxSize()) {
             itemsIndexed(songs, key = { _, s -> s.id to s.path }) { index, song ->
@@ -667,9 +649,14 @@ fun SearchScreen(
     val allSongs by library.songs.collectAsState()
     var query by remember { mutableStateOf("") }
     var section by remember { mutableStateOf(LibrarySection.Songs) }
+    var sortMode by remember { mutableStateOf(SortMode.TITLE) }
 
-    val taggedSongs = remember(allSongs, query) { library.search(query, taggedOnly = true) }
-    val untaggedSongs = remember(allSongs, query) { library.search(query, taggedOnly = false) }
+    val taggedSongs = remember(allSongs, query, sortMode) {
+        library.search(query, sortMode, taggedOnly = true)
+    }
+    val untaggedSongs = remember(allSongs, query, sortMode) {
+        library.search(query, sortMode, taggedOnly = false)
+    }
     val albums = remember(allSongs, query) { library.albums(query, taggedOnly = true) }
     val artists = remember(allSongs, query) { library.artists(query, taggedOnly = true) }
 
@@ -677,11 +664,9 @@ fun SearchScreen(
         OutlinedTextField(
             value = query,
             onValueChange = { query = it },
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 12.dp, vertical = 8.dp),
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp),
             singleLine = true,
-            leadingIcon = { Icon(Icons.Default.Search, contentDescription = null) },
+            leadingIcon = { Icon(Icons.Default.Search, null) },
             placeholder = { Text("Songs, albums, artists…") }
         )
 
@@ -706,6 +691,10 @@ fun SearchScreen(
             }
         }
 
+        if (section == LibrarySection.Songs || section == LibrarySection.Untagged) {
+            SortDropdown(sortMode = sortMode, onSortModeChange = { sortMode = it })
+        }
+
         if (query.isBlank() && section != LibrarySection.Untagged) {
             Text(
                 "Type to search tagged library",
@@ -718,14 +707,14 @@ fun SearchScreen(
                 LibrarySection.Untagged -> SongList(untaggedSongs, false, onPlay)
                 LibrarySection.Albums -> {
                     LazyColumn(modifier = Modifier.fillMaxSize()) {
-                        items(albums, key = { it.name + "|" + it.artist }) { album ->
+                        items(albums, key = { "${it.name}|${it.artist}" }) { album ->
                             AlbumRow(album) { onPlay(album.songs, 0) }
                         }
                     }
                 }
                 LibrarySection.Artists -> {
                     LazyColumn(modifier = Modifier.fillMaxSize()) {
-                        items(artists, key = { it.name }) { artist ->
+                        items(artists, key = { it.name ?: "_" }) { artist ->
                             ArtistRow(artist) { onPlay(artist.songs, 0) }
                         }
                     }
@@ -745,15 +734,15 @@ fun SongRow(song: Song, onClick: () -> Unit) {
     ) {
         Text(
             text = buildString {
-                if (song.trackNumber > 0) append("${song.trackNumber}. ")
-                append(song.title)
+                song.trackNumber?.let { append("$it. ") }
+                append(song.displayTitle)
             },
             style = MaterialTheme.typography.bodyLarge,
             maxLines = 1,
             overflow = TextOverflow.Ellipsis
         )
         Text(
-            text = "${song.artist} • ${song.album}",
+            text = "${song.displayArtist} • ${song.displayAlbum}",
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
             maxLines = 1,
@@ -770,9 +759,9 @@ fun AlbumRow(album: AlbumItem, onClick: () -> Unit) {
             .clickable(onClick = onClick)
             .padding(horizontal = 16.dp, vertical = 12.dp)
     ) {
-        Text(album.name, style = MaterialTheme.typography.bodyLarge, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        Text(album.displayName, style = MaterialTheme.typography.bodyLarge, maxLines = 1, overflow = TextOverflow.Ellipsis)
         Text(
-            "${album.artist} · ${album.trackCount} tracks",
+            "${album.displayArtist} · ${album.trackCount} tracks",
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
         )
@@ -787,7 +776,7 @@ fun ArtistRow(artist: ArtistItem, onClick: () -> Unit) {
             .clickable(onClick = onClick)
             .padding(horizontal = 16.dp, vertical = 12.dp)
     ) {
-        Text(artist.name, style = MaterialTheme.typography.bodyLarge, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        Text(artist.displayName, style = MaterialTheme.typography.bodyLarge, maxLines = 1, overflow = TextOverflow.Ellipsis)
         Text(
             "${artist.albumCount} albums · ${artist.trackCount} tracks",
             style = MaterialTheme.typography.bodySmall,
