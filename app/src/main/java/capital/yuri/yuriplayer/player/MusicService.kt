@@ -14,10 +14,13 @@ import androidx.core.app.NotificationCompat
 import androidx.media3.common.AudioAttributes
 import androidx.media3.common.C
 import androidx.media3.common.MediaItem
+import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.exoplayer.DefaultLoadControl
+import androidx.media3.exoplayer.DefaultRenderersFactory
 import androidx.media3.exoplayer.ExoPlayer
+import androidx.media3.exoplayer.audio.AudioSink
 import androidx.media3.session.MediaSession
 import androidx.media3.session.MediaSessionService
 import androidx.media3.session.MediaStyleNotificationHelper
@@ -40,8 +43,9 @@ import org.koin.android.ext.android.inject
 /**
  * ExoPlayer + notification host. Queue logic lives in [QueueManager].
  *
- * Repeat-one uses ExoPlayer's native [Player.REPEAT_MODE_ONE] so the audio sink
- * loops cleanly (avoids UnexpectedDiscontinuityException from seek-after-ENDED).
+ * Repeat-one never uses [Player.REPEAT_MODE_ONE] (FLAC on API 27 hits
+ * [AudioSink.UnexpectedDiscontinuityException] and clicks/goes silent).
+ * Instead we hard-reset the media item: stop → clear → set → prepare → play.
  */
 class MusicService : MediaSessionService() {
 
@@ -56,6 +60,7 @@ class MusicService : MediaSessionService() {
     private var persistJob: Job? = null
     private var restoredOnce = false
     private var advancing = false
+    private var recoveringAudio = false
 
     private val _nowPlaying = MutableStateFlow<Song?>(null)
     val nowPlaying: StateFlow<Song?> = _nowPlaying.asStateFlow()
@@ -85,13 +90,21 @@ class MusicService : MediaSessionService() {
             .setBufferDurationsMs(15_000, 50_000, 1_000, 2_000)
             .build()
 
-        player = ExoPlayer.Builder(this)
+        // Decoder fallback helps flaky OEM codecs on API 27
+        val renderersFactory = DefaultRenderersFactory(this)
+            .setEnableDecoderFallback(true)
+            .setExtensionRendererMode(DefaultRenderersFactory.EXTENSION_RENDERER_MODE_OFF)
+
+        player = ExoPlayer.Builder(this, renderersFactory)
             .setAudioAttributes(audioAttributes, true)
             .setHandleAudioBecomingNoisy(true)
             .setWakeMode(C.WAKE_MODE_LOCAL)
             .setLoadControl(loadControl)
             .build()
-            .also { it.addListener(playerListener) }
+            .also {
+                it.repeatMode = Player.REPEAT_MODE_OFF
+                it.addListener(playerListener)
+            }
 
         mediaSession = MediaSession.Builder(this, player!!)
             .setSessionActivity(openPlayerPendingIntent())
@@ -117,42 +130,31 @@ class MusicService : MediaSessionService() {
         return START_STICKY
     }
 
-    /** Keep ExoPlayer loop mode in sync so repeat-one is seamless. */
-    private fun syncPlayerRepeatMode() {
-        val mode = queueManager.getSnapshot().repeatMode
-        val exo = when (mode) {
-            RepeatMode.ONE -> Player.REPEAT_MODE_ONE
-            RepeatMode.OFF, RepeatMode.COLD -> Player.REPEAT_MODE_OFF
-        }
-        if (player?.repeatMode != exo) {
-            Log.i(TAG, "syncPlayerRepeatMode app=$mode exo=$exo")
-            player?.repeatMode = exo
-        }
-    }
-
-    private fun loadSong(song: Song?, startPositionMs: Long = 0L, autoPlay: Boolean = false) {
-        if (song == null) {
-            Log.i(TAG, "loadSong: null")
-            player?.stop()
+    /** Full pipeline reset — avoids audio-sink timestamp discontinuity. */
+    private fun hardLoad(song: Song?, startPositionMs: Long = 0L, autoPlay: Boolean = false) {
+        val p = player
+        if (song == null || p == null) {
+            p?.stop()
+            p?.clearMediaItems()
             _nowPlaying.value = null
             updateForegroundNotification()
             return
         }
         Log.i(
             TAG,
-            "loadSong title='${song.displayTitle}' path=${song.path} uri=${song.contentUri} " +
+            "hardLoad title='${song.displayTitle}' path=${song.path} " +
                 "startMs=$startPositionMs autoPlay=$autoPlay"
         )
-        Log.d(TAG, "loadSong id=${song.id} mime=${song.mimeType} duration=${song.durationMs}")
-
-        // Always set a fresh media item so the audio sink resets cleanly
-        player?.apply {
-            setMediaItem(toMediaItem(song), /* startPositionMs= */ startPositionMs)
-            prepare()
-            playWhenReady = autoPlay
-            if (autoPlay) play()
+        try {
+            p.stop()
+            p.clearMediaItems()
+            p.setMediaItem(toMediaItem(song), startPositionMs.coerceAtLeast(0L))
+            p.prepare()
+            p.playWhenReady = autoPlay
+            if (autoPlay) p.play()
+        } catch (e: Exception) {
+            Log.e(TAG, "hardLoad failed", e)
         }
-        syncPlayerRepeatMode()
         _nowPlaying.value = song
         updateForegroundNotification()
         persistState()
@@ -161,18 +163,14 @@ class MusicService : MediaSessionService() {
     private fun applyAdvance(result: QueueManager.AdvanceResult, autoPlay: Boolean = true) {
         when {
             result.seekToStart -> {
+                // Seek within same item is fine; discontinuity risk is on ENDED loops
                 player?.seekTo(0)
                 if (autoPlay) player?.play()
                 persistState()
             }
-            result.reload -> {
-                // Prefer native loop; if we still got here, hard-reset the track
-                val song = result.song ?: queueManager.currentSong()
-                Log.i(TAG, "applyAdvance reload path=${song?.path}")
-                player?.stop()
-                loadSong(song, 0L, autoPlay)
+            result.reload || result.song != null -> {
+                hardLoad(result.song ?: queueManager.currentSong(), 0L, autoPlay)
             }
-            result.song != null -> loadSong(result.song, 0L, autoPlay)
             result.finished -> {
                 player?.pause()
                 _nowPlaying.value = queueManager.currentSong()
@@ -184,7 +182,7 @@ class MusicService : MediaSessionService() {
 
     fun playSource(songs: List<Song>, startIndex: Int = 0, autoPlay: Boolean = true) {
         queueManager.playSource(songs, startIndex)
-        loadSong(queueManager.currentSong(), 0L, autoPlay)
+        hardLoad(queueManager.currentSong(), 0L, autoPlay)
     }
 
     fun addToHotQueue(song: Song) {
@@ -199,13 +197,13 @@ class MusicService : MediaSessionService() {
 
     fun removeFromHot(index: Int) {
         val needReload = queueManager.removeFromQueue(index)
-        if (needReload) loadSong(queueManager.currentSong(), 0L, player?.playWhenReady == true)
+        if (needReload) hardLoad(queueManager.currentSong(), 0L, player?.playWhenReady == true)
         else persistState()
     }
 
     fun removeFromCold(index: Int) {
         val needReload = queueManager.removeFromContext(index)
-        if (needReload) loadSong(queueManager.currentSong(), 0L, player?.playWhenReady == true)
+        if (needReload) hardLoad(queueManager.currentSong(), 0L, player?.playWhenReady == true)
         else persistState()
     }
 
@@ -221,7 +219,7 @@ class MusicService : MediaSessionService() {
 
     fun playQueueItem(lane: QueueLane, index: Int) {
         queueManager.playItem(lane, index)
-        loadSong(queueManager.currentSong(), 0L, autoPlay = true)
+        hardLoad(queueManager.currentSong(), 0L, autoPlay = true)
     }
 
     fun setShuffle(enabled: Boolean) {
@@ -231,13 +229,14 @@ class MusicService : MediaSessionService() {
 
     fun cycleRepeatMode() {
         queueManager.cycleRepeatMode()
-        syncPlayerRepeatMode()
+        // Keep ExoPlayer off native loop always
+        player?.repeatMode = Player.REPEAT_MODE_OFF
         persistState()
     }
 
     fun setRepeatMode(mode: RepeatMode) {
         queueManager.setRepeatMode(mode)
-        syncPlayerRepeatMode()
+        player?.repeatMode = Player.REPEAT_MODE_OFF
         persistState()
     }
 
@@ -263,7 +262,6 @@ class MusicService : MediaSessionService() {
         if (advancing) return
         advancing = true
         try {
-            // User skip always advances even in repeat-one
             applyAdvance(queueManager.advance(userInitiated = true))
         } finally {
             advancing = false
@@ -278,6 +276,9 @@ class MusicService : MediaSessionService() {
         player?.seekTo(positionMs.coerceAtLeast(0L))
         persistState()
     }
+
+    fun peekNext(): Song? = queueManager.peekNext()
+    fun peekPrevious(): Song? = queueManager.peekPrevious()
 
     private fun toMediaItem(song: Song): MediaItem =
         MediaItem.Builder()
@@ -300,8 +301,7 @@ class MusicService : MediaSessionService() {
         serviceScope.launch {
             val saved = withContext(Dispatchers.IO) { stateStore.load() } ?: return@launch
             queueManager.restore(saved.snapshot)
-            loadSong(queueManager.currentSong(), saved.positionMs, autoPlay = false)
-            syncPlayerRepeatMode()
+            hardLoad(queueManager.currentSong(), saved.positionMs, autoPlay = false)
         }
     }
 
@@ -323,6 +323,22 @@ class MusicService : MediaSessionService() {
         )
     }
 
+    private fun recoverFromAudioGlitch() {
+        if (recoveringAudio) return
+        recoveringAudio = true
+        serviceScope.launch {
+            try {
+                val song = queueManager.currentSong()
+                val wasPlaying = player?.playWhenReady == true || player?.isPlaying == true
+                Log.w(TAG, "audio glitch recovery path=${song?.path}")
+                hardLoad(song, 0L, autoPlay = wasPlaying)
+            } finally {
+                delay(300)
+                recoveringAudio = false
+            }
+        }
+    }
+
     private val playerListener = object : Player.Listener {
         override fun onIsPlayingChanged(isPlaying: Boolean) {
             _isPlaying.value = isPlaying
@@ -331,31 +347,24 @@ class MusicService : MediaSessionService() {
         }
 
         override fun onPlaybackStateChanged(playbackState: Int) {
-            val name = when (playbackState) {
-                Player.STATE_IDLE -> "IDLE"
-                Player.STATE_BUFFERING -> "BUFFERING"
-                Player.STATE_READY -> "READY"
-                Player.STATE_ENDED -> "ENDED"
-                else -> "?$playbackState"
-            }
-            Log.d(TAG, "onPlaybackStateChanged $name exoRepeat=${player?.repeatMode}")
-
-            // With REPEAT_MODE_ONE, ExoPlayer loops internally and should not end.
-            // Only advance our dual-queue when the player is not in native one-loop.
             if (playbackState == Player.STATE_ENDED && !advancing) {
-                if (player?.repeatMode == Player.REPEAT_MODE_ONE) {
-                    Log.i(TAG, "STATE_ENDED under REPEAT_MODE_ONE — restarting track cleanly")
-                    val song = queueManager.currentSong()
-                    player?.stop()
-                    loadSong(song, 0L, autoPlay = true)
-                    return
-                }
                 advancing = true
                 try {
                     applyAdvance(queueManager.advance(userInitiated = false))
                 } finally {
                     advancing = false
                 }
+            }
+        }
+
+        override fun onPlayerError(error: PlaybackException) {
+            Log.e(TAG, "player error code=${error.errorCode} ${error.message}", error)
+            val cause = error.cause
+            if (cause is AudioSink.UnexpectedDiscontinuityException ||
+                error.errorCode == PlaybackException.ERROR_CODE_AUDIO_TRACK_INIT_FAILED ||
+                error.errorCode == PlaybackException.ERROR_CODE_AUDIO_TRACK_WRITE_FAILED
+            ) {
+                recoverFromAudioGlitch()
             }
         }
     }

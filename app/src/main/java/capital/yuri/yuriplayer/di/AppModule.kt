@@ -1,5 +1,6 @@
 package capital.yuri.yuriplayer.di
 
+import capital.yuri.yuriplayer.data.AlbumArtCache
 import capital.yuri.yuriplayer.data.LibraryCache
 import capital.yuri.yuriplayer.data.LibraryIndex
 import capital.yuri.yuriplayer.data.LibrarySettings
@@ -16,6 +17,7 @@ val appModule = module {
     single { MusicRepository(androidContext(), get()) }
     single { LibraryIndex(get(), get()) }
 
+    single { AlbumArtCache() }
     single { QueueManager() }
     single { PlaybackStateStore(androidContext()) }
     single { PlayerController(androidContext()) }

@@ -2,113 +2,81 @@ package capital.yuri.yuriplayer.data
 
 import android.content.Context
 import android.graphics.Bitmap
-import android.util.LruCache
 import android.util.Log
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
-import java.security.MessageDigest
+import java.io.File
 
 /**
- * Shared in-memory album art cache keyed by content hash.
- * Same embedded art / cover file across tracks reuses one bitmap.
+ * Tiny in-memory cover cache for now-playing / peek transitions.
+ * Hard cap of [MAX_ENTRIES] bitmaps so we never balloon RAM.
+ * Identical art (same folder cover or same album identity) shares one slot.
  */
-class AlbumArtCache(
-    @Suppress("UNUSED_PARAMETER") context: Context
-) {
-    private val maxBytes = (Runtime.getRuntime().maxMemory() / 8).toInt().coerceIn(
-        4 * 1024 * 1024,
-        24 * 1024 * 1024
-    )
+class AlbumArtCache {
 
-    private val memory = object : LruCache<String, Bitmap>(maxBytes) {
-        override fun sizeOf(key: String, value: Bitmap): Int = value.byteCount
+    private val lock = Mutex()
+    /** Access-ordered: eldest evicted when over capacity. */
+    private val map = object : LinkedHashMap<String, Bitmap>(MAX_ENTRIES + 1, 0.75f, true) {
+        override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, Bitmap>?): Boolean {
+            val drop = size > MAX_ENTRIES
+            if (drop) Log.d(TAG, "evict ${eldest?.key}")
+            return drop
+        }
     }
 
-    private val keyMutex = Mutex()
-    private val inflight = mutableMapOf<String, Mutex>()
-
-    /**
-     * Stable key for a song's artwork. Prefers file path of cover or
-     * content-hash of embedded picture so identical art collapses.
-     */
-    suspend fun keyFor(song: Song): String = withContext(Dispatchers.IO) {
+    fun artKey(song: Song): String {
         val path = song.path
         if (path != null) {
-            val parent = java.io.File(path).parentFile
+            val parent = File(path).parentFile
             if (parent != null) {
                 for (name in COVER_NAMES) {
-                    val cover = java.io.File(parent, name)
+                    val cover = File(parent, name)
                     if (cover.isFile && cover.length() > 0) {
-                        return@withContext "file:${cover.absolutePath}:${cover.length()}:${cover.lastModified()}"
+                        return "cover:${cover.absolutePath}:${cover.length()}"
                     }
                 }
             }
         }
-        // Embedded / MediaStore — hash a fingerprint from uri + path + album
-        val raw = buildString {
-            append(song.contentUri)
-            append('|')
-            append(song.path ?: "")
-            append('|')
-            append(song.album ?: "")
-            append('|')
-            append(song.albumArtist ?: song.artist ?: "")
-            append('|')
-            append(song.albumArtUri ?: "")
-        }
-        "meta:${sha1(raw)}"
+        val album = song.album?.trim()?.lowercase().orEmpty()
+        val artist = (song.albumArtist ?: song.artist)?.trim()?.lowercase().orEmpty()
+        if (album.isNotEmpty()) return "album:$album|$artist"
+        return "song:${song.path ?: song.contentUri}"
     }
 
-    suspend fun getOrLoad(song: Song, maxSize: Int = 512): Bitmap? {
-        val key = keyFor(song)
-        memory.get(key)?.let { if (!it.isRecycled) return it }
-
-        val gate = keyMutex.withLock {
-            inflight.getOrPut(key) { Mutex() }
+    suspend fun get(context: Context, song: Song, maxSize: Int = 512): Bitmap? {
+        val key = artKey(song)
+        lock.withLock {
+            map[key]?.takeIf { !it.isRecycled }?.let { return it }
         }
-        return gate.withLock {
-            memory.get(key)?.let { if (!it.isRecycled) return@withLock it }
-            val loaded = withContext(Dispatchers.IO) {
-                AlbumArtResolver.load(song.let { /* context via resolver */ song }, maxSize)
-            }
-            // AlbumArtResolver needs context — use the load that takes context from caller
-            loaded
+        val bmp = withContext(Dispatchers.IO) {
+            AlbumArtResolver.loadUncached(context, song, maxSize)
+        } ?: return null
+        lock.withLock {
+            map[key]?.takeIf { !it.isRecycled }?.let { return it }
+            map[key] = bmp
+            Log.d(TAG, "put $key size=${map.size}")
         }
+        return bmp
     }
 
-    suspend fun getOrLoad(context: Context, song: Song, maxSize: Int = 512): Bitmap? {
-        val key = keyFor(song)
-        memory.get(key)?.let { if (!it.isRecycled) return it }
-
-        val gate = keyMutex.withLock {
-            inflight.getOrPut(key) { Mutex() }
-        }
-        return gate.withLock {
-            memory.get(key)?.let { if (!it.isRecycled) return@withLock it }
-            val bmp = withContext(Dispatchers.IO) {
-                AlbumArtResolver.load(context, song, maxSize)
-            }
-            if (bmp != null) {
-                memory.put(key, bmp)
-                Log.d(TAG, "cache put key=$key ${bmp.width}x${bmp.height} entries=${memory.snapshot().size}")
-            }
-            bmp
+    /** Warm cache for current + neighbors (deduped by art key, still ≤ 4 slots). */
+    suspend fun prefetch(context: Context, songs: List<Song?>, maxSize: Int = 512) {
+        val seen = mutableSetOf<String>()
+        for (song in songs) {
+            if (song == null) continue
+            val key = artKey(song)
+            if (!seen.add(key)) continue
+            get(context, song, maxSize)
         }
     }
 
-    fun peek(key: String): Bitmap? = memory.get(key)?.takeIf { !it.isRecycled }
-
-    fun clear() = memory.evictAll()
-
-    private fun sha1(s: String): String {
-        val dig = MessageDigest.getInstance("SHA-1").digest(s.toByteArray())
-        return dig.joinToString("") { "%02x".format(it) }
-    }
+    suspend fun clear() = lock.withLock { map.clear() }
 
     companion object {
         private const val TAG = "YuriPlayer.ArtCache"
+        const val MAX_ENTRIES = 4
         private val COVER_NAMES = listOf(
             "cover.jpg", "cover.jpeg", "cover.png",
             "folder.jpg", "folder.png", "AlbumArt.jpg"

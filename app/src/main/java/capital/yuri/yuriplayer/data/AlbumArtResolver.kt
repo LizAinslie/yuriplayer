@@ -5,39 +5,27 @@ import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.media.MediaMetadataRetriever
 import android.net.Uri
-import android.util.LruCache
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.io.File
 import java.io.InputStream
 
 /**
- * Album art: embedded tags first, then cover.jpg / cover.png beside the file,
- * then MediaStore albumArtUri if present.
+ * Album art decode: embedded tags → folder cover → MediaStore URI.
+ * Caching lives in [AlbumArtCache] (4-slot); this object only decodes.
  */
 object AlbumArtResolver {
 
-    private val memoryCache = object : LruCache<String, Bitmap>(8 * 1024 * 1024) {
-        override fun sizeOf(key: String, value: Bitmap): Int = value.byteCount
-    }
-
     suspend fun load(context: Context, song: Song, maxSize: Int = 512): Bitmap? =
-        withContext(Dispatchers.IO) {
-            val key = cacheKey(song, maxSize)
-            memoryCache.get(key)?.let { return@withContext it }
+        loadUncached(context, song, maxSize)
 
+    suspend fun loadUncached(context: Context, song: Song, maxSize: Int = 512): Bitmap? =
+        withContext(Dispatchers.IO) {
             val bitmap = loadEmbedded(song.path)
                 ?: loadFolderCover(song.path)
                 ?: loadUri(context, song.albumArtUri)
-
-            val scaled = bitmap?.let { scaleDown(it, maxSize) }
-            if (scaled != null) memoryCache.put(key, scaled)
-            scaled
+            bitmap?.let { scaleDown(it, maxSize) }
         }
-
-    private fun cacheKey(song: Song, maxSize: Int): String {
-        return (song.path ?: song.contentUri.toString()) + "@$maxSize"
-    }
 
     private fun loadEmbedded(path: String?): Bitmap? {
         if (path.isNullOrBlank()) return null
@@ -75,7 +63,6 @@ object AlbumArtResolver {
                 }
             }
         }
-        // Case-insensitive scan for cover.*
         dir.listFiles()?.forEach { f ->
             if (!f.isFile) return@forEach
             val n = f.name.lowercase()
