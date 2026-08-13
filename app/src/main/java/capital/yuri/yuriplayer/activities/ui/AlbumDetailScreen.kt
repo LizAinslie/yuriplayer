@@ -190,7 +190,7 @@ fun AlbumDetailScreen(
                     ) {
                         Text("Add to queue", modifier = Modifier.fillMaxWidth())
                     }
-                    Spacer(Modifier = Modifier.height(32.dp))
+                    Spacer(modifier = Modifier.height(32.dp))
                 }
             }
         }
