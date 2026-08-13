@@ -4,6 +4,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.CircleShape
@@ -27,7 +28,7 @@ import org.koin.compose.koinInject
 
 /**
  * Slim prev / play / next strip for the queue page.
- * Uses album-art accent for the play button; ambient chrome otherwise.
+ * Surface extends under the system gesture bar; controls sit above it.
  */
 @Composable
 fun QueueTransportBar(
@@ -52,6 +53,7 @@ fun QueueTransportBar(
         Row(
             modifier = Modifier
                 .fillMaxWidth()
+                .navigationBarsPadding()
                 .padding(horizontal = 24.dp, vertical = 10.dp),
             horizontalArrangement = Arrangement.SpaceEvenly,
             verticalAlignment = Alignment.CenterVertically
