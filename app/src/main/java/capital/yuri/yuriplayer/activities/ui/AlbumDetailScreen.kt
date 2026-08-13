@@ -3,16 +3,19 @@ package capital.yuri.yuriplayer.activities.ui
 import android.widget.Toast
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.requiredSize
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
@@ -34,8 +37,10 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.rememberModalBottomSheetState
+import androidx.compose.material3.ripple
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -58,6 +63,7 @@ import androidx.compose.ui.input.nestedscroll.NestedScrollSource
 import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
@@ -73,7 +79,12 @@ private val ExpandedHeaderBody = 400.dp
 private val CollapsedBarHeight = 56.dp
 private val GradientFadeLength = 220.dp
 
-/** Perfect circle play/pause — IconButton + background was rendering fat/oval. */
+/**
+ * Guaranteed circle play/pause.
+ *
+ * Uses [Surface] + [CircleShape] + [requiredSize]/[aspectRatio] so parent
+ * Rows cannot stretch it into a pill (IconButton min-size was doing that).
+ */
 @Composable
 private fun CircularPlayButton(
     showPause: Boolean,
@@ -81,20 +92,27 @@ private fun CircularPlayButton(
     size: Dp = 52.dp,
     iconSize: Dp = 28.dp
 ) {
-    Box(
+    val interaction = remember { MutableInteractionSource() }
+    Surface(
+        onClick = onClick,
         modifier = Modifier
-            .size(size)
-            .clip(CircleShape)
-            .background(MaterialTheme.colorScheme.primary)
-            .clickable(onClick = onClick),
-        contentAlignment = Alignment.Center
+            .requiredSize(size)
+            .aspectRatio(1f),
+        shape = CircleShape,
+        color = MaterialTheme.colorScheme.primary,
+        contentColor = MaterialTheme.colorScheme.onPrimary,
+        interactionSource = interaction
     ) {
-        Icon(
-            if (showPause) Icons.Default.Pause else Icons.Default.PlayArrow,
-            contentDescription = if (showPause) "Pause" else "Play",
-            tint = MaterialTheme.colorScheme.onPrimary,
-            modifier = Modifier.size(iconSize)
-        )
+        Box(
+            modifier = Modifier.fillMaxSize(),
+            contentAlignment = Alignment.Center
+        ) {
+            Icon(
+                imageVector = if (showPause) Icons.Default.Pause else Icons.Default.PlayArrow,
+                contentDescription = if (showPause) "Pause" else "Play",
+                modifier = Modifier.size(iconSize)
+            )
+        }
     }
 }
 
@@ -401,8 +419,9 @@ private fun SpotifyAlbumHero(
             modifier = Modifier.fillMaxWidth(),
             horizontalAlignment = Alignment.Start
         ) {
-            Text(
+            MarqueeText(
                 text = album.displayName,
+                modifier = Modifier.fillMaxWidth(),
                 style = MaterialTheme.typography.headlineSmall.copy(
                     fontWeight = FontWeight.Bold,
                     fontSize = 24.sp
@@ -425,7 +444,7 @@ private fun SpotifyAlbumHero(
                     corner = 12.dp
                 )
                 Spacer(modifier = Modifier.width(8.dp))
-                Text(
+                MarqueeText(
                     text = album.displayArtist,
                     style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.SemiBold),
                     color = MaterialTheme.colorScheme.onBackground
