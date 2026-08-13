@@ -26,37 +26,44 @@ import androidx.compose.ui.unit.dp
 fun PlayingIndicator(
     color: Color,
     modifier: Modifier = Modifier,
+    animated: Boolean = true,
     barWidth: Dp = 3.dp,
     maxHeight: Dp = 14.dp
 ) {
-    val infinite = rememberInfiniteTransition(label = "playing")
-    val h1 by infinite.animateFloat(
-        initialValue = 0.35f,
-        targetValue = 1f,
-        animationSpec = infiniteRepeatable(
-            animation = tween(420, easing = LinearEasing),
-            repeatMode = RepeatMode.Reverse
-        ),
-        label = "bar1"
-    )
-    val h2 by infinite.animateFloat(
-        initialValue = 0.55f,
-        targetValue = 1f,
-        animationSpec = infiniteRepeatable(
-            animation = tween(360, delayMillis = 90, easing = LinearEasing),
-            repeatMode = RepeatMode.Reverse
-        ),
-        label = "bar2"
-    )
-    val h3 by infinite.animateFloat(
-        initialValue = 0.4f,
-        targetValue = 1f,
-        animationSpec = infiniteRepeatable(
-            animation = tween(480, delayMillis = 160, easing = LinearEasing),
-            repeatMode = RepeatMode.Reverse
-        ),
-        label = "bar3"
-    )
+    val (h1, h2, h3) = if (animated) {
+        val infinite = rememberInfiniteTransition(label = "playing")
+        val a by infinite.animateFloat(
+            initialValue = 0.35f,
+            targetValue = 1f,
+            animationSpec = infiniteRepeatable(
+                animation = tween(420, easing = LinearEasing),
+                repeatMode = RepeatMode.Reverse
+            ),
+            label = "bar1"
+        )
+        val b by infinite.animateFloat(
+            initialValue = 0.55f,
+            targetValue = 1f,
+            animationSpec = infiniteRepeatable(
+                animation = tween(360, delayMillis = 90, easing = LinearEasing),
+                repeatMode = RepeatMode.Reverse
+            ),
+            label = "bar2"
+        )
+        val c by infinite.animateFloat(
+            initialValue = 0.4f,
+            targetValue = 1f,
+            animationSpec = infiniteRepeatable(
+                animation = tween(480, delayMillis = 160, easing = LinearEasing),
+                repeatMode = RepeatMode.Reverse
+            ),
+            label = "bar3"
+        )
+        Triple(a, b, c)
+    } else {
+        // Static mid heights while paused
+        Triple(0.45f, 0.75f, 0.55f)
+    }
 
     Row(
         modifier = modifier.height(maxHeight),
