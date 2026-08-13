@@ -23,11 +23,14 @@ import capital.yuri.yuriplayer.activities.MainActivity
 import capital.yuri.yuriplayer.data.Song
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
@@ -36,10 +39,13 @@ class MusicService : MediaSessionService() {
     private val binder = LocalBinder()
     private var player: ExoPlayer? = null
     private var mediaSession: MediaSession? = null
+    private lateinit var stateStore: PlaybackStateStore
 
     private var currentPlaylist: List<Song> = emptyList()
+    private var restoredOnce = false
 
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
+    private var persistJob: Job? = null
 
     private val _nowPlaying = MutableStateFlow<Song?>(null)
     val nowPlaying: StateFlow<Song?> = _nowPlaying.asStateFlow()
@@ -57,11 +63,9 @@ class MusicService : MediaSessionService() {
     @OptIn(UnstableApi::class)
     override fun onCreate() {
         super.onCreate()
+        stateStore = PlaybackStateStore(applicationContext)
 
         createNotificationChannel()
-
-        // Call startForeground immediately so Oreo does not kill us within 5s of
-        // startForegroundService(). Media3 will replace this with a richer media notification.
         startForeground(NOTIFICATION_ID, buildPlaceholderNotification("Yuri Player", "Starting…"))
 
         val audioAttributes = AudioAttributes.Builder()
@@ -84,8 +88,7 @@ class MusicService : MediaSessionService() {
         player = exo
 
         val sessionActivity = PendingIntent.getActivity(
-            this,
-            0,
+            this, 0,
             Intent(this, MainActivity::class.java),
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
@@ -93,28 +96,83 @@ class MusicService : MediaSessionService() {
         mediaSession = MediaSession.Builder(this, exo)
             .setSessionActivity(sessionActivity)
             .build()
+
+        restorePlaybackState()
+        startPeriodicPersist()
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        // Ensure we are always in the foreground once started from the UI
-        startForeground(NOTIFICATION_ID, buildPlaceholderNotification(
-            _nowPlaying.value?.title ?: "Yuri Player",
-            _nowPlaying.value?.artist ?: "Playing in background"
-        ))
+        val song = _nowPlaying.value
+        startForeground(
+            NOTIFICATION_ID,
+            buildPlaceholderNotification(
+                song?.displayTitle ?: "Yuri Player",
+                song?.displayArtist ?: "Playing in background"
+            )
+        )
         super.onStartCommand(intent, flags, startId)
         return START_STICKY
+    }
+
+    private fun restorePlaybackState() {
+        if (restoredOnce) return
+        restoredOnce = true
+        serviceScope.launch {
+            val saved = withContext(Dispatchers.IO) { stateStore.load() } ?: return@launch
+            currentPlaylist = saved.queue
+            _queue.value = saved.queue
+
+            val mediaItems = withContext(Dispatchers.Default) {
+                saved.queue.map { toMediaItem(it) }
+            }
+
+            player?.apply {
+                setMediaItems(mediaItems, saved.index, saved.positionMs)
+                prepare()
+                // Never auto-resume audio after process death — restore position only.
+                // User can press play; avoids surprise audio in the car.
+                playWhenReady = false
+            }
+            _nowPlaying.value = saved.queue.getOrNull(saved.index)
+            updateForegroundNotification()
+        }
+    }
+
+    private fun startPeriodicPersist() {
+        persistJob?.cancel()
+        persistJob = serviceScope.launch {
+            while (isActive) {
+                delay(5_000)
+                persistState()
+            }
+        }
+    }
+
+    private fun persistState() {
+        val p = player ?: return
+        if (currentPlaylist.isEmpty()) return
+        val index = p.currentMediaItemIndex
+        if (index < 0) return
+        stateStore.save(
+            queue = currentPlaylist,
+            index = index,
+            positionMs = p.currentPosition.coerceAtLeast(0L),
+            playWhenReady = p.playWhenReady
+        )
     }
 
     private val playerListener = object : Player.Listener {
         override fun onIsPlayingChanged(isPlaying: Boolean) {
             _isPlaying.value = isPlaying
             updateForegroundNotification()
+            persistState()
         }
 
         override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) {
             val index = player?.currentMediaItemIndex ?: -1
             _nowPlaying.value = currentPlaylist.getOrNull(index)
             updateForegroundNotification()
+            persistState()
         }
 
         override fun onPlaybackStateChanged(playbackState: Int) {
@@ -128,17 +186,19 @@ class MusicService : MediaSessionService() {
 
     private fun updateForegroundNotification() {
         val song = _nowPlaying.value
-        val title = song?.title ?: "Yuri Player"
-        val text = song?.artist ?: if (_isPlaying.value) "Playing" else "Paused"
-        startForeground(NOTIFICATION_ID, buildPlaceholderNotification(title, text))
+        startForeground(
+            NOTIFICATION_ID,
+            buildPlaceholderNotification(
+                song?.displayTitle ?: "Yuri Player",
+                song?.displayArtist ?: if (_isPlaying.value) "Playing" else "Paused"
+            )
+        )
     }
 
     private fun createNotificationChannel() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             val channel = NotificationChannel(
-                CHANNEL_ID,
-                "Playback",
-                NotificationManager.IMPORTANCE_LOW
+                CHANNEL_ID, "Playback", NotificationManager.IMPORTANCE_LOW
             ).apply {
                 description = "Music playback"
                 setShowBadge(false)
@@ -149,8 +209,7 @@ class MusicService : MediaSessionService() {
 
     private fun buildPlaceholderNotification(title: String, text: String): Notification {
         val pending = PendingIntent.getActivity(
-            this,
-            0,
+            this, 0,
             Intent(this, MainActivity::class.java),
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
@@ -165,16 +224,26 @@ class MusicService : MediaSessionService() {
             .build()
     }
 
-    override fun onGetSession(controllerInfo: MediaSession.ControllerInfo): MediaSession? {
-        return mediaSession
-    }
+    override fun onGetSession(controllerInfo: MediaSession.ControllerInfo): MediaSession? = mediaSession
 
     override fun onBind(intent: Intent?): IBinder? {
-        return if (intent?.action == null) {
-            binder
-        } else {
-            super.onBind(intent) ?: binder
-        }
+        return if (intent?.action == null) binder else super.onBind(intent) ?: binder
+    }
+
+    private fun toMediaItem(song: Song): MediaItem {
+        return MediaItem.Builder()
+            .setUri(song.contentUri)
+            .setMediaId(song.id.toString())
+            .setMediaMetadata(
+                androidx.media3.common.MediaMetadata.Builder()
+                    .setTitle(song.displayTitle)
+                    .setArtist(song.displayArtist)
+                    .setAlbumTitle(song.displayAlbum)
+                    .setAlbumArtist(song.displayAlbumArtist)
+                    .setArtworkUri(song.albumArtUri)
+                    .build()
+            )
+            .build()
     }
 
     fun setPlaylist(songs: List<Song>, startIndex: Int = 0) {
@@ -184,21 +253,7 @@ class MusicService : MediaSessionService() {
             _queue.value = songs
 
             val mediaItems = withContext(Dispatchers.Default) {
-                songs.map { song ->
-                    MediaItem.Builder()
-                        .setUri(song.contentUri)
-                        .setMediaId(song.id.toString())
-                        .setMediaMetadata(
-                            androidx.media3.common.MediaMetadata.Builder()
-                                .setTitle(song.title)
-                                .setArtist(song.artist)
-                                .setAlbumTitle(song.album)
-                                .setAlbumArtist(song.effectiveAlbumArtist)
-                                .setArtworkUri(song.albumArtUri)
-                                .build()
-                        )
-                        .build()
-                }
+                songs.map { toMediaItem(it) }
             }
 
             player?.apply {
@@ -208,24 +263,26 @@ class MusicService : MediaSessionService() {
 
             _nowPlaying.value = songs.getOrNull(safeIndex)
             updateForegroundNotification()
+            persistState()
         }
     }
 
     fun play() {
         player?.play()
         updateForegroundNotification()
+        persistState()
     }
 
     fun pause() {
         player?.pause()
         updateForegroundNotification()
+        persistState()
     }
 
     fun togglePlayPause() {
-        player?.let {
-            if (it.isPlaying) it.pause() else it.play()
-        }
+        player?.let { if (it.isPlaying) it.pause() else it.play() }
         updateForegroundNotification()
+        persistState()
     }
 
     fun skipToNext() {
@@ -235,52 +292,38 @@ class MusicService : MediaSessionService() {
 
     fun skipToPrevious() {
         player?.let {
-            if (it.currentPosition > 3000L) {
-                it.seekTo(0)
-            } else if (it.hasPreviousMediaItem()) {
-                it.seekToPreviousMediaItem()
-            } else {
-                it.seekTo(0)
-            }
+            if (it.currentPosition > 3000L) it.seekTo(0)
+            else if (it.hasPreviousMediaItem()) it.seekToPreviousMediaItem()
+            else it.seekTo(0)
             it.play()
         }
     }
 
     fun seekTo(positionMs: Long) {
         player?.seekTo(positionMs.coerceAtLeast(0L))
+        persistState()
     }
 
     fun isPlaying(): Boolean = player?.isPlaying == true
-
     fun getCurrentSong(): Song? {
         val index = player?.currentMediaItemIndex ?: return null
         return currentPlaylist.getOrNull(index)
     }
-
     fun getCurrentIndex(): Int = player?.currentMediaItemIndex ?: -1
-
-    fun getPositionMs(): Long {
-        val pos = player?.currentPosition ?: 0L
-        return if (pos < 0) 0L else pos
-    }
-
-    fun getDurationMs(): Long {
-        val dur = player?.duration ?: 0L
-        return if (dur < 0) 0L else dur
-    }
-
+    fun getPositionMs(): Long = player?.currentPosition?.coerceAtLeast(0L) ?: 0L
+    fun getDurationMs(): Long = player?.duration?.takeIf { it > 0 } ?: 0L
     fun getQueue(): List<Song> = currentPlaylist
 
     override fun onTaskRemoved(rootIntent: Intent?) {
-        // Keep playing after swipe-away if audio is active
-        if (player?.isPlaying == true || player?.playWhenReady == true) {
-            return
-        }
+        persistState()
+        if (player?.isPlaying == true || player?.playWhenReady == true) return
         stopSelf()
         super.onTaskRemoved(rootIntent)
     }
 
     override fun onDestroy() {
+        persistState()
+        persistJob?.cancel()
         serviceScope.cancel()
         mediaSession?.run {
             player?.release()

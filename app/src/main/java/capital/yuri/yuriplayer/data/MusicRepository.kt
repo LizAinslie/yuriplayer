@@ -20,26 +20,19 @@ class MusicRepository(
             "flac", "mp3", "ogg", "opus", "m4a", "mp4", "aac",
             "wav", "aiff", "aif", "wma", "alac"
         )
-
-        // Column exists on many API 27 devices even without the MediaStore constant
         private const val COL_ALBUM_ARTIST = "album_artist"
     }
 
     suspend fun scanLibrary(): List<Song> = withContext(Dispatchers.IO) {
         val byKey = LinkedHashMap<String, Song>()
-
         queryMediaStore().forEach { song ->
             val key = song.path?.lowercase() ?: song.contentUri.toString()
             byKey[key] = song
         }
-
         scanFilesystem().forEach { song ->
             val key = song.path?.lowercase() ?: return@forEach
-            if (!byKey.containsKey(key)) {
-                byKey[key] = song
-            }
+            if (!byKey.containsKey(key)) byKey[key] = song
         }
-
         byKey.values.toList()
     }
 
@@ -72,16 +65,13 @@ class MusicRepository(
             append(" AND (${MediaStore.Audio.Media.DURATION} IS NULL OR ${MediaStore.Audio.Media.DURATION} > 1000)")
         }
 
-        // Prefer projection without album_artist if the OEM column is missing
         val cursor = try {
             context.contentResolver.query(collection, projection, selection, null, null)
         } catch (_: IllegalArgumentException) {
             context.contentResolver.query(
                 collection,
                 projection.copyOfRange(0, projection.size - 1),
-                selection,
-                null,
-                null
+                selection, null, null
             )
         } ?: return songs
 
@@ -102,56 +92,53 @@ class MusicRepository(
                 val id = it.getLong(idCol)
                 val path = it.getString(dataCol)
                 val mime = it.getString(mimeCol)
+                if (path != null && !isAudioPath(path) && mime?.startsWith("audio/") != true) continue
 
-                if (path != null && !isAudioPath(path) && mime?.startsWith("audio/") != true) {
-                    continue
+                var title = cleanTag(it.getString(titleCol))
+                var artist = cleanTag(it.getString(artistCol))
+                var album = cleanTag(it.getString(albumCol))
+                var albumArtist = if (albumArtistCol >= 0) cleanTag(it.getString(albumArtistCol)) else null
+                var duration = it.getLong(durationCol).takeIf { d -> d > 0 }
+                var track = it.getInt(trackCol).let { t ->
+                    val n = if (t >= 1000) t % 1000 else t
+                    n.takeIf { it > 0 }
                 }
-
-                var title = it.getString(titleCol)
-                var artist = it.getString(artistCol)
-                var album = it.getString(albumCol)
-                var albumArtist = if (albumArtistCol >= 0) it.getString(albumArtistCol) else null
-                var duration = it.getLong(durationCol)
-                var track = it.getInt(trackCol)
-                if (track >= 1000) track %= 1000
-                val year = it.getInt(yearCol)
+                val year = it.getInt(yearCol).takeIf { y -> y > 0 }
                 val albumId = it.getLong(albumIdCol)
 
-                // Always prefer file tags for album artist when possible (Oreo MediaStore is spotty)
                 if (path != null) {
                     val tags = readTagsFromFile(path)
-                    if (needsTagRefresh(title, artist, album, path)) {
-                        title = tags.title ?: title
-                        artist = tags.artist ?: artist
-                        album = tags.album ?: album
-                        if (duration <= 0 && tags.durationMs > 0) duration = tags.durationMs
-                        if (track <= 0 && tags.trackNumber > 0) track = tags.trackNumber
-                    }
-                    if (albumArtist.isNullOrBlank()) {
-                        albumArtist = tags.albumArtist
-                    }
+                    if (title == null || title == fileNameTitle(path)) title = tags.title ?: title
+                    if (artist == null) artist = tags.artist
+                    if (album == null) album = tags.album
+                    if (albumArtist == null) albumArtist = tags.albumArtist
+                    if (duration == null && tags.durationMs != null) duration = tags.durationMs
+                    if (track == null && tags.trackNumber != null) track = tags.trackNumber
+                }
+
+                // If MediaStore title is just the filename, treat as untagged title
+                if (path != null && title == fileNameTitle(path)) {
+                    // keep as null for isTagged/hasTitle purposes unless other tags exist
+                    // still useful for display via path — store null to mark untagged title
+                    val tags = readTagsFromFile(path)
+                    title = tags.title // may still be null
                 }
 
                 val contentUri = ContentUris.withAppendedId(
-                    MediaStore.Audio.Media.EXTERNAL_CONTENT_URI,
-                    id
+                    MediaStore.Audio.Media.EXTERNAL_CONTENT_URI, id
                 )
                 val albumArtUri = if (albumId > 0) {
                     ContentUris.withAppendedId(
-                        Uri.parse("content://media/external/audio/albumart"),
-                        albumId
+                        Uri.parse("content://media/external/audio/albumart"), albumId
                     )
                 } else null
 
-                val cleanArtist = artist?.takeIf { a -> a.isNotBlank() && a != "<unknown>" } ?: "Unknown Artist"
-                val cleanAlbumArtist = albumArtist?.takeIf { a -> a.isNotBlank() && a != "<unknown>" } ?: ""
-
                 songs += Song(
                     id = id,
-                    title = title?.takeIf { t -> t.isNotBlank() } ?: fileNameTitle(path),
-                    artist = cleanArtist,
-                    albumArtist = cleanAlbumArtist,
-                    album = album?.takeIf { a -> a.isNotBlank() && a != "<unknown>" } ?: "Unknown Album",
+                    title = title,
+                    artist = artist,
+                    albumArtist = albumArtist,
+                    album = album,
                     durationMs = duration,
                     contentUri = contentUri,
                     albumArtUri = albumArtUri,
@@ -162,7 +149,6 @@ class MusicRepository(
                 )
             }
         }
-
         return songs
     }
 
@@ -170,27 +156,22 @@ class MusicRepository(
         val songs = mutableListOf<Song>()
         val roots = settings.getScanRoots()
         val seen = HashSet<String>()
-
         roots.forEach { root ->
             if (!root.exists()) return@forEach
-            root.walkTopDown()
-                .maxDepth(8)
-                .onFail { _, _ -> }
+            root.walkTopDown().maxDepth(8).onFail { _, _ -> }
                 .filter { it.isFile && isAudioPath(it.absolutePath) }
                 .forEach { file ->
                     val path = file.absolutePath
                     if (!seen.add(path.lowercase())) return@forEach
-
                     val tags = readTagsFromFile(path)
                     songs += Song(
                         id = path.hashCode().toLong(),
-                        title = tags.title ?: file.nameWithoutExtension,
-                        artist = tags.artist ?: "Unknown Artist",
-                        albumArtist = tags.albumArtist ?: "",
-                        album = tags.album ?: "Unknown Album",
+                        title = tags.title,
+                        artist = tags.artist,
+                        albumArtist = tags.albumArtist,
+                        album = tags.album,
                         durationMs = tags.durationMs,
                         contentUri = Uri.fromFile(file),
-                        albumArtUri = null,
                         trackNumber = tags.trackNumber,
                         year = tags.year,
                         path = path,
@@ -198,7 +179,6 @@ class MusicRepository(
                     )
                 }
         }
-
         return songs
     }
 
@@ -207,46 +187,50 @@ class MusicRepository(
         val artist: String? = null,
         val albumArtist: String? = null,
         val album: String? = null,
-        val durationMs: Long = 0,
-        val trackNumber: Int = 0,
-        val year: Int = 0
+        val durationMs: Long? = null,
+        val trackNumber: Int? = null,
+        val year: Int? = null
     )
 
     private fun readTagsFromFile(path: String): FileTags {
         val retriever = MediaMetadataRetriever()
         return try {
             retriever.setDataSource(path)
-            val title = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_TITLE)
-            val artist = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_ARTIST)
-            val albumArtist = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_ALBUMARTIST)
-            val album = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_ALBUM)
-            val duration = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION)
-                ?.toLongOrNull() ?: 0L
-            val track = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_CD_TRACK_NUMBER)
-                ?.let { parseTrackNumber(it) } ?: 0
-            val year = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_YEAR)
-                ?.take(4)?.toIntOrNull() ?: 0
-            FileTags(title, artist, albumArtist, album, duration, track, year)
+            FileTags(
+                title = cleanTag(retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_TITLE)),
+                artist = cleanTag(retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_ARTIST)),
+                albumArtist = cleanTag(retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_ALBUMARTIST)),
+                album = cleanTag(retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_ALBUM)),
+                durationMs = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION)
+                    ?.toLongOrNull()?.takeIf { it > 0 },
+                trackNumber = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_CD_TRACK_NUMBER)
+                    ?.let { parseTrackNumber(it) },
+                year = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_YEAR)
+                    ?.take(4)?.toIntOrNull()?.takeIf { it > 0 }
+            )
         } catch (_: Exception) {
             FileTags()
         } finally {
-            try {
-                retriever.release()
-            } catch (_: Exception) {
-            }
+            try { retriever.release() } catch (_: Exception) {}
         }
     }
 
-    private fun parseTrackNumber(raw: String): Int {
-        val first = raw.split('/', ' ', limit = 2).firstOrNull() ?: return 0
-        return first.trim().toIntOrNull()?.let { if (it >= 1000) it % 1000 else it } ?: 0
+    private fun cleanTag(raw: String?): String? {
+        if (raw == null) return null
+        val t = raw.trim()
+        if (t.isEmpty()) return null
+        if (t.equals("<unknown>", true)) return null
+        if (t.equals("Unknown", true)) return null
+        if (t.equals("Unknown Artist", true)) return null
+        if (t.equals("Unknown Album", true)) return null
+        return t
     }
 
-    private fun needsTagRefresh(title: String?, artist: String?, album: String?, path: String): Boolean {
-        if (title.isNullOrBlank() || title == fileNameTitle(path)) return true
-        if (artist.isNullOrBlank() || artist == "<unknown>") return true
-        if (album.isNullOrBlank() || album == "<unknown>") return true
-        return false
+    private fun parseTrackNumber(raw: String): Int? {
+        val first = raw.split('/', ' ', limit = 2).firstOrNull() ?: return null
+        val n = first.trim().toIntOrNull() ?: return null
+        val track = if (n >= 1000) n % 1000 else n
+        return track.takeIf { it > 0 }
     }
 
     private fun isAudioPath(path: String): Boolean {
@@ -265,8 +249,8 @@ class MusicRepository(
             }
     }
 
-    private fun fileNameTitle(path: String?): String {
-        if (path == null) return "Unknown"
+    private fun fileNameTitle(path: String?): String? {
+        if (path == null) return null
         return File(path).nameWithoutExtension
     }
 }

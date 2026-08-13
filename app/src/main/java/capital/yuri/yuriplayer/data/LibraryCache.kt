@@ -23,7 +23,6 @@ class LibraryCache(context: Context) {
             for (i in 0 until arr.length()) {
                 songs += songFromJson(arr.getJSONObject(i))
             }
-            Log.d(TAG, "Loaded ${songs.size} songs from cache")
             CachedLibrary(songs, scannedAt)
         } catch (e: Exception) {
             Log.w(TAG, "Failed to load library cache", e)
@@ -34,26 +33,20 @@ class LibraryCache(context: Context) {
     fun save(songs: List<Song>) {
         try {
             if (!cacheDir.exists()) cacheDir.mkdirs()
-
             val arr = JSONArray()
             songs.forEach { arr.put(songToJson(it)) }
             val root = JSONObject()
                 .put("version", CACHE_VERSION)
                 .put("scannedAt", System.currentTimeMillis())
                 .put("songs", arr)
-
             tmpFile.writeText(root.toString())
             if (!tmpFile.renameTo(file)) {
                 tmpFile.copyTo(file, overwrite = true)
                 tmpFile.delete()
             }
-            Log.d(TAG, "Saved ${songs.size} songs to ${file.absolutePath}")
         } catch (e: Exception) {
             Log.e(TAG, "Failed to save library cache", e)
-            try {
-                tmpFile.delete()
-            } catch (_: Exception) {
-            }
+            try { tmpFile.delete() } catch (_: Exception) {}
         }
     }
 
@@ -61,8 +54,7 @@ class LibraryCache(context: Context) {
         try {
             if (file.exists()) file.delete()
             if (tmpFile.exists()) tmpFile.delete()
-        } catch (_: Exception) {
-        }
+        } catch (_: Exception) {}
     }
 
     fun cacheFilePath(): String = file.absolutePath
@@ -70,47 +62,60 @@ class LibraryCache(context: Context) {
     private fun songToJson(song: Song): JSONObject {
         return JSONObject()
             .put("id", song.id)
-            .put("title", song.title)
-            .put("artist", song.artist)
-            .put("albumArtist", song.albumArtist)
-            .put("album", song.album)
-            .put("durationMs", song.durationMs)
+            .put("title", song.title ?: JSONObject.NULL)
+            .put("artist", song.artist ?: JSONObject.NULL)
+            .put("albumArtist", song.albumArtist ?: JSONObject.NULL)
+            .put("album", song.album ?: JSONObject.NULL)
+            .put("durationMs", song.durationMs ?: JSONObject.NULL)
             .put("contentUri", song.contentUri.toString())
             .put("albumArtUri", song.albumArtUri?.toString() ?: JSONObject.NULL)
-            .put("trackNumber", song.trackNumber)
-            .put("year", song.year)
+            .put("trackNumber", song.trackNumber ?: JSONObject.NULL)
+            .put("year", song.year ?: JSONObject.NULL)
             .put("path", song.path ?: JSONObject.NULL)
             .put("mimeType", song.mimeType ?: JSONObject.NULL)
     }
 
     private fun songFromJson(obj: JSONObject): Song {
-        fun optNullableString(key: String): String? {
+        fun optStr(key: String): String? {
             if (!obj.has(key) || obj.isNull(key)) return null
-            val v = obj.optString(key, "")
-            return v.takeIf { it.isNotBlank() && it != "null" }
+            return obj.optString(key, null)?.takeIf { it.isNotBlank() && it != "null" }
         }
-
-        val art = optNullableString("albumArtUri")
+        fun optLong(key: String): Long? {
+            if (!obj.has(key) || obj.isNull(key)) return null
+            return obj.optLong(key)
+        }
+        fun optInt(key: String): Int? {
+            if (!obj.has(key) || obj.isNull(key)) return null
+            return obj.optInt(key)
+        }
+        val art = optStr("albumArtUri")
+        // Migrate old caches that stored "Unknown Artist" etc.
+        fun clean(s: String?): String? = s?.takeIf {
+            it.isNotBlank() &&
+                !it.equals("<unknown>", true) &&
+                !it.equals("Unknown Artist", true) &&
+                !it.equals("Unknown Album", true)
+        }
         return Song(
             id = obj.getLong("id"),
-            title = obj.getString("title"),
-            artist = obj.getString("artist"),
-            albumArtist = obj.optString("albumArtist", ""),
-            album = obj.getString("album"),
-            durationMs = obj.getLong("durationMs"),
+            title = clean(optStr("title")),
+            artist = clean(optStr("artist")),
+            albumArtist = clean(optStr("albumArtist")),
+            album = clean(optStr("album")),
+            durationMs = optLong("durationMs"),
             contentUri = Uri.parse(obj.getString("contentUri")),
             albumArtUri = art?.let { Uri.parse(it) },
-            trackNumber = obj.optInt("trackNumber", 0),
-            year = obj.optInt("year", 0),
-            path = optNullableString("path"),
-            mimeType = optNullableString("mimeType")
+            trackNumber = optInt("trackNumber")?.takeIf { it > 0 },
+            year = optInt("year")?.takeIf { it > 0 },
+            path = optStr("path"),
+            mimeType = optStr("mimeType")
         )
     }
 
     companion object {
         private const val TAG = "LibraryCache"
         private const val FILE_NAME = "library_index.json"
-        private const val CACHE_VERSION = 2
+        private const val CACHE_VERSION = 3
     }
 }
 
