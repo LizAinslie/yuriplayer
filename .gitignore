@@ -13,3 +13,8 @@
 .externalNativeBuild
 .cxx
 local.properties
+
+# Signing (never commit secrets or keystores)
+keystore.properties
+*.jks
+*.keystore
