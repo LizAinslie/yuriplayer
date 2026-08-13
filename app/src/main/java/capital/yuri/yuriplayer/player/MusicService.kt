@@ -40,18 +40,12 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.koin.android.ext.android.inject
 
-/**
- * ExoPlayer + notification host. Queue logic lives in [QueueManager].
- *
- * Repeat-one never uses [Player.REPEAT_MODE_ONE] (FLAC on API 27 hits
- * [AudioSink.UnexpectedDiscontinuityException] and clicks/goes silent).
- * Instead we hard-reset the media item: stop → clear → set → prepare → play.
- */
 class MusicService : MediaSessionService() {
 
     private val binder = LocalBinder()
     private val queueManager: QueueManager by inject()
     private val stateStore: PlaybackStateStore by inject()
+    private val historyStore: PlaybackHistoryStore by inject()
 
     private var player: ExoPlayer? = null
     private var mediaSession: MediaSession? = null
@@ -61,6 +55,7 @@ class MusicService : MediaSessionService() {
     private var restoredOnce = false
     private var advancing = false
     private var recoveringAudio = false
+    private var lastHistoryKey: String? = null
 
     private val _nowPlaying = MutableStateFlow<Song?>(null)
     val nowPlaying: StateFlow<Song?> = _nowPlaying.asStateFlow()
@@ -69,6 +64,7 @@ class MusicService : MediaSessionService() {
     val isPlaying: StateFlow<Boolean> = _isPlaying.asStateFlow()
 
     val queueSnapshot: StateFlow<QueueSnapshot> get() = queueManager.snapshot
+    val historyEntries: StateFlow<List<HistoryEntry>> get() = historyStore.entries
 
     inner class LocalBinder : Binder() {
         fun getService(): MusicService = this@MusicService
@@ -90,7 +86,6 @@ class MusicService : MediaSessionService() {
             .setBufferDurationsMs(15_000, 50_000, 1_000, 2_000)
             .build()
 
-        // Decoder fallback helps flaky OEM codecs on API 27
         val renderersFactory = DefaultRenderersFactory(this)
             .setEnableDecoderFallback(true)
             .setExtensionRendererMode(DefaultRenderersFactory.EXTENSION_RENDERER_MODE_OFF)
@@ -130,7 +125,6 @@ class MusicService : MediaSessionService() {
         return START_STICKY
     }
 
-    /** Full pipeline reset — avoids audio-sink timestamp discontinuity. */
     private fun hardLoad(song: Song?, startPositionMs: Long = 0L, autoPlay: Boolean = false) {
         val p = player
         if (song == null || p == null) {
@@ -156,14 +150,21 @@ class MusicService : MediaSessionService() {
             Log.e(TAG, "hardLoad failed", e)
         }
         _nowPlaying.value = song
+        maybeRecordHistory(song)
         updateForegroundNotification()
         persistState()
+    }
+
+    private fun maybeRecordHistory(song: Song) {
+        val key = song.path ?: song.contentUri.toString()
+        if (key == lastHistoryKey) return
+        lastHistoryKey = key
+        historyStore.record(song)
     }
 
     private fun applyAdvance(result: QueueManager.AdvanceResult, autoPlay: Boolean = true) {
         when {
             result.seekToStart -> {
-                // Seek within same item is fine; discontinuity risk is on ENDED loops
                 player?.seekTo(0)
                 if (autoPlay) player?.play()
                 persistState()
@@ -229,7 +230,6 @@ class MusicService : MediaSessionService() {
 
     fun cycleRepeatMode() {
         queueManager.cycleRepeatMode()
-        // Keep ExoPlayer off native loop always
         player?.repeatMode = Player.REPEAT_MODE_OFF
         persistState()
     }
@@ -279,6 +279,13 @@ class MusicService : MediaSessionService() {
 
     fun peekNext(): Song? = queueManager.peekNext()
     fun peekPrevious(): Song? = queueManager.peekPrevious()
+
+    fun clearHistory() = historyStore.clear()
+    fun getHistory(): List<HistoryEntry> = historyStore.entries.value
+    fun getHistoryMax(): Int = historyStore.maxEntries
+    fun setHistoryMax(n: Int) {
+        historyStore.maxEntries = n
+    }
 
     private fun toMediaItem(song: Song): MediaItem =
         MediaItem.Builder()

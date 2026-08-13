@@ -11,13 +11,19 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 
-class PlayerController(private val context: Context) {
+class PlayerController(
+    private val context: Context,
+    private val historyStore: PlaybackHistoryStore
+) {
 
     private var service: MusicService? = null
     private var bound = false
 
     private val _isConnected = MutableStateFlow(false)
     val isConnected: StateFlow<Boolean> = _isConnected.asStateFlow()
+
+    /** Always available — history lives outside the service process binding. */
+    val historyEntries: StateFlow<List<HistoryEntry>> get() = historyStore.entries
 
     private val connection = object : ServiceConnection {
         override fun onServiceConnected(name: ComponentName?, binder: IBinder?) {
@@ -120,6 +126,17 @@ class PlayerController(private val context: Context) {
 
     fun peekNext(): Song? = service?.peekNext()
     fun peekPrevious(): Song? = service?.peekPrevious()
+
+    fun clearHistory() {
+        historyStore.clear()
+        service?.clearHistory()
+    }
+
+    fun getHistoryMax(): Int = historyStore.maxEntries
+    fun setHistoryMax(n: Int) {
+        historyStore.maxEntries = n
+        service?.setHistoryMax(n)
+    }
 
     fun isPlayingNow(): Boolean = service?.isPlaying() == true
     fun getCurrentSong(): Song? = service?.getCurrentSong()
