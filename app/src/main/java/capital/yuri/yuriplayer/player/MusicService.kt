@@ -218,6 +218,12 @@ class MusicService : MediaSessionService() {
         persistState()
     }
 
+    fun moveColdToHot(index: Int) {
+        val needReload = queueManager.moveColdToHot(index)
+        if (needReload) hardLoad(queueManager.currentSong(), 0L, player?.playWhenReady == true)
+        else persistState()
+    }
+
     fun playQueueItem(lane: QueueLane, index: Int) {
         queueManager.playItem(lane, index)
         hardLoad(queueManager.currentSong(), 0L, autoPlay = true)
