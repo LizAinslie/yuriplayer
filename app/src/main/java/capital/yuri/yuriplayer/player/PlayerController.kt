@@ -53,7 +53,6 @@ class PlayerController(private val context: Context) {
         _isConnected.value = false
     }
 
-    /** Play an album / playlist as the cold queue. */
     fun setPlaylist(songs: List<Song>, startIndex: Int = 0) {
         ensureServiceStarted()
         service?.playSource(songs, startIndex, autoPlay = true)
@@ -118,6 +117,9 @@ class PlayerController(private val context: Context) {
     }
 
     fun seekTo(positionMs: Long) = service?.seekTo(positionMs)
+
+    fun peekNext(): Song? = service?.peekNext()
+    fun peekPrevious(): Song? = service?.peekPrevious()
 
     fun isPlayingNow(): Boolean = service?.isPlaying() == true
     fun getCurrentSong(): Song? = service?.getCurrentSong()
