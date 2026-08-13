@@ -4,7 +4,6 @@ import android.content.ContentUris
 import android.content.Context
 import android.media.MediaMetadataRetriever
 import android.net.Uri
-import android.os.Environment
 import android.provider.MediaStore
 import android.webkit.MimeTypeMap
 import kotlinx.coroutines.Dispatchers
@@ -12,60 +11,48 @@ import kotlinx.coroutines.withContext
 import java.io.File
 
 /**
- * Local library scanner tuned for Android 8.1 (API 27).
- *
- * Oreo / many OEM builds (including LG) often:
- * - never index .flac into MediaStore, or
- * - index them with IS_MUSIC = 0
- *
- * So we:
- * 1. Query MediaStore with a broad filter (not just IS_MUSIC)
- * 2. Walk common music folders for known extensions as a fallback
- * 3. Prefer embedded tags via MediaMetadataRetriever when needed
+ * Scans MediaStore + configured filesystem roots.
+ * Prefer [LibraryIndex] for UI — this class is the slow path used only on refresh.
  */
-class MusicRepository(private val context: Context) {
+class MusicRepository(
+    private val context: Context,
+    private val settings: LibrarySettings
+) {
 
     companion object {
         private val AUDIO_EXTENSIONS = setOf(
             "flac", "mp3", "ogg", "opus", "m4a", "mp4", "aac",
             "wav", "aiff", "aif", "wma", "alac"
         )
-
-        private val SCAN_DIRS = listOf(
-            Environment.DIRECTORY_MUSIC,
-            Environment.DIRECTORY_DOWNLOADS,
-            "FLAC",
-            "Music",
-            "YuriTest"
-        )
     }
 
-    suspend fun getAllSongs(sortMode: SortMode = SortMode.TITLE): List<Song> =
-        withContext(Dispatchers.IO) {
-            val byKey = LinkedHashMap<String, Song>()
+    /** Full scan used by LibraryIndex.refresh(). Not for sort/search. */
+    suspend fun scanLibrary(): List<Song> = withContext(Dispatchers.IO) {
+        val byKey = LinkedHashMap<String, Song>()
 
-            // 1) MediaStore (whatever the system did index)
-            queryMediaStore().forEach { song ->
-                val key = song.path?.lowercase() ?: song.contentUri.toString()
+        queryMediaStore().forEach { song ->
+            val key = song.path?.lowercase() ?: song.contentUri.toString()
+            byKey[key] = song
+        }
+
+        scanFilesystem().forEach { song ->
+            val key = song.path?.lowercase() ?: return@forEach
+            if (!byKey.containsKey(key)) {
                 byKey[key] = song
             }
-
-            // 2) Filesystem fallback — picks up FLACs the scanner ignored
-            scanFilesystem().forEach { song ->
-                val key = song.path?.lowercase() ?: return@forEach
-                if (!byKey.containsKey(key)) {
-                    byKey[key] = song
-                }
-            }
-
-            sortSongs(byKey.values.toList(), sortMode)
         }
+
+        byKey.values.toList()
+    }
+
+    /** @deprecated Use LibraryIndex — kept for any direct callers */
+    suspend fun getAllSongs(sortMode: SortMode = SortMode.TITLE): List<Song> =
+        LibraryIndex.sortSongs(scanLibrary(), sortMode)
 
     private fun queryMediaStore(): List<Song> {
         val songs = mutableListOf<Song>()
         val collection = MediaStore.Audio.Media.EXTERNAL_CONTENT_URI
 
-        // DATA still exists and is readable on API 27
         val projection = arrayOf(
             MediaStore.Audio.Media._ID,
             MediaStore.Audio.Media.TITLE,
@@ -79,7 +66,6 @@ class MusicRepository(private val context: Context) {
             MediaStore.Audio.Media.MIME_TYPE
         )
 
-        // Do NOT rely solely on IS_MUSIC — FLACs on Oreo frequently fail that flag.
         val selection = buildString {
             append("(")
             append("${MediaStore.Audio.Media.IS_MUSIC} != 0")
@@ -88,7 +74,6 @@ class MusicRepository(private val context: Context) {
                 append(" OR LOWER(${MediaStore.Audio.Media.DATA}) LIKE '%.$ext'")
             }
             append(")")
-            // Skip obvious tiny system sounds when possible
             append(" AND (${MediaStore.Audio.Media.DURATION} IS NULL OR ${MediaStore.Audio.Media.DURATION} > 1000)")
         }
 
@@ -115,7 +100,6 @@ class MusicRepository(private val context: Context) {
                 val path = cursor.getString(dataCol)
                 val mime = cursor.getString(mimeCol)
 
-                // Skip non-audio leftovers
                 if (path != null && !isAudioPath(path) && mime?.startsWith("audio/") != true) {
                     continue
                 }
@@ -125,12 +109,10 @@ class MusicRepository(private val context: Context) {
                 var album = cursor.getString(albumCol)
                 var duration = cursor.getLong(durationCol)
                 var track = cursor.getInt(trackCol)
-                // MediaStore TRACK is often like 1001 for disc 1 track 1
                 if (track >= 1000) track %= 1000
                 val year = cursor.getInt(yearCol)
                 val albumId = cursor.getLong(albumIdCol)
 
-                // If MediaStore gave us garbage/empty tags, read the file itself
                 if (path != null && needsTagRefresh(title, artist, album, path)) {
                     val tags = readTagsFromFile(path)
                     title = tags.title ?: title
@@ -172,22 +154,14 @@ class MusicRepository(private val context: Context) {
 
     private fun scanFilesystem(): List<Song> {
         val songs = mutableListOf<Song>()
-        val roots = mutableListOf<File>()
-
-        // Public external dirs
-        SCAN_DIRS.forEach { name ->
-            val standard = Environment.getExternalStoragePublicDirectory(name)
-            if (standard != null) roots += standard
-            roots += File(Environment.getExternalStorageDirectory(), name)
-        }
-        roots += Environment.getExternalStorageDirectory()
-
+        val roots = settings.getScanRoots()
         val seen = HashSet<String>()
-        roots.distinct().forEach { root ->
+
+        roots.forEach { root ->
             if (!root.exists()) return@forEach
             root.walkTopDown()
-                .maxDepth(6)
-                .onFail { _, _ -> } // ignore unreadable dirs
+                .maxDepth(8)
+                .onFail { _, _ -> }
                 .filter { it.isFile && isAudioPath(it.absolutePath) }
                 .forEach { file ->
                     val path = file.absolutePath
@@ -195,7 +169,6 @@ class MusicRepository(private val context: Context) {
 
                     val tags = readTagsFromFile(path)
                     val uri = Uri.fromFile(file)
-                    // Negative synthetic ids for pure filesystem entries
                     val id = path.hashCode().toLong()
 
                     songs += Song(
@@ -240,7 +213,6 @@ class MusicRepository(private val context: Context) {
                 ?.let { parseTrackNumber(it) } ?: 0
             val year = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_YEAR)
                 ?.take(4)?.toIntOrNull() ?: 0
-
             FileTags(title, artist, album, duration, track, year)
         } catch (_: Exception) {
             FileTags()
@@ -253,7 +225,6 @@ class MusicRepository(private val context: Context) {
     }
 
     private fun parseTrackNumber(raw: String): Int {
-        // Handles "3", "3/12", "03"
         val first = raw.split('/', ' ', limit = 2).firstOrNull() ?: return 0
         return first.trim().toIntOrNull()?.let { if (it >= 1000) it % 1000 else it } ?: 0
     }
@@ -284,29 +255,5 @@ class MusicRepository(private val context: Context) {
     private fun fileNameTitle(path: String?): String {
         if (path == null) return "Unknown"
         return File(path).nameWithoutExtension
-    }
-
-    private fun sortSongs(songs: List<Song>, mode: SortMode): List<Song> {
-        return when (mode) {
-            SortMode.TITLE -> songs.sortedWith(
-                compareBy(String.CASE_INSENSITIVE_ORDER) { it.title }
-            )
-            SortMode.ARTIST -> songs.sortedWith(
-                compareBy<Song, String>(String.CASE_INSENSITIVE_ORDER) { it.artist }
-                    .thenBy(String.CASE_INSENSITIVE_ORDER) { it.album }
-                    .thenBy { it.trackNumber }
-                    .thenBy(String.CASE_INSENSITIVE_ORDER) { it.title }
-            )
-            SortMode.ALBUM -> songs.sortedWith(
-                compareBy<Song, String>(String.CASE_INSENSITIVE_ORDER) { it.album }
-                    .thenBy { it.trackNumber }
-                    .thenBy(String.CASE_INSENSITIVE_ORDER) { it.title }
-            )
-            SortMode.TRACK -> songs.sortedWith(
-                compareBy<Song, String>(String.CASE_INSENSITIVE_ORDER) { it.album }
-                    .thenBy { it.trackNumber }
-                    .thenBy(String.CASE_INSENSITIVE_ORDER) { it.title }
-            )
-        }
     }
 }

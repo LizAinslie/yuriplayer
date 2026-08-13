@@ -1,7 +1,9 @@
 package capital.yuri.yuriplayer
 
 import android.app.Application
+import capital.yuri.yuriplayer.data.LibraryIndex
 import capital.yuri.yuriplayer.di.appModule
+import org.koin.android.ext.android.get
 import org.koin.android.ext.koin.androidContext
 import org.koin.android.ext.koin.androidLogger
 import org.koin.core.context.startKoin
@@ -16,5 +18,8 @@ class YuriPlayerApp : Application() {
             androidContext(this@YuriPlayerApp)
             modules(appModule)
         }
+
+        // Load disk cache immediately; refresh in background if stale
+        get<LibraryIndex>().bootstrap()
     }
 }

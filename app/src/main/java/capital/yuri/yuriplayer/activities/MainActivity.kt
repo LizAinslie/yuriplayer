@@ -10,6 +10,7 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -18,25 +19,35 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.LibraryMusic
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.SkipNext
 import androidx.compose.material.icons.filled.SkipPrevious
+import androidx.compose.material.icons.filled.MusicNote
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.NavigationBar
+import androidx.compose.material3.NavigationBarItem
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -46,24 +57,30 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
 import capital.yuri.yuriplayer.activities.ui.theme.YuriPlayerTheme
-import capital.yuri.yuriplayer.data.MusicRepository
+import capital.yuri.yuriplayer.data.AlbumItem
+import capital.yuri.yuriplayer.data.ArtistItem
+import capital.yuri.yuriplayer.data.LibraryIndex
 import capital.yuri.yuriplayer.data.Song
 import capital.yuri.yuriplayer.data.SortMode
 import capital.yuri.yuriplayer.player.PlayerController
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import org.koin.android.ext.android.inject
+import java.text.DateFormat
+import java.util.Date
 
 class MainActivity : ComponentActivity() {
 
-    private val musicRepository: MusicRepository by inject()
+    private val libraryIndex: LibraryIndex by inject()
     private val playerController: PlayerController by inject()
 
     private var isCarMode = false
 
     private val permissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestPermission()
-    ) { /* reload via sort/permission state */ }
+    ) { granted ->
+        if (granted) libraryIndex.refresh()
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -80,8 +97,8 @@ class MainActivity : ComponentActivity() {
         enableEdgeToEdge()
         setContent {
             YuriPlayerTheme {
-                PlayerScreen(
-                    repository = musicRepository,
+                YuriApp(
+                    library = libraryIndex,
                     player = playerController,
                     isCarMode = isCarMode
                 )
@@ -110,98 +127,113 @@ class MainActivity : ComponentActivity() {
     }
 }
 
+private enum class AppTab { Library, NowPlaying }
+private enum class LibraryTab { Songs, Albums, Artists }
+
 @Composable
-fun PlayerScreen(
-    repository: MusicRepository,
+fun YuriApp(
+    library: LibraryIndex,
     player: PlayerController,
     isCarMode: Boolean
 ) {
-    var songs by remember { mutableStateOf<List<Song>>(emptyList()) }
-    var hasPermission by remember { mutableStateOf(true) }
-    var loading by remember { mutableStateOf(true) }
-    var sortMode by remember { mutableStateOf(SortMode.TITLE) }
+    var tab by remember { mutableStateOf(AppTab.Library) }
 
-    var currentSong by remember { mutableStateOf<Song?>(null) }
-    var playing by remember { mutableStateOf(false) }
-
-    val connected by player.isConnected.collectAsState()
-
-    LaunchedEffect(connected) {
-        if (!connected) return@LaunchedEffect
-        while (isActive) {
-            currentSong = player.getCurrentSong()
-            playing = player.isPlayingNow()
-            delay(400)
-        }
-    }
-
-    LaunchedEffect(sortMode) {
-        loading = true
-        try {
-            songs = repository.getAllSongs(sortMode)
-            hasPermission = true
-        } catch (_: SecurityException) {
-            hasPermission = false
-        } finally {
-            loading = false
-        }
-    }
-
-    Scaffold(modifier = Modifier.fillMaxSize()) { innerPadding ->
-        Column(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(innerPadding)
-        ) {
-            Card(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(12.dp),
-                colors = CardDefaults.cardColors(
-                    containerColor = MaterialTheme.colorScheme.primaryContainer
+    Scaffold(
+        modifier = Modifier.fillMaxSize(),
+        bottomBar = {
+            NavigationBar {
+                NavigationBarItem(
+                    selected = tab == AppTab.Library,
+                    onClick = { tab = AppTab.Library },
+                    icon = { Icon(Icons.Default.LibraryMusic, contentDescription = "Library") },
+                    label = { Text("Library") }
                 )
+                NavigationBarItem(
+                    selected = tab == AppTab.NowPlaying,
+                    onClick = { tab = AppTab.NowPlaying },
+                    icon = { Icon(Icons.Default.MusicNote, contentDescription = "Now Playing") },
+                    label = { Text("Playing") }
+                )
+            }
+        }
+    ) { innerPadding ->
+        Box(modifier = Modifier.padding(innerPadding)) {
+            when (tab) {
+                AppTab.Library -> LibraryScreen(
+                    library = library,
+                    player = player,
+                    onPlaySong = { tab = AppTab.NowPlaying }
+                )
+                AppTab.NowPlaying -> NowPlayingScreen(player = player)
+            }
+        }
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun LibraryScreen(
+    library: LibraryIndex,
+    player: PlayerController,
+    onPlaySong: () -> Unit
+) {
+    val allSongs by library.songs.collectAsState()
+    val loading by library.isLoading.collectAsState()
+    val lastScanned by library.lastScannedAt.collectAsState()
+    val error by library.error.collectAsState()
+
+    var query by remember { mutableStateOf("") }
+    var sortMode by remember { mutableStateOf(SortMode.TITLE) }
+    var libraryTab by remember { mutableStateOf(LibraryTab.Songs) }
+
+    // Derive filtered lists in memory — no disk I/O
+    val songs = remember(allSongs, query, sortMode) {
+        library.search(query, sortMode)
+    }
+    val albums = remember(allSongs, query) { library.albums(query) }
+    val artists = remember(allSongs, query) { library.artists(query) }
+
+    Column(modifier = Modifier.fillMaxSize()) {
+        OutlinedTextField(
+            value = query,
+            onValueChange = { query = it },
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 12.dp, vertical = 8.dp),
+            singleLine = true,
+            placeholder = { Text("Search songs, albums, artists…") }
+        )
+
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 12.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Row(
+                modifier = Modifier
+                    .weight(1f)
+                    .horizontalScroll(rememberScrollState()),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
             ) {
-                Column(modifier = Modifier.padding(16.dp)) {
-                    Text(
-                        text = currentSong?.title ?: "Not playing",
-                        style = MaterialTheme.typography.titleMedium,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis
+                LibraryTab.entries.forEach { t ->
+                    FilterChip(
+                        selected = libraryTab == t,
+                        onClick = { libraryTab = t },
+                        label = { Text(t.name) }
                     )
-                    Text(
-                        text = currentSong?.artist ?: "",
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.7f),
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis
-                    )
-
-                    Spacer(modifier = Modifier.height(12.dp))
-
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceEvenly,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        IconButton(onClick = { player.skipToPrevious() }) {
-                            Icon(Icons.Default.SkipPrevious, contentDescription = "Previous")
-                        }
-
-                        IconButton(onClick = { player.togglePlayPause() }) {
-                            Icon(
-                                if (playing) Icons.Default.Pause else Icons.Default.PlayArrow,
-                                contentDescription = if (playing) "Pause" else "Play"
-                            )
-                        }
-
-                        IconButton(onClick = { player.skipToNext() }) {
-                            Icon(Icons.Default.SkipNext, contentDescription = "Next")
-                        }
-                    }
                 }
             }
+            IconButton(onClick = { library.refresh() }) {
+                if (loading) {
+                    CircularProgressIndicator(modifier = Modifier.height(20.dp))
+                } else {
+                    Icon(Icons.Default.Refresh, contentDescription = "Refresh library")
+                }
+            }
+        }
 
-            // Sort controls
+        if (libraryTab == LibraryTab.Songs) {
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -226,45 +258,131 @@ fun PlayerScreen(
                     )
                 }
             }
+        }
 
-            Text(
-                text = if (loading) "Scanning library…" else "${songs.size} tracks",
-                style = MaterialTheme.typography.labelMedium,
-                modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
-                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
-            )
+        val statusText = when {
+            error != null -> error!!
+            loading && allSongs.isEmpty() -> "Scanning library…"
+            lastScanned > 0 -> {
+                val whenStr = DateFormat.getDateTimeInstance(DateFormat.SHORT, DateFormat.SHORT)
+                    .format(Date(lastScanned))
+                "${allSongs.size} tracks · updated $whenStr"
+            }
+            else -> "${allSongs.size} tracks"
+        }
+        Text(
+            text = statusText,
+            style = MaterialTheme.typography.labelMedium,
+            modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
+            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
+        )
 
-            when {
-                !hasPermission -> {
+        when (libraryTab) {
+            LibraryTab.Songs -> {
+                if (songs.isEmpty() && !loading) {
                     Text(
-                        text = "Storage permission required to read local music",
-                        modifier = Modifier.padding(16.dp),
-                        color = MaterialTheme.colorScheme.error
-                    )
-                }
-                loading -> {
-                    Text(
-                        text = "Reading tags / scanning folders…",
+                        text = "No songs match. Put files under Music/ or Music/library/.",
                         modifier = Modifier.padding(16.dp)
                     )
-                }
-                songs.isEmpty() -> {
-                    Text(
-                        text = "No music found. Put files in Music/ or Download/ " +
-                                "(FLAC, MP3, OGG, M4A, WAV…).",
-                        modifier = Modifier.padding(16.dp)
-                    )
-                }
-                else -> {
+                } else {
                     LazyColumn(modifier = Modifier.fillMaxSize()) {
-                        itemsIndexed(songs, key = { _, song -> song.id to song.path }) { index, song ->
-                            SongRow(song = song) {
+                        itemsIndexed(songs, key = { _, s -> s.id to s.path }) { index, song ->
+                            SongRow(song) {
                                 player.setPlaylist(songs, index)
                                 player.play()
+                                onPlaySong()
                             }
                         }
                     }
                 }
+            }
+            LibraryTab.Albums -> {
+                LazyColumn(modifier = Modifier.fillMaxSize()) {
+                    items(albums, key = { it.name + it.artist }) { album ->
+                        AlbumRow(album) {
+                            player.setPlaylist(album.songs, 0)
+                            player.play()
+                            onPlaySong()
+                        }
+                    }
+                }
+            }
+            LibraryTab.Artists -> {
+                LazyColumn(modifier = Modifier.fillMaxSize()) {
+                    items(artists, key = { it.name }) { artist ->
+                        ArtistRow(artist) {
+                            player.setPlaylist(artist.songs, 0)
+                            player.play()
+                            onPlaySong()
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+fun NowPlayingScreen(player: PlayerController) {
+    var currentSong by remember { mutableStateOf<Song?>(null) }
+    var playing by remember { mutableStateOf(false) }
+    val connected by player.isConnected.collectAsState()
+
+    LaunchedEffect(connected) {
+        if (!connected) return@LaunchedEffect
+        while (isActive) {
+            currentSong = player.getCurrentSong()
+            playing = player.isPlayingNow()
+            delay(400)
+        }
+    }
+
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .padding(24.dp),
+        verticalArrangement = Arrangement.Center,
+        horizontalAlignment = Alignment.CenterHorizontally
+    ) {
+        Text(
+            text = currentSong?.title ?: "Nothing playing",
+            style = MaterialTheme.typography.headlineSmall,
+            maxLines = 2,
+            overflow = TextOverflow.Ellipsis
+        )
+        Spacer(modifier = Modifier.height(8.dp))
+        Text(
+            text = currentSong?.artist ?: "",
+            style = MaterialTheme.typography.titleMedium,
+            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f),
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis
+        )
+        Text(
+            text = currentSong?.album ?: "",
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f),
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis
+        )
+
+        Spacer(modifier = Modifier.height(32.dp))
+
+        Row(
+            horizontalArrangement = Arrangement.spacedBy(24.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            IconButton(onClick = { player.skipToPrevious() }) {
+                Icon(Icons.Default.SkipPrevious, contentDescription = "Previous")
+            }
+            IconButton(onClick = { player.togglePlayPause() }) {
+                Icon(
+                    if (playing) Icons.Default.Pause else Icons.Default.PlayArrow,
+                    contentDescription = if (playing) "Pause" else "Play"
+                )
+            }
+            IconButton(onClick = { player.skipToNext() }) {
+                Icon(Icons.Default.SkipNext, contentDescription = "Next")
             }
         }
     }
@@ -293,6 +411,40 @@ fun SongRow(song: Song, onClick: () -> Unit) {
             color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
             maxLines = 1,
             overflow = TextOverflow.Ellipsis
+        )
+    }
+}
+
+@Composable
+fun AlbumRow(album: AlbumItem, onClick: () -> Unit) {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onClick)
+            .padding(horizontal = 16.dp, vertical = 12.dp)
+    ) {
+        Text(album.name, style = MaterialTheme.typography.bodyLarge, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        Text(
+            "${album.artist} · ${album.trackCount} tracks",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
+        )
+    }
+}
+
+@Composable
+fun ArtistRow(artist: ArtistItem, onClick: () -> Unit) {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onClick)
+            .padding(horizontal = 16.dp, vertical = 12.dp)
+    ) {
+        Text(artist.name, style = MaterialTheme.typography.bodyLarge, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        Text(
+            "${artist.albumCount} albums · ${artist.trackCount} tracks",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
         )
     }
 }
