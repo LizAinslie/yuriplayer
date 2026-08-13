@@ -193,7 +193,6 @@ fun YuriApp(
     BackHandler(enabled = playerExpanded) { playerExpanded = false }
 
     Box(modifier = Modifier.fillMaxSize()) {
-        // Library shell stays mounted underneath so the sheet can slide over it
         Scaffold(
             modifier = Modifier.fillMaxSize(),
             topBar = {
@@ -260,7 +259,6 @@ fun YuriApp(
             }
         }
 
-        // Full-screen now-playing sheet: only fully open or fully closed
         AnimatedVisibility(
             visible = playerExpanded,
             modifier = Modifier
@@ -294,7 +292,9 @@ fun YuriApp(
                 onMoveHot = { f, t -> player.moveHot(f, t) },
                 onMoveCold = { f, t -> player.moveCold(f, t) },
                 onRemoveHot = { player.removeFromHot(it) },
-                onRemoveCold = { player.removeFromCold(it) }
+                onRemoveCold = { player.removeFromCold(it) },
+                onPlayHistorySong = { s -> player.playSource(listOf(s), 0) },
+                onClearHistory = { player.clearHistory() }
             )
         }
     }
