@@ -8,23 +8,18 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlin.random.Random
 
 /**
- * Dual-queue with consume-on-play semantics.
- *
- * - Tracks are **removed** from hot/cold as they finish (or are skipped past).
- * - [coldOriginal] is the refill source for Repeat all (reshuffled when shuffle is on).
- * - [floatingCurrent] holds a track pulled out of the lists (e.g. after Clear) while
- *   it continues playing; next advance goes to cold.
+ * Dual-queue with consume-on-play semantics + cold [ColdSource] tracking.
  */
 class QueueManager {
 
     private val hotQueue = mutableListOf<Song>()
     private var coldOriginal: List<Song> = emptyList()
     private val coldQueue = mutableListOf<Song>()
+    private var coldSource: ColdSource? = null
     private var lane = QueueLane.COLD
     private var indexInLane = -1
     private var shuffleEnabled = false
     private var repeatMode = RepeatMode.OFF
-    /** Playing but not in any list (cleared out of hot, etc.). */
     private var floatingCurrent: Song? = null
 
     private val _snapshot = MutableStateFlow(QueueSnapshot())
@@ -40,10 +35,10 @@ class QueueManager {
 
     fun getSnapshot(): QueueSnapshot = _snapshot.value
 
+    fun coldSource(): ColdSource? = coldSource
+
     fun peekNext(): Song? {
         if (repeatMode == RepeatMode.ONE) return currentSong()
-        val cur = currentSong()
-        // Next after current in hot
         if (floatingCurrent != null) {
             if (hotQueue.isNotEmpty()) return hotQueue.first()
             if (coldQueue.isNotEmpty()) return coldQueue.first()
@@ -54,8 +49,8 @@ class QueueManager {
         }
         when (lane) {
             QueueLane.HOT -> {
-                if (indexInLane in hotQueue.indices) {
-                    if (indexInLane < hotQueue.lastIndex) return hotQueue[indexInLane + 1]
+                if (indexInLane in hotQueue.indices && indexInLane < hotQueue.lastIndex) {
+                    return hotQueue[indexInLane + 1]
                 }
                 if (coldQueue.isNotEmpty()) return coldQueue.first()
                 if (repeatMode == RepeatMode.COLD && coldOriginal.isNotEmpty()) {
@@ -83,6 +78,7 @@ class QueueManager {
             hotQueue = hotQueue.toList(),
             coldQueue = coldQueue.toList(),
             coldOriginal = coldOriginal,
+            coldSource = coldSource,
             lane = lane,
             indexInLane = indexInLane,
             shuffleEnabled = shuffleEnabled,
@@ -96,6 +92,7 @@ class QueueManager {
         coldOriginal = snap.coldOriginal.ifEmpty { snap.coldQueue }
         coldQueue.clear()
         coldQueue.addAll(snap.coldQueue)
+        coldSource = snap.coldSource
         lane = snap.lane
         indexInLane = snap.indexInLane
         shuffleEnabled = snap.shuffleEnabled
@@ -107,13 +104,18 @@ class QueueManager {
         }
         if (max >= 0) indexInLane = indexInLane.coerceIn(0, max)
         publish()
-        Log.i(TAG, "restore lane=$lane index=$indexInLane queue=${hotQueue.size} cold=${coldQueue.size}")
+        Log.i(TAG, "restore lane=$lane source=${coldSource?.type}:${coldSource?.id}")
     }
 
-    fun playSource(songs: List<Song>, startIndex: Int = 0) {
+    fun playSource(
+        songs: List<Song>,
+        startIndex: Int = 0,
+        source: ColdSource? = null
+    ) {
         if (songs.isEmpty()) return
-        Log.i(TAG, "playSource size=${songs.size} start=$startIndex")
+        Log.i(TAG, "playSource size=${songs.size} start=$startIndex source=$source")
         floatingCurrent = null
+        coldSource = source
         coldOriginal = songs.toList()
         coldQueue.clear()
         if (shuffleEnabled) {
@@ -132,37 +134,70 @@ class QueueManager {
         publish()
     }
 
+    /**
+     * Push an updated track list for the **active** cold source (playlist grew, etc.).
+     * Keeps the current track; drops removed tracks from remaining cold;
+     * appends newly added tracks. No-op if [sourceId] does not match.
+     */
+    fun updateColdFromSource(songs: List<Song>, sourceId: String): Boolean {
+        val src = coldSource ?: return false
+        if (!src.id.equals(sourceId, ignoreCase = true)) return false
+        if (songs.isEmpty()) return false
+
+        val current = currentSong()
+        val newKeys = songs.map { songKey(it) }.toSet()
+
+        coldOriginal = songs.toList()
+
+        // Drop remaining cold items no longer in source
+        coldQueue.removeAll { songKey(it) !in newKeys }
+
+        val present = coldQueue.map { songKey(it) }.toMutableSet()
+        current?.let { present.add(songKey(it)) }
+
+        // Append brand-new tracks (end of remaining cold)
+        songs.forEach { s ->
+            val k = songKey(s)
+            if (k !in present) {
+                coldQueue.add(s)
+                present.add(k)
+            }
+        }
+
+        // Re-bind index if still on cold lane
+        if (lane == QueueLane.COLD && floatingCurrent == null && current != null) {
+            val idx = coldQueue.indexOfFirst { sameSong(it, current) }
+            if (idx >= 0) indexInLane = idx
+            else if (coldQueue.isNotEmpty()) indexInLane = indexInLane.coerceIn(0, coldQueue.lastIndex)
+            else indexInLane = -1
+        }
+
+        publish()
+        Log.i(TAG, "updateColdFromSource id=$sourceId original=${coldOriginal.size} cold=${coldQueue.size}")
+        return true
+    }
+
     fun addToQueue(song: Song) {
-        Log.i(TAG, "queue add path=${song.path} title='${song.displayTitle}'")
         hotQueue.add(song)
         publish()
     }
 
     fun addToQueue(songs: List<Song>) {
         if (songs.isEmpty()) return
-        Log.i(TAG, "queue add ${songs.size} tracks")
         hotQueue.addAll(songs)
         publish()
     }
 
-    /**
-     * Clear pending user-queue items.
-     * If currently playing from hot, that track is **pulled out** (floating) so it
-     * keeps playing; it is not in the list anymore. Next advance → cold.
-     * @return always false (never forces an immediate reload).
-     */
     fun clearHotQueue(): Boolean {
         if (lane == QueueLane.HOT && indexInLane in hotQueue.indices) {
             floatingCurrent = hotQueue[indexInLane]
             hotQueue.clear()
             indexInLane = -1
             publish()
-            Log.i(TAG, "clearHot → floating '${floatingCurrent?.displayTitle}'")
             return false
         }
         hotQueue.clear()
         publish()
-        Log.i(TAG, "clearHot")
         return false
     }
 
@@ -179,7 +214,6 @@ class QueueManager {
                 }
                 index < indexInLane -> indexInLane--
                 removingCurrent -> {
-                    // fall through — caller reloads next
                     if (indexInLane > hotQueue.lastIndex) indexInLane = hotQueue.lastIndex
                 }
             }
@@ -266,9 +300,7 @@ class QueueManager {
         val current = currentSong()
         if (!enabled) {
             if (!shuffleEnabled) return
-            Log.i(TAG, "setShuffle OFF")
             shuffleEnabled = false
-            // Rebuild remaining cold from original order, keep current at front if in cold
             coldQueue.clear()
             coldQueue.addAll(coldOriginal)
             if (current != null && lane == QueueLane.COLD && floatingCurrent == null) {
@@ -278,7 +310,6 @@ class QueueManager {
             publish()
             return
         }
-        Log.i(TAG, "setShuffle ON (reshuffle)")
         shuffleEnabled = true
         val shuffled = coldOriginal.shuffled(Random(System.nanoTime())).toMutableList()
         if (current != null && (lane == QueueLane.COLD || floatingCurrent != null)) {
@@ -305,7 +336,6 @@ class QueueManager {
             RepeatMode.ONE -> RepeatMode.COLD
             RepeatMode.COLD -> RepeatMode.OFF
         }
-        Log.i(TAG, "repeat -> $repeatMode")
         publish()
     }
 
@@ -314,44 +344,24 @@ class QueueManager {
         publish()
     }
 
-    /**
-     * Advance: consume the current track from its list, then pick the next.
-     * Repeat-one (natural end) reloads without consuming.
-     */
     fun advance(userInitiated: Boolean): AdvanceResult {
-        Log.i(
-            TAG,
-            "advance user=$userInitiated repeat=$repeatMode lane=$lane index=$indexInLane " +
-                "queue=${hotQueue.size} cold=${coldQueue.size} floating=${floatingCurrent != null} " +
-                "path=${currentSong()?.path}"
-        )
-
         if (repeatMode == RepeatMode.ONE && !userInitiated) {
-            val song = currentSong()
-            Log.i(TAG, "repeat ONE path=${song?.path}")
-            return AdvanceResult(song = song, reload = true)
+            return AdvanceResult(song = currentSong(), reload = true)
         }
 
-        // Consume current from list
         if (floatingCurrent != null) {
             floatingCurrent = null
         } else {
             when (lane) {
                 QueueLane.HOT -> {
-                    if (indexInLane in hotQueue.indices) {
-                        hotQueue.removeAt(indexInLane)
-                        // indexInLane now points at what was next, or past end
-                    }
+                    if (indexInLane in hotQueue.indices) hotQueue.removeAt(indexInLane)
                 }
                 QueueLane.COLD -> {
-                    if (indexInLane in coldQueue.indices) {
-                        coldQueue.removeAt(indexInLane)
-                    }
+                    if (indexInLane in coldQueue.indices) coldQueue.removeAt(indexInLane)
                 }
             }
         }
 
-        // Prefer remaining hot queue
         if (hotQueue.isNotEmpty()) {
             lane = QueueLane.HOT
             indexInLane = 0
@@ -359,22 +369,18 @@ class QueueManager {
             return AdvanceResult(song = hotQueue[0])
         }
 
-        // Then remaining cold
         if (coldQueue.isNotEmpty()) {
             lane = QueueLane.COLD
-            // After remove, same index is the next track; clamp
             indexInLane = indexInLane.coerceIn(0, coldQueue.lastIndex)
             publish()
             return AdvanceResult(song = coldQueue[indexInLane])
         }
 
-        // Refill cold on Repeat all
         if (repeatMode == RepeatMode.COLD && coldOriginal.isNotEmpty()) {
             repopulateCold()
             lane = QueueLane.COLD
             indexInLane = 0
             publish()
-            Log.i(TAG, "repeat all refill size=${coldQueue.size} shuffle=$shuffleEnabled")
             return AdvanceResult(song = coldQueue[0])
         }
 
@@ -384,7 +390,6 @@ class QueueManager {
     }
 
     fun skipPrevious(currentPositionMs: Long): AdvanceResult {
-        // Consumed tracks are gone — only restart current if >3s in, else no-op restart
         return AdvanceResult(song = currentSong(), seekToStart = true)
     }
 
@@ -408,6 +413,9 @@ class QueueManager {
         if (a.path != null && b.path != null) return a.path == b.path
         return a.contentUri == b.contentUri || a.id == b.id
     }
+
+    private fun songKey(s: Song): String =
+        s.path?.lowercase() ?: s.contentUri.toString()
 
     data class AdvanceResult(
         val song: Song? = null,

@@ -14,6 +14,27 @@ enum class QueueLane {
     COLD
 }
 
+enum class ColdSourceType {
+    ALBUM,
+    PLAYLIST,
+    ARTIST,
+    SONGS,
+    UNKNOWN
+}
+
+/**
+ * Where the cold queue was initialized from.
+ * [id] is stable: albumKey, playlist id, artist key, etc.
+ */
+data class ColdSource(
+    val type: ColdSourceType,
+    val id: String,
+    val title: String? = null
+) {
+    fun matches(type: ColdSourceType, id: String): Boolean =
+        this.type == type && this.id.equals(id, ignoreCase = true)
+}
+
 /**
  * Snapshot of the dual-queue system for UI + persistence.
  *
@@ -24,6 +45,7 @@ data class QueueSnapshot(
     val hotQueue: List<Song> = emptyList(),
     val coldQueue: List<Song> = emptyList(),
     val coldOriginal: List<Song> = emptyList(),
+    val coldSource: ColdSource? = null,
     val lane: QueueLane = QueueLane.COLD,
     val indexInLane: Int = -1,
     val shuffleEnabled: Boolean = false,
@@ -35,7 +57,12 @@ data class QueueSnapshot(
             QueueLane.COLD -> coldQueue.getOrNull(indexInLane)
         }
 
-    /** Flat list for simple UIs: hot first, then cold. */
     val flatQueue: List<Song>
         get() = hotQueue + coldQueue
+
+    fun isPlayingFromAlbum(albumKey: String): Boolean =
+        coldSource?.matches(ColdSourceType.ALBUM, albumKey) == true
+
+    fun isPlayingFromPlaylist(playlistId: String): Boolean =
+        coldSource?.matches(ColdSourceType.PLAYLIST, playlistId) == true
 }
