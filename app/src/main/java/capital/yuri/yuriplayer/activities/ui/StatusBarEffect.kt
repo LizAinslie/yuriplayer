@@ -13,13 +13,15 @@ import androidx.core.view.WindowCompat
 
 /**
  * Tints the status bar to [color] while this composition is active.
- * Works on API 27 (window statusBarColor) — not ROM Material You,
- * just classic system bar coloring + light/dark icon contrast.
+ * Icon contrast is derived from [color] luminance so dark stages get light
+ * icons and light stages get dark icons (works for future light theme too).
  */
 @Composable
 fun ThemedStatusBar(color: Color, enabled: Boolean = true) {
     val view = LocalView.current
     if (!enabled || view.isInEditMode) return
+
+    val lightIcons = color.luminance() > 0.5f
 
     DisposableEffect(color, enabled) {
         val activity = view.context as? Activity
@@ -32,9 +34,10 @@ fun ThemedStatusBar(color: Color, enabled: Boolean = true) {
             val previousLight = controller.isAppearanceLightStatusBars
 
             window.statusBarColor = color.toArgb()
-            controller.isAppearanceLightStatusBars = color.luminance() > 0.5f
+            controller.isAppearanceLightStatusBars = lightIcons
 
             onDispose {
+                // Leave a sensible default; Theme SideEffect will re-apply on next frame
                 window.statusBarColor = previous
                 controller.isAppearanceLightStatusBars = previousLight
             }
@@ -45,8 +48,7 @@ fun ThemedStatusBar(color: Color, enabled: Boolean = true) {
         val activity = view.context as? Activity ?: return@SideEffect
         val window = activity.window
         window.statusBarColor = color.toArgb()
-        WindowCompat.getInsetsController(window, view).isAppearanceLightStatusBars =
-            color.luminance() > 0.5f
+        WindowCompat.getInsetsController(window, view).isAppearanceLightStatusBars = lightIcons
     }
 }
 
