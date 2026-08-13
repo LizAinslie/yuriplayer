@@ -213,7 +213,6 @@ fun YuriApp(
     BackHandler(enabled = !playerExpanded && detail != null) { detail = null }
 
     fun playAlbumFrom(songs: List<Song>, index: Int) {
-        // Album page: cold queue = album, start at track, repeat all by default
         player.setRepeatMode(RepeatMode.COLD)
         player.playSource(songs, index)
     }
@@ -352,6 +351,7 @@ fun YuriApp(
                 onMoveColdToHot = { player.moveColdToHot(it) },
                 onClearHotQueue = { player.clearHotQueue() },
                 onPlayHistorySong = { s -> player.playSource(listOf(s), 0) },
+                onAddToQueue = { player.addToHotQueue(it) },
                 onClearHistory = { player.clearHistory() }
             )
         }
