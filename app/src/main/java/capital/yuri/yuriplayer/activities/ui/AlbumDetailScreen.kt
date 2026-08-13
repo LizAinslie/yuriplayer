@@ -3,7 +3,6 @@ package capital.yuri.yuriplayer.activities.ui
 import android.widget.Toast
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
@@ -35,7 +34,6 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -171,7 +169,6 @@ fun AlbumDetailScreen(
                 }
             }
 
-            // Thin collapsed bar
             CollapsedSpotifyBar(
                 album = album,
                 fraction = collapseFraction,
@@ -198,37 +195,35 @@ fun AlbumDetailScreen(
                     onDismissRequest = { showMenu = false },
                     sheetState = rememberModalBottomSheetState()
                 ) {
-                    Text(
-                        album.displayName,
-                        style = MaterialTheme.typography.titleMedium,
-                        modifier = Modifier.padding(horizontal = 24.dp, vertical = 8.dp)
+                    MediaSheetHeader(
+                        song = album.songs.firstOrNull(),
+                        title = album.displayName,
+                        subtitle = album.displayArtist
                     )
-                    TextButton(
-                        onClick = {
-                            onAddAlbumToQueue(album.songs)
-                            Toast.makeText(
-                                context,
-                                "Queued ${album.songs.size} tracks",
-                                Toast.LENGTH_SHORT
-                            ).show()
-                            showMenu = false
-                        },
-                        modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp)
-                    ) {
-                        Text("Add to queue", modifier = Modifier.fillMaxWidth())
+                    MediaSheetItem("Add to queue") {
+                        onAddAlbumToQueue(album.songs)
+                        Toast.makeText(
+                            context,
+                            "Queued ${album.songs.size} tracks",
+                            Toast.LENGTH_SHORT
+                        ).show()
+                        showMenu = false
                     }
-                    Spacer(modifier = Modifier.height(32.dp))
+                    MediaSheetItem("Go to artist") {
+                        showMenu = false
+                        onOpenArtist()
+                    }
+                    MediaSheetItem("Add to playlist") {
+                        showMenu = false
+                        Toast.makeText(context, "Playlists coming soon", Toast.LENGTH_SHORT).show()
+                    }
+                    MediaSheetBottomPad()
                 }
             }
         }
     }
 }
 
-/**
- * Expanded layout modeled on Spotify:
- * centered art → title → artist chip → type · year · tracks →
- * heart · ··· · shuffle · big play
- */
 @Composable
 private fun SpotifyAlbumHero(
     album: AlbumItem,
@@ -266,7 +261,6 @@ private fun SpotifyAlbumHero(
 
         Spacer(modifier = Modifier.height(20.dp))
 
-        // Title — left aligned block under art (Spotify stacks left on phone)
         Column(
             modifier = Modifier.fillMaxWidth(),
             horizontalAlignment = Alignment.Start
@@ -282,7 +276,6 @@ private fun SpotifyAlbumHero(
 
             Spacer(modifier = Modifier.height(10.dp))
 
-            // Artist row with small cover circle
             Row(
                 verticalAlignment = Alignment.CenterVertically,
                 modifier = Modifier
@@ -313,7 +306,6 @@ private fun SpotifyAlbumHero(
 
             Spacer(modifier = Modifier.height(14.dp))
 
-            // Actions: ♡  ···     shuffle   [play]
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 verticalAlignment = Alignment.CenterVertically
@@ -444,7 +436,6 @@ private fun groupByDisc(songs: List<Song>): Map<Int?, List<Song>> {
     return grouped.toSortedMap(compareBy { it ?: 1 })
 }
 
-/** Spotify-style label: Album / EP / Single (we still expose LP as Album). */
 private fun guessReleaseType(trackCount: Int): String = when {
     trackCount <= 3 -> "Single"
     trackCount <= 8 -> "EP"

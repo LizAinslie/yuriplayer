@@ -5,6 +5,7 @@ import android.app.Activity
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Bundle
+import android.view.WindowManager
 import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
@@ -93,6 +94,12 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
+        // Never pop the soft keyboard on cold start
+        window.setSoftInputMode(
+            WindowManager.LayoutParams.SOFT_INPUT_STATE_ALWAYS_HIDDEN or
+                WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE
+        )
+
         isCarMode = intent?.action == "capital.yuri.yuriplayer.action.CAR_MODE" ||
                 intent?.getBooleanExtra("car_mode", false) == true
         openPlayerState.value = intent?.getBooleanExtra(EXTRA_OPEN_PLAYER, false) == true
@@ -171,7 +178,18 @@ fun YuriApp(
 
     var topTab by remember { mutableStateOf(TopTab.Library) }
     var playerExpanded by remember { mutableStateOf(false) }
-    var detail by remember { mutableStateOf<DetailRoute?>(null) }
+    // Stack so album/artist/playlist layers return to the previous page
+    var detailStack by remember { mutableStateOf<List<DetailRoute>>(emptyList()) }
+
+    fun pushDetail(route: DetailRoute) {
+        detailStack = detailStack + route
+    }
+
+    fun popDetail() {
+        if (detailStack.isNotEmpty()) detailStack = detailStack.dropLast(1)
+    }
+
+    val detail = detailStack.lastOrNull()
 
     LaunchedEffect(openPlayerInitially) {
         if (openPlayerInitially) {
@@ -214,7 +232,7 @@ fun YuriApp(
     }
 
     BackHandler(enabled = playerExpanded) { playerExpanded = false }
-    BackHandler(enabled = !playerExpanded && detail != null) { detail = null }
+    BackHandler(enabled = !playerExpanded && detailStack.isNotEmpty()) { popDetail() }
 
     fun playAlbumFrom(album: AlbumItem, songs: List<Song>, index: Int) {
         val key = albumKey(album.name, album.artist)
@@ -228,6 +246,34 @@ fun YuriApp(
                 title = album.name
             )
         )
+    }
+
+    fun openAlbumForSong(song: Song) {
+        val key = albumKey(song.album, song.effectiveAlbumArtist)
+        val found = library.albums().firstOrNull {
+            albumKey(it.name, it.artist) == key
+        } ?: library.albums().firstOrNull {
+            it.name.equals(song.album, ignoreCase = true)
+        }
+        if (found != null) {
+            playerExpanded = false
+            pushDetail(DetailRoute.Album(found))
+        } else {
+            Toast.makeText(context, "Album not found in library", Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    fun openArtistForSong(song: Song) {
+        val name = song.effectiveAlbumArtist ?: song.artist
+        if (name.isNullOrBlank()) {
+            Toast.makeText(context, "No artist tag", Toast.LENGTH_SHORT).show()
+            return
+        }
+        val found = library.artists().firstOrNull {
+            it.name.equals(name, ignoreCase = true)
+        } ?: ArtistItem(name = name, trackCount = 0, albumCount = 0, songs = emptyList())
+        playerExpanded = false
+        pushDetail(DetailRoute.Artist(found))
     }
 
     Box(modifier = Modifier.fillMaxSize()) {
@@ -268,7 +314,7 @@ fun YuriApp(
                                     }
                                 }
                             }
-                            IconButton(onClick = { detail = DetailRoute.Settings }) {
+                            IconButton(onClick = { pushDetail(DetailRoute.Settings) }) {
                                 Icon(Icons.Default.Settings, contentDescription = "Settings")
                             }
                         }
@@ -290,7 +336,6 @@ fun YuriApp(
                 when (val d = detail) {
                     is DetailRoute.Album -> {
                         val key = albumKey(d.album.name, d.album.artist)
-                        // Keep cold queue in sync if library rescan adds tracks
                         LaunchedEffect(d.album.songs.size, key) {
                             player.updateColdFromSource(d.album.songs, key)
                         }
@@ -299,25 +344,20 @@ fun YuriApp(
                             isSourceActive = snapshot.isPlayingFromAlbum(key),
                             isPlaying = playing,
                             shuffleEnabled = snapshot.shuffleEnabled,
-                            onBack = { detail = null },
+                            onBack = { popDetail() },
                             onPlayAlbum = { songs, index -> playAlbumFrom(d.album, songs, index) },
                             onTogglePlayPause = { player.togglePlayPause() },
                             onToggleShuffle = { player.toggleShuffle() },
                             onFavorite = {
-                                Toast.makeText(
-                                    context,
-                                    "My Stuff coming soon",
-                                    Toast.LENGTH_SHORT
-                                ).show()
+                                Toast.makeText(context, "My Stuff coming soon", Toast.LENGTH_SHORT).show()
                             },
                             onOpenArtist = {
                                 val name = d.album.artist ?: return@AlbumDetailScreen
-                                detail = DetailRoute.Artist(
-                                    ArtistItem(
-                                        name = name,
-                                        trackCount = 0,
-                                        albumCount = 0,
-                                        songs = emptyList()
+                                pushDetail(
+                                    DetailRoute.Artist(
+                                        library.artists().firstOrNull {
+                                            it.name.equals(name, ignoreCase = true)
+                                        } ?: ArtistItem(name, 0, 0, emptyList())
                                     )
                                 )
                             },
@@ -332,10 +372,9 @@ fun YuriApp(
                         ArtistDetailScreen(
                             artist = d.artist,
                             albums = albums,
-                            onBack = { detail = null },
-                            onOpenAlbum = { detail = DetailRoute.Album(it) },
+                            onBack = { popDetail() },
+                            onOpenAlbum = { pushDetail(DetailRoute.Album(it)) },
                             onPlaySongs = { songs, i ->
-                                // Artist play: no stable album source
                                 player.setRepeatMode(RepeatMode.COLD)
                                 player.playSource(
                                     songs, i,
@@ -344,7 +383,7 @@ fun YuriApp(
                             }
                         )
                     }
-                    is DetailRoute.Settings -> SettingsScreen(onBack = { detail = null })
+                    is DetailRoute.Settings -> SettingsScreen(onBack = { popDetail() })
                     null -> when (topTab) {
                         TopTab.Home -> PlaceholderScreen("Home", "Pin playlists and shortcuts here later.")
                         TopTab.Library -> LibraryScreen(
@@ -352,8 +391,8 @@ fun YuriApp(
                             onPlay = { songs, index -> player.playSource(songs, index) },
                             onAddToQueue = { player.addToHotQueue(it) },
                             onAddAlbumToQueue = { player.addToHotQueue(it) },
-                            onOpenAlbum = { detail = DetailRoute.Album(it) },
-                            onOpenArtist = { detail = DetailRoute.Artist(it) }
+                            onOpenAlbum = { pushDetail(DetailRoute.Album(it)) },
+                            onOpenArtist = { pushDetail(DetailRoute.Artist(it)) }
                         )
                         TopTab.MyStuff -> PlaceholderScreen(
                             "My Stuff",
@@ -402,7 +441,12 @@ fun YuriApp(
                 onClearHotQueue = { player.clearHotQueue() },
                 onPlayHistorySong = { s -> player.playSource(listOf(s), 0) },
                 onAddToQueue = { player.addToHotQueue(it) },
-                onClearHistory = { player.clearHistory() }
+                onClearHistory = { player.clearHistory() },
+                onGoToAlbum = { openAlbumForSong(it) },
+                onGoToArtist = { openArtistForSong(it) },
+                onAddToPlaylist = {
+                    Toast.makeText(context, "Playlists coming soon", Toast.LENGTH_SHORT).show()
+                }
             )
         }
     }
