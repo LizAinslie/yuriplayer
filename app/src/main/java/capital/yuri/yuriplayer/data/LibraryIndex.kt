@@ -113,7 +113,7 @@ class LibraryIndex(
                     it.artist.contains(q, ignoreCase = true)
             }
             .sortedWith(
-                compareBy(String.CASE_INSENSITIVE_ORDER) { it.artist }
+                compareBy<AlbumItem, String>(String.CASE_INSENSITIVE_ORDER) { it.artist }
                     .thenBy(String.CASE_INSENSITIVE_ORDER) { it.name }
             )
     }
