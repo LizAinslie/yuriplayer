@@ -134,10 +134,12 @@ fun NowPlayingScreen(
                     modifier = Modifier
                         .fillMaxSize()
                         .statusBarsPadding()
-                        .padding(horizontal = 16.dp, vertical = 8.dp)
+                        .navigationBarsPadding()
                 ) {
                     Box(
-                        modifier = Modifier.fillMaxWidth(),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 16.dp, vertical = 8.dp),
                         contentAlignment = Alignment.Center
                     ) {
                         IconButton(
@@ -153,6 +155,8 @@ fun NowPlayingScreen(
                             color = scheme.onBackground
                         )
                     }
+
+                    // Tabs + lists — preview sits outside this block
                     QueuePanel(
                         snapshot = snapshot,
                         onPlayItem = onPlayItem,
@@ -162,7 +166,22 @@ fun NowPlayingScreen(
                         onRemoveCold = onRemoveCold,
                         onPlayHistorySong = onPlayHistorySong,
                         onClearHistory = onClearHistory,
-                        modifier = Modifier.weight(1f)
+                        modifier = Modifier
+                            .weight(1f)
+                            .padding(horizontal = 16.dp)
+                    )
+
+                    // Shared preview under both tabs — tap returns to full now playing
+                    NowPlayingPreview(
+                        song = song,
+                        playing = playing,
+                        positionMs = positionMs,
+                        durationMs = durationMs,
+                        onToggle = onToggle,
+                        onOpen = { showQueue = false },
+                        enableSwipeUp = false,
+                        tonalElevation = 2.dp,
+                        shadowElevation = 4.dp
                     )
                 }
                 return@Surface
