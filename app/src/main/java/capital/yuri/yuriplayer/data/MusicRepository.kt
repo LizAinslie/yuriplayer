@@ -3,12 +3,17 @@ package capital.yuri.yuriplayer.data
 import android.content.ContentUris
 import android.content.Context
 import android.media.MediaMetadataRetriever
+import android.media.MediaScannerConnection
 import android.net.Uri
 import android.provider.MediaStore
+import android.util.Log
 import android.webkit.MimeTypeMap
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
 import java.io.File
+import java.util.concurrent.atomic.AtomicInteger
+import kotlin.coroutines.resume
 
 class MusicRepository(
     private val context: Context,
@@ -16,14 +21,22 @@ class MusicRepository(
 ) {
 
     companion object {
+        private const val TAG = "YuriPlayer.Library"
         private val AUDIO_EXTENSIONS = setOf(
             "flac", "mp3", "ogg", "opus", "m4a", "mp4", "aac",
             "wav", "aiff", "aif", "wma", "alac"
         )
         private const val COL_ALBUM_ARTIST = "album_artist"
+        private val SKIP_PATH_FRAGMENTS = listOf(
+            "/ringtones/", "/notifications/", "/alarms/",
+            "/ui/", "/system/media/"
+        )
     }
 
     suspend fun scanLibrary(): List<Song> = withContext(Dispatchers.IO) {
+        // ADB-pushed / freshly copied files are invisible to MediaStore until scanned.
+        requestMediaScan()
+
         val byKey = LinkedHashMap<String, Song>()
         queryMediaStore().forEach { song ->
             val key = song.path?.lowercase() ?: song.contentUri.toString()
@@ -33,7 +46,55 @@ class MusicRepository(
             val key = song.path?.lowercase() ?: return@forEach
             if (!byKey.containsKey(key)) byKey[key] = song
         }
+        Log.i(TAG, "scan complete: ${byKey.size} tracks")
         byKey.values.toList()
+    }
+
+    /** Kick MediaScanner on configured roots so new files show up in MediaStore. */
+    private suspend fun requestMediaScan() {
+        val roots = settings.getScanRoots().filter { it.exists() }
+        if (roots.isEmpty()) return
+
+        val paths = mutableListOf<String>()
+        roots.forEach { root ->
+            paths += root.absolutePath
+            try {
+                root.walkTopDown().maxDepth(8).onFail { _, _ -> }
+                    .filter { it.isFile && isAudioPath(it.absolutePath) }
+                    .forEach { paths += it.absolutePath }
+            } catch (e: Exception) {
+                Log.w(TAG, "walk failed ${root.absolutePath}", e)
+            }
+        }
+        if (paths.isEmpty()) return
+
+        val unique = paths.distinct()
+        Log.i(TAG, "media-scan ${unique.size} paths")
+        suspendCancellableCoroutine { cont ->
+            val left = AtomicInteger(unique.size)
+            fun done() {
+                if (left.decrementAndGet() <= 0 && cont.isActive) cont.resume(Unit)
+            }
+            try {
+                MediaScannerConnection.scanFile(
+                    context,
+                    unique.toTypedArray(),
+                    null
+                ) { path, uri ->
+                    Log.d(TAG, "scanned $path → $uri")
+                    done()
+                }
+            } catch (e: Exception) {
+                Log.w(TAG, "media-scan failed", e)
+                if (cont.isActive) cont.resume(Unit)
+            }
+        }
+    }
+
+    private fun isSystemSoundPath(path: String?): Boolean {
+        if (path.isNullOrBlank()) return false
+        val lower = path.lowercase().replace('\\', '/')
+        return SKIP_PATH_FRAGMENTS.any { lower.contains(it) }
     }
 
     private fun queryMediaStore(): List<Song> {
@@ -54,25 +115,38 @@ class MusicRepository(
             COL_ALBUM_ARTIST
         )
 
+        // Prefer real music; still accept audio under common library roots.
         val selection = buildString {
             append("(")
             append("${MediaStore.Audio.Media.IS_MUSIC} != 0")
-            append(" OR ${MediaStore.Audio.Media.MIME_TYPE} LIKE 'audio/%'")
+            append(" OR LOWER(${MediaStore.Audio.Media.DATA}) LIKE '%/music/%'")
+            append(" OR LOWER(${MediaStore.Audio.Media.DATA}) LIKE '%/download/%'")
             AUDIO_EXTENSIONS.forEach { ext ->
                 append(" OR LOWER(${MediaStore.Audio.Media.DATA}) LIKE '%.$ext'")
             }
             append(")")
             append(" AND (${MediaStore.Audio.Media.DURATION} IS NULL OR ${MediaStore.Audio.Media.DURATION} > 1000)")
+            // Exclude obvious system notification/ringtone buckets when columns exist
+            append(" AND (${MediaStore.Audio.Media.IS_RINGTONE} = 0 OR ${MediaStore.Audio.Media.IS_RINGTONE} IS NULL)")
+            append(" AND (${MediaStore.Audio.Media.IS_NOTIFICATION} = 0 OR ${MediaStore.Audio.Media.IS_NOTIFICATION} IS NULL)")
+            append(" AND (${MediaStore.Audio.Media.IS_ALARM} = 0 OR ${MediaStore.Audio.Media.IS_ALARM} IS NULL)")
         }
 
         val cursor = try {
             context.contentResolver.query(collection, projection, selection, null, null)
         } catch (_: IllegalArgumentException) {
-            context.contentResolver.query(
-                collection,
-                projection.copyOfRange(0, projection.size - 1),
-                selection, null, null
-            )
+            // Some devices lack album_artist or IS_* columns — fall back soft
+            try {
+                context.contentResolver.query(
+                    collection,
+                    projection.copyOfRange(0, projection.size - 1),
+                    "${MediaStore.Audio.Media.IS_MUSIC} != 0",
+                    null,
+                    null
+                )
+            } catch (_: Exception) {
+                null
+            }
         } ?: return songs
 
         cursor.use {
@@ -91,6 +165,8 @@ class MusicRepository(
             while (it.moveToNext()) {
                 val id = it.getLong(idCol)
                 val path = it.getString(dataCol)
+                if (isSystemSoundPath(path)) continue
+
                 val mime = it.getString(mimeCol)
                 if (path != null && !isAudioPath(path) && mime?.startsWith("audio/") != true) continue
 
@@ -114,14 +190,9 @@ class MusicRepository(
                     if (albumArtist == null) albumArtist = tags.albumArtist
                     if (duration == null && tags.durationMs != null) duration = tags.durationMs
                     if (track == null && tags.trackNumber != null) track = tags.trackNumber
-                }
-
-                // If MediaStore title is just the filename, treat as untagged title
-                if (path != null && title == fileNameTitle(path)) {
-                    // keep as null for isTagged/hasTitle purposes unless other tags exist
-                    // still useful for display via path — store null to mark untagged title
-                    val tags = readTagsFromFile(path)
-                    title = tags.title // may still be null
+                    if (title == fileNameTitle(path)) {
+                        title = tags.title
+                    }
                 }
 
                 val contentUri = ContentUris.withAppendedId(
@@ -157,27 +228,40 @@ class MusicRepository(
         val roots = settings.getScanRoots()
         val seen = HashSet<String>()
         roots.forEach { root ->
-            if (!root.exists()) return@forEach
-            root.walkTopDown().maxDepth(8).onFail { _, _ -> }
-                .filter { it.isFile && isAudioPath(it.absolutePath) }
-                .forEach { file ->
-                    val path = file.absolutePath
-                    if (!seen.add(path.lowercase())) return@forEach
-                    val tags = readTagsFromFile(path)
-                    songs += Song(
-                        id = path.hashCode().toLong(),
-                        title = tags.title,
-                        artist = tags.artist,
-                        albumArtist = tags.albumArtist,
-                        album = tags.album,
-                        durationMs = tags.durationMs,
-                        contentUri = Uri.fromFile(file),
-                        trackNumber = tags.trackNumber,
-                        year = tags.year,
-                        path = path,
-                        mimeType = mimeFromPath(path)
-                    )
+            if (!root.exists()) {
+                Log.w(TAG, "scan root missing: ${root.absolutePath}")
+                return@forEach
+            }
+            Log.i(TAG, "fs-scan ${root.absolutePath}")
+            try {
+                root.walkTopDown().maxDepth(8).onFail { f, e ->
+                    Log.w(TAG, "walk fail $f: ${e.message}")
                 }
+                    .filter { it.isFile && isAudioPath(it.absolutePath) }
+                    .forEach { file ->
+                        val path = file.absolutePath
+                        if (isSystemSoundPath(path)) return@forEach
+                        if (!seen.add(path.lowercase())) return@forEach
+                        val tags = readTagsFromFile(path)
+                        songs += Song(
+                            id = path.hashCode().toLong(),
+                            title = tags.title,
+                            artist = tags.artist,
+                            albumArtist = tags.albumArtist,
+                            album = tags.album,
+                            durationMs = tags.durationMs,
+                            contentUri = Uri.fromFile(file),
+                            trackNumber = tags.trackNumber,
+                            year = tags.year,
+                            path = path,
+                            mimeType = mimeFromPath(path)
+                        )
+                    }
+            } catch (e: SecurityException) {
+                Log.e(TAG, "fs-scan permission denied for ${root.absolutePath}", e)
+            } catch (e: Exception) {
+                Log.e(TAG, "fs-scan failed ${root.absolutePath}", e)
+            }
         }
         return songs
     }
@@ -211,7 +295,10 @@ class MusicRepository(
         } catch (_: Exception) {
             FileTags()
         } finally {
-            try { retriever.release() } catch (_: Exception) {}
+            try {
+                retriever.release()
+            } catch (_: Exception) {
+            }
         }
     }
 
