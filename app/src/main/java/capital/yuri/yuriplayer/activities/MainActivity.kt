@@ -20,7 +20,6 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -33,20 +32,13 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.QueueMusic
-import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.LibraryMusic
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Refresh
-import androidx.compose.material.icons.filled.Repeat
-import androidx.compose.material.icons.filled.RepeatOne
 import androidx.compose.material.icons.filled.Search
-import androidx.compose.material.icons.filled.Shuffle
-import androidx.compose.material.icons.filled.SkipNext
-import androidx.compose.material.icons.filled.SkipPrevious
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -59,7 +51,6 @@ import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
-import androidx.compose.material3.Slider
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
@@ -78,13 +69,12 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
-import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
 import capital.yuri.yuriplayer.activities.ui.AlbumArt
-import capital.yuri.yuriplayer.activities.ui.QueuePanel
+import capital.yuri.yuriplayer.activities.ui.NowPlayingScreen
 import capital.yuri.yuriplayer.activities.ui.theme.YuriPlayerTheme
 import capital.yuri.yuriplayer.data.AlbumItem
 import capital.yuri.yuriplayer.data.ArtistItem
@@ -93,16 +83,12 @@ import capital.yuri.yuriplayer.data.Song
 import capital.yuri.yuriplayer.data.SortMode
 import capital.yuri.yuriplayer.data.label
 import capital.yuri.yuriplayer.player.PlayerController
-import capital.yuri.yuriplayer.player.QueueLane
 import capital.yuri.yuriplayer.player.QueueSnapshot
-import capital.yuri.yuriplayer.player.RepeatMode
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import org.koin.android.ext.android.inject
 import java.text.DateFormat
 import java.util.Date
-import java.util.Locale
-import java.util.concurrent.TimeUnit
 import kotlin.math.roundToInt
 
 class MainActivity : ComponentActivity() {
@@ -111,8 +97,6 @@ class MainActivity : ComponentActivity() {
     private val playerController: PlayerController by inject()
 
     private var isCarMode = false
-
-    /** Set when launched from the media notification. */
     private val openPlayerState = mutableStateOf(false)
 
     private val permissionLauncher = registerForActivityResult(
@@ -225,7 +209,7 @@ fun YuriApp(
     BackHandler(enabled = playerExpanded) { playerExpanded = false }
 
     if (playerExpanded) {
-        FullPlayerScreen(
+        NowPlayingScreen(
             song = currentSong,
             playing = playing,
             positionMs = positionMs,
@@ -300,7 +284,7 @@ fun YuriApp(
                 TopTab.Library -> LibraryScreen(
                     library = library,
                     onPlay = { songs, index -> player.playSource(songs, index) },
-                    onAddToHot = { player.addToHotQueue(it) }
+                    onAddToQueue = { player.addToHotQueue(it) }
                 )
                 TopTab.MyStuff -> PlaceholderScreen(
                     "My Stuff",
@@ -415,179 +399,10 @@ fun MiniPlayerBar(
 }
 
 @Composable
-fun FullPlayerScreen(
-    song: Song?,
-    playing: Boolean,
-    positionMs: Long,
-    durationMs: Long,
-    snapshot: QueueSnapshot,
-    onCollapse: () -> Unit,
-    onToggle: () -> Unit,
-    onPrev: () -> Unit,
-    onNext: () -> Unit,
-    onSeek: (Long) -> Unit,
-    onToggleShuffle: () -> Unit,
-    onCycleRepeat: () -> Unit,
-    onPlayItem: (QueueLane, Int) -> Unit,
-    onMoveHot: (Int, Int) -> Unit,
-    onMoveCold: (Int, Int) -> Unit,
-    onRemoveHot: (Int) -> Unit,
-    onRemoveCold: (Int) -> Unit
-) {
-    var showQueue by remember { mutableStateOf(false) }
-    var sliderPosition by remember { mutableFloatStateOf(0f) }
-    var sliding by remember { mutableStateOf(false) }
-
-    LaunchedEffect(positionMs, durationMs, sliding) {
-        if (!sliding && durationMs > 0) {
-            sliderPosition = (positionMs.toFloat() / durationMs).coerceIn(0f, 1f)
-        }
-    }
-
-    Surface(modifier = Modifier.fillMaxSize()) {
-        Column(modifier = Modifier.fillMaxSize().padding(16.dp)) {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                IconButton(onClick = onCollapse) {
-                    Icon(Icons.Default.ExpandMore, contentDescription = "Close")
-                }
-                Spacer(modifier = Modifier.weight(1f))
-                IconButton(onClick = { showQueue = !showQueue }) {
-                    Icon(Icons.AutoMirrored.Filled.QueueMusic, contentDescription = "Queue")
-                }
-            }
-
-            if (showQueue) {
-                QueuePanel(
-                    snapshot = snapshot,
-                    onPlayItem = onPlayItem,
-                    onMoveHot = onMoveHot,
-                    onMoveCold = onMoveCold,
-                    onRemoveHot = onRemoveHot,
-                    onRemoveCold = onRemoveCold,
-                    modifier = Modifier.weight(1f)
-                )
-            } else {
-                Spacer(modifier = Modifier.height(12.dp))
-                AlbumArt(
-                    song = song,
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = 24.dp)
-                        .aspectRatio(1f),
-                    corner = 12.dp
-                )
-                Spacer(modifier = Modifier.height(28.dp))
-                Text(
-                    song?.displayTitle ?: "Not playing",
-                    style = MaterialTheme.typography.headlineSmall,
-                    maxLines = 2,
-                    overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.padding(horizontal = 8.dp)
-                )
-                Text(
-                    song?.displayArtist ?: "",
-                    style = MaterialTheme.typography.titleMedium,
-                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f),
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.padding(horizontal = 8.dp)
-                )
-                Text(
-                    song?.displayAlbum ?: "",
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f),
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.padding(horizontal = 8.dp)
-                )
-                Spacer(modifier = Modifier.height(20.dp))
-                Slider(
-                    value = sliderPosition,
-                    onValueChange = { sliding = true; sliderPosition = it },
-                    onValueChangeFinished = {
-                        sliding = false
-                        if (durationMs > 0) onSeek((sliderPosition * durationMs).toLong())
-                    },
-                    modifier = Modifier.fillMaxWidth()
-                )
-                Row(
-                    modifier = Modifier.fillMaxWidth().padding(horizontal = 4.dp),
-                    horizontalArrangement = Arrangement.SpaceBetween
-                ) {
-                    Text(formatTime(positionMs), style = MaterialTheme.typography.labelSmall)
-                    Text(formatTime(durationMs), style = MaterialTheme.typography.labelSmall)
-                }
-                Spacer(modifier = Modifier.height(8.dp))
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceEvenly,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    IconButton(onClick = onToggleShuffle) {
-                        Icon(
-                            Icons.Default.Shuffle,
-                            contentDescription = "Shuffle cold queue",
-                            tint = if (snapshot.shuffleEnabled) MaterialTheme.colorScheme.primary
-                            else MaterialTheme.colorScheme.onSurface
-                        )
-                    }
-                    IconButton(onClick = onPrev) {
-                        Icon(Icons.Default.SkipPrevious, "Previous", modifier = Modifier.size(36.dp))
-                    }
-                    IconButton(onClick = onToggle) {
-                        Icon(
-                            if (playing) Icons.Default.Pause else Icons.Default.PlayArrow,
-                            if (playing) "Pause" else "Play",
-                            modifier = Modifier.size(48.dp)
-                        )
-                    }
-                    IconButton(onClick = onNext) {
-                        Icon(Icons.Default.SkipNext, "Next", modifier = Modifier.size(36.dp))
-                    }
-                    IconButton(onClick = onCycleRepeat) {
-                        val (icon, tintOn) = when (snapshot.repeatMode) {
-                            RepeatMode.OFF -> Icons.Default.Repeat to false
-                            RepeatMode.ONE -> Icons.Default.RepeatOne to true
-                            RepeatMode.COLD -> Icons.Default.Repeat to true
-                        }
-                        Icon(
-                            icon,
-                            contentDescription = "Repeat: ${snapshot.repeatMode.name}",
-                            tint = if (tintOn) MaterialTheme.colorScheme.primary
-                            else MaterialTheme.colorScheme.onSurface
-                        )
-                    }
-                }
-                Text(
-                    when (snapshot.repeatMode) {
-                        RepeatMode.OFF -> "Repeat off"
-                        RepeatMode.ONE -> "Repeat one"
-                        RepeatMode.COLD -> "Repeat cold queue"
-                    } + if (snapshot.shuffleEnabled) " · Shuffle on" else "",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f),
-                    modifier = Modifier.align(Alignment.CenterHorizontally)
-                )
-                Spacer(modifier = Modifier.weight(1f))
-                Text(
-                    "Lyrics coming later",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.4f),
-                    modifier = Modifier.align(Alignment.CenterHorizontally)
-                )
-            }
-        }
-    }
-}
-
-@Composable
 fun LibraryScreen(
     library: LibraryIndex,
     onPlay: (List<Song>, Int) -> Unit,
-    onAddToHot: (Song) -> Unit
+    onAddToQueue: (Song) -> Unit
 ) {
     val allSongs by library.songs.collectAsState()
     val loading by library.isLoading.collectAsState()
@@ -660,16 +475,16 @@ fun LibraryScreen(
         when (section) {
             LibrarySection.Songs -> SongList(
                 taggedSongs, loading, onPlay,
-                onAddToHot = {
-                    onAddToHot(it)
-                    Toast.makeText(context, "Added to hot queue", Toast.LENGTH_SHORT).show()
+                onAddToQueue = {
+                    onAddToQueue(it)
+                    Toast.makeText(context, "Added to queue", Toast.LENGTH_SHORT).show()
                 }
             )
             LibrarySection.Untagged -> SongList(
                 untaggedSongs, loading, onPlay,
-                onAddToHot = {
-                    onAddToHot(it)
-                    Toast.makeText(context, "Added to hot queue", Toast.LENGTH_SHORT).show()
+                onAddToQueue = {
+                    onAddToQueue(it)
+                    Toast.makeText(context, "Added to queue", Toast.LENGTH_SHORT).show()
                 }
             )
             LibrarySection.Albums -> {
@@ -697,7 +512,7 @@ private fun SongList(
     songs: List<Song>,
     loading: Boolean,
     onPlay: (List<Song>, Int) -> Unit,
-    onAddToHot: (Song) -> Unit
+    onAddToQueue: (Song) -> Unit
 ) {
     if (songs.isEmpty() && !loading) {
         Text("Nothing here yet.", modifier = Modifier.padding(16.dp))
@@ -707,7 +522,7 @@ private fun SongList(
                 SwipeAddSongRow(
                     song = song,
                     onClick = { onPlay(songs, index) },
-                    onSwipeAdd = { onAddToHot(song) }
+                    onSwipeAdd = { onAddToQueue(song) }
                 )
             }
         }
@@ -730,7 +545,7 @@ fun SwipeAddSongRow(
             .background(MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.35f))
     ) {
         Text(
-            "+ Hot queue",
+            "+ Queue",
             style = MaterialTheme.typography.labelLarge,
             color = MaterialTheme.colorScheme.primary,
             modifier = Modifier.align(Alignment.CenterStart).padding(start = 16.dp)
@@ -813,11 +628,4 @@ fun ArtistRow(artist: ArtistItem, onClick: () -> Unit) {
             color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
         )
     }
-}
-
-private fun formatTime(ms: Long): String {
-    if (ms <= 0L) return "0:00"
-    val minutes = TimeUnit.MILLISECONDS.toMinutes(ms)
-    val seconds = TimeUnit.MILLISECONDS.toSeconds(ms) % 60
-    return String.format(Locale.US, "%d:%02d", minutes, seconds)
 }
