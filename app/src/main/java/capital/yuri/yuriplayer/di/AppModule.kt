@@ -28,7 +28,7 @@ val appModule = module {
     single { get<YuriDatabase>().sources() }
     single { get<YuriDatabase>().scrobblers() }
 
-    single { AlbumArtCache() }
+    single { AlbumArtCache(androidContext()) }
     single { ThemeService(get()) }
     single { PlayerThemeStore(get(), get()) }
     single { QueueManager() }
