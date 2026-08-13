@@ -32,7 +32,6 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.QueueMusic
 import androidx.compose.material.icons.filled.ExpandMore
-import androidx.compose.material.icons.filled.LibraryMusic
 import androidx.compose.material.icons.filled.MusicNote
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
@@ -128,9 +127,10 @@ class MainActivity : ComponentActivity() {
         playerController.bind()
     }
 
-    override fun onStop() {
+    // Keep service bound across onStop so playback does not die when leaving the app.
+    override fun onDestroy() {
         playerController.unbind()
-        super.onStop()
+        super.onDestroy()
     }
 
     override fun onNewIntent(intent: android.content.Intent) {
@@ -145,7 +145,7 @@ class MainActivity : ComponentActivity() {
 }
 
 private enum class TopTab { Library, Search }
-private enum class LibrarySection { Songs, Albums, Artists }
+private enum class LibrarySection { Songs, Albums, Artists, Untagged }
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -157,7 +157,6 @@ fun YuriApp(
     var topTab by remember { mutableStateOf(TopTab.Library) }
     var playerExpanded by remember { mutableStateOf(false) }
 
-    // Shared playback snapshot for mini + full player
     var currentSong by remember { mutableStateOf<Song?>(null) }
     var playing by remember { mutableStateOf(false) }
     var positionMs by remember { mutableLongStateOf(0L) }
@@ -176,7 +175,7 @@ fun YuriApp(
             durationMs = player.getDurationMs()
             queue = player.getQueue()
             currentIndex = player.getCurrentIndex()
-            delay(250)
+            delay(400)
         }
     }
 
@@ -301,7 +300,6 @@ fun MiniPlayerBar(
             .fillMaxWidth()
             .pointerInput(Unit) {
                 detectVerticalDragGestures { _, dragAmount ->
-                    // Negative = swipe up
                     if (dragAmount < -12f) onExpand()
                 }
             }
@@ -432,7 +430,6 @@ fun FullPlayerScreen(
             } else {
                 Spacer(modifier = Modifier.height(12.dp))
 
-                // Album art placeholder (real art / lyrics later)
                 Box(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -550,9 +547,11 @@ fun LibraryScreen(
     var sortMode by remember { mutableStateOf(SortMode.TITLE) }
     var section by remember { mutableStateOf(LibrarySection.Songs) }
 
-    val songs = remember(allSongs, sortMode) { library.sorted(sortMode) }
-    val albums = remember(allSongs) { library.albums() }
-    val artists = remember(allSongs) { library.artists() }
+    // Tagged preferred; Untagged is its own section
+    val taggedSongs = remember(allSongs, sortMode) { library.sorted(sortMode, taggedOnly = true) }
+    val untaggedSongs = remember(allSongs, sortMode) { library.sorted(sortMode, taggedOnly = false) }
+    val albums = remember(allSongs) { library.albums(taggedOnly = true) }
+    val artists = remember(allSongs) { library.artists(taggedOnly = true) }
 
     Column(modifier = Modifier.fillMaxSize()) {
         Row(
@@ -563,15 +562,19 @@ fun LibraryScreen(
             horizontalArrangement = Arrangement.spacedBy(8.dp)
         ) {
             LibrarySection.entries.forEach { s ->
+                val label = when (s) {
+                    LibrarySection.Untagged -> "Untagged (${library.untaggedCount()})"
+                    else -> s.name
+                }
                 FilterChip(
                     selected = section == s,
                     onClick = { section = s },
-                    label = { Text(s.name) }
+                    label = { Text(label) }
                 )
             }
         }
 
-        if (section == LibrarySection.Songs) {
+        if (section == LibrarySection.Songs || section == LibrarySection.Untagged) {
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -604,7 +607,7 @@ fun LibraryScreen(
             lastScanned > 0 -> {
                 val whenStr = DateFormat.getDateTimeInstance(DateFormat.SHORT, DateFormat.SHORT)
                     .format(Date(lastScanned))
-                "${allSongs.size} tracks · updated $whenStr"
+                "${library.taggedCount()} tagged · ${library.untaggedCount()} untagged · updated $whenStr"
             }
             else -> "${allSongs.size} tracks"
         }
@@ -616,23 +619,11 @@ fun LibraryScreen(
         )
 
         when (section) {
-            LibrarySection.Songs -> {
-                if (songs.isEmpty() && !loading) {
-                    Text(
-                        "No songs yet. Put files under Music/ or Music/library/.",
-                        modifier = Modifier.padding(16.dp)
-                    )
-                } else {
-                    LazyColumn(modifier = Modifier.fillMaxSize()) {
-                        itemsIndexed(songs, key = { _, s -> s.id to s.path }) { index, song ->
-                            SongRow(song) { onPlay(songs, index) }
-                        }
-                    }
-                }
-            }
+            LibrarySection.Songs -> SongList(taggedSongs, loading, onPlay)
+            LibrarySection.Untagged -> SongList(untaggedSongs, loading, onPlay)
             LibrarySection.Albums -> {
                 LazyColumn(modifier = Modifier.fillMaxSize()) {
-                    items(albums, key = { it.name + it.artist }) { album ->
+                    items(albums, key = { it.name + "|" + it.artist }) { album ->
                         AlbumRow(album) { onPlay(album.songs, 0) }
                     }
                 }
@@ -649,6 +640,26 @@ fun LibraryScreen(
 }
 
 @Composable
+private fun SongList(
+    songs: List<Song>,
+    loading: Boolean,
+    onPlay: (List<Song>, Int) -> Unit
+) {
+    if (songs.isEmpty() && !loading) {
+        Text(
+            "Nothing here yet.",
+            modifier = Modifier.padding(16.dp)
+        )
+    } else {
+        LazyColumn(modifier = Modifier.fillMaxSize()) {
+            itemsIndexed(songs, key = { _, s -> s.id to s.path }) { index, song ->
+                SongRow(song) { onPlay(songs, index) }
+            }
+        }
+    }
+}
+
+@Composable
 fun SearchScreen(
     library: LibraryIndex,
     onPlay: (List<Song>, Int) -> Unit
@@ -657,9 +668,10 @@ fun SearchScreen(
     var query by remember { mutableStateOf("") }
     var section by remember { mutableStateOf(LibrarySection.Songs) }
 
-    val songs = remember(allSongs, query) { library.search(query) }
-    val albums = remember(allSongs, query) { library.albums(query) }
-    val artists = remember(allSongs, query) { library.artists(query) }
+    val taggedSongs = remember(allSongs, query) { library.search(query, taggedOnly = true) }
+    val untaggedSongs = remember(allSongs, query) { library.search(query, taggedOnly = false) }
+    val albums = remember(allSongs, query) { library.albums(query, taggedOnly = true) }
+    val artists = remember(allSongs, query) { library.artists(query, taggedOnly = true) }
 
     Column(modifier = Modifier.fillMaxSize()) {
         OutlinedTextField(
@@ -680,37 +692,33 @@ fun SearchScreen(
                 .padding(horizontal = 12.dp),
             horizontalArrangement = Arrangement.spacedBy(8.dp)
         ) {
-            LibrarySection.entries.forEach { s ->
+            listOf(
+                LibrarySection.Songs to "Songs",
+                LibrarySection.Albums to "Albums",
+                LibrarySection.Artists to "Artists",
+                LibrarySection.Untagged to "Untagged"
+            ).forEach { (s, label) ->
                 FilterChip(
                     selected = section == s,
                     onClick = { section = s },
-                    label = { Text(s.name) }
+                    label = { Text(label) }
                 )
             }
         }
 
-        if (query.isBlank()) {
+        if (query.isBlank() && section != LibrarySection.Untagged) {
             Text(
-                "Type to search your library",
+                "Type to search tagged library",
                 modifier = Modifier.padding(16.dp),
                 color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f)
             )
         } else {
             when (section) {
-                LibrarySection.Songs -> {
-                    if (songs.isEmpty()) {
-                        Text("No matching songs", modifier = Modifier.padding(16.dp))
-                    } else {
-                        LazyColumn(modifier = Modifier.fillMaxSize()) {
-                            itemsIndexed(songs, key = { _, s -> s.id to s.path }) { index, song ->
-                                SongRow(song) { onPlay(songs, index) }
-                            }
-                        }
-                    }
-                }
+                LibrarySection.Songs -> SongList(taggedSongs, false, onPlay)
+                LibrarySection.Untagged -> SongList(untaggedSongs, false, onPlay)
                 LibrarySection.Albums -> {
                     LazyColumn(modifier = Modifier.fillMaxSize()) {
-                        items(albums, key = { it.name + it.artist }) { album ->
+                        items(albums, key = { it.name + "|" + it.artist }) { album ->
                             AlbumRow(album) { onPlay(album.songs, 0) }
                         }
                     }
