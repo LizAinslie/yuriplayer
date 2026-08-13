@@ -1,11 +1,19 @@
 package capital.yuri.yuriplayer.activities.ui
 
+import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.LinearEasing
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.remember
@@ -22,27 +30,51 @@ import kotlin.math.PI
 import kotlin.math.sin
 
 /**
- * Expressive wavy seek bar (Spotify-ish / Material expressive vibes).
- * [progress] is 0f..1f.
+ * Expressive seek bar: animates a traveling sine wave while [playing],
+ * smoothly flattens to a line when paused.
  */
 @Composable
 fun WavySeekBar(
     progress: Float,
+    playing: Boolean,
     onProgressChange: (Float) -> Unit,
     onProgressChangeFinished: () -> Unit,
     activeColor: Color,
     inactiveColor: Color,
     modifier: Modifier = Modifier,
-    waveAmplitude: Float = 6f,
-    waveLength: Float = 28f
+    maxWaveAmplitude: Float = 7f,
+    waveLength: Float = 32f
 ) {
     var dragging by remember { mutableFloatStateOf(-1f) }
     val shown = if (dragging >= 0f) dragging else progress.coerceIn(0f, 1f)
 
+    // Amplitude 0 = flat, 1 = full wave
+    val amplitudeFactor = remember { Animatable(if (playing) 1f else 0f) }
+    LaunchedEffect(playing) {
+        amplitudeFactor.animateTo(
+            targetValue = if (playing) 1f else 0f,
+            animationSpec = tween(durationMillis = 420)
+        )
+    }
+
+    val infinite = rememberInfiniteTransition(label = "wavePhase")
+    val phase by infinite.animateFloat(
+        initialValue = 0f,
+        targetValue = (2f * PI).toFloat(),
+        animationSpec = infiniteRepeatable(
+            animation = tween(durationMillis = 1400, easing = LinearEasing),
+            repeatMode = RepeatMode.Restart
+        ),
+        label = "phase"
+    )
+
+    // Only apply phase while playing (or while flattening out)
+    val effectivePhase = if (amplitudeFactor.value > 0.01f) phase else 0f
+
     Canvas(
         modifier = modifier
             .fillMaxWidth()
-            .height(36.dp)
+            .height(40.dp)
             .pointerInput(Unit) {
                 detectTapGestures { offset ->
                     val p = (offset.x / size.width).coerceIn(0f, 1f)
@@ -74,11 +106,12 @@ fun WavySeekBar(
     ) {
         val w = size.width
         val midY = size.height / 2f
-        val amp = waveAmplitude * density
+        val amp = maxWaveAmplitude * density * amplitudeFactor.value
         val len = waveLength * density
 
         fun waveY(x: Float): Float {
-            return midY + amp * sin(2f * PI.toFloat() * x / len).toFloat()
+            if (amp < 0.5f) return midY
+            return midY + amp * sin(2f * PI.toFloat() * x / len + effectivePhase).toFloat()
         }
 
         val inactivePath = Path().apply {
@@ -112,16 +145,15 @@ fun WavySeekBar(
             )
         }
 
-        // Thumb
         val thumbX = endX
         val thumbY = waveY(thumbX)
         drawCircle(
             color = activeColor,
-            radius = 7f * density,
+            radius = 8f * density,
             center = Offset(thumbX, thumbY)
         )
         drawCircle(
-            color = Color.White.copy(alpha = 0.9f),
+            color = Color.White.copy(alpha = 0.92f),
             radius = 3.5f * density,
             center = Offset(thumbX, thumbY)
         )

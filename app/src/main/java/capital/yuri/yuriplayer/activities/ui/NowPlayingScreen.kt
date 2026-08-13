@@ -71,17 +71,14 @@ fun NowPlayingScreen(
 ) {
     val context = LocalContext.current
     val baseScheme = MaterialTheme.colorScheme
-    var artBitmap by remember(song?.path, song?.contentUri) { mutableStateOf<Bitmap?>(null) }
     var playerColors by remember { mutableStateOf(fallbackPlayerColors(baseScheme)) }
     var showQueue by remember { mutableStateOf(false) }
     var sliderPosition by remember { mutableFloatStateOf(0f) }
     var sliding by remember { mutableStateOf(false) }
 
     LaunchedEffect(song?.path, song?.contentUri) {
-        artBitmap = null
         if (song != null) {
-            val bmp = AlbumArtResolver.load(context, song, maxSize = 768)
-            artBitmap = bmp
+            val bmp: Bitmap? = AlbumArtResolver.load(context, song, maxSize = 768)
             playerColors = extractPlayerColors(bmp, baseScheme)
         } else {
             playerColors = fallbackPlayerColors(baseScheme)
@@ -101,29 +98,29 @@ fun NowPlayingScreen(
             modifier = Modifier.fillMaxSize(),
             color = scheme.background
         ) {
-            Column(modifier = Modifier.fillMaxSize().padding(16.dp)) {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    IconButton(onClick = onCollapse) {
-                        Icon(
-                            Icons.Default.ExpandMore,
-                            contentDescription = "Close",
-                            tint = scheme.onBackground
+            if (showQueue) {
+                Column(modifier = Modifier.fillMaxSize().padding(16.dp)) {
+                    Box(
+                        modifier = Modifier.fillMaxWidth(),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        IconButton(
+                            onClick = { showQueue = false },
+                            modifier = Modifier.align(Alignment.CenterStart)
+                        ) {
+                            Icon(
+                                Icons.Default.ExpandMore,
+                                contentDescription = "Back",
+                                tint = scheme.onBackground
+                            )
+                        }
+                        Text(
+                            "Queue",
+                            style = MaterialTheme.typography.titleMedium,
+                            fontWeight = FontWeight.SemiBold,
+                            color = scheme.onBackground
                         )
                     }
-                    Spacer(modifier = Modifier.weight(1f))
-                    IconButton(onClick = { showQueue = !showQueue }) {
-                        Icon(
-                            Icons.AutoMirrored.Filled.QueueMusic,
-                            contentDescription = "Queue",
-                            tint = if (showQueue) scheme.primary else scheme.onBackground
-                        )
-                    }
-                }
-
-                if (showQueue) {
                     QueuePanel(
                         snapshot = snapshot,
                         onPlayItem = onPlayItem,
@@ -133,150 +130,175 @@ fun NowPlayingScreen(
                         onRemoveCold = onRemoveCold,
                         modifier = Modifier.weight(1f)
                     )
-                } else {
-                    Spacer(modifier = Modifier.height(8.dp))
-                    Box(
+                }
+                return@Surface
+            }
+
+            Column(modifier = Modifier.fillMaxSize().padding(16.dp)) {
+                // Centered collapse chevron (Spotify-style)
+                Box(
+                    modifier = Modifier.fillMaxWidth(),
+                    contentAlignment = Alignment.Center
+                ) {
+                    IconButton(onClick = onCollapse) {
+                        Icon(
+                            Icons.Default.ExpandMore,
+                            contentDescription = "Close",
+                            tint = scheme.onBackground
+                        )
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(4.dp))
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 20.dp)
+                        .aspectRatio(1f)
+                ) {
+                    AlbumArt(
+                        song = song,
+                        modifier = Modifier.fillMaxSize(),
+                        corner = 16.dp
+                    )
+                }
+
+                Spacer(modifier = Modifier.height(28.dp))
+
+                Text(
+                    song?.displayTitle ?: "Not playing",
+                    style = MaterialTheme.typography.headlineSmall,
+                    fontWeight = FontWeight.Bold,
+                    color = scheme.onBackground,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.padding(horizontal = 8.dp)
+                )
+                Text(
+                    song?.displayArtist ?: "",
+                    style = MaterialTheme.typography.titleMedium,
+                    color = playerColors.muted,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.padding(horizontal = 8.dp)
+                )
+                Text(
+                    song?.displayAlbum ?: "",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = playerColors.muted.copy(alpha = 0.75f),
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.padding(horizontal = 8.dp)
+                )
+
+                Spacer(modifier = Modifier.height(20.dp))
+
+                WavySeekBar(
+                    progress = sliderPosition,
+                    playing = playing,
+                    onProgressChange = {
+                        sliding = true
+                        sliderPosition = it
+                    },
+                    onProgressChangeFinished = {
+                        sliding = false
+                        if (durationMs > 0) onSeek((sliderPosition * durationMs).toLong())
+                    },
+                    activeColor = scheme.primary,
+                    inactiveColor = playerColors.muted.copy(alpha = 0.35f),
+                    modifier = Modifier.padding(horizontal = 4.dp)
+                )
+
+                Row(
+                    modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Text(formatTime(positionMs), style = MaterialTheme.typography.labelSmall, color = playerColors.muted)
+                    Text(formatTime(durationMs), style = MaterialTheme.typography.labelSmall, color = playerColors.muted)
+                }
+
+                Spacer(modifier = Modifier.height(12.dp))
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceEvenly,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    IconButton(onClick = onToggleShuffle) {
+                        Icon(
+                            Icons.Default.Shuffle,
+                            contentDescription = "Shuffle",
+                            tint = if (snapshot.shuffleEnabled) scheme.primary
+                            else scheme.onBackground.copy(alpha = 0.7f)
+                        )
+                    }
+                    IconButton(onClick = onPrev) {
+                        Icon(
+                            Icons.Default.SkipPrevious,
+                            contentDescription = "Previous",
+                            modifier = Modifier.size(40.dp),
+                            tint = scheme.onBackground
+                        )
+                    }
+                    IconButton(
+                        onClick = onToggle,
                         modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(horizontal = 20.dp)
-                            .aspectRatio(1f)
+                            .size(72.dp)
+                            .background(scheme.primary, shape = MaterialTheme.shapes.extraLarge)
                     ) {
-                        AlbumArt(
-                            song = song,
-                            modifier = Modifier.fillMaxSize(),
-                            corner = 16.dp
+                        Icon(
+                            if (playing) Icons.Default.Pause else Icons.Default.PlayArrow,
+                            contentDescription = if (playing) "Pause" else "Play",
+                            modifier = Modifier.size(40.dp),
+                            tint = scheme.onPrimary
                         )
                     }
-
-                    Spacer(modifier = Modifier.height(28.dp))
-
-                    Text(
-                        song?.displayTitle ?: "Not playing",
-                        style = MaterialTheme.typography.headlineSmall,
-                        fontWeight = FontWeight.Bold,
-                        color = scheme.onBackground,
-                        maxLines = 2,
-                        overflow = TextOverflow.Ellipsis,
-                        modifier = Modifier.padding(horizontal = 8.dp)
-                    )
-                    Text(
-                        song?.displayArtist ?: "",
-                        style = MaterialTheme.typography.titleMedium,
-                        color = playerColors.muted,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                        modifier = Modifier.padding(horizontal = 8.dp)
-                    )
-                    Text(
-                        song?.displayAlbum ?: "",
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = playerColors.muted.copy(alpha = 0.75f),
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                        modifier = Modifier.padding(horizontal = 8.dp)
-                    )
-
-                    Spacer(modifier = Modifier.height(20.dp))
-
-                    WavySeekBar(
-                        progress = sliderPosition,
-                        onProgressChange = {
-                            sliding = true
-                            sliderPosition = it
-                        },
-                        onProgressChangeFinished = {
-                            sliding = false
-                            if (durationMs > 0) onSeek((sliderPosition * durationMs).toLong())
-                        },
-                        activeColor = scheme.primary,
-                        inactiveColor = playerColors.muted.copy(alpha = 0.35f),
-                        modifier = Modifier.padding(horizontal = 4.dp)
-                    )
-
-                    Row(
-                        modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp),
-                        horizontalArrangement = Arrangement.SpaceBetween
-                    ) {
-                        Text(
-                            formatTime(positionMs),
-                            style = MaterialTheme.typography.labelSmall,
-                            color = playerColors.muted
-                        )
-                        Text(
-                            formatTime(durationMs),
-                            style = MaterialTheme.typography.labelSmall,
-                            color = playerColors.muted
+                    IconButton(onClick = onNext) {
+                        Icon(
+                            Icons.Default.SkipNext,
+                            contentDescription = "Next",
+                            modifier = Modifier.size(40.dp),
+                            tint = scheme.onBackground
                         )
                     }
-
-                    Spacer(modifier = Modifier.height(12.dp))
-
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceEvenly,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        IconButton(onClick = onToggleShuffle) {
-                            Icon(
-                                Icons.Default.Shuffle,
-                                contentDescription = "Shuffle",
-                                tint = if (snapshot.shuffleEnabled) scheme.primary else scheme.onBackground.copy(alpha = 0.7f)
-                            )
+                    IconButton(onClick = onCycleRepeat) {
+                        val (icon, active) = when (snapshot.repeatMode) {
+                            RepeatMode.OFF -> Icons.Default.Repeat to false
+                            RepeatMode.ONE -> Icons.Default.RepeatOne to true
+                            RepeatMode.COLD -> Icons.Default.Repeat to true
                         }
-                        IconButton(onClick = onPrev) {
-                            Icon(
-                                Icons.Default.SkipPrevious,
-                                contentDescription = "Previous",
-                                modifier = Modifier.size(40.dp),
-                                tint = scheme.onBackground
-                            )
-                        }
-                        IconButton(
-                            onClick = onToggle,
-                            modifier = Modifier
-                                .size(72.dp)
-                                .background(scheme.primary, shape = MaterialTheme.shapes.extraLarge)
-                        ) {
-                            Icon(
-                                if (playing) Icons.Default.Pause else Icons.Default.PlayArrow,
-                                contentDescription = if (playing) "Pause" else "Play",
-                                modifier = Modifier.size(40.dp),
-                                tint = scheme.onPrimary
-                            )
-                        }
-                        IconButton(onClick = onNext) {
-                            Icon(
-                                Icons.Default.SkipNext,
-                                contentDescription = "Next",
-                                modifier = Modifier.size(40.dp),
-                                tint = scheme.onBackground
-                            )
-                        }
-                        IconButton(onClick = onCycleRepeat) {
-                            val (icon, active) = when (snapshot.repeatMode) {
-                                RepeatMode.OFF -> Icons.Default.Repeat to false
-                                RepeatMode.ONE -> Icons.Default.RepeatOne to true
-                                RepeatMode.COLD -> Icons.Default.Repeat to true
-                            }
-                            Icon(
-                                icon,
-                                contentDescription = repeatLabel(snapshot.repeatMode),
-                                tint = if (active) scheme.primary else scheme.onBackground.copy(alpha = 0.7f)
-                            )
-                        }
+                        Icon(
+                            icon,
+                            contentDescription = repeatLabel(snapshot.repeatMode),
+                            tint = if (active) scheme.primary else scheme.onBackground.copy(alpha = 0.7f)
+                        )
                     }
+                }
 
-                    Text(
-                        buildString {
-                            append(repeatLabel(snapshot.repeatMode))
-                            if (snapshot.shuffleEnabled) append(" · Shuffle")
-                        },
-                        style = MaterialTheme.typography.labelSmall,
-                        color = playerColors.muted,
-                        modifier = Modifier.align(Alignment.CenterHorizontally).padding(top = 4.dp)
-                    )
+                Text(
+                    buildString {
+                        append(repeatLabel(snapshot.repeatMode))
+                        if (snapshot.shuffleEnabled) append(" · Shuffle")
+                    },
+                    style = MaterialTheme.typography.labelSmall,
+                    color = playerColors.muted,
+                    modifier = Modifier.align(Alignment.CenterHorizontally).padding(top = 4.dp)
+                )
 
-                    Spacer(modifier = Modifier.weight(1f))
+                Spacer(modifier = Modifier.weight(1f))
+
+                // Queue control bottom-right (Spotify-style)
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.End
+                ) {
+                    IconButton(onClick = { showQueue = true }) {
+                        Icon(
+                            Icons.AutoMirrored.Filled.QueueMusic,
+                            contentDescription = "Queue",
+                            tint = scheme.onBackground.copy(alpha = 0.85f)
+                        )
+                    }
                 }
             }
         }

@@ -16,20 +16,16 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
 
 enum class ProgressStyle {
-    /** Thin bar under mini player. */
     LINEAR,
-    /** Expressive wavy seek on now-playing. */
     WAVY
 }
 
-/**
- * Shared progress / seek UI for mini player and full now-playing.
- */
 @Composable
 fun PlaybackProgress(
     positionMs: Long,
     durationMs: Long,
     style: ProgressStyle,
+    playing: Boolean = false,
     onSeek: ((Long) -> Unit)? = null,
     activeColor: Color = MaterialTheme.colorScheme.primary,
     inactiveColor: Color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.25f),
@@ -53,13 +49,12 @@ fun PlaybackProgress(
             var sliding by remember { mutableStateOf(false) }
 
             LaunchedEffect(positionMs, durationMs, sliding) {
-                if (!sliding && durationMs > 0) {
-                    slider = progress
-                }
+                if (!sliding && durationMs > 0) slider = progress
             }
 
             WavySeekBar(
                 progress = slider,
+                playing = playing,
                 onProgressChange = {
                     sliding = true
                     slider = it

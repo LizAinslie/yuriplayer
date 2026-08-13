@@ -39,6 +39,9 @@ import org.koin.android.ext.android.inject
 
 /**
  * ExoPlayer + notification host. Queue logic lives in [QueueManager].
+ *
+ * Repeat-one uses ExoPlayer's native [Player.REPEAT_MODE_ONE] so the audio sink
+ * loops cleanly (avoids UnexpectedDiscontinuityException from seek-after-ENDED).
  */
 class MusicService : MediaSessionService() {
 
@@ -114,6 +117,19 @@ class MusicService : MediaSessionService() {
         return START_STICKY
     }
 
+    /** Keep ExoPlayer loop mode in sync so repeat-one is seamless. */
+    private fun syncPlayerRepeatMode() {
+        val mode = queueManager.getSnapshot().repeatMode
+        val exo = when (mode) {
+            RepeatMode.ONE -> Player.REPEAT_MODE_ONE
+            RepeatMode.OFF, RepeatMode.COLD -> Player.REPEAT_MODE_OFF
+        }
+        if (player?.repeatMode != exo) {
+            Log.i(TAG, "syncPlayerRepeatMode app=$mode exo=$exo")
+            player?.repeatMode = exo
+        }
+    }
+
     private fun loadSong(song: Song?, startPositionMs: Long = 0L, autoPlay: Boolean = false) {
         if (song == null) {
             Log.i(TAG, "loadSong: null")
@@ -129,11 +145,14 @@ class MusicService : MediaSessionService() {
         )
         Log.d(TAG, "loadSong id=${song.id} mime=${song.mimeType} duration=${song.durationMs}")
 
+        // Always set a fresh media item so the audio sink resets cleanly
         player?.apply {
-            setMediaItem(toMediaItem(song), startPositionMs)
+            setMediaItem(toMediaItem(song), /* startPositionMs= */ startPositionMs)
             prepare()
             playWhenReady = autoPlay
+            if (autoPlay) play()
         }
+        syncPlayerRepeatMode()
         _nowPlaying.value = song
         updateForegroundNotification()
         persistState()
@@ -146,7 +165,14 @@ class MusicService : MediaSessionService() {
                 if (autoPlay) player?.play()
                 persistState()
             }
-            result.reload || result.song != null -> loadSong(result.song, 0L, autoPlay)
+            result.reload -> {
+                // Prefer native loop; if we still got here, hard-reset the track
+                val song = result.song ?: queueManager.currentSong()
+                Log.i(TAG, "applyAdvance reload path=${song?.path}")
+                player?.stop()
+                loadSong(song, 0L, autoPlay)
+            }
+            result.song != null -> loadSong(result.song, 0L, autoPlay)
             result.finished -> {
                 player?.pause()
                 _nowPlaying.value = queueManager.currentSong()
@@ -205,11 +231,13 @@ class MusicService : MediaSessionService() {
 
     fun cycleRepeatMode() {
         queueManager.cycleRepeatMode()
+        syncPlayerRepeatMode()
         persistState()
     }
 
     fun setRepeatMode(mode: RepeatMode) {
         queueManager.setRepeatMode(mode)
+        syncPlayerRepeatMode()
         persistState()
     }
 
@@ -235,6 +263,7 @@ class MusicService : MediaSessionService() {
         if (advancing) return
         advancing = true
         try {
+            // User skip always advances even in repeat-one
             applyAdvance(queueManager.advance(userInitiated = true))
         } finally {
             advancing = false
@@ -272,6 +301,7 @@ class MusicService : MediaSessionService() {
             val saved = withContext(Dispatchers.IO) { stateStore.load() } ?: return@launch
             queueManager.restore(saved.snapshot)
             loadSong(queueManager.currentSong(), saved.positionMs, autoPlay = false)
+            syncPlayerRepeatMode()
         }
     }
 
@@ -301,7 +331,25 @@ class MusicService : MediaSessionService() {
         }
 
         override fun onPlaybackStateChanged(playbackState: Int) {
+            val name = when (playbackState) {
+                Player.STATE_IDLE -> "IDLE"
+                Player.STATE_BUFFERING -> "BUFFERING"
+                Player.STATE_READY -> "READY"
+                Player.STATE_ENDED -> "ENDED"
+                else -> "?$playbackState"
+            }
+            Log.d(TAG, "onPlaybackStateChanged $name exoRepeat=${player?.repeatMode}")
+
+            // With REPEAT_MODE_ONE, ExoPlayer loops internally and should not end.
+            // Only advance our dual-queue when the player is not in native one-loop.
             if (playbackState == Player.STATE_ENDED && !advancing) {
+                if (player?.repeatMode == Player.REPEAT_MODE_ONE) {
+                    Log.i(TAG, "STATE_ENDED under REPEAT_MODE_ONE — restarting track cleanly")
+                    val song = queueManager.currentSong()
+                    player?.stop()
+                    loadSong(song, 0L, autoPlay = true)
+                    return
+                }
                 advancing = true
                 try {
                     applyAdvance(queueManager.advance(userInitiated = false))
