@@ -11,6 +11,8 @@ import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.platform.LocalView
 import androidx.core.view.WindowCompat
 
+private val ColorBlackish = Color(0xFF1A1224)
+
 /** Always-dark purple theme. Accent customization lands in Settings later. */
 private val YuriDarkPurple = darkColorScheme(
     primary = YuriPurple,
@@ -29,8 +31,6 @@ private val YuriDarkPurple = darkColorScheme(
     onSurfaceVariant = YuriMuted,
     outline = YuriMuted.copy(alpha = 0.5f)
 )
-
-private val ColorBlackish = Color(0xFF1A1224)
 
 @Composable
 fun YuriPlayerTheme(
