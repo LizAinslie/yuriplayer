@@ -34,6 +34,18 @@ android {
     buildFeatures {
         compose = true
     }
+
+    // AGP 9: register KSP output via android.sourceSets (preferred over kotlin.sourceSets)
+    sourceSets {
+        getByName("debug") {
+            java.srcDir("build/generated/ksp/debug/java")
+            java.srcDir("build/generated/ksp/debug/kotlin")
+        }
+        getByName("release") {
+            java.srcDir("build/generated/ksp/release/java")
+            java.srcDir("build/generated/ksp/release/kotlin")
+        }
+    }
 }
 
 dependencies {
