@@ -2,15 +2,31 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:tools="http://schemas.android.com/tools">
 
-    <!-- API 32 and below -->
+    <!--
+      Storage / audio library access
+      Justification: core feature — scan and play the user's local music library
+      (Music/, Download/, user-configured roots). No other media types are read.
+    -->
     <uses-permission
         android:name="android.permission.READ_EXTERNAL_STORAGE"
-        android:maxSdkVersion="32" />
-    <!-- API 33+ -->
-    <uses-permission android:name="android.permission.READ_MEDIA_AUDIO" />
+        android:maxSdkVersion="32"
+        tools:ignore="ScopedStorage" />
+    <uses-permission
+        android:name="android.permission.READ_MEDIA_AUDIO" />
 
+    <!--
+      Foreground playback service
+      Justification: keep music playing with media controls when the app is
+      backgrounded or the screen is off (car / pocket use).
+    -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK" />
+
+    <!--
+      Wake lock
+      Justification: hold a partial wake lock during active playback so the
+      CPU is not suspended mid-track on some devices.
+    -->
     <uses-permission android:name="android.permission.WAKE_LOCK" />
 
     <application
