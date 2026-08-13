@@ -191,7 +191,6 @@ class MusicService : MediaSessionService() {
         hardLoad(queueManager.currentSong(), 0L, autoPlay)
     }
 
-    /** Sync cold queue when the underlying album/playlist track list changes. */
     fun updateColdFromSource(songs: List<Song>, sourceId: String) {
         if (queueManager.updateColdFromSource(songs, sourceId)) persistState()
     }
@@ -498,9 +497,23 @@ class MusicService : MediaSessionService() {
         }
     }
 
+    /** User swiped the app away from recents — stop audio and tear down. */
     override fun onTaskRemoved(rootIntent: Intent?) {
+        Log.i(TAG, "onTaskRemoved — stopping playback")
         persistState()
-        if (player?.isPlaying == true || player?.playWhenReady == true) return
+        try {
+            player?.playWhenReady = false
+            player?.pause()
+            player?.stop()
+        } catch (e: Exception) {
+            Log.w(TAG, "stop on task removed", e)
+        }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+            stopForeground(STOP_FOREGROUND_REMOVE)
+        } else {
+            @Suppress("DEPRECATION")
+            stopForeground(true)
+        }
         stopSelf()
         super.onTaskRemoved(rootIntent)
     }
