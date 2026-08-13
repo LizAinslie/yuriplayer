@@ -405,22 +405,34 @@ fun NowPlayingScreen(
                         title = song.displayTitle,
                         subtitle = "${song.displayArtist} · ${song.displayAlbum}"
                     )
-                    MediaSheetItem("Go to album") {
-                        showSongMenu = false
-                        onGoToAlbum(song)
-                    }
-                    MediaSheetItem("Go to artist") {
-                        showSongMenu = false
-                        onGoToArtist(song)
-                    }
-                    MediaSheetItem("Add to playlist") {
-                        showSongMenu = false
-                        onAddToPlaylist(song)
-                    }
-                    MediaSheetItem("Add to queue") {
-                        showSongMenu = false
-                        onAddToQueue(song)
-                    }
+                    MediaSheetItem(
+                        label = "Go to album",
+                        onClick = {
+                            showSongMenu = false
+                            onGoToAlbum(song)
+                        }
+                    )
+                    MediaSheetItem(
+                        label = "Go to artist",
+                        onClick = {
+                            showSongMenu = false
+                            onGoToArtist(song)
+                        }
+                    )
+                    MediaSheetItem(
+                        label = "Add to playlist",
+                        onClick = {
+                            showSongMenu = false
+                            onAddToPlaylist(song)
+                        }
+                    )
+                    MediaSheetItem(
+                        label = "Add to queue",
+                        onClick = {
+                            showSongMenu = false
+                            onAddToQueue(song)
+                        }
+                    )
                     MediaSheetBottomPad()
                 }
             }

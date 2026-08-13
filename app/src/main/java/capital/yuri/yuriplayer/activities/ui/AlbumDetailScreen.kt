@@ -254,33 +254,42 @@ fun AlbumDetailScreen(
                     }
                 }
 
-                if (showMenu) {
-                    ModalBottomSheet(
-                        onDismissRequest = { showMenu = false },
-                        sheetState = rememberModalBottomSheetState()
-                    ) {
-                        MediaSheetHeader(
-                            song = album.songs.firstOrNull(),
-                            title = album.displayName,
-                            subtitle = album.displayArtist
-                        )
-                        MediaSheetItem("Add to queue") {
+            if (showMenu) {
+                ModalBottomSheet(
+                    onDismissRequest = { showMenu = false },
+                    sheetState = rememberModalBottomSheetState()
+                ) {
+                    MediaSheetHeader(
+                        song = album.songs.firstOrNull(),
+                        title = album.displayName,
+                        subtitle = album.displayArtist
+                    )
+                    MediaSheetItem(
+                        label = "Add to queue",
+                            onClick =  {
                             onAddAlbumToQueue(album.songs)
                             Toast.makeText(
                                 context,
-                                "Queued ${formatTrackCount(album.songs.size)}",
+                                "Queued ${formatTrackCount(album.songs.size)} tracks",
                                 Toast.LENGTH_SHORT
                             ).show()
                             showMenu = false
                         }
-                        MediaSheetItem("Go to artist") {
+                    )
+                    MediaSheetItem(
+                        label = "Go to artist",
+                            onClick = {
                             showMenu = false
                             onOpenArtist()
                         }
-                        MediaSheetItem("Add to playlist") {
+                    )
+                    MediaSheetItem(
+                        label = "Add to playlist",
+                        onClick = {
                             showMenu = false
                             Toast.makeText(context, "Playlists coming soon", Toast.LENGTH_SHORT).show()
                         }
+                        )
                         MediaSheetBottomPad()
                     }
                 }
