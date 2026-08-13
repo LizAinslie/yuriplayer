@@ -4,7 +4,6 @@ import android.widget.Toast
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -47,6 +46,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
@@ -58,7 +58,6 @@ import capital.yuri.yuriplayer.data.Song
 import capital.yuri.yuriplayer.data.theme.ThemeService
 import capital.yuri.yuriplayer.ui.formatTrackCount
 import org.koin.compose.koinInject
-import kotlin.math.min
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -124,24 +123,17 @@ fun AlbumDetailScreen(
     }
 
     MaterialTheme(colorScheme = scheme) {
-        BoxWithConstraints(
+        Box(
             modifier = Modifier
                 .fillMaxSize()
                 .background(defaultBg)
                 .statusBarsPadding()
         ) {
-            val viewportPx = constraints.maxHeight.toFloat()
-            // Soft fade under the hero: ~half viewport, never taller than remaining space
-            val fadeDp = with(density) {
-                min(viewportPx * 0.45f, viewportPx * 0.55f).toDp()
-            }
-
             LazyColumn(
                 state = listState,
                 modifier = Modifier.fillMaxSize(),
                 contentPadding = PaddingValues(bottom = 96.dp)
             ) {
-                // Hero sits on album color; gradient strip scrolls with it so there is no fixed band
                 item(key = "hero") {
                     Column(
                         modifier = Modifier
@@ -160,11 +152,11 @@ fun AlbumDetailScreen(
                             onMore = { showMenu = true },
                             onOpenArtist = onOpenArtist
                         )
-                        // Scroll-linked fade into the default page background
+                        // Short scroll-linked fade into the track list / default bg
                         Box(
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .height(fadeDp)
+                                .height(96.dp)
                                 .background(
                                     Brush.verticalGradient(
                                         colors = listOf(albumBg, defaultBg)
@@ -187,7 +179,6 @@ fun AlbumDetailScreen(
                         val globalIndex = album.songs.indexOfFirst {
                             (it.path != null && it.path == song.path) || it.id == song.id
                         }.coerceAtLeast(0)
-                        // Opaque default bg so swipe-to-queue never bleeds through
                         SwipeAddSongRow(
                             song = song,
                             onClick = { onPlayAlbum(album.songs, globalIndex) },
@@ -395,7 +386,7 @@ private fun CollapsedSpotifyBar(
     album: AlbumItem,
     fraction: Float,
     showPause: Boolean,
-    barColor: androidx.compose.ui.graphics.Color,
+    barColor: Color,
     onBack: () -> Unit,
     onPrimary: () -> Unit
 ) {
