@@ -1,5 +1,6 @@
 package capital.yuri.yuriplayer.activities.ui
 
+import android.widget.Toast
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.spring
 import androidx.compose.foundation.background
@@ -12,8 +13,8 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -44,8 +45,10 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.zIndex
 import capital.yuri.yuriplayer.data.Song
@@ -118,6 +121,7 @@ fun QueuePanel(
     onMoveColdToHot: (Int) -> Unit = {},
     onClearHotQueue: () -> Unit = {},
     onPlayHistorySong: (Song) -> Unit = {},
+    onAddHistoryToQueue: (Song) -> Unit = {},
     onClearHistory: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
@@ -174,6 +178,7 @@ fun QueuePanel(
                 entries = history,
                 maxEntries = historyStore.maxEntries,
                 onPlay = onPlayHistorySong,
+                onAddToQueue = onAddHistoryToQueue,
                 modifier = Modifier.weight(1f)
             )
         }
@@ -197,7 +202,6 @@ private fun QueueTabContent(
     val hotDrag = remember { SectionDragState() }
     val coldDrag = remember { SectionDragState() }
 
-    // Upcoming only — current lives in the sticky card
     val currentKey = nowPlaying?.let { it.path ?: it.contentUri.toString() }
     fun isCurrent(song: Song): Boolean {
         val k = song.path ?: song.contentUri.toString()
@@ -205,7 +209,6 @@ private fun QueueTabContent(
     }
 
     Column(modifier = modifier) {
-        // Sticky now-playing card
         if (nowPlaying != null) {
             NowPlayingQueueCard(song = nowPlaying)
         }
@@ -296,7 +299,6 @@ private fun QueueTabContent(
     }
 }
 
-/** Listing-style sticky card for the track that is playing right now. */
 @Composable
 private fun NowPlayingQueueCard(song: Song) {
     Surface(
@@ -499,8 +501,10 @@ private fun HistoryTabContent(
     entries: List<HistoryEntry>,
     maxEntries: Int,
     onPlay: (Song) -> Unit,
+    onAddToQueue: (Song) -> Unit,
     modifier: Modifier = Modifier
 ) {
+    val context = LocalContext.current
     if (entries.isEmpty()) {
         Text(
             "Nothing played yet. Tracks show up here as you listen (up to $maxEntries).",
@@ -518,38 +522,87 @@ private fun HistoryTabContent(
     LazyColumn(modifier = modifier) {
         item {
             Text(
-                "${entries.size} / $maxEntries",
+                "${entries.size} / $maxEntries · swipe right to queue",
                 style = MaterialTheme.typography.labelMedium,
                 color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f),
                 modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
             )
         }
         items(entries, key = { "${it.song.id}-${it.playedAtMs}-${it.song.path}" }) { entry ->
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .clickable { onPlay(entry.song) }
-                    .padding(horizontal = 8.dp, vertical = 10.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Column(modifier = Modifier.weight(1f)) {
-                    MarqueeText(
-                        text = entry.song.displayTitle,
-                        style = MaterialTheme.typography.bodyMedium
-                    )
-                    MarqueeText(
-                        text = entry.song.displayArtist,
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
+            HistorySwipeRow(
+                entry = entry,
+                timeLabel = timeFmt.format(Date(entry.playedAtMs)),
+                onPlay = { onPlay(entry.song) },
+                onAddToQueue = {
+                    onAddToQueue(entry.song)
+                    Toast.makeText(context, "Added to queue", Toast.LENGTH_SHORT).show()
+                }
+            )
+        }
+    }
+}
+
+/** Swipe right → queue (same affordance as library). Tap → play. */
+@Composable
+private fun HistorySwipeRow(
+    entry: HistoryEntry,
+    timeLabel: String,
+    onPlay: () -> Unit,
+    onAddToQueue: () -> Unit
+) {
+    var offsetX by remember { mutableFloatStateOf(0f) }
+    val density = LocalDensity.current
+    val threshold = with(density) { 96.dp.toPx() }
+
+    Box(
+        modifier = Modifier
+            .fillMaxWidth()
+            .background(MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.35f))
+    ) {
+        Text(
+            "+ Queue",
+            style = MaterialTheme.typography.labelLarge,
+            color = MaterialTheme.colorScheme.primary,
+            modifier = Modifier.align(Alignment.CenterStart).padding(start = 16.dp)
+        )
+        Row(
+            modifier = Modifier
+                .offset { IntOffset(offsetX.roundToInt(), 0) }
+                .fillMaxWidth()
+                .background(MaterialTheme.colorScheme.surface)
+                .pointerInput(entry.playedAtMs, entry.song.id) {
+                    detectHorizontalDragGestures(
+                        onDragEnd = {
+                            if (offsetX > threshold) onAddToQueue()
+                            offsetX = 0f
+                        },
+                        onDragCancel = { offsetX = 0f },
+                        onHorizontalDrag = { _, dragAmount ->
+                            offsetX = (offsetX + dragAmount).coerceIn(0f, threshold * 1.5f)
+                        }
                     )
                 }
-                Spacer(modifier = Modifier.width(8.dp))
-                Text(
-                    timeFmt.format(Date(entry.playedAtMs)),
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.45f)
+                .clickable(onClick = onPlay)
+                .padding(horizontal = 8.dp, vertical = 10.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Column(modifier = Modifier.weight(1f)) {
+                MarqueeText(
+                    text = entry.song.displayTitle,
+                    style = MaterialTheme.typography.bodyMedium
+                )
+                MarqueeText(
+                    text = entry.song.displayArtist,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
                 )
             }
+            Spacer(modifier = Modifier.width(8.dp))
+            Text(
+                timeLabel,
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.45f)
+            )
         }
     }
 }
