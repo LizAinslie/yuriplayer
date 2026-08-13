@@ -64,14 +64,9 @@ import capital.yuri.yuriplayer.ui.formatTrackCount
 import org.koin.compose.koinInject
 import kotlin.math.roundToInt
 
-/** Approximate expanded hero content height (art + meta + actions). */
-private val ExpandedHeroHeight = 430.dp
-/** Collapsed sticky bar height. */
 private val CollapsedBarHeight = 56.dp
-/** Long soft fade under the header into the list. */
-private val GradientFadeHeight = 320.dp
-/** How early the fade begins inside the expanded hero (pulls vignette up a bit). */
-private val ExpandedEarlyStart = 72.dp
+/** Sticky fade under the collapsed bar (behind the list). */
+private val CollapsedFadeHeight = 220.dp
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -137,13 +132,10 @@ fun AlbumDetailScreen(
     }
 
     val f = collapseFraction.coerceIn(0f, 1f)
-    // Sticky gradient top: under expanded hero (with early start) → under collapsed bar
-    val gradientTopDp = ExpandedHeroHeight - ExpandedEarlyStart +
-        (CollapsedBarHeight - (ExpandedHeroHeight - ExpandedEarlyStart)) * f
-    val gradientTopPx = with(density) { gradientTopDp.toPx().roundToInt() }
+    val collapsedBarPx = with(density) { CollapsedBarHeight.toPx().roundToInt() }
 
     MaterialTheme(colorScheme = scheme) {
-        // Album color through the status-bar region; page body is default below the fade
+        // Album color through the status-bar; page body defaults underneath
         Box(
             modifier = Modifier
                 .fillMaxSize()
@@ -153,14 +145,18 @@ fun AlbumDetailScreen(
                 modifier = Modifier
                     .fillMaxSize()
                     .statusBarsPadding()
+                    .background(defaultBg)
             ) {
-                // Default page color fills under the sticky gradient so the list meshes with mini-player
-                Box(
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .offset { IntOffset(0, gradientTopPx) }
-                        .background(defaultBg)
-                )
+                // Sticky vignette under collapsed bar — ALWAYS behind the list (drawn first)
+                if (f > 0.05f) {
+                    StickyAlbumGradient(
+                        albumBg = albumBg,
+                        defaultBg = defaultBg,
+                        topPx = collapsedBarPx,
+                        height = CollapsedFadeHeight,
+                        alpha = f
+                    )
+                }
 
                 LazyColumn(
                     state = listState,
@@ -168,10 +164,34 @@ fun AlbumDetailScreen(
                     contentPadding = PaddingValues(bottom = 96.dp)
                 ) {
                     item(key = "hero") {
+                        // Gradient is the hero's own background — behind the controls, scrolls with content
                         Column(
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .background(albumBg)
+                                .drawBehind {
+                                    drawRect(
+                                        brush = Brush.verticalGradient(
+                                            colorStops = arrayOf(
+                                                0.00f to albumBg,
+                                                0.42f to albumBg,
+                                                0.62f to lerpColor(albumBg, defaultBg, 0.28f),
+                                                0.82f to lerpColor(albumBg, defaultBg, 0.7f),
+                                                1.00f to defaultBg
+                                            )
+                                        )
+                                    )
+                                    drawRect(
+                                        brush = Brush.radialGradient(
+                                            colors = listOf(
+                                                albumBg.copy(alpha = 0.4f),
+                                                albumBg.copy(alpha = 0.12f),
+                                                Color.Transparent
+                                            ),
+                                            center = Offset(size.width / 2f, size.height * 0.15f),
+                                            radius = size.maxDimension * 0.9f
+                                        )
+                                    )
+                                }
                         ) {
                             SpotifyAlbumHero(
                                 album = album,
@@ -185,8 +205,8 @@ fun AlbumDetailScreen(
                                 onMore = { showMenu = true },
                                 onOpenArtist = onOpenArtist
                             )
-                            // Spacer so tracks start after the fade zone
-                            Spacer(modifier = Modifier.height(GradientFadeHeight - ExpandedEarlyStart))
+                            // Small tail so the dissolve continues a bit under the first tracks
+                            Spacer(modifier = Modifier.height(48.dp))
                         }
                     }
 
@@ -212,20 +232,12 @@ fun AlbumDetailScreen(
                                 },
                                 showTrackNumber = true,
                                 isPlaying = song.isSameAs(nowPlaying),
-                                transparentSurface = false,
-                                surfaceColor = defaultBg
+                                // Transparent so any background fade shows through without washing text
+                                transparentSurface = true
                             )
                         }
                     }
                 }
-
-                // Sticky vignette: stays under the header whether expanded or collapsed
-                StickyAlbumGradient(
-                    albumBg = albumBg,
-                    defaultBg = defaultBg,
-                    topPx = gradientTopPx,
-                    height = GradientFadeHeight
-                )
 
                 CollapsedSpotifyBar(
                     album = album,
@@ -293,33 +305,28 @@ fun AlbumDetailScreen(
     }
 }
 
-/**
- * Long, smooth vertical fade with a soft radial vignette so the album color
- * pools under the header and dissolves into the default page background.
- * Positioned sticky under the (expanded or collapsed) header.
- */
 @Composable
 private fun StickyAlbumGradient(
     albumBg: Color,
     defaultBg: Color,
     topPx: Int,
-    height: androidx.compose.ui.unit.Dp
+    height: androidx.compose.ui.unit.Dp,
+    alpha: Float = 1f
 ) {
     Box(
         modifier = Modifier
             .fillMaxWidth()
             .height(height)
-            // offset lambda is Density.() -> IntOffset — not a @Composable scope
             .offset { IntOffset(0, topPx) }
+            .graphicsLayer { this.alpha = alpha }
             .drawBehind {
                 drawRect(
                     brush = Brush.verticalGradient(
                         colorStops = arrayOf(
                             0.00f to albumBg,
-                            0.18f to albumBg.copy(alpha = 0.92f),
-                            0.40f to lerpColor(albumBg, defaultBg, 0.35f),
-                            0.65f to lerpColor(albumBg, defaultBg, 0.72f),
-                            0.85f to defaultBg.copy(alpha = 0.92f),
+                            0.25f to albumBg.copy(alpha = 0.85f),
+                            0.55f to lerpColor(albumBg, defaultBg, 0.55f),
+                            0.8f to defaultBg.copy(alpha = 0.9f),
                             1.00f to defaultBg
                         )
                     )
@@ -327,12 +334,11 @@ private fun StickyAlbumGradient(
                 drawRect(
                     brush = Brush.radialGradient(
                         colors = listOf(
-                            albumBg.copy(alpha = 0.35f),
-                            albumBg.copy(alpha = 0.12f),
+                            albumBg.copy(alpha = 0.28f),
                             Color.Transparent
                         ),
                         center = Offset(size.width / 2f, 0f),
-                        radius = size.maxDimension * 0.95f
+                        radius = size.maxDimension * 0.9f
                     )
                 )
             }
