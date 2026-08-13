@@ -1,8 +1,15 @@
 package capital.yuri.yuriplayer.activities.ui
 
 import android.widget.Toast
+import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.spring
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.togetherWith
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
@@ -62,6 +69,26 @@ import java.util.Date
 import kotlin.math.roundToInt
 
 private enum class QueueTab { Queue, History }
+
+/** Stable Lazy keys that survive list head removals (index alone would break placement anim). */
+private data class QueuedSong(
+    val key: String,
+    val index: Int,
+    val song: Song
+)
+
+private fun keyedQueue(prefix: String, songs: List<Song>, skip: (Song) -> Boolean): List<QueuedSong> {
+    val seen = mutableMapOf<String, Int>()
+    val out = ArrayList<QueuedSong>(songs.size)
+    songs.forEachIndexed { index, song ->
+        if (skip(song)) return@forEachIndexed
+        val base = "$prefix-${song.path ?: song.contentUri}"
+        val n = seen.getOrDefault(base, 0)
+        seen[base] = n + 1
+        out += QueuedSong(key = "$base#$n", index = index, song = song)
+    }
+    return out
+}
 
 private class SectionDragState {
     var from by mutableIntStateOf(-1)
@@ -185,6 +212,7 @@ fun QueuePanel(
     }
 }
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun QueueTabContent(
     snapshot: QueueSnapshot,
@@ -208,12 +236,34 @@ private fun QueueTabContent(
         return currentKey != null && k == currentKey
     }
 
-    val upcomingHot = snapshot.hotQueue.filter { !isCurrent(it) }
+    val upcomingHot = remember(snapshot.hotQueue, currentKey) {
+        keyedQueue("hot", snapshot.hotQueue, ::isCurrent)
+    }
+    val upcomingCold = remember(snapshot.coldQueue, currentKey) {
+        keyedQueue("cold", snapshot.coldQueue, ::isCurrent)
+    }
     val showHotSection = upcomingHot.isNotEmpty()
 
+    val placementSpec = spring<androidx.compose.ui.unit.IntOffset>(
+        stiffness = Spring.StiffnessMediumLow,
+        dampingRatio = 0.85f
+    )
+    val fadeSpec = tween<Float>(durationMillis = 200)
+
     Column(modifier = modifier) {
-        if (nowPlaying != null) {
-            NowPlayingQueueCard(song = nowPlaying)
+        AnimatedContent(
+            targetState = nowPlaying?.let { it.path ?: it.contentUri.toString() },
+            transitionSpec = {
+                fadeIn(tween(220)) togetherWith fadeOut(tween(160))
+            },
+            label = "nowPlayingCard"
+        ) { key ->
+            val song = nowPlaying?.takeIf {
+                (it.path ?: it.contentUri.toString()) == key
+            }
+            if (song != null) {
+                NowPlayingQueueCard(song = song)
+            }
         }
 
         LazyColumn(
@@ -221,36 +271,39 @@ private fun QueueTabContent(
             state = rememberLazyListState()
         ) {
             if (showHotSection) {
-                item { SectionHeader("Queue · ${upcomingHot.size}") }
-                itemsIndexed(
-                    snapshot.hotQueue,
-                    // Index must be in the key — same song can appear twice in queue
-                    key = { index, s -> "hot-$index-${s.id}-${s.path}" }
-                ) { index, song ->
-                    if (isCurrent(song)) return@itemsIndexed
+                item(key = "hdr-hot") { SectionHeader("Queue · ${upcomingHot.size}") }
+                items(
+                    items = upcomingHot,
+                    key = { it.key }
+                ) { entry ->
                     SwipeableQueueRow(
-                        song = song,
-                        index = index,
+                        song = entry.song,
+                        index = entry.index,
                         listSize = snapshot.hotQueue.size,
                         isCurrent = false,
                         rowHeightPx = rowHeightPx,
                         drag = hotDrag,
                         allowPromoteToHot = false,
                         showPromoteHint = false,
-                        onClick = { onPlayItem(QueueLane.HOT, index) },
+                        onClick = { onPlayItem(QueueLane.HOT, entry.index) },
                         onCommitMove = { f, t -> onMoveHot(f, t) },
-                        onSwipeRemove = { onRemoveHot(index) },
-                        onSwipePromote = null
+                        onSwipeRemove = { onRemoveHot(entry.index) },
+                        onSwipePromote = null,
+                        modifier = Modifier.animateItem(
+                            fadeInSpec = fadeSpec,
+                            fadeOutSpec = fadeSpec,
+                            placementSpec = placementSpec
+                        )
                     )
                 }
             }
 
-            item {
+            item(key = "hdr-cold") {
                 val contextLabel = snapshot.coldSource?.title
                     ?: snapshot.coldQueue.firstOrNull()?.album?.takeIf { it.isNotBlank() }
                     ?: "Up next"
                 SectionHeader(
-                    "$contextLabel · ${snapshot.coldQueue.count { !isCurrent(it) }}" +
+                    "$contextLabel · ${upcomingCold.size}" +
                         if (snapshot.shuffleEnabled) " · shuffled" else ""
                 )
                 if (showHotSection) {
@@ -262,8 +315,8 @@ private fun QueueTabContent(
                     )
                 }
             }
-            if (snapshot.coldQueue.none { !isCurrent(it) }) {
-                item {
+            if (upcomingCold.isEmpty()) {
+                item(key = "cold-empty") {
                     Text(
                         "Play an album or list to fill what comes next.",
                         style = MaterialTheme.typography.bodySmall,
@@ -272,25 +325,29 @@ private fun QueueTabContent(
                     )
                 }
             }
-            itemsIndexed(
-                snapshot.coldQueue,
-                key = { index, s -> "cold-$index-${s.id}-${s.path}" }
-            ) { index, song ->
-                if (isCurrent(song)) return@itemsIndexed
+            items(
+                items = upcomingCold,
+                key = { it.key }
+            ) { entry ->
                 SwipeableQueueRow(
-                    song = song,
-                    index = index,
+                    song = entry.song,
+                    index = entry.index,
                     listSize = snapshot.coldQueue.size,
                     isCurrent = false,
                     rowHeightPx = rowHeightPx,
                     drag = coldDrag,
                     allowPromoteToHot = true,
-                    showPromoteHint = coldDrag.active && coldDrag.promoteToHot && coldDrag.from == index,
-                    onClick = { onPlayItem(QueueLane.COLD, index) },
+                    showPromoteHint = coldDrag.active && coldDrag.promoteToHot && coldDrag.from == entry.index,
+                    onClick = { onPlayItem(QueueLane.COLD, entry.index) },
                     onCommitMove = { f, t -> onMoveCold(f, t) },
-                    onSwipeRemove = { onRemoveCold(index) },
-                    onSwipePromote = { onMoveColdToHot(index) },
-                    onDragPromote = { onMoveColdToHot(it) }
+                    onSwipeRemove = { onRemoveCold(entry.index) },
+                    onSwipePromote = { onMoveColdToHot(entry.index) },
+                    onDragPromote = { onMoveColdToHot(it) },
+                    modifier = Modifier.animateItem(
+                        fadeInSpec = fadeSpec,
+                        fadeOutSpec = fadeSpec,
+                        placementSpec = placementSpec
+                    )
                 )
             }
         }
@@ -351,7 +408,8 @@ private fun SwipeableQueueRow(
     onCommitMove: (from: Int, to: Int) -> Unit,
     onSwipeRemove: () -> Unit,
     onSwipePromote: (() -> Unit)?,
-    onDragPromote: ((Int) -> Unit)? = null
+    onDragPromote: ((Int) -> Unit)? = null,
+    modifier: Modifier = Modifier
 ) {
     val density = LocalDensity.current
     val swipeThreshold = with(density) { 96.dp.toPx() }
@@ -371,7 +429,7 @@ private fun SwipeableQueueRow(
     )
 
     Box(
-        modifier = Modifier
+        modifier = modifier
             .fillMaxWidth()
             .zIndex(if (isDragged) 10f else 0f)
     ) {
