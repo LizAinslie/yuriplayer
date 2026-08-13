@@ -47,7 +47,6 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
@@ -60,9 +59,6 @@ import capital.yuri.yuriplayer.data.theme.ThemeService
 import capital.yuri.yuriplayer.ui.formatTrackCount
 import org.koin.compose.koinInject
 import kotlin.math.min
-
-/** Approximate expanded hero height (art + title + actions). */
-private val AlbumHeroHeight = 420.dp
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -135,33 +131,9 @@ fun AlbumDetailScreen(
                 .statusBarsPadding()
         ) {
             val viewportPx = constraints.maxHeight.toFloat()
-            val headerPx = with(density) { AlbumHeroHeight.toPx() }
-            // Fade distance = full header height, capped so it fits under the header in the viewport
-            val fadePx = min(headerPx, (viewportPx - headerPx).coerceAtLeast(0f))
-            val fadeDp = with(density) { fadePx.toDp() }
-
-            // Solid album color behind the hero
-            Box(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(AlbumHeroHeight)
-                    .align(Alignment.TopCenter)
-                    .background(albumBg)
-            )
-            // Gradient from bottom of header downward into default bg
-            if (fadePx > 0f) {
-                Box(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(fadeDp)
-                        .padding(top = AlbumHeroHeight)
-                        .align(Alignment.TopCenter)
-                        .background(
-                            Brush.verticalGradient(
-                                colors = listOf(albumBg, defaultBg)
-                            )
-                        )
-                )
+            // Soft fade under the hero: ~half viewport, never taller than remaining space
+            val fadeDp = with(density) {
+                min(viewportPx * 0.45f, viewportPx * 0.55f).toDp()
             }
 
             LazyColumn(
@@ -169,19 +141,37 @@ fun AlbumDetailScreen(
                 modifier = Modifier.fillMaxSize(),
                 contentPadding = PaddingValues(bottom = 96.dp)
             ) {
-                item {
-                    SpotifyAlbumHero(
-                        album = album,
-                        metaLine = metaLine,
-                        collapseFraction = collapseFraction,
-                        showPause = showPause,
-                        shuffleEnabled = shuffleEnabled,
-                        onPrimary = onPrimary,
-                        onToggleShuffle = onToggleShuffle,
-                        onFavorite = onFavorite,
-                        onMore = { showMenu = true },
-                        onOpenArtist = onOpenArtist
-                    )
+                // Hero sits on album color; gradient strip scrolls with it so there is no fixed band
+                item(key = "hero") {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .background(albumBg)
+                    ) {
+                        SpotifyAlbumHero(
+                            album = album,
+                            metaLine = metaLine,
+                            collapseFraction = collapseFraction,
+                            showPause = showPause,
+                            shuffleEnabled = shuffleEnabled,
+                            onPrimary = onPrimary,
+                            onToggleShuffle = onToggleShuffle,
+                            onFavorite = onFavorite,
+                            onMore = { showMenu = true },
+                            onOpenArtist = onOpenArtist
+                        )
+                        // Scroll-linked fade into the default page background
+                        Box(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(fadeDp)
+                                .background(
+                                    Brush.verticalGradient(
+                                        colors = listOf(albumBg, defaultBg)
+                                    )
+                                )
+                        )
+                    }
                 }
 
                 discs.forEach { (disc, tracks) ->
@@ -197,6 +187,7 @@ fun AlbumDetailScreen(
                         val globalIndex = album.songs.indexOfFirst {
                             (it.path != null && it.path == song.path) || it.id == song.id
                         }.coerceAtLeast(0)
+                        // Opaque default bg so swipe-to-queue never bleeds through
                         SwipeAddSongRow(
                             song = song,
                             onClick = { onPlayAlbum(album.songs, globalIndex) },
@@ -206,7 +197,8 @@ fun AlbumDetailScreen(
                             },
                             showTrackNumber = true,
                             isPlaying = song.isSameAs(nowPlaying),
-                            transparentSurface = true
+                            transparentSurface = false,
+                            surfaceColor = defaultBg
                         )
                     }
                 }
@@ -216,6 +208,7 @@ fun AlbumDetailScreen(
                 album = album,
                 fraction = collapseFraction,
                 showPause = showPause,
+                barColor = defaultBg,
                 onBack = onBack,
                 onPrimary = onPrimary
             )
@@ -402,6 +395,7 @@ private fun CollapsedSpotifyBar(
     album: AlbumItem,
     fraction: Float,
     showPause: Boolean,
+    barColor: androidx.compose.ui.graphics.Color,
     onBack: () -> Unit,
     onPrimary: () -> Unit
 ) {
@@ -410,7 +404,7 @@ private fun CollapsedSpotifyBar(
         modifier = Modifier
             .fillMaxWidth()
             .graphicsLayer { alpha = fraction }
-            .background(MaterialTheme.colorScheme.background.copy(alpha = 0.96f))
+            .background(barColor)
             .padding(start = 4.dp, end = 16.dp, top = 6.dp, bottom = 6.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
