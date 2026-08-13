@@ -334,7 +334,6 @@ fun SwipeAddSongRow(
     val titleWeight = if (isPlaying) FontWeight.SemiBold else FontWeight.Normal
 
     Box(modifier = Modifier.fillMaxWidth()) {
-        // Only paint the reveal while the user is actually swiping
         if (revealAlpha > 0.01f) {
             Box(
                 modifier = Modifier
@@ -372,18 +371,28 @@ fun SwipeAddSongRow(
                 .padding(horizontal = 16.dp, vertical = 10.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            if (!showTrackNumber) {
-                AlbumArt(song = song, size = 40.dp, corner = 4.dp)
-                Spacer(modifier = Modifier.width(12.dp))
-            } else if (song.trackNumber != null) {
-                Text(
-                    text = "${song.trackNumber}",
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = if (isPlaying) accent else onSurface.copy(alpha = 0.55f),
-                    modifier = Modifier.width(28.dp)
-                )
-            } else {
-                Spacer(modifier = Modifier.width(28.dp))
+            when {
+                !showTrackNumber -> {
+                    AlbumArt(song = song, size = 40.dp, corner = 4.dp)
+                    Spacer(modifier = Modifier.width(12.dp))
+                }
+                isPlaying -> {
+                    Box(
+                        modifier = Modifier.width(28.dp),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        PlayingIndicator(color = accent)
+                    }
+                }
+                song.trackNumber != null -> {
+                    Text(
+                        text = "${song.trackNumber}",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = onSurface.copy(alpha = 0.55f),
+                        modifier = Modifier.width(28.dp)
+                    )
+                }
+                else -> Spacer(modifier = Modifier.width(28.dp))
             }
             Column(modifier = Modifier.weight(1f)) {
                 MarqueeText(
