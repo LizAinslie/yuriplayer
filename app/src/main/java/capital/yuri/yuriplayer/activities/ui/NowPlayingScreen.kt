@@ -12,6 +12,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.QueueMusic
 import androidx.compose.material.icons.filled.ExpandMore
@@ -88,7 +89,6 @@ fun NowPlayingScreen(
     var hFrac by remember { mutableFloatStateOf(0f) }
     var dismissFrac by remember { mutableFloatStateOf(0f) }
 
-    // Keep theme hot so reopening NP has no FOUC
     LaunchedEffect(song?.id, song?.path) {
         themeStore.updateCurrent(context, song, baseScheme)
     }
@@ -103,7 +103,6 @@ fun NowPlayingScreen(
     }
 
     val playerColors = theme?.colors ?: fallbackPlayerColors(baseScheme)
-    // Blend toward neighbor palette while swiping
     val blendTarget = when {
         hFrac < -0.02f -> nextTheme?.colors
         hFrac > 0.02f -> prevTheme?.colors
@@ -116,13 +115,21 @@ fun NowPlayingScreen(
 
     val scheme = playerColorScheme(shownColors, baseScheme)
 
+    // API 27+: classic statusBarColor (not ROM Material You)
+    ThemedStatusBar(color = scheme.background, enabled = true)
+
     MaterialTheme(colorScheme = scheme) {
         Surface(
             modifier = Modifier.fillMaxSize(),
-            color = scheme.background.copy(alpha = 1f - dismissFrac * 0.25f)
+            color = scheme.background.copy(alpha = 1f - dismissFrac * 0.2f)
         ) {
             if (showQueue) {
-                Column(modifier = Modifier.fillMaxSize().padding(16.dp)) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .statusBarsPadding()
+                        .padding(horizontal = 16.dp, vertical = 8.dp)
+                ) {
                     Box(
                         modifier = Modifier.fillMaxWidth(),
                         contentAlignment = Alignment.Center
@@ -153,9 +160,13 @@ fun NowPlayingScreen(
                 return@Surface
             }
 
-            Column(modifier = Modifier.fillMaxSize().padding(16.dp)) {
+            Column(modifier = Modifier.fillMaxSize()) {
+                // Top chrome — padded
                 Box(
-                    modifier = Modifier.fillMaxWidth(),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .statusBarsPadding()
+                        .padding(horizontal = 8.dp),
                     contentAlignment = Alignment.Center
                 ) {
                     IconButton(onClick = onCollapse) {
@@ -163,8 +174,7 @@ fun NowPlayingScreen(
                     }
                 }
 
-                Spacer(modifier = Modifier.height(4.dp))
-
+                // Album art — full width, edge-to-edge (swipe from absolute screen edge)
                 SwipeableAlbumArt(
                     current = theme,
                     next = nextTheme,
@@ -176,144 +186,147 @@ fun NowPlayingScreen(
                     onDismissFraction = { dismissFrac = it },
                     modifier = Modifier
                         .fillMaxWidth()
-                        .padding(horizontal = 20.dp)
                         .aspectRatio(1f)
                 )
 
-                Spacer(modifier = Modifier.height(28.dp))
-
-                Text(
-                    song?.displayTitle ?: "Not playing",
-                    style = MaterialTheme.typography.headlineSmall,
-                    fontWeight = FontWeight.Bold,
-                    color = scheme.onBackground,
-                    maxLines = 2,
-                    overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.padding(horizontal = 8.dp)
-                )
-                Text(
-                    song?.displayArtist ?: "",
-                    style = MaterialTheme.typography.titleMedium,
-                    color = shownColors.muted,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.padding(horizontal = 8.dp)
-                )
-                Text(
-                    song?.displayAlbum ?: "",
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = shownColors.muted.copy(alpha = 0.75f),
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.padding(horizontal = 8.dp)
-                )
-
-                Spacer(modifier = Modifier.height(20.dp))
-
-                WavySeekBar(
-                    progress = sliderPosition,
-                    playing = playing,
-                    onProgressChange = {
-                        sliding = true
-                        sliderPosition = it
-                    },
-                    onProgressChangeFinished = {
-                        sliding = false
-                        if (durationMs > 0) onSeek((sliderPosition * durationMs).toLong())
-                    },
-                    activeColor = scheme.primary,
-                    inactiveColor = shownColors.muted.copy(alpha = 0.35f),
-                    modifier = Modifier.padding(horizontal = 4.dp)
-                )
-
-                Row(
-                    modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp),
-                    horizontalArrangement = Arrangement.SpaceBetween
+                // Controls — padded
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .weight(1f)
+                        .padding(horizontal = 16.dp, vertical = 12.dp)
                 ) {
-                    Text(formatTime(positionMs), style = MaterialTheme.typography.labelSmall, color = shownColors.muted)
-                    Text(formatTime(durationMs), style = MaterialTheme.typography.labelSmall, color = shownColors.muted)
-                }
+                    Spacer(modifier = Modifier.height(12.dp))
 
-                Spacer(modifier = Modifier.height(12.dp))
+                    Text(
+                        song?.displayTitle ?: "Not playing",
+                        style = MaterialTheme.typography.headlineSmall,
+                        fontWeight = FontWeight.Bold,
+                        color = scheme.onBackground,
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                    Text(
+                        song?.displayArtist ?: "",
+                        style = MaterialTheme.typography.titleMedium,
+                        color = shownColors.muted,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                    Text(
+                        song?.displayAlbum ?: "",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = shownColors.muted.copy(alpha = 0.75f),
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
 
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceEvenly,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    IconButton(onClick = onToggleShuffle) {
-                        Icon(
-                            Icons.Default.Shuffle,
-                            "Shuffle",
-                            tint = if (snapshot.shuffleEnabled) scheme.primary
-                            else scheme.onBackground.copy(alpha = 0.7f)
-                        )
-                    }
-                    IconButton(onClick = onPrev) {
-                        Icon(
-                            Icons.Default.SkipPrevious,
-                            "Previous",
-                            modifier = Modifier.size(40.dp),
-                            tint = scheme.onBackground
-                        )
-                    }
-                    IconButton(
-                        onClick = onToggle,
-                        modifier = Modifier
-                            .size(72.dp)
-                            .background(scheme.primary, shape = MaterialTheme.shapes.extraLarge)
+                    Spacer(modifier = Modifier.height(20.dp))
+
+                    WavySeekBar(
+                        progress = sliderPosition,
+                        playing = playing,
+                        onProgressChange = {
+                            sliding = true
+                            sliderPosition = it
+                        },
+                        onProgressChangeFinished = {
+                            sliding = false
+                            if (durationMs > 0) onSeek((sliderPosition * durationMs).toLong())
+                        },
+                        activeColor = scheme.primary,
+                        inactiveColor = shownColors.muted.copy(alpha = 0.35f)
+                    )
+
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween
                     ) {
-                        Icon(
-                            if (playing) Icons.Default.Pause else Icons.Default.PlayArrow,
-                            if (playing) "Pause" else "Play",
-                            modifier = Modifier.size(40.dp),
-                            tint = scheme.onPrimary
-                        )
+                        Text(formatTime(positionMs), style = MaterialTheme.typography.labelSmall, color = shownColors.muted)
+                        Text(formatTime(durationMs), style = MaterialTheme.typography.labelSmall, color = shownColors.muted)
                     }
-                    IconButton(onClick = onNext) {
-                        Icon(
-                            Icons.Default.SkipNext,
-                            "Next",
-                            modifier = Modifier.size(40.dp),
-                            tint = scheme.onBackground
-                        )
-                    }
-                    IconButton(onClick = onCycleRepeat) {
-                        val (icon, active) = when (snapshot.repeatMode) {
-                            RepeatMode.OFF -> Icons.Default.Repeat to false
-                            RepeatMode.ONE -> Icons.Default.RepeatOne to true
-                            RepeatMode.COLD -> Icons.Default.Repeat to true
+
+                    Spacer(modifier = Modifier.height(12.dp))
+
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceEvenly,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        IconButton(onClick = onToggleShuffle) {
+                            Icon(
+                                Icons.Default.Shuffle,
+                                "Shuffle",
+                                tint = if (snapshot.shuffleEnabled) scheme.primary
+                                else scheme.onBackground.copy(alpha = 0.7f)
+                            )
                         }
-                        Icon(
-                            icon,
-                            repeatLabel(snapshot.repeatMode),
-                            tint = if (active) scheme.primary else scheme.onBackground.copy(alpha = 0.7f)
-                        )
+                        IconButton(onClick = onPrev) {
+                            Icon(
+                                Icons.Default.SkipPrevious,
+                                "Previous",
+                                modifier = Modifier.size(40.dp),
+                                tint = scheme.onBackground
+                            )
+                        }
+                        IconButton(
+                            onClick = onToggle,
+                            modifier = Modifier
+                                .size(72.dp)
+                                .background(scheme.primary, shape = MaterialTheme.shapes.extraLarge)
+                        ) {
+                            Icon(
+                                if (playing) Icons.Default.Pause else Icons.Default.PlayArrow,
+                                if (playing) "Pause" else "Play",
+                                modifier = Modifier.size(40.dp),
+                                tint = scheme.onPrimary
+                            )
+                        }
+                        IconButton(onClick = onNext) {
+                            Icon(
+                                Icons.Default.SkipNext,
+                                "Next",
+                                modifier = Modifier.size(40.dp),
+                                tint = scheme.onBackground
+                            )
+                        }
+                        IconButton(onClick = onCycleRepeat) {
+                            val (icon, active) = when (snapshot.repeatMode) {
+                                RepeatMode.OFF -> Icons.Default.Repeat to false
+                                RepeatMode.ONE -> Icons.Default.RepeatOne to true
+                                RepeatMode.COLD -> Icons.Default.Repeat to true
+                            }
+                            Icon(
+                                icon,
+                                repeatLabel(snapshot.repeatMode),
+                                tint = if (active) scheme.primary else scheme.onBackground.copy(alpha = 0.7f)
+                            )
+                        }
                     }
-                }
 
-                Text(
-                    buildString {
-                        append(repeatLabel(snapshot.repeatMode))
-                        if (snapshot.shuffleEnabled) append(" · Shuffle")
-                    },
-                    style = MaterialTheme.typography.labelSmall,
-                    color = shownColors.muted,
-                    modifier = Modifier.align(Alignment.CenterHorizontally).padding(top = 4.dp)
-                )
+                    Text(
+                        buildString {
+                            append(repeatLabel(snapshot.repeatMode))
+                            if (snapshot.shuffleEnabled) append(" · Shuffle")
+                        },
+                        style = MaterialTheme.typography.labelSmall,
+                        color = shownColors.muted,
+                        modifier = Modifier.align(Alignment.CenterHorizontally).padding(top = 4.dp)
+                    )
 
-                Spacer(modifier = Modifier.weight(1f))
+                    Spacer(modifier = Modifier.weight(1f))
 
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.End
-                ) {
-                    IconButton(onClick = { showQueue = true }) {
-                        Icon(
-                            Icons.AutoMirrored.Filled.QueueMusic,
-                            "Queue",
-                            tint = scheme.onBackground.copy(alpha = 0.85f)
-                        )
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.End
+                    ) {
+                        IconButton(onClick = { showQueue = true }) {
+                            Icon(
+                                Icons.AutoMirrored.Filled.QueueMusic,
+                                "Queue",
+                                tint = scheme.onBackground.copy(alpha = 0.85f)
+                            )
+                        }
                     }
                 }
             }

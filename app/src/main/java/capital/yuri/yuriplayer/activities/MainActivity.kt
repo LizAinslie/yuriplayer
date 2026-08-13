@@ -9,6 +9,12 @@ import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Row
@@ -40,6 +46,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.zIndex
 import androidx.core.content.ContextCompat
 import capital.yuri.yuriplayer.activities.ui.LibraryScreen
 import capital.yuri.yuriplayer.activities.ui.MiniPlayerBar
@@ -175,7 +182,6 @@ fun YuriApp(
         }
     }
 
-    // Warm theme even when NP is collapsed — reopen has no FOUC
     LaunchedEffect(currentSong?.id, currentSong?.path) {
         themeStore.updateCurrent(context, currentSong, baseScheme)
         themeStore.updateNeighbors(context, peekNext, peekPrev, baseScheme)
@@ -186,91 +192,110 @@ fun YuriApp(
 
     BackHandler(enabled = playerExpanded) { playerExpanded = false }
 
-    if (playerExpanded) {
-        NowPlayingScreen(
-            song = currentSong,
-            playing = playing,
-            positionMs = positionMs,
-            durationMs = durationMs,
-            snapshot = snapshot,
-            peekNextSong = peekNext,
-            peekPrevSong = peekPrev,
-            onCollapse = { playerExpanded = false },
-            onToggle = { player.togglePlayPause() },
-            onPrev = { player.skipToPrevious() },
-            onNext = { player.skipToNext() },
-            onSeek = { player.seekTo(it) },
-            onToggleShuffle = { player.toggleShuffle() },
-            onCycleRepeat = { player.cycleRepeatMode() },
-            onPlayItem = { lane, index -> player.playQueueItem(lane, index) },
-            onMoveHot = { f, t -> player.moveHot(f, t) },
-            onMoveCold = { f, t -> player.moveCold(f, t) },
-            onRemoveHot = { player.removeFromHot(it) },
-            onRemoveCold = { player.removeFromCold(it) }
-        )
-        return
-    }
-
-    Scaffold(
-        modifier = Modifier.fillMaxSize(),
-        topBar = {
-            TopAppBar(
-                title = {
-                    Row(
-                        horizontalArrangement = Arrangement.spacedBy(4.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        TopTab.entries.forEach { tab ->
-                            val selected = topTab == tab
-                            IconButton(onClick = { topTab = tab }) {
-                                Icon(
-                                    imageVector = tab.icon,
-                                    contentDescription = tab.label,
-                                    tint = if (selected) MaterialTheme.colorScheme.primary
-                                    else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.45f)
-                                )
+    Box(modifier = Modifier.fillMaxSize()) {
+        // Library shell stays mounted underneath so the sheet can slide over it
+        Scaffold(
+            modifier = Modifier.fillMaxSize(),
+            topBar = {
+                TopAppBar(
+                    title = {
+                        Row(
+                            horizontalArrangement = Arrangement.spacedBy(4.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            TopTab.entries.forEach { tab ->
+                                val selected = topTab == tab
+                                IconButton(onClick = { topTab = tab }) {
+                                    Icon(
+                                        imageVector = tab.icon,
+                                        contentDescription = tab.label,
+                                        tint = if (selected) MaterialTheme.colorScheme.primary
+                                        else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.45f)
+                                    )
+                                }
+                            }
+                        }
+                    },
+                    actions = {
+                        if (topTab == TopTab.Library) {
+                            val loading by library.isLoading.collectAsState()
+                            IconButton(onClick = { library.refresh() }) {
+                                if (loading) {
+                                    CircularProgressIndicator(
+                                        modifier = Modifier.size(20.dp),
+                                        strokeWidth = 2.dp
+                                    )
+                                } else {
+                                    Icon(Icons.Default.Refresh, contentDescription = "Refresh library")
+                                }
                             }
                         }
                     }
-                },
-                actions = {
-                    if (topTab == TopTab.Library) {
-                        val loading by library.isLoading.collectAsState()
-                        IconButton(onClick = { library.refresh() }) {
-                            if (loading) {
-                                CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp)
-                            } else {
-                                Icon(Icons.Default.Refresh, contentDescription = "Refresh library")
-                            }
-                        }
-                    }
+                )
+            },
+            bottomBar = {
+                MiniPlayerBar(
+                    song = currentSong,
+                    playing = playing,
+                    positionMs = positionMs,
+                    durationMs = durationMs,
+                    onToggle = { player.togglePlayPause() },
+                    onExpand = { playerExpanded = true }
+                )
+            }
+        ) { innerPadding ->
+            Box(modifier = Modifier.fillMaxSize().padding(innerPadding)) {
+                when (topTab) {
+                    TopTab.Home -> PlaceholderScreen("Home", "Pin playlists and shortcuts here later.")
+                    TopTab.Library -> LibraryScreen(
+                        library = library,
+                        onPlay = { songs, index -> player.playSource(songs, index) },
+                        onAddToQueue = { player.addToHotQueue(it) }
+                    )
+                    TopTab.MyStuff -> PlaceholderScreen(
+                        "My Stuff",
+                        "Favorites, playlists, and saved albums/artists will live here."
+                    )
                 }
-            )
-        },
-        bottomBar = {
-            MiniPlayerBar(
+            }
+        }
+
+        // Full-screen now-playing sheet: only fully open or fully closed
+        AnimatedVisibility(
+            visible = playerExpanded,
+            modifier = Modifier
+                .fillMaxSize()
+                .zIndex(2f),
+            enter = slideInVertically(
+                animationSpec = tween(320),
+                initialOffsetY = { fullHeight -> fullHeight }
+            ) + fadeIn(animationSpec = tween(200)),
+            exit = slideOutVertically(
+                animationSpec = tween(280),
+                targetOffsetY = { fullHeight -> fullHeight }
+            ) + fadeOut(animationSpec = tween(180))
+        ) {
+            NowPlayingScreen(
                 song = currentSong,
                 playing = playing,
                 positionMs = positionMs,
                 durationMs = durationMs,
+                snapshot = snapshot,
+                peekNextSong = peekNext,
+                peekPrevSong = peekPrev,
+                onCollapse = { playerExpanded = false },
                 onToggle = { player.togglePlayPause() },
-                onExpand = { playerExpanded = true }
+                onPrev = { player.skipToPrevious() },
+                onNext = { player.skipToNext() },
+                onSeek = { player.seekTo(it) },
+                onToggleShuffle = { player.toggleShuffle() },
+                onCycleRepeat = { player.cycleRepeatMode() },
+                onPlayItem = { lane, index -> player.playQueueItem(lane, index) },
+                onMoveHot = { f, t -> player.moveHot(f, t) },
+                onMoveCold = { f, t -> player.moveCold(f, t) },
+                onRemoveHot = { player.removeFromHot(it) },
+                onRemoveCold = { player.removeFromCold(it) }
             )
-        }
-    ) { innerPadding ->
-        Box(modifier = Modifier.fillMaxSize().padding(innerPadding)) {
-            when (topTab) {
-                TopTab.Home -> PlaceholderScreen("Home", "Pin playlists and shortcuts here later.")
-                TopTab.Library -> LibraryScreen(
-                    library = library,
-                    onPlay = { songs, index -> player.playSource(songs, index) },
-                    onAddToQueue = { player.addToHotQueue(it) }
-                )
-                TopTab.MyStuff -> PlaceholderScreen(
-                    "My Stuff",
-                    "Favorites, playlists, and saved albums/artists will live here."
-                )
-            }
         }
     }
 }
