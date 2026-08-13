@@ -4,13 +4,25 @@ import android.app.PendingIntent
 import android.content.Intent
 import android.os.Binder
 import android.os.IBinder
+import androidx.media3.common.AudioAttributes
+import androidx.media3.common.C
 import androidx.media3.common.MediaItem
 import androidx.media3.common.Player
+import androidx.media3.exoplayer.DefaultLoadControl
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.session.MediaSession
 import androidx.media3.session.MediaSessionService
 import capital.yuri.yuriplayer.activities.MainActivity
 import capital.yuri.yuriplayer.data.Song
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 class MusicService : MediaSessionService() {
 
@@ -20,6 +32,14 @@ class MusicService : MediaSessionService() {
 
     private var currentPlaylist: List<Song> = emptyList()
 
+    private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
+
+    private val _nowPlaying = MutableStateFlow<Song?>(null)
+    val nowPlaying: StateFlow<Song?> = _nowPlaying.asStateFlow()
+
+    private val _isPlaying = MutableStateFlow(false)
+    val isPlaying: StateFlow<Boolean> = _isPlaying.asStateFlow()
+
     inner class LocalBinder : Binder() {
         fun getService(): MusicService = this@MusicService
     }
@@ -27,9 +47,29 @@ class MusicService : MediaSessionService() {
     override fun onCreate() {
         super.onCreate()
 
-        val exo = ExoPlayer.Builder(this).build().also {
-            it.addListener(playerListener)
-        }
+        val audioAttributes = AudioAttributes.Builder()
+            .setUsage(C.USAGE_MEDIA)
+            .setContentType(C.AUDIO_CONTENT_TYPE_MUSIC)
+            .build()
+
+        // Slightly larger buffers help local high-bitrate files on slower storage
+        val loadControl = DefaultLoadControl.Builder()
+            .setBufferDurationsMs(
+                /* minBufferMs = */ 15_000,
+                /* maxBufferMs = */ 50_000,
+                /* bufferForPlaybackMs = */ 1_000,
+                /* bufferForPlaybackAfterRebufferMs = */ 2_000
+            )
+            .build()
+
+        val exo = ExoPlayer.Builder(this)
+            .setAudioAttributes(audioAttributes, /* handleAudioFocus = */ true)
+            .setHandleAudioBecomingNoisy(true)
+            .setWakeMode(C.WAKE_MODE_LOCAL)
+            .setLoadControl(loadControl)
+            .build()
+            .also { it.addListener(playerListener) }
+
         player = exo
 
         val sessionActivity = PendingIntent.getActivity(
@@ -45,7 +85,21 @@ class MusicService : MediaSessionService() {
     }
 
     private val playerListener = object : Player.Listener {
-        // Future: emit state changes to a shared flow if needed
+        override fun onIsPlayingChanged(isPlaying: Boolean) {
+            _isPlaying.value = isPlaying
+        }
+
+        override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) {
+            val index = player?.currentMediaItemIndex ?: -1
+            _nowPlaying.value = currentPlaylist.getOrNull(index)
+        }
+
+        override fun onPlaybackStateChanged(playbackState: Int) {
+            if (playbackState == Player.STATE_READY || playbackState == Player.STATE_BUFFERING) {
+                val index = player?.currentMediaItemIndex ?: -1
+                _nowPlaying.value = currentPlaylist.getOrNull(index)
+            }
+        }
     }
 
     override fun onGetSession(controllerInfo: MediaSession.ControllerInfo): MediaSession? {
@@ -53,33 +107,46 @@ class MusicService : MediaSessionService() {
     }
 
     override fun onBind(intent: Intent?): IBinder? {
-        // Allow both MediaSessionService binding and our LocalBinder
-        val superBinder = super.onBind(intent)
-        return if (intent?.action == null) binder else superBinder ?: binder
+        // Our app binds with a plain Intent (no action) for LocalBinder.
+        // Media3 session controllers bind with a specific action — defer to super for those.
+        return if (intent?.action == null) {
+            binder
+        } else {
+            super.onBind(intent) ?: binder
+        }
     }
 
+    /**
+     * Build MediaItems off the main thread to avoid ANRs on large libraries.
+     */
     fun setPlaylist(songs: List<Song>, startIndex: Int = 0) {
-        currentPlaylist = songs
-        val safeIndex = startIndex.coerceIn(0, (songs.size - 1).coerceAtLeast(0))
+        serviceScope.launch {
+            val safeIndex = startIndex.coerceIn(0, (songs.size - 1).coerceAtLeast(0))
+            currentPlaylist = songs
 
-        val mediaItems = songs.map { song ->
-            MediaItem.Builder()
-                .setUri(song.contentUri)
-                .setMediaId(song.id.toString())
-                .setMediaMetadata(
-                    androidx.media3.common.MediaMetadata.Builder()
-                        .setTitle(song.title)
-                        .setArtist(song.artist)
-                        .setAlbumTitle(song.album)
-                        .setArtworkUri(song.albumArtUri)
+            val mediaItems = withContext(Dispatchers.Default) {
+                songs.map { song ->
+                    MediaItem.Builder()
+                        .setUri(song.contentUri)
+                        .setMediaId(song.id.toString())
+                        .setMediaMetadata(
+                            androidx.media3.common.MediaMetadata.Builder()
+                                .setTitle(song.title)
+                                .setArtist(song.artist)
+                                .setAlbumTitle(song.album)
+                                .setArtworkUri(song.albumArtUri)
+                                .build()
+                        )
                         .build()
-                )
-                .build()
-        }
+                }
+            }
 
-        player?.apply {
-            setMediaItems(mediaItems, safeIndex, 0L)
-            prepare()
+            player?.apply {
+                setMediaItems(mediaItems, safeIndex, 0L)
+                prepare()
+            }
+
+            _nowPlaying.value = songs.getOrNull(safeIndex)
         }
     }
 
@@ -104,7 +171,9 @@ class MusicService : MediaSessionService() {
 
     fun skipToPrevious() {
         player?.let {
-            if (it.hasPreviousMediaItem()) {
+            if (it.currentPosition > 3000 && !it.hasPreviousMediaItem()) {
+                it.seekTo(0)
+            } else if (it.hasPreviousMediaItem()) {
                 it.seekToPreviousMediaItem()
             } else {
                 it.seekTo(0)
@@ -121,6 +190,7 @@ class MusicService : MediaSessionService() {
     }
 
     override fun onDestroy() {
+        serviceScope.cancel()
         mediaSession?.run {
             player?.release()
             release()

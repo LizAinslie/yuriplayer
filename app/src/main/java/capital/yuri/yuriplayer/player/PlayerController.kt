@@ -11,8 +11,12 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 
 /**
- * Thin facade over MusicService so UI / ViewModels never talk to the service directly.
- * Bound once from the Application / Activity lifecycle.
+ * Facade over [MusicService].
+ *
+ * Important: we only *bind* the service here. We do NOT call
+ * startForegroundService() up front — that caused ANRs on Android 8+
+ * because MediaSessionService only goes foreground once playback starts.
+ * Media3 promotes the service to foreground automatically when playing.
  */
 class PlayerController(private val context: Context) {
 
@@ -22,9 +26,19 @@ class PlayerController(private val context: Context) {
     private val _isConnected = MutableStateFlow(false)
     val isConnected: StateFlow<Boolean> = _isConnected.asStateFlow()
 
+    val nowPlaying: StateFlow<Song?>
+        get() = service?.nowPlaying ?: MutableStateFlow(null)
+
+    val isPlaying: StateFlow<Boolean>
+        get() = service?.isPlaying ?: MutableStateFlow(false)
+
     private val connection = object : ServiceConnection {
         override fun onServiceConnected(name: ComponentName?, binder: IBinder?) {
-            val local = binder as MusicService.LocalBinder
+            val local = binder as? MusicService.LocalBinder
+            if (local == null) {
+                // Wrong binder type — ignore rather than crash
+                return
+            }
             service = local.getService()
             bound = true
             _isConnected.value = true
@@ -40,13 +54,17 @@ class PlayerController(private val context: Context) {
     fun bind() {
         if (bound) return
         val intent = Intent(context, MusicService::class.java)
-        context.startForegroundService(intent)
+        // BIND_AUTO_CREATE starts the service without the foreground deadline
         context.bindService(intent, connection, Context.BIND_AUTO_CREATE)
     }
 
     fun unbind() {
         if (!bound) return
-        context.unbindService(connection)
+        try {
+            context.unbindService(connection)
+        } catch (_: IllegalArgumentException) {
+            // Already unbound
+        }
         bound = false
         service = null
         _isConnected.value = false
@@ -62,6 +80,6 @@ class PlayerController(private val context: Context) {
     fun skipToNext() = service?.skipToNext()
     fun skipToPrevious() = service?.skipToPrevious()
 
-    fun isPlaying(): Boolean = service?.isPlaying() == true
+    fun isPlayingNow(): Boolean = service?.isPlaying() == true
     fun getCurrentSong(): Song? = service?.getCurrentSong()
 }

@@ -31,8 +31,8 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -57,11 +57,7 @@ class MainActivity : ComponentActivity() {
 
     private val permissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestPermission()
-    ) { granted ->
-        if (granted) {
-            // trigger recomposition via a simple flag if needed
-        }
-    }
+    ) { /* recomposition picks up songs after grant via retry below */ }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -93,7 +89,6 @@ class MainActivity : ComponentActivity() {
     }
 
     override fun onStop() {
-        // Keep service running in background; only unbind the activity connection
         playerController.unbind()
         super.onStop()
     }
@@ -105,7 +100,6 @@ class MainActivity : ComponentActivity() {
                 intent.getBooleanExtra("car_mode", false)
         if (nowCar && !isCarMode) {
             isCarMode = true
-            // Future: switch to car layout
         }
     }
 }
@@ -117,24 +111,33 @@ fun PlayerScreen(
     isCarMode: Boolean
 ) {
     var songs by remember { mutableStateOf<List<Song>>(emptyList()) }
-    var currentSong by remember { mutableStateOf<Song?>(null) }
-    var isPlaying by remember { mutableStateOf(false) }
     var hasPermission by remember { mutableStateOf(true) }
+    var loading by remember { mutableStateOf(true) }
 
-    LaunchedEffect(Unit) {
-        try {
-            songs = repository.getAllSongs()
-        } catch (_: SecurityException) {
-            hasPermission = false
-        }
+    val connected by player.isConnected.collectAsState()
+
+    // Re-read service flows when connected
+    val currentSong by if (connected) {
+        player.nowPlaying.collectAsState()
+    } else {
+        remember { mutableStateOf<Song?>(null) }
     }
 
-    // Simple polling for now-playing state (can be replaced with flows later)
-    LaunchedEffect(player.isConnected) {
-        while (true) {
-            currentSong = player.getCurrentSong()
-            isPlaying = player.isPlaying()
-            kotlinx.coroutines.delay(500)
+    val playing by if (connected) {
+        player.isPlaying.collectAsState()
+    } else {
+        remember { mutableStateOf(false) }
+    }
+
+    LaunchedEffect(Unit) {
+        loading = true
+        try {
+            songs = repository.getAllSongs()
+            hasPermission = true
+        } catch (_: SecurityException) {
+            hasPermission = false
+        } finally {
+            loading = false
         }
     }
 
@@ -144,7 +147,6 @@ fun PlayerScreen(
                 .fillMaxSize()
                 .padding(innerPadding)
         ) {
-            // Now playing bar
             Card(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -175,52 +177,52 @@ fun PlayerScreen(
                         horizontalArrangement = Arrangement.SpaceEvenly,
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        IconButton(onClick = {
-                            player.skipToPrevious()
-                            currentSong = player.getCurrentSong()
-                        }) {
+                        IconButton(onClick = { player.skipToPrevious() }) {
                             Icon(Icons.Default.SkipPrevious, contentDescription = "Previous")
                         }
 
-                        IconButton(onClick = {
-                            player.togglePlayPause()
-                            isPlaying = player.isPlaying()
-                        }) {
+                        IconButton(onClick = { player.togglePlayPause() }) {
                             Icon(
-                                if (isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
-                                contentDescription = if (isPlaying) "Pause" else "Play"
+                                if (playing) Icons.Default.Pause else Icons.Default.PlayArrow,
+                                contentDescription = if (playing) "Pause" else "Play"
                             )
                         }
 
-                        IconButton(onClick = {
-                            player.skipToNext()
-                            currentSong = player.getCurrentSong()
-                        }) {
+                        IconButton(onClick = { player.skipToNext() }) {
                             Icon(Icons.Default.SkipNext, contentDescription = "Next")
                         }
                     }
                 }
             }
 
-            if (!hasPermission) {
-                Text(
-                    text = "Storage permission required to read local music",
-                    modifier = Modifier.padding(16.dp),
-                    color = MaterialTheme.colorScheme.error
-                )
-            } else if (songs.isEmpty()) {
-                Text(
-                    text = "No music found on device",
-                    modifier = Modifier.padding(16.dp)
-                )
-            } else {
-                LazyColumn(modifier = Modifier.fillMaxSize()) {
-                    itemsIndexed(songs, key = { _, song -> song.id }) { index, song ->
-                        SongRow(song = song) {
-                            player.setPlaylist(songs, index)
-                            player.play()
-                            currentSong = song
-                            isPlaying = true
+            when {
+                !hasPermission -> {
+                    Text(
+                        text = "Storage permission required to read local music",
+                        modifier = Modifier.padding(16.dp),
+                        color = MaterialTheme.colorScheme.error
+                    )
+                }
+                loading -> {
+                    Text(
+                        text = "Scanning library…",
+                        modifier = Modifier.padding(16.dp)
+                    )
+                }
+                songs.isEmpty() -> {
+                    Text(
+                        text = "No music found on device",
+                        modifier = Modifier.padding(16.dp)
+                    )
+                }
+                else -> {
+                    LazyColumn(modifier = Modifier.fillMaxSize()) {
+                        itemsIndexed(songs, key = { _, song -> song.id }) { index, song ->
+                            SongRow(song = song) {
+                                // Playlist build is async inside the service — safe on click
+                                player.setPlaylist(songs, index)
+                                player.play()
+                            }
                         }
                     }
                 }
