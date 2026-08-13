@@ -282,8 +282,6 @@ fun YuriApp(
     Box(modifier = Modifier.fillMaxSize()) {
         Scaffold(
             modifier = Modifier.fillMaxSize(),
-            // Transparent so album/artist can paint under the status bar;
-            // otherwise Scaffold's surface shows through the inset band.
             containerColor = if (edgeToEdgeDetail) Color.Transparent
             else MaterialTheme.colorScheme.background,
             contentWindowInsets = if (edgeToEdgeDetail) {
@@ -407,6 +405,7 @@ fun YuriApp(
                         TopTab.Library -> LibraryScreen(
                             library = library,
                             nowPlaying = currentSong,
+                            isPlaybackActive = playing,
                             onPlay = { songs, index -> player.playSource(songs, index) },
                             onAddToQueue = { player.addToHotQueue(it) },
                             onAddAlbumToQueue = { player.addToHotQueue(it) },
