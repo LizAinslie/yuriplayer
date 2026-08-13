@@ -369,7 +369,8 @@ private fun CollapsedSpotifyBar(
             .fillMaxWidth()
             .graphicsLayer { alpha = fraction }
             .background(MaterialTheme.colorScheme.background.copy(alpha = 0.96f))
-            .padding(horizontal = 4.dp, vertical = 6.dp),
+            // Match page gutters (~16–20dp); keep back control near the left edge
+            .padding(start = 4.dp, end = 16.dp, top = 6.dp, bottom = 6.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
         IconButton(onClick = onBack) {
@@ -393,6 +394,7 @@ private fun CollapsedSpotifyBar(
                 color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.65f)
             )
         }
+        Spacer(modifier = Modifier.width(8.dp))
         IconButton(
             onClick = onPrimary,
             modifier = Modifier
