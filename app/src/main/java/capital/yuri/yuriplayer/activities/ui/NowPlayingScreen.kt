@@ -80,6 +80,7 @@ fun NowPlayingScreen(
     onMoveColdToHot: (Int) -> Unit = {},
     onClearHotQueue: () -> Unit = {},
     onPlayHistorySong: (Song) -> Unit = {},
+    onAddToQueue: (Song) -> Unit = {},
     onClearHistory: () -> Unit = {}
 ) {
     val context = LocalContext.current
@@ -170,6 +171,7 @@ fun NowPlayingScreen(
                         onMoveColdToHot = onMoveColdToHot,
                         onClearHotQueue = onClearHotQueue,
                         onPlayHistorySong = onPlayHistorySong,
+                        onAddHistoryToQueue = onAddToQueue,
                         onClearHistory = onClearHistory,
                         modifier = Modifier
                             .weight(1f)
@@ -319,6 +321,7 @@ fun NowPlayingScreen(
                                 .background(scheme.primary, shape = MaterialTheme.shapes.extraLarge)
                         ) {
                             Icon(
+                                if (playing) Icons.Default.Pause else Icons.Default.PlayArrow,
                                 if (playing) Icons.Default.Pause else Icons.Default.PlayArrow,
                                 if (playing) "Pause" else "Play",
                                 modifier = Modifier.size(40.dp),
