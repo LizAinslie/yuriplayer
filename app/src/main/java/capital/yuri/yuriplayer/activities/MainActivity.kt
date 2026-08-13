@@ -1,6 +1,7 @@
 package capital.yuri.yuriplayer.activities
 
 import android.Manifest
+import android.app.Activity
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Bundle
@@ -53,6 +54,7 @@ import capital.yuri.yuriplayer.activities.ui.MiniPlayerBar
 import capital.yuri.yuriplayer.activities.ui.NowPlayingScreen
 import capital.yuri.yuriplayer.activities.ui.PlaceholderScreen
 import capital.yuri.yuriplayer.activities.ui.theme.YuriPlayerTheme
+import capital.yuri.yuriplayer.data.ActivityTitleFormat
 import capital.yuri.yuriplayer.data.LibraryIndex
 import capital.yuri.yuriplayer.data.PlayerThemeStore
 import capital.yuri.yuriplayer.data.Song
@@ -90,6 +92,7 @@ class MainActivity : ComponentActivity() {
             permissionLauncher.launch(Manifest.permission.READ_EXTERNAL_STORAGE)
         }
 
+        title = "YuriPlayer"
         enableEdgeToEdge()
         setContent {
             YuriPlayerTheme {
@@ -145,6 +148,7 @@ fun YuriApp(
     onPlayerOpened: () -> Unit = {}
 ) {
     val context = LocalContext.current
+    val activity = context as? Activity
     val themeStore: PlayerThemeStore = koinInject()
     val baseScheme = MaterialTheme.colorScheme
 
@@ -185,6 +189,7 @@ fun YuriApp(
     LaunchedEffect(currentSong?.id, currentSong?.path) {
         themeStore.updateCurrent(context, currentSong, baseScheme)
         themeStore.updateNeighbors(context, peekNext, peekPrev, baseScheme)
+        activity?.title = ActivityTitleFormat.format(currentSong)
     }
     LaunchedEffect(peekNext?.id, peekPrev?.id) {
         themeStore.updateNeighbors(context, peekNext, peekPrev, baseScheme)
