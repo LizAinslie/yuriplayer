@@ -37,19 +37,23 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
+import androidx.compose.ui.input.nestedscroll.NestedScrollSource
+import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
@@ -60,12 +64,13 @@ import capital.yuri.yuriplayer.data.Song
 import capital.yuri.yuriplayer.data.theme.ThemeService
 import capital.yuri.yuriplayer.ui.formatTrackCount
 import org.koin.compose.koinInject
+import kotlin.math.roundToInt
 
+/** Expanded header body height (art + meta + actions), excluding status bar. */
+private val ExpandedHeaderBody = 420.dp
 private val CollapsedBarHeight = 56.dp
-/** Pure fade zone under hero controls → first tracks. */
-private val HeroFadeTail = 120.dp
-/** Sticky fade under collapsed bar once the hero is fully off-screen. */
-private val StickyFadeHeight = 240.dp
+/** Fade strip under the expanded controls into the track list. */
+private val FadeTail = 96.dp
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -92,23 +97,39 @@ fun AlbumDetailScreen(
     val listState = rememberLazyListState()
     val density = LocalDensity.current
 
-    val collapseRangePx = with(density) { 280.dp.toPx() }
-    val collapseFraction by remember {
-        derivedStateOf {
-            val idx = listState.firstVisibleItemIndex
-            val off = listState.firstVisibleItemScrollOffset.toFloat()
-            when {
-                idx > 0 -> 1f
-                else -> (off / collapseRangePx).coerceIn(0f, 1f)
+    val collapseRangePx = with(density) { (ExpandedHeaderBody - CollapsedBarHeight).toPx() }
+    var collapsePx by remember { mutableFloatStateOf(0f) }
+    val f = (collapsePx / collapseRangePx).coerceIn(0f, 1f)
+
+    val nestedScroll = remember(collapseRangePx) {
+        object : NestedScrollConnection {
+            override fun onPreScroll(
+                available: androidx.compose.ui.geometry.Offset,
+                source: NestedScrollSource
+            ): androidx.compose.ui.geometry.Offset {
+                val delta = available.y
+                // Finger up (delta < 0) → collapse; finger down → expand only if list at top
+                if (delta < 0f && collapsePx < collapseRangePx) {
+                    val consumed = (-delta).coerceAtMost(collapseRangePx - collapsePx)
+                    collapsePx += consumed
+                    return androidx.compose.ui.geometry.Offset(0f, -consumed)
+                }
+                if (delta > 0f && collapsePx > 0f &&
+                    listState.firstVisibleItemIndex == 0 &&
+                    listState.firstVisibleItemScrollOffset == 0
+                ) {
+                    val consumed = delta.coerceAtMost(collapsePx)
+                    collapsePx -= consumed
+                    return androidx.compose.ui.geometry.Offset(0f, consumed)
+                }
+                return androidx.compose.ui.geometry.Offset.Zero
             }
         }
-    }
-    val heroOffScreen by remember {
-        derivedStateOf { listState.firstVisibleItemIndex > 0 }
     }
 
     LaunchedEffect(album.name, album.artist) {
         themeColors = themeService.themeFromSong(context, album.songs.firstOrNull(), base).colors
+        collapsePx = 0f
     }
 
     val discs = remember(album.songs) { groupByDisc(album.songs) }
@@ -133,211 +154,189 @@ fun AlbumDetailScreen(
         else onPlayAlbum(album.songs, 0)
     }
 
-    val f = collapseFraction.coerceIn(0f, 1f)
+    // Header body height collapses in real space — no ghost empty region
+    val headerBodyH = ExpandedHeaderBody * (1f - f) + CollapsedBarHeight * f
+    val fadeH = FadeTail * (1f - f)
 
-    // Drive system status bar to album color for the whole page
     ThemedStatusBar(color = albumBg, enabled = true)
 
     MaterialTheme(colorScheme = scheme) {
-        // Root is album-colored so the status-bar inset matches the theme
+        // Album color under status bar (edge-to-edge)
         Box(
             modifier = Modifier
                 .fillMaxSize()
                 .background(albumBg)
+                .nestedScroll(nestedScroll)
         ) {
-            Box(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .statusBarsPadding()
-            ) {
-                // Page body defaults under the list; hero paints its own album color + fade
+            Column(modifier = Modifier.fillMaxSize()) {
+                // —— Collapsing header (lives outside the list so height is reclaimed) ——
                 Box(
                     modifier = Modifier
-                        .fillMaxSize()
-                        .background(defaultBg)
-                )
-
-                // Sticky fade ONLY after the hero is fully scrolled off — no dual-gradient fight
-                if (heroOffScreen) {
+                        .fillMaxWidth()
+                        .background(albumBg)
+                        .statusBarsPadding()
+                ) {
                     Box(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .height(CollapsedBarHeight + StickyFadeHeight)
-                            .drawBehind {
-                                val barH = size.height * (CollapsedBarHeight / (CollapsedBarHeight + StickyFadeHeight))
-                                // solid bar region
-                                drawRect(
-                                    color = albumBg,
-                                    size = androidx.compose.ui.geometry.Size(size.width, barH)
+                            .height(headerBodyH)
+                            .clipToBounds()
+                    ) {
+                        // Expanded content fades/scales out as we collapse
+                        Box(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .graphicsLayer {
+                                    alpha = (1f - f * 1.6f).coerceIn(0f, 1f)
+                                    scaleX = 1f - 0.08f * f
+                                    scaleY = 1f - 0.08f * f
+                                }
+                        ) {
+                            SpotifyAlbumHero(
+                                album = album,
+                                metaLine = metaLine,
+                                showPause = showPause,
+                                shuffleEnabled = shuffleEnabled,
+                                onPrimary = onPrimary,
+                                onToggleShuffle = onToggleShuffle,
+                                onFavorite = onFavorite,
+                                onMore = { showMenu = true },
+                                onOpenArtist = onOpenArtist
+                            )
+                        }
+
+                        // Collapsed bar — fully opaque, no translucent graphicsLayer
+                        if (f > 0.12f) {
+                            CollapsedSpotifyBar(
+                                album = album,
+                                showPause = showPause,
+                                barColor = albumBg,
+                                onBack = onBack,
+                                onPrimary = onPrimary,
+                                modifier = Modifier
+                                    .align(Alignment.TopCenter)
+                                    .graphicsLayer { alpha = ((f - 0.12f) / 0.4f).coerceIn(0f, 1f) }
+                            )
+                        }
+
+                        // Expanded back button
+                        if (f < 0.5f) {
+                            IconButton(
+                                onClick = onBack,
+                                modifier = Modifier
+                                    .align(Alignment.TopStart)
+                                    .padding(4.dp)
+                                    .graphicsLayer { alpha = (1f - f * 2f).coerceIn(0f, 1f) }
+                            ) {
+                                Icon(
+                                    Icons.AutoMirrored.Filled.ArrowBack,
+                                    contentDescription = "Back",
+                                    tint = scheme.onBackground
                                 )
-                                // continuous fade from solid albumBg into default
+                            }
+                        }
+                    }
+                }
+
+                // Continuous fade into list — height shrinks with collapse so no dead space
+                if (fadeH > 2.dp) {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(fadeH)
+                            .drawBehind {
                                 drawRect(
                                     brush = Brush.verticalGradient(
                                         colorStops = arrayOf(
                                             0.00f to albumBg,
-                                            0.18f to albumBg,
-                                            0.40f to lerpColor(albumBg, defaultBg, 0.35f),
-                                            0.65f to lerpColor(albumBg, defaultBg, 0.72f),
-                                            0.88f to defaultBg.copy(alpha = 0.95f),
+                                            0.35f to lerpColor(albumBg, defaultBg, 0.35f),
+                                            0.7f to lerpColor(albumBg, defaultBg, 0.75f),
                                             1.00f to defaultBg
-                                        ),
-                                        startY = barH,
-                                        endY = size.height
+                                        )
                                     )
                                 )
                             }
                     )
                 }
 
-                LazyColumn(
-                    state = listState,
-                    modifier = Modifier.fillMaxSize(),
-                    contentPadding = PaddingValues(
-                        top = if (heroOffScreen) CollapsedBarHeight else 0.dp,
-                        bottom = 96.dp
-                    )
+                // —— Track list ——
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .background(defaultBg)
                 ) {
-                    item(key = "hero") {
-                        Column(modifier = Modifier.fillMaxWidth()) {
-                            // Solid album color under the controls — no mid-hero color break
-                            Box(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .background(albumBg)
-                            ) {
-                                SpotifyAlbumHero(
-                                    album = album,
-                                    metaLine = metaLine,
-                                    collapseFraction = collapseFraction,
-                                    showPause = showPause,
-                                    shuffleEnabled = shuffleEnabled,
-                                    onPrimary = onPrimary,
-                                    onToggleShuffle = onToggleShuffle,
-                                    onFavorite = onFavorite,
-                                    onMore = { showMenu = true },
-                                    onOpenArtist = onOpenArtist
+                    LazyColumn(
+                        state = listState,
+                        modifier = Modifier.fillMaxSize(),
+                        contentPadding = PaddingValues(bottom = 96.dp)
+                    ) {
+                        discs.forEach { (disc, tracks) ->
+                            if (multiDisc) {
+                                item(key = "disc-$disc") {
+                                    DiscSectionHeader(discNumber = disc ?: 1)
+                                }
+                            }
+                            itemsIndexed(
+                                tracks,
+                                key = { _, s -> "${s.id}-${s.path}" }
+                            ) { _, song ->
+                                val globalIndex = album.songs.indexOfFirst {
+                                    (it.path != null && it.path == song.path) || it.id == song.id
+                                }.coerceAtLeast(0)
+                                SwipeAddSongRow(
+                                    song = song,
+                                    onClick = { onPlayAlbum(album.songs, globalIndex) },
+                                    onSwipeAdd = {
+                                        onAddSongToQueue(song)
+                                        Toast.makeText(context, "Added to queue", Toast.LENGTH_SHORT).show()
+                                    },
+                                    showTrackNumber = true,
+                                    isPlaying = song.isSameAs(nowPlaying),
+                                    transparentSurface = true
                                 )
                             }
-                            // Single continuous dissolve into the list (one gradient, no overlay)
-                            Box(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .height(HeroFadeTail)
-                                    .drawBehind {
-                                        drawRect(
-                                            brush = Brush.verticalGradient(
-                                                colorStops = arrayOf(
-                                                    0.00f to albumBg,
-                                                    0.22f to albumBg.copy(alpha = 0.9f),
-                                                    0.48f to lerpColor(albumBg, defaultBg, 0.4f),
-                                                    0.72f to lerpColor(albumBg, defaultBg, 0.78f),
-                                                    1.00f to defaultBg
-                                                )
-                                            )
-                                        )
-                                    }
-                            )
-                        }
-                    }
-
-                    discs.forEach { (disc, tracks) ->
-                        if (multiDisc) {
-                            item(key = "disc-$disc") {
-                                DiscSectionHeader(discNumber = disc ?: 1)
-                            }
-                        }
-                        itemsIndexed(
-                            tracks,
-                            key = { _, s -> "${s.id}-${s.path}" }
-                        ) { _, song ->
-                            val globalIndex = album.songs.indexOfFirst {
-                                (it.path != null && it.path == song.path) || it.id == song.id
-                            }.coerceAtLeast(0)
-                            SwipeAddSongRow(
-                                song = song,
-                                onClick = { onPlayAlbum(album.songs, globalIndex) },
-                                onSwipeAdd = {
-                                    onAddSongToQueue(song)
-                                    Toast.makeText(context, "Added to queue", Toast.LENGTH_SHORT).show()
-                                },
-                                showTrackNumber = true,
-                                isPlaying = song.isSameAs(nowPlaying),
-                                transparentSurface = true
-                            )
                         }
                     }
                 }
+            }
 
-                // Opaque collapsed chrome — never translucent over scrolling content
-                if (f > 0.04f) {
-                    Column(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .graphicsLayer { alpha = f }
-                    ) {
-                        CollapsedSpotifyBar(
-                            album = album,
-                            showPause = showPause,
-                            barColor = albumBg,
-                            onBack = onBack,
-                            onPrimary = onPrimary
-                        )
-                    }
-                }
-
-                if (f < 0.55f) {
-                    IconButton(
-                        onClick = onBack,
-                        modifier = Modifier
-                            .padding(4.dp)
-                            .graphicsLayer { alpha = (1f - f * 2f).coerceIn(0f, 1f) }
-                    ) {
-                        Icon(
-                            Icons.AutoMirrored.Filled.ArrowBack,
-                            contentDescription = "Back",
-                            tint = scheme.onBackground
-                        )
-                    }
-                }
-
-                if (showMenu) {
-                    ModalBottomSheet(
-                        onDismissRequest = { showMenu = false },
-                        sheetState = rememberModalBottomSheetState()
-                    ) {
-                        MediaSheetHeader(
-                            song = album.songs.firstOrNull(),
-                            title = album.displayName,
-                            subtitle = album.displayArtist
-                        )
-                        MediaSheetItem(
-                            label = "Add to queue",
-                            onClick = {
-                                onAddAlbumToQueue(album.songs)
-                                Toast.makeText(
-                                    context,
-                                    "Queued ${formatTrackCount(album.songs.size)}",
-                                    Toast.LENGTH_SHORT
-                                ).show()
-                                showMenu = false
-                            }
-                        )
-                        MediaSheetItem(
-                            label = "Go to artist",
-                            onClick = {
-                                showMenu = false
-                                onOpenArtist()
-                            }
-                        )
-                        MediaSheetItem(
-                            label = "Add to playlist",
-                            onClick = {
-                                showMenu = false
-                                Toast.makeText(context, "Playlists coming soon", Toast.LENGTH_SHORT).show()
-                            }
-                        )
-                        MediaSheetBottomPad()
-                    }
+            if (showMenu) {
+                ModalBottomSheet(
+                    onDismissRequest = { showMenu = false },
+                    sheetState = rememberModalBottomSheetState()
+                ) {
+                    MediaSheetHeader(
+                        song = album.songs.firstOrNull(),
+                        title = album.displayName,
+                        subtitle = album.displayArtist
+                    )
+                    MediaSheetItem(
+                        label = "Add to queue",
+                        onClick = {
+                            onAddAlbumToQueue(album.songs)
+                            Toast.makeText(
+                                context,
+                                "Queued ${formatTrackCount(album.songs.size)}",
+                                Toast.LENGTH_SHORT
+                            ).show()
+                            showMenu = false
+                        }
+                    )
+                    MediaSheetItem(
+                        label = "Go to artist",
+                        onClick = {
+                            showMenu = false
+                            onOpenArtist()
+                        }
+                    )
+                    MediaSheetItem(
+                        label = "Add to playlist",
+                        onClick = {
+                            showMenu = false
+                            Toast.makeText(context, "Playlists coming soon", Toast.LENGTH_SHORT).show()
+                        }
+                    )
+                    MediaSheetBottomPad()
                 }
             }
         }
@@ -358,7 +357,6 @@ private fun lerpColor(a: Color, b: Color, t: Float): Color {
 private fun SpotifyAlbumHero(
     album: AlbumItem,
     metaLine: String,
-    collapseFraction: Float,
     showPause: Boolean,
     shuffleEnabled: Boolean,
     onPrimary: () -> Unit,
@@ -367,21 +365,11 @@ private fun SpotifyAlbumHero(
     onMore: () -> Unit,
     onOpenArtist: () -> Unit
 ) {
-    // Faster fade so large art doesn't linger under the collapsed bar mid-transition
-    val f = collapseFraction.coerceIn(0f, 1f)
-    val alpha = (1f - f * 2.2f).coerceIn(0f, 1f)
-    val scale = 1f - 0.1f * f
-
     Column(
         modifier = Modifier
             .fillMaxWidth()
-            .graphicsLayer {
-                this.alpha = alpha
-                scaleX = scale
-                scaleY = scale
-            }
             .padding(horizontal = 20.dp)
-            .padding(top = 48.dp, bottom = 8.dp),
+            .padding(top = 40.dp, bottom = 8.dp),
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
         AlbumArt(
@@ -491,10 +479,11 @@ private fun CollapsedSpotifyBar(
     showPause: Boolean,
     barColor: Color,
     onBack: () -> Unit,
-    onPrimary: () -> Unit
+    onPrimary: () -> Unit,
+    modifier: Modifier = Modifier
 ) {
     Row(
-        modifier = Modifier
+        modifier = modifier
             .fillMaxWidth()
             .height(CollapsedBarHeight)
             .background(barColor)
