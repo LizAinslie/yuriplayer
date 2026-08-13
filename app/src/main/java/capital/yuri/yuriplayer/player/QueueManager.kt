@@ -5,10 +5,13 @@ import capital.yuri.yuriplayer.data.Song
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlin.random.Random
 
 /**
  * Dual-queue source of truth (user Queue + context/album).
- * No Android framework deps — [MusicService] drives ExoPlayer from [AdvanceResult].
+ * Cold mutations never touch library playlists — only the in-memory cold copy.
+ * [coldOriginal] stays as the session source order for deshuffle / future
+ * "restore removed on repeat" settings.
  */
 class QueueManager {
 
@@ -31,7 +34,6 @@ class QueueManager {
 
     fun getSnapshot(): QueueSnapshot = _snapshot.value
 
-    /** Next song that [advance] would load (no mutation). Null if playback would stop. */
     fun peekNext(): Song? {
         if (repeatMode == RepeatMode.ONE) return currentSong()
         when (lane) {
@@ -57,7 +59,6 @@ class QueueManager {
         }
     }
 
-    /** Previous song [skipPrevious] would load when position ≤ 3s (no mutation). */
     fun peekPrevious(): Song? {
         when (lane) {
             QueueLane.HOT -> {
@@ -113,7 +114,7 @@ class QueueManager {
         coldOriginal = songs.toList()
         coldQueue.clear()
         if (shuffleEnabled) {
-            coldQueue.addAll(songs.shuffled())
+            coldQueue.addAll(songs.shuffled(Random(System.nanoTime())))
             val tapped = songs.getOrNull(startIndex)
             if (tapped != null) {
                 coldQueue.removeAll { sameSong(it, tapped) }
@@ -159,11 +160,14 @@ class QueueManager {
         return removingCurrent
     }
 
+    /**
+     * Remove from the cold *session* list only — never mutates library playlists.
+     * [coldOriginal] is left intact so deshuffle / future settings can restore items.
+     */
     fun removeFromContext(index: Int): Boolean {
         if (index !in coldQueue.indices) return false
         val removingCurrent = lane == QueueLane.COLD && index == indexInLane
-        val song = coldQueue.removeAt(index)
-        coldOriginal = coldOriginal.filterNot { sameSong(it, song) }
+        coldQueue.removeAt(index)
         if (index < coldResumeIndex) coldResumeIndex = (coldResumeIndex - 1).coerceAtLeast(0)
         if (lane == QueueLane.COLD) {
             when {
@@ -173,10 +177,29 @@ class QueueManager {
                     return removingCurrent
                 }
                 index < indexInLane -> indexInLane--
-                removingCurrent -> { }
+                removingCurrent -> { /* caller reloads */ }
             }
         }
         publish()
+        return removingCurrent
+    }
+
+    /** Pull a cold item into the user Queue (hot). Leaves [coldOriginal] alone. */
+    fun moveColdToHot(coldIndex: Int): Boolean {
+        if (coldIndex !in coldQueue.indices) return false
+        val removingCurrent = lane == QueueLane.COLD && coldIndex == indexInLane
+        val song = coldQueue.removeAt(coldIndex)
+        if (coldIndex < coldResumeIndex) coldResumeIndex = (coldResumeIndex - 1).coerceAtLeast(0)
+        if (lane == QueueLane.COLD) {
+            when {
+                coldQueue.isEmpty() -> indexInLane = -1
+                coldIndex < indexInLane -> indexInLane--
+                removingCurrent -> indexInLane = indexInLane.coerceAtMost(coldQueue.lastIndex)
+            }
+        }
+        hotQueue.add(song)
+        publish()
+        Log.i(TAG, "cold→hot '${song.displayTitle}' queue=${hotQueue.size} cold=${coldQueue.size}")
         return removingCurrent
     }
 
@@ -214,25 +237,16 @@ class QueueManager {
         publish()
     }
 
+    /**
+     * Enabling shuffle **always** reshuffles (new seed every time),
+     * even when shuffle was already on — so toggle off→on never repeats an order.
+     */
     fun setShuffle(enabled: Boolean) {
-        if (shuffleEnabled == enabled) return
-        Log.i(TAG, "setShuffle $enabled")
         val current = currentSong()
-        shuffleEnabled = enabled
-        if (enabled) {
-            val shuffled = coldOriginal.shuffled().toMutableList()
-            if (current != null && lane == QueueLane.COLD) {
-                shuffled.removeAll { sameSong(it, current) }
-                shuffled.add(0, current)
-                coldQueue.clear()
-                coldQueue.addAll(shuffled)
-                indexInLane = 0
-                coldResumeIndex = 0
-            } else {
-                coldQueue.clear()
-                coldQueue.addAll(shuffled)
-            }
-        } else {
+        if (!enabled) {
+            if (!shuffleEnabled) return
+            Log.i(TAG, "setShuffle OFF")
+            shuffleEnabled = false
             coldQueue.clear()
             coldQueue.addAll(coldOriginal)
             if (current != null && lane == QueueLane.COLD) {
@@ -240,6 +254,23 @@ class QueueManager {
                 indexInLane = if (idx >= 0) idx else 0
                 coldResumeIndex = indexInLane
             }
+            publish()
+            return
+        }
+
+        Log.i(TAG, "setShuffle ON (reshuffle)")
+        shuffleEnabled = true
+        val shuffled = coldOriginal.shuffled(Random(System.nanoTime())).toMutableList()
+        if (current != null && lane == QueueLane.COLD) {
+            shuffled.removeAll { sameSong(it, current) }
+            shuffled.add(0, current)
+            coldQueue.clear()
+            coldQueue.addAll(shuffled)
+            indexInLane = 0
+            coldResumeIndex = 0
+        } else {
+            coldQueue.clear()
+            coldQueue.addAll(shuffled)
         }
         publish()
     }
