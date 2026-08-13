@@ -45,16 +45,13 @@ import kotlin.math.abs
 import kotlin.math.roundToInt
 
 /** Spotify-ish slide duration for skip (button or fling settle). */
-private val SkipSpec = tween<Float>(durationMillis = 260, easing = FastOutSlowInEasing)
+private val SkipSpec = tween<Float>(durationMillis = 280, easing = FastOutSlowInEasing)
 
 /**
  * Album art card with edge-to-edge neighbor peeks.
  *
- * - Finger drag follows the touch; settle eases off-screen then promotes theme.
- * - [skipToken] + [skipDirection] drive the same animation for transport buttons
- *   (-1 = next / from right, +1 = previous / from left).
- * - [onPromoteNext]/[onPromotePrev] must update the theme store *before*
- *   playback advances so the art never snaps back to the old cover.
+ * Finger drag follows touch; settle / transport buttons ease off-screen,
+ * promote the preloaded theme, then snap so the new cover is already current.
  */
 @Composable
 fun SwipeableAlbumArt(
@@ -86,8 +83,13 @@ fun SwipeableAlbumArt(
         LocalConfiguration.current.screenWidthDp.dp.toPx()
     }
 
+    suspend fun animateSkipTo(targetX: Float) {
+        offsetX.animateTo(targetX, SkipSpec) {
+            onHorizontalFraction((value / screenWidthPx).coerceIn(-1f, 1f))
+        }
+    }
+
     suspend fun finishNext() {
-        // Paint incoming theme as current before snapping offset home.
         onPromoteNext()
         onHorizontalFraction(0f)
         offsetX.snapTo(0f)
@@ -119,13 +121,13 @@ fun SwipeableAlbumArt(
                 }
                 x < -trackThreshold && next != null -> {
                     animatingSkip = -1
-                    offsetX.animateTo(-screenWidthPx, SkipSpec)
+                    animateSkipTo(-screenWidthPx)
                     finishNext()
                     animatingSkip = 0
                 }
                 x > trackThreshold && prev != null -> {
                     animatingSkip = 1
-                    offsetX.animateTo(screenWidthPx, SkipSpec)
+                    animateSkipTo(screenWidthPx)
                     finishPrev()
                     animatingSkip = 0
                 }
@@ -139,7 +141,6 @@ fun SwipeableAlbumArt(
         }
     }
 
-    // Transport buttons: same path as a completed fling, eased.
     LaunchedEffect(skipToken) {
         if (skipToken == 0L || skipDirection == 0) return@LaunchedEffect
         if (animatingSkip != 0) {
@@ -149,23 +150,17 @@ fun SwipeableAlbumArt(
         when {
             skipDirection < 0 && next != null -> {
                 animatingSkip = -1
-                // Nudge fraction so theme blend kicks in immediately
-                onHorizontalFraction(-0.05f)
-                offsetX.animateTo(-screenWidthPx, SkipSpec)
+                animateSkipTo(-screenWidthPx)
                 finishNext()
                 animatingSkip = 0
             }
             skipDirection > 0 && prev != null -> {
                 animatingSkip = 1
-                onHorizontalFraction(0.05f)
-                offsetX.animateTo(screenWidthPx, SkipSpec)
+                animateSkipTo(screenWidthPx)
                 finishPrev()
                 animatingSkip = 0
             }
-            skipDirection < 0 -> {
-                // No preloaded next — still advance playback without art slide
-                onSwipeNext()
-            }
+            skipDirection < 0 -> onSwipeNext()
             skipDirection > 0 -> onSwipePrev()
         }
         onSkipConsumed()
