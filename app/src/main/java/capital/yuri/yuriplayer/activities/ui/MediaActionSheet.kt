@@ -57,8 +57,8 @@ fun MediaSheetHeader(
 @Composable
 fun MediaSheetItem(
     label: String,
-    onClick: () -> Unit,
-    enabled: Boolean = true
+    enabled: Boolean = true,
+    onClick: () -> Unit
 ) {
     TextButton(
         onClick = onClick,
