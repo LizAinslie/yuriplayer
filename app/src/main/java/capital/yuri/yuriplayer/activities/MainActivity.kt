@@ -1,6 +1,7 @@
 package capital.yuri.yuriplayer.activities
 
 import android.Manifest
+import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Bundle
 import android.widget.Toast
@@ -31,7 +32,6 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.QueueMusic
 import androidx.compose.material.icons.filled.ExpandMore
@@ -112,6 +112,9 @@ class MainActivity : ComponentActivity() {
 
     private var isCarMode = false
 
+    /** Set when launched from the media notification. */
+    private val openPlayerState = mutableStateOf(false)
+
     private val permissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestPermission()
     ) { granted ->
@@ -123,6 +126,7 @@ class MainActivity : ComponentActivity() {
 
         isCarMode = intent?.action == "capital.yuri.yuriplayer.action.CAR_MODE" ||
                 intent?.getBooleanExtra("car_mode", false) == true
+        openPlayerState.value = intent?.getBooleanExtra(EXTRA_OPEN_PLAYER, false) == true
 
         if (ContextCompat.checkSelfPermission(this, Manifest.permission.READ_EXTERNAL_STORAGE)
             != PackageManager.PERMISSION_GRANTED
@@ -133,10 +137,13 @@ class MainActivity : ComponentActivity() {
         enableEdgeToEdge()
         setContent {
             YuriPlayerTheme {
+                val openPlayer by openPlayerState
                 YuriApp(
                     library = libraryIndex,
                     player = playerController,
-                    isCarMode = isCarMode
+                    isCarMode = isCarMode,
+                    openPlayerInitially = openPlayer,
+                    onPlayerOpened = { openPlayerState.value = false }
                 )
             }
         }
@@ -152,12 +159,19 @@ class MainActivity : ComponentActivity() {
         super.onDestroy()
     }
 
-    override fun onNewIntent(intent: android.content.Intent) {
+    override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         setIntent(intent)
         val nowCar = intent.action == "capital.yuri.yuriplayer.action.CAR_MODE" ||
                 intent.getBooleanExtra("car_mode", false)
         if (nowCar && !isCarMode) isCarMode = true
+        if (intent.getBooleanExtra(EXTRA_OPEN_PLAYER, false)) {
+            openPlayerState.value = true
+        }
+    }
+
+    companion object {
+        const val EXTRA_OPEN_PLAYER = "capital.yuri.yuriplayer.extra.OPEN_PLAYER"
     }
 }
 
@@ -174,10 +188,19 @@ private enum class LibrarySection { Songs, Albums, Artists, Untagged }
 fun YuriApp(
     library: LibraryIndex,
     player: PlayerController,
-    isCarMode: Boolean
+    isCarMode: Boolean,
+    openPlayerInitially: Boolean = false,
+    onPlayerOpened: () -> Unit = {}
 ) {
     var topTab by remember { mutableStateOf(TopTab.Library) }
     var playerExpanded by remember { mutableStateOf(false) }
+
+    LaunchedEffect(openPlayerInitially) {
+        if (openPlayerInitially) {
+            playerExpanded = true
+            onPlayerOpened()
+        }
+    }
 
     var currentSong by remember { mutableStateOf<Song?>(null) }
     var playing by remember { mutableStateOf(false) }
