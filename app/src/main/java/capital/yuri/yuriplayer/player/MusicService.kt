@@ -102,6 +102,8 @@ class MusicService : MediaSessionService() {
             .setPauseAtEndOfMediaItems(false)
             .build()
             .also {
+                // Never use Exo's own REPEAT_MODE_ONE — on API 27 same-URI
+                // seeks/transitions kill the AudioTrack (UnexpectedDiscontinuity).
                 it.repeatMode = Player.REPEAT_MODE_OFF
                 it.addListener(playerListener)
             }
@@ -159,56 +161,22 @@ class MusicService : MediaSessionService() {
         return toMediaItem(song, mediaIdSuffix = "loop-$loopGeneration")
     }
 
-    private fun rotateRepeatOneWindow() {
-        val p = player ?: return
-        val current = queueManager.currentSong() ?: return
-        Log.i(TAG, "rotateRepeatOneWindow index=${p.currentMediaItemIndex} count=${p.mediaItemCount}")
-        try {
-            while (p.currentMediaItemIndex > 0) p.removeMediaItem(0)
-            while (p.mediaItemCount > 1) p.removeMediaItem(p.mediaItemCount - 1)
-            p.addMediaItem(nextLoopItem(current))
-        } catch (e: Exception) {
-            Log.e(TAG, "rotateRepeatOneWindow failed — hard restart", e)
-            hardRestartCurrent(autoPlay = true)
-            return
-        }
-        _nowPlaying.value = current
-        updateForegroundNotification()
-        persistState()
-    }
-
     /**
-     * After seamless transition: drop finished items + attach correct next.
-     * Never calls setMediaItems on the playing item (that was the audio gap).
+     * Full stop → clear → prepare of a *single* media item.
+     * Required on API 27: transitioning between two items that share the same
+     * URI leaves DefaultAudioSink in a dead state (UnexpectedDiscontinuity +
+     * silence while the clock keeps running).
      */
-    private fun softNormalizeWindow() {
-        val p = player ?: return
-        val current = queueManager.currentSong() ?: return
-        try {
-            while (p.currentMediaItemIndex > 0) p.removeMediaItem(0)
-            while (p.mediaItemCount > 1) p.removeMediaItem(p.mediaItemCount - 1)
-            if (isRepeatOne()) {
-                p.addMediaItem(nextLoopItem(current))
-            } else {
-                queueManager.peekNext()?.let { p.addMediaItem(toMediaItem(it)) }
-            }
-        } catch (e: Exception) {
-            Log.e(TAG, "softNormalizeWindow failed", e)
-        }
-    }
-
     private fun hardRestartCurrent(autoPlay: Boolean = true) {
         val p = player ?: return
         val current = queueManager.currentSong() ?: return
         val wasPlaying = autoPlay || p.playWhenReady
-        Log.i(TAG, "hardRestartCurrent '${current.displayTitle}'")
+        Log.i(TAG, "hardRestartCurrent '${current.displayTitle}' gen=$loopGeneration")
         try {
             p.playWhenReady = false
             p.stop()
             p.clearMediaItems()
-            val a = nextLoopItem(current)
-            val b = nextLoopItem(current)
-            p.setMediaItems(listOf(a, b), 0, 0L)
+            p.setMediaItem(nextLoopItem(current), /* resetPosition = */ true)
             p.prepare()
             p.repeatMode = Player.REPEAT_MODE_OFF
             if (wasPlaying) {
@@ -223,6 +191,23 @@ class MusicService : MediaSessionService() {
         _nowPlaying.value = current
         updateForegroundNotification()
         persistState()
+    }
+
+    /**
+     * After seamless advance between *different* tracks: drop finished items and
+     * attach the true next. Never used for repeat-one (same URI).
+     */
+    private fun softNormalizeWindow() {
+        val p = player ?: return
+        val current = queueManager.currentSong() ?: return
+        if (isRepeatOne()) return
+        try {
+            while (p.currentMediaItemIndex > 0) p.removeMediaItem(0)
+            while (p.mediaItemCount > 1) p.removeMediaItem(p.mediaItemCount - 1)
+            queueManager.peekNext()?.let { p.addMediaItem(toMediaItem(it)) }
+        } catch (e: Exception) {
+            Log.e(TAG, "softNormalizeWindow failed", e)
+        }
     }
 
     private fun rebufferWindow(
@@ -241,8 +226,10 @@ class MusicService : MediaSessionService() {
         }
 
         val repeatOne = isRepeatOne()
+        // Repeat-one: ONE item only. A second same-URI item is what triggers
+        // UnexpectedDiscontinuityException on Android 8.1 audio track.
         val nextSong = if (repeatOne) null else queueManager.peekNext()
-        val wantCount = if (repeatOne) 2 else 1 + (if (nextSong != null) 1 else 0)
+        val wantCount = if (repeatOne) 1 else 1 + (if (nextSong != null) 1 else 0)
         val haveUris = (0 until p.mediaItemCount).mapNotNull { mediaItemUriAt(it) }
         val currentUri = songUri(current)
 
@@ -251,9 +238,7 @@ class MusicService : MediaSessionService() {
             haveUris.size == wantCount &&
             haveUris.isNotEmpty() &&
             urisEqual(haveUris[0], currentUri) &&
-            (if (repeatOne) {
-                haveUris.size >= 2 && urisEqual(haveUris[1], currentUri)
-            } else if (nextSong != null) {
+            (if (nextSong != null) {
                 haveUris.size >= 2 && urisEqual(haveUris[1], songUri(nextSong))
             } else true)
 
@@ -270,7 +255,7 @@ class MusicService : MediaSessionService() {
         }
 
         val items = if (repeatOne) {
-            listOf(nextLoopItem(current), nextLoopItem(current))
+            listOf(nextLoopItem(current))
         } else {
             buildList {
                 add(toMediaItem(current))
@@ -281,7 +266,7 @@ class MusicService : MediaSessionService() {
         Log.i(
             TAG,
             "rebufferWindow current='${current.displayTitle}' " +
-                "next='${if (repeatOne) current.displayTitle + " (loop)" else nextSong?.displayTitle}' " +
+                "next='${if (repeatOne) "(repeat-one single)" else nextSong?.displayTitle}' " +
                 "startMs=$startPositionMs autoPlay=$autoPlay force=$forceReload"
         )
 
@@ -314,12 +299,12 @@ class MusicService : MediaSessionService() {
             )
             return
         }
+        // Strip anything after the playing item
         while (p.mediaItemCount > p.currentMediaItemIndex + 1) {
             p.removeMediaItem(p.mediaItemCount - 1)
         }
-        if (isRepeatOne()) {
-            p.addMediaItem(nextLoopItem(current))
-        } else {
+        // Repeat-one stays single-item; never prebuffer a same-URI copy
+        if (!isRepeatOne()) {
             queueManager.peekNext()?.let { p.addMediaItem(toMediaItem(it)) }
         }
         p.repeatMode = Player.REPEAT_MODE_OFF
@@ -344,15 +329,9 @@ class MusicService : MediaSessionService() {
                 persistState()
             }
             result.seekToStart -> {
-                if (p != null && p.playbackState != Player.STATE_ENDED) {
-                    p.seekTo(0)
-                    if (autoPlay) p.play()
-                    _nowPlaying.value = queueManager.currentSong() ?: result.song
-                    updateForegroundNotification()
-                    persistState()
-                } else {
-                    hardRestartCurrent(autoPlay = autoPlay)
-                }
+                // Restart current (previous button past 3s). Prefer hard restart
+                // over seekTo(0) so the audio sink can't go silent on API 27.
+                hardRestartCurrent(autoPlay = autoPlay)
             }
             result.reload -> hardRestartCurrent(autoPlay = autoPlay)
             result.song != null -> {
@@ -364,6 +343,7 @@ class MusicService : MediaSessionService() {
                 val nextItemUri = mediaItemUriAt(1)
                 val canSeamless =
                     p != null &&
+                        !isRepeatOne() &&
                         p.hasNextMediaItem() &&
                         nextItemUri != null &&
                         urisEqual(nextItemUri, songUri(target))
@@ -384,8 +364,9 @@ class MusicService : MediaSessionService() {
 
     private fun syncQueueAfterExoAutoAdvance() {
         if (advancing) return
+        // Should not happen under repeat-one (single item), but if it does:
         if (isRepeatOne()) {
-            rotateRepeatOneWindow()
+            hardRestartCurrent(autoPlay = true)
             return
         }
         advancing = true
@@ -494,13 +475,22 @@ class MusicService : MediaSessionService() {
 
     fun cycleRepeatMode() {
         queueManager.cycleRepeatMode()
-        updateNextMediaItemOnly()
+        // Entering/leaving repeat-one changes window shape (1 vs 1+next)
+        rebufferWindow(
+            startPositionMs = player?.currentPosition?.coerceAtLeast(0L) ?: 0L,
+            autoPlay = player?.playWhenReady == true,
+            forceReload = true
+        )
         persistState()
     }
 
     fun setRepeatMode(mode: RepeatMode) {
         queueManager.setRepeatMode(mode)
-        updateNextMediaItemOnly()
+        rebufferWindow(
+            startPositionMs = player?.currentPosition?.coerceAtLeast(0L) ?: 0L,
+            autoPlay = player?.playWhenReady == true,
+            forceReload = true
+        )
         persistState()
     }
 
@@ -605,7 +595,7 @@ class MusicService : MediaSessionService() {
                 Log.w(TAG, "audio glitch → hard restart")
                 hardRestartCurrent(autoPlay = wasPlaying)
             } finally {
-                delay(300)
+                delay(400)
                 recoveringAudio = false
             }
         }
@@ -639,7 +629,7 @@ class MusicService : MediaSessionService() {
         override fun onPlaybackStateChanged(playbackState: Int) {
             if (playbackState == Player.STATE_ENDED && !advancing) {
                 if (isRepeatOne()) {
-                    Log.w(TAG, "STATE_ENDED under repeat-one → hardRestart")
+                    Log.i(TAG, "STATE_ENDED under repeat-one → hardRestart")
                     hardRestartCurrent(autoPlay = true)
                     return
                 }
