@@ -8,6 +8,7 @@ import android.content.Intent
 import android.os.Binder
 import android.os.Build
 import android.os.IBinder
+import android.util.Log
 import androidx.annotation.OptIn
 import androidx.core.app.NotificationCompat
 import androidx.media3.common.AudioAttributes
@@ -49,6 +50,9 @@ class MusicService : MediaSessionService() {
     private var indexInLane = -1
     private var shuffleEnabled = false
     private var repeatMode = RepeatMode.OFF
+
+    /** Prevents double-advance from ENDED + other events. */
+    private var advancing = false
 
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private var persistJob: Job? = null
@@ -111,7 +115,6 @@ class MusicService : MediaSessionService() {
             ACTION_NEXT -> skipToNext()
             ACTION_PREV -> skipToPrevious()
             else -> {
-                // Keep foreground alive
                 startForeground(
                     NOTIFICATION_ID,
                     buildMediaNotification(_nowPlaying.value, _isPlaying.value)
@@ -143,11 +146,26 @@ class MusicService : MediaSessionService() {
 
     private fun loadCurrent(startPositionMs: Long = 0L, autoPlay: Boolean = false) {
         val song = currentSong() ?: run {
+            Log.i(TAG, "loadCurrent: no current song (lane=$lane index=$indexInLane)")
             player?.stop()
             publishSnapshot()
             updateForegroundNotification()
             return
         }
+
+        Log.i(
+            TAG,
+            "loadCurrent: title='${song.displayTitle}' path=${song.path} uri=${song.contentUri} " +
+                "lane=$lane index=$indexInLane startMs=$startPositionMs autoPlay=$autoPlay " +
+                "repeat=$repeatMode shuffle=$shuffleEnabled"
+        )
+        Log.d(
+            TAG,
+            "loadCurrent detail: id=${song.id} mime=${song.mimeType} durationMs=${song.durationMs} " +
+                "hotSize=${hotQueue.size} coldSize=${coldQueue.size} " +
+                "artist='${song.artist}' album='${song.album}'"
+        )
+
         val item = toMediaItem(song)
         player?.apply {
             setMediaItem(item, startPositionMs)
@@ -161,6 +179,7 @@ class MusicService : MediaSessionService() {
 
     fun playSource(songs: List<Song>, startIndex: Int = 0, autoPlay: Boolean = true) {
         if (songs.isEmpty()) return
+        Log.i(TAG, "playSource: ${songs.size} tracks startIndex=$startIndex")
         coldOriginal = songs.toList()
         coldQueue.clear()
         if (shuffleEnabled) {
@@ -180,6 +199,7 @@ class MusicService : MediaSessionService() {
     }
 
     fun addToHotQueue(song: Song) {
+        Log.d(TAG, "addToHotQueue: ${song.path ?: song.displayTitle}")
         hotQueue.add(song)
         publishSnapshot()
         persistState()
@@ -293,6 +313,7 @@ class MusicService : MediaSessionService() {
 
     fun setShuffle(enabled: Boolean) {
         if (shuffleEnabled == enabled) return
+        Log.i(TAG, "setShuffle: $enabled")
         val current = currentSong()
         shuffleEnabled = enabled
         if (enabled) {
@@ -325,23 +346,27 @@ class MusicService : MediaSessionService() {
             RepeatMode.ONE -> RepeatMode.COLD
             RepeatMode.COLD -> RepeatMode.OFF
         }
+        Log.i(TAG, "cycleRepeatMode -> $repeatMode")
         publishSnapshot()
         persistState()
     }
 
     fun setRepeatMode(mode: RepeatMode) {
+        Log.i(TAG, "setRepeatMode -> $mode")
         repeatMode = mode
         publishSnapshot()
         persistState()
     }
 
     fun play() {
+        Log.d(TAG, "play()")
         player?.play()
         updateForegroundNotification()
         persistState()
     }
 
     fun pause() {
+        Log.d(TAG, "pause()")
         player?.pause()
         updateForegroundNotification()
         persistState()
@@ -392,45 +417,65 @@ class MusicService : MediaSessionService() {
     }
 
     private fun advance(userInitiated: Boolean) {
-        if (repeatMode == RepeatMode.ONE && !userInitiated) {
-            player?.seekTo(0)
-            player?.play()
+        if (advancing) {
+            Log.d(TAG, "advance ignored (already advancing)")
             return
         }
+        advancing = true
+        try {
+            Log.i(
+                TAG,
+                "advance userInitiated=$userInitiated repeat=$repeatMode lane=$lane index=$indexInLane " +
+                    "current=${currentSong()?.path}"
+            )
 
-        when (lane) {
-            QueueLane.HOT -> {
-                if (indexInLane < hotQueue.lastIndex) {
-                    indexInLane++
-                    loadCurrent(0L, autoPlay = true)
-                } else if (coldQueue.isNotEmpty()) {
-                    lane = QueueLane.COLD
-                    indexInLane = 0
-                    loadCurrent(0L, autoPlay = true)
-                } else if (repeatMode == RepeatMode.COLD && coldOriginal.isNotEmpty()) {
-                    rebuildColdFromOriginal()
-                    lane = QueueLane.COLD
-                    indexInLane = 0
-                    loadCurrent(0L, autoPlay = true)
-                } else {
-                    player?.pause()
-                    publishSnapshot()
-                    updateForegroundNotification()
+            // Repeat one: never leave the current track on natural end
+            if (repeatMode == RepeatMode.ONE && !userInitiated) {
+                val song = currentSong()
+                Log.i(TAG, "repeat ONE → reload current path=${song?.path}")
+                loadCurrent(0L, autoPlay = true)
+                return
+            }
+
+            when (lane) {
+                QueueLane.HOT -> {
+                    if (indexInLane < hotQueue.lastIndex) {
+                        indexInLane++
+                        loadCurrent(0L, autoPlay = true)
+                    } else if (coldQueue.isNotEmpty()) {
+                        lane = QueueLane.COLD
+                        indexInLane = 0
+                        loadCurrent(0L, autoPlay = true)
+                    } else if (repeatMode == RepeatMode.COLD && coldOriginal.isNotEmpty()) {
+                        rebuildColdFromOriginal()
+                        lane = QueueLane.COLD
+                        indexInLane = 0
+                        loadCurrent(0L, autoPlay = true)
+                    } else {
+                        Log.i(TAG, "advance: end of queue")
+                        player?.pause()
+                        publishSnapshot()
+                        updateForegroundNotification()
+                    }
+                }
+                QueueLane.COLD -> {
+                    if (indexInLane < coldQueue.lastIndex) {
+                        indexInLane++
+                        loadCurrent(0L, autoPlay = true)
+                    } else if (repeatMode == RepeatMode.COLD && coldQueue.isNotEmpty()) {
+                        Log.i(TAG, "repeat ALL → restart cold queue")
+                        indexInLane = 0
+                        loadCurrent(0L, autoPlay = true)
+                    } else {
+                        Log.i(TAG, "advance: end of cold queue")
+                        player?.pause()
+                        publishSnapshot()
+                        updateForegroundNotification()
+                    }
                 }
             }
-            QueueLane.COLD -> {
-                if (indexInLane < coldQueue.lastIndex) {
-                    indexInLane++
-                    loadCurrent(0L, autoPlay = true)
-                } else if (repeatMode == RepeatMode.COLD && coldQueue.isNotEmpty()) {
-                    indexInLane = 0
-                    loadCurrent(0L, autoPlay = true)
-                } else {
-                    player?.pause()
-                    publishSnapshot()
-                    updateForegroundNotification()
-                }
-            }
+        } finally {
+            advancing = false
         }
     }
 
@@ -483,6 +528,7 @@ class MusicService : MediaSessionService() {
             if (max < 0) return@launch
             indexInLane = indexInLane.coerceIn(0, max)
 
+            Log.i(TAG, "restorePlaybackState lane=$lane index=$indexInLane repeat=$repeatMode")
             loadCurrent(saved.positionMs, autoPlay = false)
         }
     }
@@ -514,6 +560,14 @@ class MusicService : MediaSessionService() {
         }
 
         override fun onPlaybackStateChanged(playbackState: Int) {
+            val name = when (playbackState) {
+                Player.STATE_IDLE -> "IDLE"
+                Player.STATE_BUFFERING -> "BUFFERING"
+                Player.STATE_READY -> "READY"
+                Player.STATE_ENDED -> "ENDED"
+                else -> "?$playbackState"
+            }
+            Log.d(TAG, "onPlaybackStateChanged $name path=${currentSong()?.path}")
             if (playbackState == Player.STATE_ENDED) {
                 advance(userInitiated = false)
             }
@@ -651,6 +705,7 @@ class MusicService : MediaSessionService() {
     }
 
     companion object {
+        private const val TAG = "YuriPlayer"
         const val CHANNEL_ID = "yuri_playback"
         const val NOTIFICATION_ID = 42
 
