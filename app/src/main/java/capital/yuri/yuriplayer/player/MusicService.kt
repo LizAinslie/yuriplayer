@@ -52,7 +52,6 @@ class MusicService : MediaSessionService() {
             .setContentType(C.AUDIO_CONTENT_TYPE_MUSIC)
             .build()
 
-        // Slightly larger buffers help local high-bitrate files on slower storage
         val loadControl = DefaultLoadControl.Builder()
             .setBufferDurationsMs(
                 /* minBufferMs = */ 15_000,
@@ -84,6 +83,12 @@ class MusicService : MediaSessionService() {
             .build()
     }
 
+    override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        super.onStartCommand(intent, flags, startId)
+        // Keep running after the UI goes away; system may restart us if killed under memory pressure
+        return START_STICKY
+    }
+
     private val playerListener = object : Player.Listener {
         override fun onIsPlayingChanged(isPlaying: Boolean) {
             _isPlaying.value = isPlaying
@@ -107,8 +112,6 @@ class MusicService : MediaSessionService() {
     }
 
     override fun onBind(intent: Intent?): IBinder? {
-        // Our app binds with a plain Intent (no action) for LocalBinder.
-        // Media3 session controllers bind with a specific action — defer to super for those.
         return if (intent?.action == null) {
             binder
         } else {
@@ -171,7 +174,7 @@ class MusicService : MediaSessionService() {
 
     fun skipToPrevious() {
         player?.let {
-            if (it.currentPosition > 3000 && !it.hasPreviousMediaItem()) {
+            if (it.currentPosition > 3000L) {
                 it.seekTo(0)
             } else if (it.hasPreviousMediaItem()) {
                 it.seekToPreviousMediaItem()
@@ -187,6 +190,14 @@ class MusicService : MediaSessionService() {
     fun getCurrentSong(): Song? {
         val index = player?.currentMediaItemIndex ?: return null
         return currentPlaylist.getOrNull(index)
+    }
+
+    override fun onTaskRemoved(rootIntent: Intent?) {
+        // User swiped the app away — keep audio going if something is playing.
+        if (player?.isPlaying != true) {
+            stopSelf()
+        }
+        super.onTaskRemoved(rootIntent)
     }
 
     override fun onDestroy() {
