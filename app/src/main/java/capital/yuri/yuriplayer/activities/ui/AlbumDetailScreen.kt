@@ -47,7 +47,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.draw.drawBehind
-import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
@@ -64,13 +63,10 @@ import capital.yuri.yuriplayer.data.Song
 import capital.yuri.yuriplayer.data.theme.ThemeService
 import capital.yuri.yuriplayer.ui.formatTrackCount
 import org.koin.compose.koinInject
-import kotlin.math.roundToInt
 
-/** Expanded header body height (art + meta + actions), excluding status bar. */
-private val ExpandedHeaderBody = 420.dp
+/** Expanded header content height (below status bar). */
+private val ExpandedHeaderBody = 400.dp
 private val CollapsedBarHeight = 56.dp
-/** Fade strip under the expanded controls into the track list. */
-private val FadeTail = 96.dp
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -108,7 +104,6 @@ fun AlbumDetailScreen(
                 source: NestedScrollSource
             ): androidx.compose.ui.geometry.Offset {
                 val delta = available.y
-                // Finger up (delta < 0) → collapse; finger down → expand only if list at top
                 if (delta < 0f && collapsePx < collapseRangePx) {
                     val consumed = (-delta).coerceAtMost(collapseRangePx - collapsePx)
                     collapsePx += consumed
@@ -154,14 +149,13 @@ fun AlbumDetailScreen(
         else onPlayAlbum(album.songs, 0)
     }
 
-    // Header body height collapses in real space — no ghost empty region
+    // Real collapsing height — space is reclaimed, no ghost region
     val headerBodyH = ExpandedHeaderBody * (1f - f) + CollapsedBarHeight * f
-    val fadeH = FadeTail * (1f - f)
 
+    // Transparent system bar; we paint albumBg behind it. Icons from luminance.
     ThemedStatusBar(color = albumBg, enabled = true)
 
     MaterialTheme(colorScheme = scheme) {
-        // Album color under status bar (edge-to-edge)
         Box(
             modifier = Modifier
                 .fillMaxSize()
@@ -169,7 +163,7 @@ fun AlbumDetailScreen(
                 .nestedScroll(nestedScroll)
         ) {
             Column(modifier = Modifier.fillMaxSize()) {
-                // —— Collapsing header (lives outside the list so height is reclaimed) ——
+                // Header: solid album color under status bar + collapsing body
                 Box(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -182,14 +176,12 @@ fun AlbumDetailScreen(
                             .height(headerBodyH)
                             .clipToBounds()
                     ) {
-                        // Expanded content fades/scales out as we collapse
+                        // Expanded hero — fades out while height shrinks
                         Box(
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .graphicsLayer {
-                                    alpha = (1f - f * 1.6f).coerceIn(0f, 1f)
-                                    scaleX = 1f - 0.08f * f
-                                    scaleY = 1f - 0.08f * f
+                                    alpha = (1f - f * 1.8f).coerceIn(0f, 1f)
                                 }
                         ) {
                             SpotifyAlbumHero(
@@ -205,8 +197,7 @@ fun AlbumDetailScreen(
                             )
                         }
 
-                        // Collapsed bar — fully opaque, no translucent graphicsLayer
-                        if (f > 0.12f) {
+                        if (f > 0.15f) {
                             CollapsedSpotifyBar(
                                 album = album,
                                 showPause = showPause,
@@ -215,18 +206,19 @@ fun AlbumDetailScreen(
                                 onPrimary = onPrimary,
                                 modifier = Modifier
                                     .align(Alignment.TopCenter)
-                                    .graphicsLayer { alpha = ((f - 0.12f) / 0.4f).coerceIn(0f, 1f) }
+                                    .graphicsLayer {
+                                        alpha = ((f - 0.15f) / 0.35f).coerceIn(0f, 1f)
+                                    }
                             )
                         }
 
-                        // Expanded back button
-                        if (f < 0.5f) {
+                        if (f < 0.45f) {
                             IconButton(
                                 onClick = onBack,
                                 modifier = Modifier
                                     .align(Alignment.TopStart)
                                     .padding(4.dp)
-                                    .graphicsLayer { alpha = (1f - f * 2f).coerceIn(0f, 1f) }
+                                    .graphicsLayer { alpha = (1f - f * 2.2f).coerceIn(0f, 1f) }
                             ) {
                                 Icon(
                                     Icons.AutoMirrored.Filled.ArrowBack,
@@ -238,28 +230,21 @@ fun AlbumDetailScreen(
                     }
                 }
 
-                // Continuous fade into list — height shrinks with collapse so no dead space
-                if (fadeH > 2.dp) {
-                    Box(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .height(fadeH)
-                            .drawBehind {
-                                drawRect(
-                                    brush = Brush.verticalGradient(
-                                        colorStops = arrayOf(
-                                            0.00f to albumBg,
-                                            0.35f to lerpColor(albumBg, defaultBg, 0.35f),
-                                            0.7f to lerpColor(albumBg, defaultBg, 0.75f),
-                                            1.00f to defaultBg
-                                        )
-                                    )
+                // Short edge blend into the list — not a tall empty gradient band
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(28.dp)
+                        .drawBehind {
+                            drawRect(
+                                brush = Brush.verticalGradient(
+                                    colors = listOf(albumBg, defaultBg)
                                 )
-                            }
-                    )
-                }
+                            )
+                        }
+                )
 
-                // —— Track list ——
+                // Track list on the default page color
                 Box(
                     modifier = Modifier
                         .fillMaxSize()
@@ -343,16 +328,6 @@ fun AlbumDetailScreen(
     }
 }
 
-private fun lerpColor(a: Color, b: Color, t: Float): Color {
-    val x = t.coerceIn(0f, 1f)
-    return Color(
-        red = a.red + (b.red - a.red) * x,
-        green = a.green + (b.green - a.green) * x,
-        blue = a.blue + (b.blue - a.blue) * x,
-        alpha = a.alpha + (b.alpha - a.alpha) * x
-    )
-}
-
 @Composable
 private fun SpotifyAlbumHero(
     album: AlbumItem,
@@ -369,16 +344,16 @@ private fun SpotifyAlbumHero(
         modifier = Modifier
             .fillMaxWidth()
             .padding(horizontal = 20.dp)
-            .padding(top = 40.dp, bottom = 8.dp),
+            .padding(top = 36.dp, bottom = 4.dp),
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
         AlbumArt(
             song = album.songs.firstOrNull(),
-            size = 220.dp,
+            size = 200.dp,
             corner = 8.dp
         )
 
-        Spacer(modifier = Modifier.height(20.dp))
+        Spacer(modifier = Modifier.height(16.dp))
 
         Column(
             modifier = Modifier.fillMaxWidth(),
@@ -388,12 +363,12 @@ private fun SpotifyAlbumHero(
                 text = album.displayName,
                 style = MaterialTheme.typography.headlineSmall.copy(
                     fontWeight = FontWeight.Bold,
-                    fontSize = 26.sp
+                    fontSize = 24.sp
                 ),
                 color = MaterialTheme.colorScheme.onBackground
             )
 
-            Spacer(modifier = Modifier.height(10.dp))
+            Spacer(modifier = Modifier.height(8.dp))
 
             Row(
                 verticalAlignment = Alignment.CenterVertically,
@@ -415,7 +390,7 @@ private fun SpotifyAlbumHero(
                 )
             }
 
-            Spacer(modifier = Modifier.height(6.dp))
+            Spacer(modifier = Modifier.height(4.dp))
 
             Text(
                 text = metaLine,
@@ -423,7 +398,7 @@ private fun SpotifyAlbumHero(
                 color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.55f)
             )
 
-            Spacer(modifier = Modifier.height(14.dp))
+            Spacer(modifier = Modifier.height(10.dp))
 
             Row(
                 modifier = Modifier.fillMaxWidth(),
@@ -458,14 +433,14 @@ private fun SpotifyAlbumHero(
                 IconButton(
                     onClick = onPrimary,
                     modifier = Modifier
-                        .size(56.dp)
+                        .size(52.dp)
                         .background(MaterialTheme.colorScheme.primary, CircleShape)
                 ) {
                     Icon(
                         if (showPause) Icons.Default.Pause else Icons.Default.PlayArrow,
                         contentDescription = if (showPause) "Pause" else "Play",
                         tint = MaterialTheme.colorScheme.onPrimary,
-                        modifier = Modifier.size(32.dp)
+                        modifier = Modifier.size(30.dp)
                     )
                 }
             }
