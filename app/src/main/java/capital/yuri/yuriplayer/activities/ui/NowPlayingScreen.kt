@@ -26,14 +26,12 @@ import androidx.compose.material.icons.filled.Shuffle
 import androidx.compose.material.icons.filled.SkipNext
 import androidx.compose.material.icons.filled.SkipPrevious
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -360,7 +358,6 @@ fun NowPlayingScreen(
                         }
                     }
 
-                    // [⋯]   Repeat · Shuffle   [queue]   — lyrics slot later below
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         verticalAlignment = Alignment.CenterVertically
@@ -395,9 +392,6 @@ fun NowPlayingScreen(
                             )
                         }
                     }
-
-                    // Lyrics placeholder (future)
-                    // Spacer + lyric preview will sit here
                 }
             }
 
@@ -406,57 +400,31 @@ fun NowPlayingScreen(
                     onDismissRequest = { showSongMenu = false },
                     sheetState = rememberModalBottomSheetState()
                 ) {
-                    Text(
-                        song.displayTitle,
-                        style = MaterialTheme.typography.titleMedium,
-                        fontWeight = FontWeight.SemiBold,
-                        modifier = Modifier.padding(horizontal = 24.dp, vertical = 4.dp)
+                    MediaSheetHeader(
+                        song = song,
+                        title = song.displayTitle,
+                        subtitle = "${song.displayArtist} · ${song.displayAlbum}"
                     )
-                    Text(
-                        "${song.displayArtist} · ${song.displayAlbum}",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
-                        modifier = Modifier.padding(horizontal = 24.dp, vertical = 2.dp)
-                    )
-                    HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
-
-                    NowPlayingMenuItem("Go to album") {
+                    MediaSheetItem("Go to album") {
                         showSongMenu = false
                         onGoToAlbum(song)
                     }
-                    NowPlayingMenuItem("Go to artist") {
+                    MediaSheetItem("Go to artist") {
                         showSongMenu = false
                         onGoToArtist(song)
                     }
-                    NowPlayingMenuItem("Add to playlist") {
+                    MediaSheetItem("Add to playlist") {
                         showSongMenu = false
                         onAddToPlaylist(song)
                     }
-                    NowPlayingMenuItem("Add to queue") {
+                    MediaSheetItem("Add to queue") {
                         showSongMenu = false
                         onAddToQueue(song)
                     }
-
-                    Spacer(modifier = Modifier.height(28.dp))
+                    MediaSheetBottomPad()
                 }
             }
         }
-    }
-}
-
-@Composable
-private fun NowPlayingMenuItem(label: String, onClick: () -> Unit) {
-    TextButton(
-        onClick = onClick,
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(horizontal = 8.dp)
-    ) {
-        Text(
-            label,
-            modifier = Modifier.fillMaxWidth(),
-            style = MaterialTheme.typography.bodyLarge
-        )
     }
 }
 
