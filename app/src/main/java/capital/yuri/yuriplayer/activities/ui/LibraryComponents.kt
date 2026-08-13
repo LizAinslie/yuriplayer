@@ -126,7 +126,8 @@ fun SortDropdown(sortMode: SortMode, onSortModeChange: (SortMode) -> Unit) {
 fun LibraryScreen(
     library: LibraryIndex,
     onPlay: (List<Song>, Int) -> Unit,
-    onAddToQueue: (Song) -> Unit
+    onAddToQueue: (Song) -> Unit,
+    onAddAlbumToQueue: (List<Song>) -> Unit = {}
 ) {
     val allSongs by library.songs.collectAsState()
     val loading by library.isLoading.collectAsState()
@@ -211,7 +212,18 @@ fun LibraryScreen(
                 if (albums.isEmpty()) Text("No albums match.", modifier = Modifier.padding(16.dp))
                 else LazyColumn(modifier = Modifier.fillMaxSize()) {
                     items(albums, key = { "${it.name}|${it.artist}" }) { album ->
-                        AlbumRow(album) { onPlay(album.songs, 0) }
+                        SwipeAddAlbumRow(
+                            album = album,
+                            onClick = { onPlay(album.songs, 0) },
+                            onSwipeAdd = {
+                                onAddAlbumToQueue(album.songs)
+                                Toast.makeText(
+                                    context,
+                                    "Queued ${album.songs.size} tracks",
+                                    Toast.LENGTH_SHORT
+                                ).show()
+                            }
+                        )
                     }
                 }
             }
@@ -307,6 +319,66 @@ fun SwipeAddSongRow(
                 )
                 MarqueeText(
                     text = "${song.displayArtist} • ${song.displayAlbum}",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
+                )
+            }
+        }
+    }
+}
+
+/** Swipe right to queue every track on the album. Tap to play. */
+@Composable
+fun SwipeAddAlbumRow(
+    album: AlbumItem,
+    onClick: () -> Unit,
+    onSwipeAdd: () -> Unit
+) {
+    var offsetX by remember { mutableFloatStateOf(0f) }
+    val density = LocalDensity.current
+    val threshold = with(density) { 96.dp.toPx() }
+
+    Box(
+        modifier = Modifier
+            .fillMaxWidth()
+            .background(MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.35f))
+    ) {
+        Text(
+            "+ Queue all",
+            style = MaterialTheme.typography.labelLarge,
+            color = MaterialTheme.colorScheme.primary,
+            modifier = Modifier.align(Alignment.CenterStart).padding(start = 16.dp)
+        )
+        Row(
+            modifier = Modifier
+                .offset { IntOffset(offsetX.roundToInt(), 0) }
+                .fillMaxWidth()
+                .background(MaterialTheme.colorScheme.surface)
+                .pointerInput(album.name, album.artist) {
+                    detectHorizontalDragGestures(
+                        onDragEnd = {
+                            if (offsetX > threshold) onSwipeAdd()
+                            offsetX = 0f
+                        },
+                        onDragCancel = { offsetX = 0f },
+                        onHorizontalDrag = { _, dragAmount ->
+                            offsetX = (offsetX + dragAmount).coerceIn(0f, threshold * 1.5f)
+                        }
+                    )
+                }
+                .clickable(onClick = onClick)
+                .padding(horizontal = 16.dp, vertical = 12.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            AlbumArt(song = album.songs.firstOrNull(), size = 48.dp)
+            Spacer(modifier = Modifier.width(12.dp))
+            Column(modifier = Modifier.weight(1f)) {
+                MarqueeText(
+                    text = album.displayName,
+                    style = MaterialTheme.typography.bodyLarge
+                )
+                MarqueeText(
+                    text = "${album.displayArtist} · ${album.trackCount} tracks",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
                 )
