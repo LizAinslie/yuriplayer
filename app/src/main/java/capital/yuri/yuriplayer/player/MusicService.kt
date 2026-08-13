@@ -102,8 +102,6 @@ class MusicService : MediaSessionService() {
             .setPauseAtEndOfMediaItems(false)
             .build()
             .also {
-                // Always OFF. Native REPEAT_MODE_ONE seeks silent on this device.
-                // Gapless repeat-one uses a dual [A, A'] window + rotate instead.
                 it.repeatMode = Player.REPEAT_MODE_OFF
                 it.addListener(playerListener)
             }
@@ -161,60 +159,58 @@ class MusicService : MediaSessionService() {
         return toMediaItem(song, mediaIdSuffix = "loop-$loopGeneration")
     }
 
-    /**
-     * After Exo auto-advances into the prebuffered copy of the same song,
-     * drop the finished item and append a fresh unique copy — without stopping
-     * playback. This is the gapless repeat-one path.
-     */
     private fun rotateRepeatOneWindow() {
         val p = player ?: return
         val current = queueManager.currentSong() ?: return
-        Log.i(
-            TAG,
-            "rotateRepeatOneWindow index=${p.currentMediaItemIndex} count=${p.mediaItemCount}"
-        )
-
+        Log.i(TAG, "rotateRepeatOneWindow index=${p.currentMediaItemIndex} count=${p.mediaItemCount}")
         try {
-            // Remove finished items before the one we're now on
-            while (p.currentMediaItemIndex > 0) {
-                p.removeMediaItem(0)
-            }
-            // Keep only the current item, then append the next loop copy
-            while (p.mediaItemCount > 1) {
-                p.removeMediaItem(p.mediaItemCount - 1)
-            }
+            while (p.currentMediaItemIndex > 0) p.removeMediaItem(0)
+            while (p.mediaItemCount > 1) p.removeMediaItem(p.mediaItemCount - 1)
             p.addMediaItem(nextLoopItem(current))
         } catch (e: Exception) {
             Log.e(TAG, "rotateRepeatOneWindow failed — hard restart", e)
             hardRestartCurrent(autoPlay = true)
             return
         }
-
         _nowPlaying.value = current
         updateForegroundNotification()
         persistState()
     }
 
-    /** Fallback only when the dual-window path could not run. */
+    /**
+     * After seamless transition: drop finished items + attach correct next.
+     * Never calls setMediaItems on the playing item (that was the audio gap).
+     */
+    private fun softNormalizeWindow() {
+        val p = player ?: return
+        val current = queueManager.currentSong() ?: return
+        try {
+            while (p.currentMediaItemIndex > 0) p.removeMediaItem(0)
+            while (p.mediaItemCount > 1) p.removeMediaItem(p.mediaItemCount - 1)
+            if (isRepeatOne()) {
+                p.addMediaItem(nextLoopItem(current))
+            } else {
+                queueManager.peekNext()?.let { p.addMediaItem(toMediaItem(it)) }
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "softNormalizeWindow failed", e)
+        }
+    }
+
     private fun hardRestartCurrent(autoPlay: Boolean = true) {
         val p = player ?: return
         val current = queueManager.currentSong() ?: return
         val wasPlaying = autoPlay || p.playWhenReady
-
         Log.i(TAG, "hardRestartCurrent '${current.displayTitle}'")
-
         try {
             p.playWhenReady = false
             p.stop()
             p.clearMediaItems()
-
-            // Dual window so the *next* loop is already gapless after this restart
             val a = nextLoopItem(current)
             val b = nextLoopItem(current)
-            p.setMediaItems(listOf(a, b), /* startIndex */ 0, /* startPos */ 0L)
+            p.setMediaItems(listOf(a, b), 0, 0L)
             p.prepare()
             p.repeatMode = Player.REPEAT_MODE_OFF
-
             if (wasPlaying) {
                 p.playWhenReady = true
                 p.play()
@@ -224,7 +220,6 @@ class MusicService : MediaSessionService() {
             rebufferWindow(0L, autoPlay = wasPlaying, forceReload = true)
             return
         }
-
         _nowPlaying.value = current
         updateForegroundNotification()
         persistState()
@@ -247,9 +242,6 @@ class MusicService : MediaSessionService() {
 
         val repeatOne = isRepeatOne()
         val nextSong = if (repeatOne) null else queueManager.peekNext()
-
-        // For repeat-one we always want [current, current-copy] so the loop
-        // can cross the boundary gaplessly into a prebuffered second item.
         val wantCount = if (repeatOne) 2 else 1 + (if (nextSong != null) 1 else 0)
         val haveUris = (0 until p.mediaItemCount).mapNotNull { mediaItemUriAt(it) }
         val currentUri = songUri(current)
@@ -295,7 +287,7 @@ class MusicService : MediaSessionService() {
 
         try {
             val wasPlaying = autoPlay || p.playWhenReady
-            p.setMediaItems(items, /* startIndex */ 0, startPositionMs.coerceAtLeast(0L))
+            p.setMediaItems(items, 0, startPositionMs.coerceAtLeast(0L))
             p.prepare()
             p.repeatMode = Player.REPEAT_MODE_OFF
             p.playWhenReady = wasPlaying
@@ -322,20 +314,14 @@ class MusicService : MediaSessionService() {
             )
             return
         }
-
-        // Drop anything after current
         while (p.mediaItemCount > p.currentMediaItemIndex + 1) {
             p.removeMediaItem(p.mediaItemCount - 1)
         }
-
         if (isRepeatOne()) {
-            // Ensure a prebuffered copy of the same track for gapless loop
             p.addMediaItem(nextLoopItem(current))
         } else {
-            val next = queueManager.peekNext()
-            if (next != null) p.addMediaItem(toMediaItem(next))
+            queueManager.peekNext()?.let { p.addMediaItem(toMediaItem(it)) }
         }
-
         p.repeatMode = Player.REPEAT_MODE_OFF
         _nowPlaying.value = current
         updateForegroundNotification()
@@ -368,10 +354,7 @@ class MusicService : MediaSessionService() {
                     hardRestartCurrent(autoPlay = autoPlay)
                 }
             }
-            result.reload -> {
-                // Queue still says "same song" — keep dual window gapless path
-                hardRestartCurrent(autoPlay = autoPlay)
-            }
+            result.reload -> hardRestartCurrent(autoPlay = autoPlay)
             result.song != null -> {
                 val target = result.song
                 _nowPlaying.value = target
@@ -389,17 +372,8 @@ class MusicService : MediaSessionService() {
                     Log.i(TAG, "seamless advance → '${target.displayTitle}'")
                     p.seekToNextMediaItem()
                     if (autoPlay) p.play()
+                    softNormalizeWindow()
                     persistState()
-                    serviceScope.launch {
-                        delay(150)
-                        val pl = player ?: return@launch
-                        val pos = pl.currentPosition.coerceAtLeast(0L)
-                        rebufferWindow(
-                            startPositionMs = pos,
-                            autoPlay = pl.playWhenReady,
-                            forceReload = true
-                        )
-                    }
                 } else {
                     Log.i(TAG, "fallback rebuffer advance → '${target.displayTitle}'")
                     rebufferWindow(0L, autoPlay = autoPlay, forceReload = true)
@@ -410,7 +384,6 @@ class MusicService : MediaSessionService() {
 
     private fun syncQueueAfterExoAutoAdvance() {
         if (advancing) return
-        // Repeat-one dual window: stay on the same queue song, just rotate
         if (isRepeatOne()) {
             rotateRepeatOneWindow()
             return
@@ -431,16 +404,8 @@ class MusicService : MediaSessionService() {
                     _nowPlaying.value = result.song
                     maybeRecordHistory(result.song)
                     updateForegroundNotification()
+                    softNormalizeWindow()
                     persistState()
-                    serviceScope.launch {
-                        delay(80)
-                        val pl = player ?: return@launch
-                        rebufferWindow(
-                            startPositionMs = pl.currentPosition.coerceAtLeast(0L),
-                            autoPlay = pl.playWhenReady,
-                            forceReload = true
-                        )
-                    }
                 }
             }
         } finally {
@@ -485,21 +450,15 @@ class MusicService : MediaSessionService() {
 
     fun removeFromHot(index: Int) {
         val needReload = queueManager.removeFromQueue(index)
-        if (needReload) {
-            rebufferWindow(0L, autoPlay = player?.playWhenReady == true, forceReload = true)
-        } else {
-            updateNextMediaItemOnly()
-        }
+        if (needReload) rebufferWindow(0L, autoPlay = player?.playWhenReady == true, forceReload = true)
+        else updateNextMediaItemOnly()
         persistState()
     }
 
     fun removeFromCold(index: Int) {
         val needReload = queueManager.removeFromContext(index)
-        if (needReload) {
-            rebufferWindow(0L, autoPlay = player?.playWhenReady == true, forceReload = true)
-        } else {
-            updateNextMediaItemOnly()
-        }
+        if (needReload) rebufferWindow(0L, autoPlay = player?.playWhenReady == true, forceReload = true)
+        else updateNextMediaItemOnly()
         persistState()
     }
 
@@ -517,11 +476,8 @@ class MusicService : MediaSessionService() {
 
     fun moveColdToHot(index: Int) {
         val needReload = queueManager.moveColdToHot(index)
-        if (needReload) {
-            rebufferWindow(0L, autoPlay = player?.playWhenReady == true, forceReload = true)
-        } else {
-            updateNextMediaItemOnly()
-        }
+        if (needReload) rebufferWindow(0L, autoPlay = player?.playWhenReady == true, forceReload = true)
+        else updateNextMediaItemOnly()
         persistState()
     }
 
@@ -538,7 +494,6 @@ class MusicService : MediaSessionService() {
 
     fun cycleRepeatMode() {
         queueManager.cycleRepeatMode()
-        // Rebuild next slot: either a loop copy or the real next track
         updateNextMediaItemOnly()
         persistState()
     }
@@ -669,7 +624,6 @@ class MusicService : MediaSessionService() {
                 return
             }
             if (reason == Player.MEDIA_ITEM_TRANSITION_REASON_AUTO) {
-                // Dual-window repeat-one or normal queue advance
                 syncQueueAfterExoAutoAdvance()
                 return
             }
@@ -685,8 +639,7 @@ class MusicService : MediaSessionService() {
         override fun onPlaybackStateChanged(playbackState: Int) {
             if (playbackState == Player.STATE_ENDED && !advancing) {
                 if (isRepeatOne()) {
-                    // Dual window should have prevented ENDED — fallback only
-                    Log.w(TAG, "STATE_ENDED under repeat-one (no prebuffer?) → hardRestart")
+                    Log.w(TAG, "STATE_ENDED under repeat-one → hardRestart")
                     hardRestartCurrent(autoPlay = true)
                     return
                 }
@@ -712,10 +665,7 @@ class MusicService : MediaSessionService() {
     }
 
     private fun updateForegroundNotification() {
-        startForeground(
-            NOTIFICATION_ID,
-            buildMediaNotification(_nowPlaying.value, _isPlaying.value)
-        )
+        startForeground(NOTIFICATION_ID, buildMediaNotification(_nowPlaying.value, _isPlaying.value))
     }
 
     private fun createNotificationChannel() {
@@ -768,24 +718,12 @@ class MusicService : MediaSessionService() {
             .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
             .setCategory(NotificationCompat.CATEGORY_TRANSPORT)
             .setPriority(NotificationCompat.PRIORITY_LOW)
-            .addAction(
-                android.R.drawable.ic_media_previous, "Previous",
-                serviceActionPending(ACTION_PREV, REQUEST_PREV)
-            )
-            .addAction(
-                playPauseIcon, if (playing) "Pause" else "Play",
-                serviceActionPending(ACTION_TOGGLE, REQUEST_TOGGLE)
-            )
-            .addAction(
-                android.R.drawable.ic_media_next, "Next",
-                serviceActionPending(ACTION_NEXT, REQUEST_NEXT)
-            )
+            .addAction(android.R.drawable.ic_media_previous, "Previous", serviceActionPending(ACTION_PREV, REQUEST_PREV))
+            .addAction(playPauseIcon, if (playing) "Pause" else "Play", serviceActionPending(ACTION_TOGGLE, REQUEST_TOGGLE))
+            .addAction(android.R.drawable.ic_media_next, "Next", serviceActionPending(ACTION_NEXT, REQUEST_NEXT))
 
         mediaSession?.let {
-            builder.setStyle(
-                MediaStyleNotificationHelper.MediaStyle(it)
-                    .setShowActionsInCompactView(0, 1, 2)
-            )
+            builder.setStyle(MediaStyleNotificationHelper.MediaStyle(it).setShowActionsInCompactView(0, 1, 2))
         }
         return builder.build()
     }
@@ -797,14 +735,11 @@ class MusicService : MediaSessionService() {
     }
 
     fun isPlaying(): Boolean = player?.isPlaying == true
-
     fun getCurrentSong(): Song? = _nowPlaying.value ?: queueManager.currentSong()
-
     fun getPositionMs(): Long = player?.currentPosition?.coerceAtLeast(0L) ?: 0L
     fun getDurationMs(): Long = player?.duration?.takeIf { it > 0 } ?: 0L
     fun getQueueSnapshot(): QueueSnapshot = queueManager.getSnapshot()
-    fun setPlaylist(songs: List<Song>, startIndex: Int = 0) =
-        playSource(songs, startIndex, autoPlay = false)
+    fun setPlaylist(songs: List<Song>, startIndex: Int = 0) = playSource(songs, startIndex, autoPlay = false)
     fun getQueue(): List<Song> = queueManager.getSnapshot().flatQueue
     fun getCurrentIndex(): Int {
         val snap = queueManager.getSnapshot()
@@ -824,9 +759,8 @@ class MusicService : MediaSessionService() {
         } catch (e: Exception) {
             Log.w(TAG, "stop on task removed", e)
         }
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
-            stopForeground(STOP_FOREGROUND_REMOVE)
-        } else {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) stopForeground(STOP_FOREGROUND_REMOVE)
+        else {
             @Suppress("DEPRECATION")
             stopForeground(true)
         }
