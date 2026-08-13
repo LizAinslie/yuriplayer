@@ -259,23 +259,32 @@ fun AlbumDetailScreen(
                             title = album.displayName,
                             subtitle = album.displayArtist
                         )
-                        MediaSheetItem("Add to queue") {
-                            onAddAlbumToQueue(album.songs)
-                            Toast.makeText(
-                                context,
-                                "Queued ${formatTrackCount(album.songs.size)}",
-                                Toast.LENGTH_SHORT
-                            ).show()
-                            showMenu = false
-                        }
-                        MediaSheetItem("Go to artist") {
-                            showMenu = false
-                            onOpenArtist()
-                        }
-                        MediaSheetItem("Add to playlist") {
-                            showMenu = false
-                            Toast.makeText(context, "Playlists coming soon", Toast.LENGTH_SHORT).show()
-                        }
+                        MediaSheetItem(
+                            label = "Add to queue",
+                            onClick = {
+                                onAddAlbumToQueue(album.songs)
+                                Toast.makeText(
+                                    context,
+                                    "Queued ${formatTrackCount(album.songs.size)}",
+                                    Toast.LENGTH_SHORT
+                                ).show()
+                                showMenu = false
+                            }
+                        )
+                        MediaSheetItem(
+                            label = "Go to artist",
+                            onClick = {
+                                showMenu = false
+                                onOpenArtist()
+                            }
+                        )
+                        MediaSheetItem(
+                            label = "Add to playlist",
+                            onClick = {
+                                showMenu = false
+                                Toast.makeText(context, "Playlists coming soon", Toast.LENGTH_SHORT).show()
+                            }
+                        )
                         MediaSheetBottomPad()
                     }
                 }
