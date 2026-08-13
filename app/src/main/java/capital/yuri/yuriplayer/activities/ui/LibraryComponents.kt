@@ -8,6 +8,7 @@ import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -30,6 +31,7 @@ import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
@@ -72,13 +74,19 @@ fun SortDropdown(sortMode: SortMode, onSortModeChange: (SortMode) -> Unit) {
             readOnly = true,
             singleLine = true,
             trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = expanded) },
-            modifier = Modifier.menuAnchor().fillMaxWidth().height(48.dp),
-            textStyle = MaterialTheme.typography.bodyMedium
+            modifier = Modifier
+                .menuAnchor()
+                .fillMaxWidth()
+                .height(40.dp),
+            textStyle = MaterialTheme.typography.labelLarge,
+            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 0.dp)
         )
         ExposedDropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
             SortMode.entries.forEach { mode ->
                 DropdownMenuItem(
-                    text = { Text(mode.label()) },
+                    text = {
+                        Text(mode.label(), style = MaterialTheme.typography.bodySmall)
+                    },
                     onClick = {
                         onSortModeChange(mode)
                         expanded = false
