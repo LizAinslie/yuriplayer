@@ -57,6 +57,7 @@ import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import capital.yuri.yuriplayer.data.AlbumItem
@@ -376,17 +377,24 @@ fun SwipeAddSongRow(
                     )
                 }
                 .clickable(onClick = onClick)
-                .padding(horizontal = 16.dp, vertical = 10.dp),
+                .padding(
+                    // Slightly tighter start when showing track #s so the number
+                    // sits in the middle of the left gutter, not hugging the title.
+                    start = if (showTrackNumber) 8.dp else 16.dp,
+                    end = 16.dp,
+                    top = 10.dp,
+                    bottom = 10.dp
+                ),
             verticalAlignment = Alignment.CenterVertically
         ) {
             if (!showTrackNumber) {
                 AlbumArt(song = song, size = 40.dp, corner = 4.dp)
                 Spacer(modifier = Modifier.width(12.dp))
             } else {
-                // Fixed slot: track numbers and equalizer share the same center.
+                // Wide left column: number / bars centered in the gutter
                 Box(
                     modifier = Modifier
-                        .width(28.dp)
+                        .width(48.dp)
                         .height(40.dp),
                     contentAlignment = Alignment.Center
                 ) {
@@ -398,10 +406,12 @@ fun SwipeAddSongRow(
                         song.trackNumber != null -> Text(
                             text = "${song.trackNumber}",
                             style = MaterialTheme.typography.bodyMedium,
-                            color = onSurface.copy(alpha = 0.55f)
+                            color = onSurface.copy(alpha = 0.55f),
+                            textAlign = TextAlign.Center
                         )
                     }
                 }
+                Spacer(modifier = Modifier.width(4.dp))
             }
             Column(modifier = Modifier.weight(1f)) {
                 MarqueeText(
