@@ -51,6 +51,13 @@ data class Song(
     val hasAlbum: Boolean get() = album.isMeaningfulTag()
     val hasArtist: Boolean get() = artist.isMeaningfulTag() || albumArtist.isMeaningfulTag()
     val hasTitle: Boolean get() = title.isMeaningfulTag()
+
+    /** Stable identity for “is this the same track” checks. */
+    fun isSameAs(other: Song?): Boolean {
+        if (other == null) return false
+        if (path != null && other.path != null) return path == other.path
+        return id == other.id && contentUri == other.contentUri
+    }
 }
 
 private fun String?.isMeaningfulTag(): Boolean {
