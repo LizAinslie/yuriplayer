@@ -196,6 +196,12 @@ class MusicService : MediaSessionService() {
         persistState()
     }
 
+    fun clearHotQueue() {
+        val needReload = queueManager.clearHotQueue()
+        if (needReload) hardLoad(queueManager.currentSong(), 0L, player?.playWhenReady == true)
+        else persistState()
+    }
+
     fun removeFromHot(index: Int) {
         val needReload = queueManager.removeFromQueue(index)
         if (needReload) hardLoad(queueManager.currentSong(), 0L, player?.playWhenReady == true)

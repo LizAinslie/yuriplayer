@@ -78,6 +78,11 @@ class PlayerController(
         service?.addToHotQueue(songs)
     }
 
+    fun clearHotQueue() {
+        ensureServiceStarted()
+        service?.clearHotQueue()
+    }
+
     fun removeFromHot(index: Int) = service?.removeFromHot(index)
     fun removeFromCold(index: Int) = service?.removeFromCold(index)
     fun moveHot(from: Int, to: Int) = service?.moveHot(from, to)
