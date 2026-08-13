@@ -231,7 +231,6 @@ class MusicService : MediaSessionService() {
             result.seekToStart -> {
                 p?.seekTo(0)
                 if (autoPlay) p?.play()
-                // Keep now-playing pointing at the same track
                 _nowPlaying.value = queueManager.currentSong() ?: result.song
                 updateForegroundNotification()
                 persistState()
@@ -246,8 +245,6 @@ class MusicService : MediaSessionService() {
             }
             result.song != null -> {
                 val target = result.song
-                // Publish UI-facing now-playing *before* touching the player so
-                // the next poll / collector sees the new track immediately.
                 _nowPlaying.value = target
                 maybeRecordHistory(target)
                 updateForegroundNotification()
@@ -279,6 +276,52 @@ class MusicService : MediaSessionService() {
                     rebufferWindow(0L, autoPlay = autoPlay, forceReload = true)
                 }
             }
+        }
+    }
+
+    /**
+     * Exo already moved to the next prebuffered item. Advance our queue to match
+     * without seeking the player again, then rebuild the [current, next] window.
+     */
+    private fun syncQueueAfterExoAutoAdvance() {
+        if (advancing) return
+        advancing = true
+        try {
+            val result = queueManager.advance(userInitiated = false)
+            when {
+                result.reload -> {
+                    Log.i(TAG, "auto-transition + repeat-one → seekTo(0)")
+                    player?.seekTo(0)
+                    player?.play()
+                    _nowPlaying.value = result.song ?: queueManager.currentSong()
+                    updateForegroundNotification()
+                    persistState()
+                }
+                result.finished -> {
+                    player?.pause()
+                    _nowPlaying.value = null
+                    updateForegroundNotification()
+                    persistState()
+                }
+                result.song != null -> {
+                    Log.i(TAG, "auto-transition → queue now '${result.song.displayTitle}'")
+                    _nowPlaying.value = result.song
+                    maybeRecordHistory(result.song)
+                    updateForegroundNotification()
+                    persistState()
+                    serviceScope.launch {
+                        delay(80)
+                        val pl = player ?: return@launch
+                        rebufferWindow(
+                            startPositionMs = pl.currentPosition.coerceAtLeast(0L),
+                            autoPlay = pl.playWhenReady,
+                            forceReload = true
+                        )
+                    }
+                }
+            }
+        } finally {
+            advancing = false
         }
     }
 
@@ -534,7 +577,13 @@ class MusicService : MediaSessionService() {
         }
 
         override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) {
-            // Prefer queue manager truth; fall back to matching media id
+            // Exo auto-advanced into the prebuffered next item. Queue was still on
+            // the previous song — that is why the UI lagged until the user hit next.
+            if (reason == Player.MEDIA_ITEM_TRANSITION_REASON_AUTO) {
+                syncQueueAfterExoAutoAdvance()
+                return
+            }
+            if (advancing) return
             val song = queueManager.currentSong() ?: _nowPlaying.value
             if (song != null) {
                 _nowPlaying.value = song
@@ -544,6 +593,7 @@ class MusicService : MediaSessionService() {
         }
 
         override fun onPlaybackStateChanged(playbackState: Int) {
+            // True end of timeline (no prebuffered next). Advance via full path.
             if (playbackState == Player.STATE_ENDED && !advancing) {
                 advancing = true
                 try {
@@ -653,7 +703,6 @@ class MusicService : MediaSessionService() {
 
     fun isPlaying(): Boolean = player?.isPlaying == true
 
-    /** Prefer the UI-facing now-playing slot so advances show up immediately. */
     fun getCurrentSong(): Song? = _nowPlaying.value ?: queueManager.currentSong()
 
     fun getPositionMs(): Long = player?.currentPosition?.coerceAtLeast(0L) ?: 0L
