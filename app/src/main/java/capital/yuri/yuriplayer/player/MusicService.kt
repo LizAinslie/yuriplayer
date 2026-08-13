@@ -197,9 +197,9 @@ class MusicService : MediaSessionService() {
     }
 
     fun clearHotQueue() {
-        val needReload = queueManager.clearHotQueue()
-        if (needReload) hardLoad(queueManager.currentSong(), 0L, player?.playWhenReady == true)
-        else persistState()
+        // Never reloads — current track keeps playing if it was pulled out of hot
+        queueManager.clearHotQueue()
+        persistState()
     }
 
     fun removeFromHot(index: Int) {
