@@ -9,5 +9,16 @@ data class Song(
     val album: String,
     val durationMs: Long,
     val contentUri: Uri,
-    val albumArtUri: Uri? = null
+    val albumArtUri: Uri? = null,
+    val trackNumber: Int = 0,
+    val year: Int = 0,
+    val path: String? = null,
+    val mimeType: String? = null
 )
+
+enum class SortMode {
+    TITLE,
+    ARTIST,
+    ALBUM,
+    TRACK
+}

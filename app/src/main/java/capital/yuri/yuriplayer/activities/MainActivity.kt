@@ -8,6 +8,7 @@ import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -18,6 +19,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
@@ -25,6 +27,7 @@ import androidx.compose.material.icons.filled.SkipNext
 import androidx.compose.material.icons.filled.SkipPrevious
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -45,6 +48,7 @@ import androidx.core.content.ContextCompat
 import capital.yuri.yuriplayer.activities.ui.theme.YuriPlayerTheme
 import capital.yuri.yuriplayer.data.MusicRepository
 import capital.yuri.yuriplayer.data.Song
+import capital.yuri.yuriplayer.data.SortMode
 import capital.yuri.yuriplayer.player.PlayerController
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
@@ -59,7 +63,7 @@ class MainActivity : ComponentActivity() {
 
     private val permissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestPermission()
-    ) { /* library reload happens in LaunchedEffect below when permission flips */ }
+    ) { /* reload via sort/permission state */ }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -115,13 +119,13 @@ fun PlayerScreen(
     var songs by remember { mutableStateOf<List<Song>>(emptyList()) }
     var hasPermission by remember { mutableStateOf(true) }
     var loading by remember { mutableStateOf(true) }
+    var sortMode by remember { mutableStateOf(SortMode.TITLE) }
 
     var currentSong by remember { mutableStateOf<Song?>(null) }
     var playing by remember { mutableStateOf(false) }
 
     val connected by player.isConnected.collectAsState()
 
-    // Lightweight state sync only while connected — avoids blocking the UI thread
     LaunchedEffect(connected) {
         if (!connected) return@LaunchedEffect
         while (isActive) {
@@ -131,10 +135,10 @@ fun PlayerScreen(
         }
     }
 
-    LaunchedEffect(Unit) {
+    LaunchedEffect(sortMode) {
         loading = true
         try {
-            songs = repository.getAllSongs()
+            songs = repository.getAllSongs(sortMode)
             hasPermission = true
         } catch (_: SecurityException) {
             hasPermission = false
@@ -197,6 +201,39 @@ fun PlayerScreen(
                 }
             }
 
+            // Sort controls
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .horizontalScroll(rememberScrollState())
+                    .padding(horizontal = 12.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                SortMode.entries.forEach { mode ->
+                    FilterChip(
+                        selected = sortMode == mode,
+                        onClick = { sortMode = mode },
+                        label = {
+                            Text(
+                                when (mode) {
+                                    SortMode.TITLE -> "Title"
+                                    SortMode.ARTIST -> "Artist"
+                                    SortMode.ALBUM -> "Album"
+                                    SortMode.TRACK -> "Track #"
+                                }
+                            )
+                        }
+                    )
+                }
+            }
+
+            Text(
+                text = if (loading) "Scanning library…" else "${songs.size} tracks",
+                style = MaterialTheme.typography.labelMedium,
+                modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
+                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
+            )
+
             when {
                 !hasPermission -> {
                     Text(
@@ -207,19 +244,20 @@ fun PlayerScreen(
                 }
                 loading -> {
                     Text(
-                        text = "Scanning library…",
+                        text = "Reading tags / scanning folders…",
                         modifier = Modifier.padding(16.dp)
                     )
                 }
                 songs.isEmpty() -> {
                     Text(
-                        text = "No music found on device",
+                        text = "No music found. Put files in Music/ or Download/ " +
+                                "(FLAC, MP3, OGG, M4A, WAV…).",
                         modifier = Modifier.padding(16.dp)
                     )
                 }
                 else -> {
                     LazyColumn(modifier = Modifier.fillMaxSize()) {
-                        itemsIndexed(songs, key = { _, song -> song.id }) { index, song ->
+                        itemsIndexed(songs, key = { _, song -> song.id to song.path }) { index, song ->
                             SongRow(song = song) {
                                 player.setPlaylist(songs, index)
                                 player.play()
@@ -241,7 +279,10 @@ fun SongRow(song: Song, onClick: () -> Unit) {
             .padding(horizontal = 16.dp, vertical = 10.dp)
     ) {
         Text(
-            text = song.title,
+            text = buildString {
+                if (song.trackNumber > 0) append("${song.trackNumber}. ")
+                append(song.title)
+            },
             style = MaterialTheme.typography.bodyLarge,
             maxLines = 1,
             overflow = TextOverflow.Ellipsis
