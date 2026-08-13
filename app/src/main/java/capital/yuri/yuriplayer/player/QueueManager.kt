@@ -134,11 +134,6 @@ class QueueManager {
         publish()
     }
 
-    /**
-     * Push an updated track list for the **active** cold source (playlist grew, etc.).
-     * Keeps the current track; drops removed tracks from remaining cold;
-     * appends newly added tracks. No-op if [sourceId] does not match.
-     */
     fun updateColdFromSource(songs: List<Song>, sourceId: String): Boolean {
         val src = coldSource ?: return false
         if (!src.id.equals(sourceId, ignoreCase = true)) return false
@@ -148,14 +143,11 @@ class QueueManager {
         val newKeys = songs.map { songKey(it) }.toSet()
 
         coldOriginal = songs.toList()
-
-        // Drop remaining cold items no longer in source
         coldQueue.removeAll { songKey(it) !in newKeys }
 
         val present = coldQueue.map { songKey(it) }.toMutableSet()
         current?.let { present.add(songKey(it)) }
 
-        // Append brand-new tracks (end of remaining cold)
         songs.forEach { s ->
             val k = songKey(s)
             if (k !in present) {
@@ -164,7 +156,6 @@ class QueueManager {
             }
         }
 
-        // Re-bind index if still on cold lane
         if (lane == QueueLane.COLD && floatingCurrent == null && current != null) {
             val idx = coldQueue.indexOfFirst { sameSong(it, current) }
             if (idx >= 0) indexInLane = idx
@@ -344,38 +335,61 @@ class QueueManager {
         publish()
     }
 
+    /**
+     * Consume current and move to the next song.
+     *
+     * After removing the current item at [indexInLane], the *next* item slides
+     * into that same index — so we keep the index when it is still valid.
+     * If we just consumed the last item of a lane, we fall through to the other
+     * lane / repopulate / finished. Never coerce onto a previous track.
+     */
     fun advance(userInitiated: Boolean): AdvanceResult {
         if (repeatMode == RepeatMode.ONE && !userInitiated) {
             return AdvanceResult(song = currentSong(), reload = true)
         }
 
+        val fromLane = lane
+        val fromIndex = indexInLane
+
         if (floatingCurrent != null) {
             floatingCurrent = null
         } else {
-            when (lane) {
+            when (fromLane) {
                 QueueLane.HOT -> {
-                    if (indexInLane in hotQueue.indices) hotQueue.removeAt(indexInLane)
+                    if (fromIndex in hotQueue.indices) hotQueue.removeAt(fromIndex)
                 }
                 QueueLane.COLD -> {
-                    if (indexInLane in coldQueue.indices) coldQueue.removeAt(indexInLane)
+                    if (fromIndex in coldQueue.indices) coldQueue.removeAt(fromIndex)
                 }
             }
         }
 
+        // Hot still has items: next is at the same index if we were on hot and
+        // the index is still in range; otherwise take the head.
         if (hotQueue.isNotEmpty()) {
             lane = QueueLane.HOT
-            indexInLane = 0
+            indexInLane = if (fromLane == QueueLane.HOT && fromIndex in hotQueue.indices) {
+                fromIndex
+            } else {
+                0
+            }
             publish()
-            return AdvanceResult(song = hotQueue[0])
+            return AdvanceResult(song = hotQueue[indexInLane])
         }
 
+        // Cold still has items after consume
         if (coldQueue.isNotEmpty()) {
             lane = QueueLane.COLD
-            indexInLane = indexInLane.coerceIn(0, coldQueue.lastIndex)
+            indexInLane = if (fromLane == QueueLane.COLD && fromIndex in coldQueue.indices) {
+                fromIndex
+            } else {
+                0
+            }
             publish()
             return AdvanceResult(song = coldQueue[indexInLane])
         }
 
+        // Both empty — loop cold source if repeat-all
         if (repeatMode == RepeatMode.COLD && coldOriginal.isNotEmpty()) {
             repopulateCold()
             lane = QueueLane.COLD
