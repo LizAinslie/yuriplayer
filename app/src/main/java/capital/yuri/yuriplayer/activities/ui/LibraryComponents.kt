@@ -8,7 +8,6 @@ import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -31,7 +30,6 @@ import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
@@ -45,8 +43,10 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import capital.yuri.yuriplayer.data.AlbumItem
 import capital.yuri.yuriplayer.data.ArtistItem
 import capital.yuri.yuriplayer.data.LibraryIndex
@@ -63,6 +63,7 @@ enum class LibrarySection { Songs, Albums, Artists, Untagged }
 @Composable
 fun SortDropdown(sortMode: SortMode, onSortModeChange: (SortMode) -> Unit) {
     var expanded by remember { mutableStateOf(false) }
+    val smallStyle = MaterialTheme.typography.bodySmall.copy(fontSize = 13.sp)
     ExposedDropdownMenuBox(
         expanded = expanded,
         onExpandedChange = { expanded = it },
@@ -78,15 +79,12 @@ fun SortDropdown(sortMode: SortMode, onSortModeChange: (SortMode) -> Unit) {
                 .menuAnchor()
                 .fillMaxWidth()
                 .height(40.dp),
-            textStyle = MaterialTheme.typography.labelLarge,
-            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 0.dp)
+            textStyle = smallStyle
         )
         ExposedDropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
             SortMode.entries.forEach { mode ->
                 DropdownMenuItem(
-                    text = {
-                        Text(mode.label(), style = MaterialTheme.typography.bodySmall)
-                    },
+                    text = { Text(mode.label(), style = MaterialTheme.typography.bodySmall) },
                     onClick = {
                         onSortModeChange(mode)
                         expanded = false
