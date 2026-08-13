@@ -1,7 +1,6 @@
 package capital.yuri.yuriplayer.activities.ui
 
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -9,9 +8,9 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.KeyboardArrowUp
-import androidx.compose.material.icons.filled.Close
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -38,7 +37,7 @@ fun QueuePanel(
 ) {
     LazyColumn(modifier = modifier) {
         item {
-            SectionHeader("Hot queue · ${snapshot.hotQueue.size}")
+            SectionHeader("Queue · ${snapshot.hotQueue.size}")
         }
         if (snapshot.hotQueue.isEmpty()) {
             item {
@@ -68,15 +67,18 @@ fun QueuePanel(
         }
 
         item {
+            val contextLabel = snapshot.coldQueue.firstOrNull()?.displayAlbum
+                ?.takeIf { it != "Unknown Album" }
+                ?: "Playing from"
             SectionHeader(
-                "Cold queue · ${snapshot.coldQueue.size}" +
+                "$contextLabel · ${snapshot.coldQueue.size}" +
                     if (snapshot.shuffleEnabled) " · shuffled" else ""
             )
         }
         if (snapshot.coldQueue.isEmpty()) {
             item {
                 Text(
-                    "Play an album or song list to fill the cold queue.",
+                    "Play an album or list to set what’s playing next after the queue.",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f),
                     modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
@@ -149,7 +151,7 @@ private fun QueueSongRow(
                 overflow = TextOverflow.Ellipsis
             )
         }
-        IconButton(onClick = onMoveUp, enabled = canMoveUp, modifier = Modifier.padding(0.dp)) {
+        IconButton(onClick = onMoveUp, enabled = canMoveUp) {
             Icon(Icons.Default.KeyboardArrowUp, contentDescription = "Move up")
         }
         IconButton(onClick = onMoveDown, enabled = canMoveDown) {

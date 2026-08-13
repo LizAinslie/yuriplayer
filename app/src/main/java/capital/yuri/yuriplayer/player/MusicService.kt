@@ -43,15 +43,21 @@ class MusicService : MediaSessionService() {
     private var mediaSession: MediaSession? = null
     private lateinit var stateStore: PlaybackStateStore
 
+    /** User-added queue (Spotify "Queue"). Plays next after the current track. */
     private val hotQueue = mutableListOf<Song>()
+
+    /** Context source (album / playlist / list). Resumed after queue drains. */
     private var coldOriginal: List<Song> = emptyList()
     private val coldQueue = mutableListOf<Song>()
+
     private var lane = QueueLane.COLD
     private var indexInLane = -1
+
+    /** Where to continue in cold after the user queue is drained. */
+    private var coldResumeIndex = 0
+
     private var shuffleEnabled = false
     private var repeatMode = RepeatMode.OFF
-
-    /** Prevents double-advance from ENDED + other events. */
     private var advancing = false
 
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
@@ -98,9 +104,8 @@ class MusicService : MediaSessionService() {
 
         player = exo
 
-        val sessionActivity = openPlayerPendingIntent()
         mediaSession = MediaSession.Builder(this, exo)
-            .setSessionActivity(sessionActivity)
+            .setSessionActivity(openPlayerPendingIntent())
             .build()
 
         restorePlaybackState()
@@ -114,12 +119,10 @@ class MusicService : MediaSessionService() {
             ACTION_TOGGLE -> togglePlayPause()
             ACTION_NEXT -> skipToNext()
             ACTION_PREV -> skipToPrevious()
-            else -> {
-                startForeground(
-                    NOTIFICATION_ID,
-                    buildMediaNotification(_nowPlaying.value, _isPlaying.value)
-                )
-            }
+            else -> startForeground(
+                NOTIFICATION_ID,
+                buildMediaNotification(_nowPlaying.value, _isPlaying.value)
+            )
         }
         super.onStartCommand(intent, flags, startId)
         return START_STICKY
@@ -157,13 +160,12 @@ class MusicService : MediaSessionService() {
             TAG,
             "loadCurrent: title='${song.displayTitle}' path=${song.path} uri=${song.contentUri} " +
                 "lane=$lane index=$indexInLane startMs=$startPositionMs autoPlay=$autoPlay " +
-                "repeat=$repeatMode shuffle=$shuffleEnabled"
+                "repeat=$repeatMode shuffle=$shuffleEnabled queueSize=${hotQueue.size} coldSize=${coldQueue.size}"
         )
         Log.d(
             TAG,
             "loadCurrent detail: id=${song.id} mime=${song.mimeType} durationMs=${song.durationMs} " +
-                "hotSize=${hotQueue.size} coldSize=${coldQueue.size} " +
-                "artist='${song.artist}' album='${song.album}'"
+                "artist='${song.artist}' album='${song.album}' coldResume=$coldResumeIndex"
         )
 
         val item = toMediaItem(song)
@@ -194,12 +196,13 @@ class MusicService : MediaSessionService() {
             coldQueue.addAll(songs)
             indexInLane = startIndex.coerceIn(0, coldQueue.lastIndex)
         }
+        coldResumeIndex = indexInLane
         lane = QueueLane.COLD
         loadCurrent(0L, autoPlay)
     }
 
     fun addToHotQueue(song: Song) {
-        Log.d(TAG, "addToHotQueue: ${song.path ?: song.displayTitle}")
+        Log.i(TAG, "queue add: path=${song.path} title='${song.displayTitle}' (size→${hotQueue.size + 1})")
         hotQueue.add(song)
         publishSnapshot()
         persistState()
@@ -217,17 +220,15 @@ class MusicService : MediaSessionService() {
         hotQueue.removeAt(index)
         if (lane == QueueLane.HOT) {
             when {
-                hotQueue.isEmpty() -> {
-                    lane = QueueLane.COLD
-                    indexInLane = indexInLane.coerceAtMost(coldQueue.lastIndex)
-                    if (removingCurrent) loadCurrent(0L, player?.playWhenReady == true)
-                    else publishSnapshot()
-                }
+                hotQueue.isEmpty() -> resumeColdAfterQueue(removingCurrent)
                 index < indexInLane -> {
                     indexInLane--
                     publishSnapshot()
                 }
-                removingCurrent -> loadCurrent(0L, player?.playWhenReady == true)
+                removingCurrent -> {
+                    indexInLane = indexInLane.coerceAtMost(hotQueue.lastIndex)
+                    loadCurrent(0L, player?.playWhenReady == true)
+                }
                 else -> publishSnapshot()
             }
         } else {
@@ -241,6 +242,7 @@ class MusicService : MediaSessionService() {
         val removingCurrent = lane == QueueLane.COLD && index == indexInLane
         val song = coldQueue.removeAt(index)
         coldOriginal = coldOriginal.filterNot { sameSong(it, song) }
+        if (index < coldResumeIndex) coldResumeIndex = (coldResumeIndex - 1).coerceAtLeast(0)
         if (lane == QueueLane.COLD) {
             when {
                 coldQueue.isEmpty() -> {
@@ -299,6 +301,9 @@ class MusicService : MediaSessionService() {
         when (laneTarget) {
             QueueLane.HOT -> {
                 if (index !in hotQueue.indices) return
+                if (lane == QueueLane.COLD) {
+                    coldResumeIndex = indexInLane + 1
+                }
                 lane = QueueLane.HOT
                 indexInLane = index
             }
@@ -306,6 +311,7 @@ class MusicService : MediaSessionService() {
                 if (index !in coldQueue.indices) return
                 lane = QueueLane.COLD
                 indexInLane = index
+                coldResumeIndex = index
             }
         }
         loadCurrent(0L, autoPlay = true)
@@ -324,6 +330,7 @@ class MusicService : MediaSessionService() {
                 coldQueue.clear()
                 coldQueue.addAll(shuffled)
                 indexInLane = 0
+                coldResumeIndex = 0
             } else {
                 coldQueue.clear()
                 coldQueue.addAll(shuffled)
@@ -334,6 +341,7 @@ class MusicService : MediaSessionService() {
             if (current != null && lane == QueueLane.COLD) {
                 val idx = coldQueue.indexOfFirst { sameSong(it, current) }
                 indexInLane = if (idx >= 0) idx else 0
+                coldResumeIndex = indexInLane
             }
         }
         publishSnapshot()
@@ -359,14 +367,12 @@ class MusicService : MediaSessionService() {
     }
 
     fun play() {
-        Log.d(TAG, "play()")
         player?.play()
         updateForegroundNotification()
         persistState()
     }
 
     fun pause() {
-        Log.d(TAG, "pause()")
         player?.pause()
         updateForegroundNotification()
         persistState()
@@ -393,16 +399,20 @@ class MusicService : MediaSessionService() {
                     indexInLane--
                     loadCurrent(0L, autoPlay = true)
                 } else {
-                    p?.seekTo(0)
+                    // Back into context just before resume point
+                    val prevCold = (coldResumeIndex - 1).coerceAtLeast(0)
+                    if (coldQueue.isNotEmpty()) {
+                        lane = QueueLane.COLD
+                        indexInLane = prevCold
+                        loadCurrent(0L, autoPlay = true)
+                    } else {
+                        p?.seekTo(0)
+                    }
                 }
             }
             QueueLane.COLD -> {
                 if (indexInLane > 0) {
                     indexInLane--
-                    loadCurrent(0L, autoPlay = true)
-                } else if (hotQueue.isNotEmpty()) {
-                    lane = QueueLane.HOT
-                    indexInLane = hotQueue.lastIndex
                     loadCurrent(0L, autoPlay = true)
                 } else {
                     p?.seekTo(0)
@@ -416,6 +426,13 @@ class MusicService : MediaSessionService() {
         persistState()
     }
 
+    /**
+     * Spotify-style next:
+     * - Repeat one (natural end only): reload same track
+     * - If user queue has items and we're on context: jump to queue, remember cold resume
+     * - Drain user queue in order, then return to context at coldResumeIndex
+     * - Otherwise advance context; Repeat all loops context
+     */
     private fun advance(userInitiated: Boolean) {
         if (advancing) {
             Log.d(TAG, "advance ignored (already advancing)")
@@ -425,49 +442,54 @@ class MusicService : MediaSessionService() {
         try {
             Log.i(
                 TAG,
-                "advance userInitiated=$userInitiated repeat=$repeatMode lane=$lane index=$indexInLane " +
-                    "current=${currentSong()?.path}"
+                "advance user=$userInitiated repeat=$repeatMode lane=$lane index=$indexInLane " +
+                    "queue=${hotQueue.size} cold=${coldQueue.size} resume=$coldResumeIndex " +
+                    "path=${currentSong()?.path}"
             )
 
-            // Repeat one: never leave the current track on natural end
             if (repeatMode == RepeatMode.ONE && !userInitiated) {
-                val song = currentSong()
-                Log.i(TAG, "repeat ONE → reload current path=${song?.path}")
+                Log.i(TAG, "repeat ONE → reload path=${currentSong()?.path}")
                 loadCurrent(0L, autoPlay = true)
                 return
             }
 
             when (lane) {
                 QueueLane.HOT -> {
+                    // Finished a queued track → next in queue or back to context
                     if (indexInLane < hotQueue.lastIndex) {
                         indexInLane++
-                        loadCurrent(0L, autoPlay = true)
-                    } else if (coldQueue.isNotEmpty()) {
-                        lane = QueueLane.COLD
-                        indexInLane = 0
-                        loadCurrent(0L, autoPlay = true)
-                    } else if (repeatMode == RepeatMode.COLD && coldOriginal.isNotEmpty()) {
-                        rebuildColdFromOriginal()
-                        lane = QueueLane.COLD
-                        indexInLane = 0
+                        Log.i(TAG, "queue next → index=$indexInLane path=${hotQueue.getOrNull(indexInLane)?.path}")
                         loadCurrent(0L, autoPlay = true)
                     } else {
-                        Log.i(TAG, "advance: end of queue")
-                        player?.pause()
-                        publishSnapshot()
-                        updateForegroundNotification()
+                        Log.i(TAG, "queue drained → resume context at $coldResumeIndex")
+                        // Drop consumed queue entries for a clean slate
+                        hotQueue.clear()
+                        resumeColdAfterQueue(play = true)
                     }
                 }
                 QueueLane.COLD -> {
-                    if (indexInLane < coldQueue.lastIndex) {
+                    // User queue takes priority for "next"
+                    if (hotQueue.isNotEmpty()) {
+                        coldResumeIndex = (indexInLane + 1).coerceAtMost(coldQueue.size)
+                        lane = QueueLane.HOT
+                        indexInLane = 0
+                        Log.i(
+                            TAG,
+                            "context → queue first item path=${hotQueue.firstOrNull()?.path} " +
+                                "(resume cold at $coldResumeIndex)"
+                        )
+                        loadCurrent(0L, autoPlay = true)
+                    } else if (indexInLane < coldQueue.lastIndex) {
                         indexInLane++
+                        coldResumeIndex = indexInLane
                         loadCurrent(0L, autoPlay = true)
                     } else if (repeatMode == RepeatMode.COLD && coldQueue.isNotEmpty()) {
-                        Log.i(TAG, "repeat ALL → restart cold queue")
+                        Log.i(TAG, "repeat ALL → restart context")
                         indexInLane = 0
+                        coldResumeIndex = 0
                         loadCurrent(0L, autoPlay = true)
                     } else {
-                        Log.i(TAG, "advance: end of cold queue")
+                        Log.i(TAG, "end of context")
                         player?.pause()
                         publishSnapshot()
                         updateForegroundNotification()
@@ -477,6 +499,33 @@ class MusicService : MediaSessionService() {
         } finally {
             advancing = false
         }
+    }
+
+    private fun resumeColdAfterQueue(play: Boolean) {
+        lane = QueueLane.COLD
+        if (coldQueue.isEmpty()) {
+            indexInLane = -1
+            player?.pause()
+            publishSnapshot()
+            updateForegroundNotification()
+            return
+        }
+        indexInLane = coldResumeIndex.coerceIn(0, coldQueue.lastIndex)
+        // If resume is past the end, stop or loop
+        if (coldResumeIndex >= coldQueue.size) {
+            if (repeatMode == RepeatMode.COLD) {
+                indexInLane = 0
+                coldResumeIndex = 0
+                loadCurrent(0L, autoPlay = play)
+            } else {
+                indexInLane = coldQueue.lastIndex
+                player?.pause()
+                publishSnapshot()
+                updateForegroundNotification()
+            }
+            return
+        }
+        loadCurrent(0L, autoPlay = play)
     }
 
     private fun rebuildColdFromOriginal() {
@@ -520,6 +569,10 @@ class MusicService : MediaSessionService() {
             indexInLane = saved.snapshot.indexInLane
             shuffleEnabled = saved.snapshot.shuffleEnabled
             repeatMode = saved.snapshot.repeatMode
+            coldResumeIndex = when (lane) {
+                QueueLane.COLD -> indexInLane
+                QueueLane.HOT -> indexInLane // best effort
+            }
 
             val max = when (lane) {
                 QueueLane.HOT -> hotQueue.lastIndex
@@ -626,11 +679,8 @@ class MusicService : MediaSessionService() {
         val toggle = serviceActionPending(ACTION_TOGGLE, REQUEST_TOGGLE)
         val next = serviceActionPending(ACTION_NEXT, REQUEST_NEXT)
 
-        val playPauseIcon = if (playing) {
-            android.R.drawable.ic_media_pause
-        } else {
-            android.R.drawable.ic_media_play
-        }
+        val playPauseIcon =
+            if (playing) android.R.drawable.ic_media_pause else android.R.drawable.ic_media_play
         val playPauseLabel = if (playing) "Pause" else "Play"
 
         val builder = NotificationCompat.Builder(this, CHANNEL_ID)
@@ -648,8 +698,7 @@ class MusicService : MediaSessionService() {
             .addAction(playPauseIcon, playPauseLabel, toggle)
             .addAction(android.R.drawable.ic_media_next, "Next", next)
 
-        val session = mediaSession
-        if (session != null) {
+        mediaSession?.let { session ->
             builder.setStyle(
                 MediaStyleNotificationHelper.MediaStyle(session)
                     .setShowActionsInCompactView(0, 1, 2)
