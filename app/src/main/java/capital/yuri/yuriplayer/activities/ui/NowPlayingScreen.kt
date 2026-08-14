@@ -62,6 +62,9 @@ import java.util.Locale
 import java.util.concurrent.TimeUnit
 import kotlin.math.abs
 
+/** Matches QueueManager.PREV_RESTART_MS — past this, Previous only seeks to 0. */
+private const val PREV_RESTART_MS = 3_000L
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun NowPlayingScreen(
@@ -110,11 +113,13 @@ fun NowPlayingScreen(
     var dismissFrac by remember { mutableFloatStateOf(0f) }
     var topPull by remember { mutableFloatStateOf(0f) }
 
-    // Button-driven art slide: token bumps, direction -1=next +1=prev
     var skipToken by remember { mutableLongStateOf(0L) }
     var skipDirection by remember { mutableIntStateOf(0) }
 
     val dismissThreshold = with(density) { 140.dp.toPx() }
+
+    // Only true when Previous will load a different track (not restart current).
+    val allowPrevTrackChange = positionMs <= PREV_RESTART_MS && peekPrevSong != null
 
     fun requestSkipNext() {
         skipDirection = -1
@@ -122,6 +127,11 @@ fun NowPlayingScreen(
     }
 
     fun requestSkipPrev() {
+        if (!allowPrevTrackChange) {
+            // Seek-to-start only — never promote or slide previous art.
+            onPrev()
+            return
+        }
         skipDirection = 1
         skipToken++
     }
@@ -129,6 +139,8 @@ fun NowPlayingScreen(
     LaunchedEffect(song?.id, song?.path) {
         themeStore.updateCurrent(context, song, baseScheme)
     }
+    // Still prefetch neighbors for when we *are* allowed to go prev, but art
+    // display is gated by allowPrevTrackChange at the swipe layer.
     LaunchedEffect(peekNextSong?.id, peekPrevSong?.id, song?.id) {
         themeStore.updateNeighbors(context, peekNextSong, peekPrevSong, baseScheme)
     }
@@ -142,7 +154,7 @@ fun NowPlayingScreen(
     val playerColors = theme?.colors ?: fallbackPlayerColors(baseScheme)
     val blendTarget = when {
         hFrac < -0.02f -> nextTheme?.colors
-        hFrac > 0.02f -> prevTheme?.colors
+        hFrac > 0.02f && allowPrevTrackChange -> prevTheme?.colors
         else -> null
     }
     val blendT = abs(hFrac).coerceIn(0f, 1f)
@@ -159,8 +171,6 @@ fun NowPlayingScreen(
             color = scheme.background.copy(alpha = 1f - maxOf(dismissFrac, topPull / dismissThreshold) * 0.2f)
         ) {
             if (showQueue) {
-                // No navigationBarsPadding on the column — transport bar owns the inset
-                // so its surface can paint under the gesture bar.
                 Column(
                     modifier = Modifier
                         .fillMaxSize()
@@ -256,7 +266,7 @@ fun NowPlayingScreen(
                     SwipeableAlbumArt(
                         current = theme,
                         next = nextTheme,
-                        prev = prevTheme,
+                        prev = if (allowPrevTrackChange) prevTheme else null,
                         onSwipeNext = onNext,
                         onSwipePrev = onPrev,
                         onPromoteNext = { themeStore.promoteNext() },
@@ -264,6 +274,7 @@ fun NowPlayingScreen(
                         onDismiss = onCollapse,
                         onHorizontalFraction = { hFrac = it },
                         onDismissFraction = { dismissFrac = it },
+                        allowPrevTrackChange = allowPrevTrackChange,
                         skipToken = skipToken,
                         skipDirection = skipDirection,
                         onSkipConsumed = {
