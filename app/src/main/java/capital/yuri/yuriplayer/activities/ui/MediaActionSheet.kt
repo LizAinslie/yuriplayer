@@ -7,15 +7,19 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
+import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import capital.yuri.yuriplayer.data.AlbumItem
 import capital.yuri.yuriplayer.data.Song
 
 /** Spotify-style sheet header: art + title + subtitle. */
@@ -78,4 +82,94 @@ fun MediaSheetItem(
 @Composable
 fun MediaSheetBottomPad() {
     Spacer(modifier = Modifier.height(28.dp))
+}
+
+/** Long-press sheet for a song: Go to album / Go to artist / Add to queue. */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun SongContextSheet(
+    song: Song,
+    onDismiss: () -> Unit,
+    onGoToAlbum: (() -> Unit)? = null,
+    onGoToArtist: (() -> Unit)? = null,
+    onAddToQueue: (() -> Unit)? = null
+) {
+    ModalBottomSheet(
+        onDismissRequest = onDismiss,
+        sheetState = rememberModalBottomSheetState()
+    ) {
+        MediaSheetHeader(
+            song = song,
+            title = song.displayTitle,
+            subtitle = "${song.displayArtist} · ${song.displayAlbum}"
+        )
+        if (onGoToAlbum != null) {
+            MediaSheetItem(
+                label = "Go to album",
+                onClick = {
+                    onDismiss()
+                    onGoToAlbum()
+                }
+            )
+        }
+        if (onGoToArtist != null) {
+            MediaSheetItem(
+                label = "Go to artist",
+                onClick = {
+                    onDismiss()
+                    onGoToArtist()
+                }
+            )
+        }
+        if (onAddToQueue != null) {
+            MediaSheetItem(
+                label = "Add to queue",
+                onClick = {
+                    onDismiss()
+                    onAddToQueue()
+                }
+            )
+        }
+        MediaSheetBottomPad()
+    }
+}
+
+/** Long-press sheet for an album: Go to artist / Add to queue. */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun AlbumContextSheet(
+    album: AlbumItem,
+    onDismiss: () -> Unit,
+    onGoToArtist: (() -> Unit)? = null,
+    onAddToQueue: (() -> Unit)? = null
+) {
+    ModalBottomSheet(
+        onDismissRequest = onDismiss,
+        sheetState = rememberModalBottomSheetState()
+    ) {
+        MediaSheetHeader(
+            song = album.songs.firstOrNull(),
+            title = album.displayName,
+            subtitle = album.displayArtist
+        )
+        if (onGoToArtist != null) {
+            MediaSheetItem(
+                label = "Go to artist",
+                onClick = {
+                    onDismiss()
+                    onGoToArtist()
+                }
+            )
+        }
+        if (onAddToQueue != null) {
+            MediaSheetItem(
+                label = "Add to queue",
+                onClick = {
+                    onDismiss()
+                    onAddToQueue()
+                }
+            )
+        }
+        MediaSheetBottomPad()
+    }
 }
