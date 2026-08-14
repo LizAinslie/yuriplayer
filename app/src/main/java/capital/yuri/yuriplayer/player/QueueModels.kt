@@ -40,6 +40,9 @@ data class ColdSource(
  *
  * Playback order: [hotQueue] (manual, never shuffled) then [coldQueue]
  * (album/playlist; may be shuffled while [coldOriginal] keeps source order).
+ *
+ * [playedStack] is the history of consumed tracks (oldest → newest) used by
+ * Previous. Persisted so skip-previous still works after process death.
  */
 data class QueueSnapshot(
     val hotQueue: List<Song> = emptyList(),
@@ -49,7 +52,9 @@ data class QueueSnapshot(
     val lane: QueueLane = QueueLane.COLD,
     val indexInLane: Int = -1,
     val shuffleEnabled: Boolean = false,
-    val repeatMode: RepeatMode = RepeatMode.OFF
+    val repeatMode: RepeatMode = RepeatMode.OFF,
+    /** Consumed tracks, oldest first. Last element is the most recent previous. */
+    val playedStack: List<Song> = emptyList()
 ) {
     val currentSong: Song?
         get() = when (lane) {
