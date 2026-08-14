@@ -1,7 +1,9 @@
 package capital.yuri.yuriplayer.player
 
 import capital.yuri.yuriplayer.data.Song
+import kotlinx.serialization.Serializable
 
+@Serializable
 enum class RepeatMode {
     OFF,
     ONE,
@@ -9,11 +11,13 @@ enum class RepeatMode {
     COLD
 }
 
+@Serializable
 enum class QueueLane {
     HOT,
     COLD
 }
 
+@Serializable
 enum class ColdSourceType {
     ALBUM,
     PLAYLIST,
@@ -26,6 +30,7 @@ enum class ColdSourceType {
  * Where the cold queue was initialized from.
  * [id] is stable: albumKey, playlist id, artist key, etc.
  */
+@Serializable
 data class ColdSource(
     val type: ColdSourceType,
     val id: String,
@@ -44,6 +49,7 @@ data class ColdSource(
  * [playedStack] is the history of consumed tracks (oldest → newest) used by
  * Previous. Persisted so skip-previous still works after process death.
  */
+@Serializable
 data class QueueSnapshot(
     val hotQueue: List<Song> = emptyList(),
     val coldQueue: List<Song> = emptyList(),
