@@ -132,16 +132,18 @@ class PlayerController(
         service?.skipToNext()
     }
 
-    /**
-     * @param forceTrackChange true for album-art swipe (always previous when
-     * history exists). false for button/notification (3s restart rule).
-     */
     fun skipToPrevious(forceTrackChange: Boolean = false) {
         ensureServiceStarted()
         service?.skipToPrevious(forceTrackChange)
     }
 
     fun seekTo(positionMs: Long) = service?.seekTo(positionMs)
+
+    /** Prefer this for scrubbers — maps fraction with live decoder duration. */
+    fun seekToFraction(fraction: Float) {
+        ensureServiceStarted()
+        service?.seekToFraction(fraction)
+    }
 
     fun peekNext(): Song? = service?.peekNext()
     fun peekPrevious(): Song? = service?.peekPrevious()
