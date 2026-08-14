@@ -43,7 +43,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -54,6 +54,7 @@ import capital.yuri.yuriplayer.data.ReleaseType
 import capital.yuri.yuriplayer.data.Song
 import capital.yuri.yuriplayer.data.releaseType
 import capital.yuri.yuriplayer.data.releaseYear
+import capital.yuri.yuriplayer.data.source.ArtistLink
 import capital.yuri.yuriplayer.data.theme.ThemeService
 import capital.yuri.yuriplayer.ui.formatAlbumCount
 import capital.yuri.yuriplayer.ui.formatTrackCount
@@ -72,23 +73,13 @@ fun ArtistDetailScreen(
     val themeService: ThemeService = koinInject()
     val profileRepo: ArtistProfileRepository = koinInject()
     val base = MaterialTheme.colorScheme
+    val context = LocalContext.current
     var themeColors by remember { mutableStateOf(fallbackPlayerColors(base)) }
     var filter by remember { mutableStateOf(ArtistReleaseFilter.All) }
     val uriHandler = LocalUriHandler.current
 
     val profile by profileRepo.observe(artist.displayName).collectAsState(initial = null)
-    LaunchedEffect(artist.name) {
-        profileRepo.resolve(artist.displayName)
-        val seed = albums.firstOrNull()?.songs?.firstOrNull() ?: artist.songs.firstOrNull()
-        themeColors = themeService.themeFromSong(
-            androidx.compose.ui.platform.LocalContext.current,
-            seed,
-            base
-        ).colors
-    }
 
-    // LocalContext in LaunchedEffect is wrong — fix with proper context
-    val context = androidx.compose.ui.platform.LocalContext.current
     LaunchedEffect(artist.name, albums.size) {
         profileRepo.resolve(artist.displayName)
         val seed = albums.firstOrNull()?.songs?.firstOrNull() ?: artist.songs.firstOrNull()
@@ -148,7 +139,6 @@ fun ArtistDetailScreen(
                     item {
                         ArtistHero(
                             name = artist.displayName,
-                            profileImageUri = profile?.imageUri,
                             seedSong = albums.firstOrNull()?.songs?.firstOrNull()
                                 ?: artist.songs.firstOrNull(),
                             stats = "${formatAlbumCount(artist.albumCount)} · ${formatTrackCount(artist.trackCount)}",
@@ -158,9 +148,7 @@ fun ArtistDetailScreen(
                             onPlayAll = {
                                 if (artist.songs.isNotEmpty()) onPlaySongs(artist.songs, 0)
                             },
-                            onOpenLink = { url ->
-                                runCatching { uriHandler.openUri(url) }
-                            }
+                            onOpenLink = { url -> runCatching { uriHandler.openUri(url) } }
                         )
                     }
 
@@ -207,12 +195,11 @@ fun ArtistDetailScreen(
 @Composable
 private fun ArtistHero(
     name: String,
-    profileImageUri: String?,
     seedSong: Song?,
     stats: String,
     bio: String?,
     website: String?,
-    links: List<capital.yuri.yuriplayer.data.source.ArtistLink>,
+    links: List<ArtistLink>,
     onPlayAll: () -> Unit,
     onOpenLink: (String) -> Unit
 ) {
@@ -223,7 +210,6 @@ private fun ArtistHero(
             .padding(bottom = 12.dp),
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
-        // Profile image — circular; fall back to album art seed
         Box(
             modifier = Modifier
                 .size(160.dp)
@@ -231,11 +217,7 @@ private fun ArtistHero(
                 .background(MaterialTheme.colorScheme.surfaceVariant),
             contentAlignment = Alignment.Center
         ) {
-            AlbumArt(
-                song = seedSong,
-                size = 160.dp,
-                corner = 80.dp
-            )
+            AlbumArt(song = seedSong, size = 160.dp, corner = 80.dp)
         }
 
         Spacer(modifier = Modifier.height(16.dp))
