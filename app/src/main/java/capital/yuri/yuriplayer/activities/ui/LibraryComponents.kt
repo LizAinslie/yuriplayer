@@ -169,24 +169,28 @@ fun LibraryScreen(
     val artists = remember(allSongs, query) { library.artists(query, taggedOnly = true) }
 
     fun openArtistForSong(song: Song) {
-        val name = song.albumArtist?.takeIf { it.isNotBlank() }
-            ?: song.artist?.takeIf { it.isNotBlank() }
-            ?: return
+        val name = song.effectiveAlbumArtist ?: return
         val match = library.artists(taggedOnly = false)
             .firstOrNull { it.name.equals(name, ignoreCase = true) }
-            ?: ArtistItem(name = name, songs = listOf(song))
+            ?: ArtistItem(
+                name = name,
+                trackCount = 1,
+                albumCount = if (song.hasAlbum) 1 else 0,
+                songs = listOf(song)
+            )
         onOpenArtist(match)
     }
 
     fun openAlbumForSong(song: Song) {
         val albumName = song.album?.takeIf { it.isNotBlank() } ?: return
-        val artistKey = song.albumArtist ?: song.artist
+        val artistKey = song.effectiveAlbumArtist
         val match = library.albums(taggedOnly = false).firstOrNull {
             it.name.equals(albumName, ignoreCase = true) &&
                 (artistKey == null || it.artist.equals(artistKey, ignoreCase = true))
         } ?: AlbumItem(
             name = albumName,
             artist = artistKey,
+            trackCount = 1,
             songs = listOf(song)
         )
         onOpenAlbum(match)
@@ -196,7 +200,12 @@ fun LibraryScreen(
         val name = album.artist?.takeIf { it.isNotBlank() } ?: return
         val match = library.artists(taggedOnly = false)
             .firstOrNull { it.name.equals(name, ignoreCase = true) }
-            ?: ArtistItem(name = name, songs = album.songs)
+            ?: ArtistItem(
+                name = name,
+                trackCount = album.trackCount,
+                albumCount = 1,
+                songs = album.songs
+            )
         onOpenArtist(match)
     }
 
