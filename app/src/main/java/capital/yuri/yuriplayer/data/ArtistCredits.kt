@@ -3,16 +3,16 @@ package capital.yuri.yuriplayer.data
 /**
  * Split a raw artist tag into discrete credit names for linking.
  *
- * Only hard separators (`;`, `,`) and simple collab marks (`&`, `/`).
- * Does **not** split on `feat.` / `ft.` / `featuring` — those stay as part of
- * the credit string (often mirrored in the title already).
+ * **Local tags:** only `;` is treated as a multi-artist separator. Commas and
+ * ampersands stay inside names ("Earth, Wind & Fire", "Simon & Garfunkel").
+ * `feat.` / `ft.` are never split — they belong in the credit / title text.
+ *
+ * **Structured sources** (Jellyfin, Navidrome, MusicBrainz) should supply an
+ * artist array and skip this parser entirely.
  */
 fun parseArtistCredits(raw: String?): List<String> {
     if (raw.isNullOrBlank()) return emptyList()
-    var s = raw.trim()
-    // Normalize & / to semicolon separators (raw string keeps regex escapes valid)
-    s = s.replace(Regex("""\s*[&/]\s*"""), ";")
-    return s.split(Regex("[,;]"))
+    return raw.split(';')
         .map { it.trim() }
         .filter { it.isNotEmpty() }
         .distinctBy { it.lowercase() }
