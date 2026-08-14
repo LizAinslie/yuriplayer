@@ -35,7 +35,6 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
-import capital.yuri.yuriplayer.data.Playlist
 import capital.yuri.yuriplayer.data.PlaylistRepository
 import capital.yuri.yuriplayer.data.Song
 import capital.yuri.yuriplayer.ui.formatTrackCount
@@ -174,21 +173,20 @@ fun PlaylistDetailScreen(
                             Icon(Icons.Default.KeyboardArrowDown, contentDescription = "Move down")
                         }
                     }
-                    SwipeAddSongRow(
-                        song = song,
-                        onClick = { onPlay(pl.songs, index) },
-                        onSwipeAdd = {
-                            onAddToQueue(song)
-                            Toast.makeText(context, "Added to queue", Toast.LENGTH_SHORT).show()
-                        },
-                        isPlaying = song.isSameAs(nowPlaying),
-                        isPlaybackActive = isPlaybackActive,
-                        modifier = Modifier.weight(1f)
-                    )
+                    Column(modifier = Modifier.weight(1f)) {
+                        SwipeAddSongRow(
+                            song = song,
+                            onClick = { onPlay(pl.songs, index) },
+                            onSwipeAdd = {
+                                onAddToQueue(song)
+                                Toast.makeText(context, "Added to queue", Toast.LENGTH_SHORT).show()
+                            },
+                            isPlaying = song.isSameAs(nowPlaying),
+                            isPlaybackActive = isPlaybackActive
+                        )
+                    }
                 }
             }
         }
     }
 }
-
-// Optional modifier overload — SwipeAddSongRow may not take modifier; keep row as-is without modifier param if compile fails.
