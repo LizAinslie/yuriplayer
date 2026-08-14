@@ -24,6 +24,24 @@ interface AlbumPrefsDao {
 }
 
 @Dao
+interface AlbumMetadataDao {
+    @Query("SELECT * FROM album_metadata WHERE albumKey = :key LIMIT 1")
+    suspend fun get(key: String): AlbumMetadataEntity?
+
+    @Query("SELECT * FROM album_metadata WHERE albumKey = :key LIMIT 1")
+    fun observe(key: String): Flow<AlbumMetadataEntity?>
+
+    @Query("SELECT * FROM album_metadata")
+    suspend fun getAll(): List<AlbumMetadataEntity>
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun upsert(entity: AlbumMetadataEntity): Long
+
+    @Query("DELETE FROM album_metadata WHERE albumKey = :key")
+    suspend fun delete(key: String)
+}
+
+@Dao
 interface PlaylistPrefsDao {
     @Query("SELECT * FROM playlist_prefs WHERE playlistId = :id LIMIT 1")
     suspend fun get(id: String): PlaylistPrefsEntity?
