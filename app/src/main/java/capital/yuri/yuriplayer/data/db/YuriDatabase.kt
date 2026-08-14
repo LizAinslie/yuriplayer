@@ -9,16 +9,23 @@ import androidx.room.RoomDatabase
     entities = [
         AlbumPrefsEntity::class,
         PlaylistPrefsEntity::class,
+        PlaylistEntity::class,
+        PlaylistTrackEntity::class,
+        ArtistProfileEntity::class,
+        SourceOverrideEntity::class,
         AppSettingEntity::class,
         SourceInstanceEntity::class,
         ScrobblerInstanceEntity::class
     ],
-    version = 1,
+    version = 2,
     exportSchema = false
 )
 abstract class YuriDatabase : RoomDatabase() {
     abstract fun albumPrefs(): AlbumPrefsDao
     abstract fun playlistPrefs(): PlaylistPrefsDao
+    abstract fun playlists(): PlaylistDao
+    abstract fun artistProfiles(): ArtistProfileDao
+    abstract fun sourceOverrides(): SourceOverrideDao
     abstract fun appSettings(): AppSettingsDao
     abstract fun sources(): SourceInstanceDao
     abstract fun scrobblers(): ScrobblerInstanceDao
