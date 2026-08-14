@@ -62,7 +62,7 @@ import java.util.Locale
 import java.util.concurrent.TimeUnit
 import kotlin.math.abs
 
-/** Matches QueueManager.PREV_RESTART_MS — past this, Previous only seeks to 0. */
+/** Matches QueueManager.PREV_RESTART_MS — button only seeks to 0 past this. */
 private const val PREV_RESTART_MS = 3_000L
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -78,6 +78,8 @@ fun NowPlayingScreen(
     onCollapse: () -> Unit,
     onToggle: () -> Unit,
     onPrev: () -> Unit,
+    /** Album-art swipe / animated button-prev that must change tracks. */
+    onForcePrev: () -> Unit = onPrev,
     onNext: () -> Unit,
     onSeek: (Long) -> Unit,
     onToggleShuffle: () -> Unit,
@@ -118,8 +120,10 @@ fun NowPlayingScreen(
 
     val dismissThreshold = with(density) { 140.dp.toPx() }
 
-    // Only true when Previous will load a different track (not restart current).
-    val allowPrevTrackChange = positionMs <= PREV_RESTART_MS && peekPrevSong != null
+    // Swipe: only when there is a previous track in history.
+    val canSwipePrev = peekPrevSong != null
+    // Button: Spotify 3s restart rule when past threshold or no history.
+    val buttonGoesToPrevTrack = positionMs <= PREV_RESTART_MS && canSwipePrev
 
     fun requestSkipNext() {
         skipDirection = -1
@@ -127,9 +131,8 @@ fun NowPlayingScreen(
     }
 
     fun requestSkipPrev() {
-        if (!allowPrevTrackChange) {
-            // Seek-to-start only — never promote or slide previous art.
-            onPrev()
+        if (!buttonGoesToPrevTrack) {
+            onPrev() // seek-to-start (or no-op if nothing)
             return
         }
         skipDirection = 1
@@ -139,8 +142,6 @@ fun NowPlayingScreen(
     LaunchedEffect(song?.id, song?.path) {
         themeStore.updateCurrent(context, song, baseScheme)
     }
-    // Still prefetch neighbors for when we *are* allowed to go prev, but art
-    // display is gated by allowPrevTrackChange at the swipe layer.
     LaunchedEffect(peekNextSong?.id, peekPrevSong?.id, song?.id) {
         themeStore.updateNeighbors(context, peekNextSong, peekPrevSong, baseScheme)
     }
@@ -154,7 +155,7 @@ fun NowPlayingScreen(
     val playerColors = theme?.colors ?: fallbackPlayerColors(baseScheme)
     val blendTarget = when {
         hFrac < -0.02f -> nextTheme?.colors
-        hFrac > 0.02f && allowPrevTrackChange -> prevTheme?.colors
+        hFrac > 0.02f && canSwipePrev -> prevTheme?.colors
         else -> null
     }
     val blendT = abs(hFrac).coerceIn(0f, 1f)
@@ -266,15 +267,15 @@ fun NowPlayingScreen(
                     SwipeableAlbumArt(
                         current = theme,
                         next = nextTheme,
-                        prev = if (allowPrevTrackChange) prevTheme else null,
+                        prev = if (canSwipePrev) prevTheme else null,
                         onSwipeNext = onNext,
-                        onSwipePrev = onPrev,
+                        onSwipePrev = onForcePrev,
                         onPromoteNext = { themeStore.promoteNext() },
                         onPromotePrev = { themeStore.promotePrev() },
                         onDismiss = onCollapse,
                         onHorizontalFraction = { hFrac = it },
                         onDismissFraction = { dismissFrac = it },
-                        allowPrevTrackChange = allowPrevTrackChange,
+                        allowPrevTrackChange = canSwipePrev,
                         skipToken = skipToken,
                         skipDirection = skipDirection,
                         onSkipConsumed = {
