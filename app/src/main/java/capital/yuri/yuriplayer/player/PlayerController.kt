@@ -132,9 +132,13 @@ class PlayerController(
         service?.skipToNext()
     }
 
-    fun skipToPrevious() {
+    /**
+     * @param forceTrackChange true for album-art swipe (always previous when
+     * history exists). false for button/notification (3s restart rule).
+     */
+    fun skipToPrevious(forceTrackChange: Boolean = false) {
         ensureServiceStarted()
-        service?.skipToPrevious()
+        service?.skipToPrevious(forceTrackChange)
     }
 
     fun seekTo(positionMs: Long) = service?.seekTo(positionMs)
