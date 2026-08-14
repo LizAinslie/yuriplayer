@@ -81,6 +81,8 @@ fun NowPlayingScreen(
     onForcePrev: () -> Unit = onPrev,
     onNext: () -> Unit,
     onSeek: (Long) -> Unit,
+    /** Preferred: map 0–1 with live decoder duration in the service. */
+    onSeekFraction: ((Float) -> Unit)? = null,
     onToggleShuffle: () -> Unit,
     onCycleRepeat: () -> Unit,
     onPlayItem: (QueueLane, Int) -> Unit,
@@ -143,6 +145,8 @@ fun NowPlayingScreen(
         themeStore.updateNeighbors(context, peekNextSong, peekPrevSong, baseScheme)
     }
 
+    // Follow player position only when not scrubbing. Service sticky seek keeps
+    // positionMs on the drop target until Exo confirms, so this no longer snaps back.
     LaunchedEffect(positionMs, durationMs, sliding) {
         if (!sliding && durationMs > 0) {
             sliderPosition = (positionMs.toDouble() / durationMs.toDouble())
@@ -320,15 +324,17 @@ fun NowPlayingScreen(
                             sliderPosition = it
                         },
                         onProgressChangeFinished = { fraction ->
-                            // Use the fraction handed back from the bar — not
-                            // sliderPosition, which can race with position polls.
                             sliderPosition = fraction
-                            val targetMs = if (durationMs > 0L) {
-                                (fraction.toDouble() * durationMs.toDouble())
+                            // Service maps fraction with live duration and holds
+                            // sticky position until Exo confirms the seek.
+                            if (onSeekFraction != null) {
+                                onSeekFraction(fraction)
+                            } else if (durationMs > 0L) {
+                                val targetMs = (fraction.toDouble() * durationMs.toDouble())
                                     .toLong()
                                     .coerceIn(0L, (durationMs - 1L).coerceAtLeast(0L))
-                            } else 0L
-                            if (durationMs > 0L) onSeek(targetMs)
+                                onSeek(targetMs)
+                            }
                             sliding = false
                         },
                         activeColor = scheme.primary,
