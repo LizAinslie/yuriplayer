@@ -1,17 +1,13 @@
 package capital.yuri.yuriplayer.activities.ui
 
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.layout.ExperimentalLayoutApi
-import androidx.compose.foundation.layout.FlowRow
-import androidx.compose.foundation.text.InlineTextContent
-import androidx.compose.foundation.text.appendInlineContent
+import androidx.compose.foundation.text.ClickableText
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.buildAnnotatedString
@@ -19,7 +15,6 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.withStyle
 import capital.yuri.yuriplayer.data.Song
-import capital.yuri.yuriplayer.data.parseArtistCredits
 
 /**
  * Renders track artist credits as comma-separated tappable names (Spotify-style).
@@ -59,8 +54,7 @@ fun ArtistCreditsText(
         return
     }
 
-    // Annotated string with clickable ranges
-    val annotated = remember(credits, linkColor) {
+    val annotated = remember(credits, linkColor, color) {
         buildAnnotatedString {
             credits.forEachIndexed { index, name ->
                 if (index > 0) {
@@ -80,7 +74,7 @@ fun ArtistCreditsText(
         }
     }
 
-    androidx.compose.foundation.text.ClickableText(
+    ClickableText(
         text = annotated,
         style = style.copy(color = color),
         maxLines = maxLines,
