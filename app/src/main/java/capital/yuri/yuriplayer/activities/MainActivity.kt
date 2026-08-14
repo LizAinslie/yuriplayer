@@ -310,8 +310,6 @@ fun YuriApp(
                 modifier = Modifier.fillMaxSize(),
                 containerColor = if (edgeToEdgeDetail) Color.Transparent
                 else MaterialTheme.colorScheme.background,
-                // Mini-player owns the bottom edge (paints under gesture bar).
-                // Only apply top + horizontal system insets here.
                 contentWindowInsets = if (edgeToEdgeDetail) {
                     WindowInsets(0, 0, 0, 0)
                 } else {
@@ -475,7 +473,8 @@ fun YuriApp(
                     peekPrevSong = peekPrev,
                     onCollapse = { playerExpanded = false },
                     onToggle = { player.togglePlayPause() },
-                    onPrev = { player.skipToPrevious() },
+                    onPrev = { player.skipToPrevious(forceTrackChange = false) },
+                    onForcePrev = { player.skipToPrevious(forceTrackChange = true) },
                     onNext = { player.skipToNext() },
                     onSeek = { player.seekTo(it) },
                     onToggleShuffle = { player.toggleShuffle() },
