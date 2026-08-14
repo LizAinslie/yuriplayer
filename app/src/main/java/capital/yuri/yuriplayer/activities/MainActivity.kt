@@ -249,7 +249,7 @@ fun YuriApp(
             snapshot = player.getQueueSnapshot()
             peekNext = player.peekNext()
             peekPrev = player.peekPrevious()
-            delay(400)
+            delay(250)
         }
     }
 
@@ -285,13 +285,10 @@ fun YuriApp(
             artistKey(it.name) == key
         }
         if (found != null) return found
-        // Build from any tracks that credit this name
         val tracks = library.songs.value.filter { song ->
             artistKey(song.effectiveAlbumArtist) == key ||
                 song.creditArtists.any { artistKey(it) == key }
         }
-        val albumKeys = tracks.mapNotNull { artistKey(it.album)?.let { a -> a } }.toSet()
-        // album keys wrong - use album normalize
         val albums = tracks.mapNotNull { it.album }.map { it.lowercase() }.toSet()
         return ArtistItem(
             name = name,
@@ -524,6 +521,7 @@ fun YuriApp(
                     onForcePrev = { player.skipToPrevious(forceTrackChange = true) },
                     onNext = { player.skipToNext() },
                     onSeek = { player.seekTo(it) },
+                    onSeekFraction = { player.seekToFraction(it) },
                     onToggleShuffle = { player.toggleShuffle() },
                     onCycleRepeat = { player.cycleRepeatMode() },
                     onPlayItem = { lane, index -> player.playQueueItem(lane, index) },
