@@ -42,6 +42,8 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.koin.android.ext.android.inject
 import java.io.File
+import kotlin.math.abs
+import kotlin.math.roundToLong
 
 class MusicService : MediaSessionService() {
 
@@ -64,6 +66,13 @@ class MusicService : MediaSessionService() {
 
     private var stallSamplePos = -1L
     private var stallSampleAtElapsed = 0L
+
+    /** Report this position until Exo catches up (prevents UI snap-back after scrub). */
+    private var stickySeekTargetMs: Long = -1L
+    private var stickySeekUntilElapsed: Long = 0L
+
+    /** Ignore AUTO / STATE_ENDED for a short window after a user scrub. */
+    private var userSeekGuardUntilElapsed: Long = 0L
 
     private val _nowPlaying = MutableStateFlow<Song?>(null)
     val nowPlaying: StateFlow<Song?> = _nowPlaying.asStateFlow()
@@ -139,6 +148,9 @@ class MusicService : MediaSessionService() {
     private fun isRepeatOne(): Boolean =
         queueManager.getSnapshot().repeatMode == RepeatMode.ONE
 
+    private fun inUserSeekGuard(): Boolean =
+        SystemClock.elapsedRealtime() < userSeekGuardUntilElapsed
+
     private fun songUri(song: Song): Uri {
         val path = song.path
         if (!path.isNullOrBlank()) {
@@ -165,11 +177,17 @@ class MusicService : MediaSessionService() {
         return toMediaItem(song, mediaIdSuffix = "loop-$loopGeneration")
     }
 
+    private fun clearStickySeek() {
+        stickySeekTargetMs = -1L
+        stickySeekUntilElapsed = 0L
+    }
+
     private fun hardRestartCurrent(autoPlay: Boolean = true, startPositionMs: Long = 0L) {
         val p = player ?: return
         val current = queueManager.currentSong() ?: return
         val wasPlaying = autoPlay || p.playWhenReady
         val pos = startPositionMs.coerceAtLeast(0L)
+        clearStickySeek()
         Log.i(TAG, "hardRestartCurrent '${current.displayTitle}' pos=$pos gen=$loopGeneration")
         try {
             p.playWhenReady = false
@@ -255,6 +273,8 @@ class MusicService : MediaSessionService() {
             return
         }
 
+        clearStickySeek()
+
         val repeatOne = isRepeatOne()
         val nextSong = if (repeatOne) null else queueManager.peekNext()
         val wantCount = if (repeatOne) 1 else 1 + (if (nextSong != null) 1 else 0)
@@ -271,7 +291,7 @@ class MusicService : MediaSessionService() {
             } else true)
 
         if (alreadySynced) {
-            if (startPositionMs > 0L && kotlin.math.abs(p.currentPosition - startPositionMs) > 400L) {
+            if (startPositionMs > 0L && abs(p.currentPosition - startPositionMs) > 400L) {
                 p.seekTo(0, startPositionMs)
             }
             if (autoPlay && !p.isPlaying) p.play()
@@ -346,6 +366,7 @@ class MusicService : MediaSessionService() {
     }
 
     private fun applyAdvance(result: QueueManager.AdvanceResult, autoPlay: Boolean = true) {
+        clearStickySeek()
         val p = player
         when {
             result.finished -> {
@@ -389,6 +410,12 @@ class MusicService : MediaSessionService() {
 
     private fun syncQueueAfterExoAutoAdvance() {
         if (advancing) return
+        if (inUserSeekGuard()) {
+            Log.i(TAG, "AUTO transition ignored — inside user seek guard")
+            // Window may already be on next item incorrectly; force match queue.
+            ensurePlayerMatchesQueue(autoPlay = player?.playWhenReady == true)
+            return
+        }
         if (isRepeatOne()) {
             hardRestartCurrent(autoPlay = true)
             return
@@ -529,6 +556,9 @@ class MusicService : MediaSessionService() {
 
     fun skipToNext() {
         if (advancing) return
+        // Manual skip always clears seek guard
+        userSeekGuardUntilElapsed = 0L
+        clearStickySeek()
         advancing = true
         try {
             applyAdvance(queueManager.advance(userInitiated = true))
@@ -538,6 +568,8 @@ class MusicService : MediaSessionService() {
     }
 
     fun skipToPrevious(forceTrackChange: Boolean = false) {
+        userSeekGuardUntilElapsed = 0L
+        clearStickySeek()
         applyAdvance(
             queueManager.skipPrevious(
                 currentPositionMs = player?.currentPosition ?: 0L,
@@ -547,9 +579,9 @@ class MusicService : MediaSessionService() {
     }
 
     /**
-     * Scrubber seek — lands on the exact drop time for the *current* item only.
-     * Only parks 1ms before EOF when the drop is at/past the real duration so
-     * near-end scrubs no longer snap all the way to the end.
+     * Scrubber seek on the *current* item only.
+     * Uses live decoder duration; parks 1ms before EOF only when drop is at/past end.
+     * Sticky position + seek guard prevent snap-back UI and accidental next-track.
      */
     fun seekTo(positionMs: Long) {
         val p = player ?: return
@@ -557,7 +589,6 @@ class MusicService : MediaSessionService() {
 
         val playerDuration = p.duration.takeIf { it > 0 && it != C.TIME_UNSET } ?: 0L
         val metaDuration = queueManager.currentSong()?.durationMs?.takeIf { it > 0 } ?: 0L
-        // Prefer live decoder duration so mapping matches what Exo will play.
         val duration = when {
             playerDuration > 0L -> playerDuration
             metaDuration > 0L -> metaDuration
@@ -571,16 +602,57 @@ class MusicService : MediaSessionService() {
             else -> positionMs
         }
 
-        val idx = p.currentMediaItemIndex.coerceAtLeast(0)
+        // Always seek on the item that matches the current song URI when possible
+        val current = queueManager.currentSong()
+        val idx = when {
+            current != null && urisEqual(mediaItemUriAt(0), songUri(current)) -> 0
+            current != null -> {
+                var found = p.currentMediaItemIndex.coerceAtLeast(0)
+                for (i in 0 until p.mediaItemCount) {
+                    if (urisEqual(mediaItemUriAt(i), songUri(current))) {
+                        found = i
+                        break
+                    }
+                }
+                found
+            }
+            else -> p.currentMediaItemIndex.coerceAtLeast(0)
+        }
+
+        val now = SystemClock.elapsedRealtime()
+        stickySeekTargetMs = target
+        stickySeekUntilElapsed = now + STICKY_SEEK_MS
+        userSeekGuardUntilElapsed = now + USER_SEEK_GUARD_MS
+        stallSamplePos = target
+        stallSampleAtElapsed = now
+
         try {
             p.seekTo(idx, target)
-            stallSamplePos = target
-            stallSampleAtElapsed = SystemClock.elapsedRealtime()
+            // Keep playing if we were playing — seek should not pause
+            if (p.playWhenReady && !p.isPlaying && p.playbackState == Player.STATE_READY) {
+                p.play()
+            }
             Log.i(TAG, "seekTo target=$target (raw=$positionMs) duration=$duration idx=$idx")
         } catch (e: Exception) {
             Log.w(TAG, "seekTo failed", e)
+            clearStickySeek()
         }
         persistState()
+    }
+
+    /** Map a 0–1 scrub fraction using **live** player duration (not a stale UI poll). */
+    fun seekToFraction(fraction: Float) {
+        val p = player ?: return
+        val playerDuration = p.duration.takeIf { it > 0 && it != C.TIME_UNSET } ?: 0L
+        val metaDuration = queueManager.currentSong()?.durationMs?.takeIf { it > 0 } ?: 0L
+        val duration = when {
+            playerDuration > 0L -> playerDuration
+            metaDuration > 0L -> metaDuration
+            else -> 0L
+        }
+        if (duration <= 0L) return
+        val f = fraction.toDouble().coerceIn(0.0, 1.0)
+        seekTo((f * duration.toDouble()).roundToLong())
     }
 
     fun peekNext(): Song? = queueManager.peekNext()
@@ -636,7 +708,7 @@ class MusicService : MediaSessionService() {
             while (isActive) {
                 delay(STALL_POLL_MS)
                 val p = player ?: continue
-                if (recoveringAudio || advancing) {
+                if (recoveringAudio || advancing || inUserSeekGuard()) {
                     stallSamplePos = -1L
                     continue
                 }
@@ -683,7 +755,7 @@ class MusicService : MediaSessionService() {
     private fun persistState() {
         stateStore.save(
             snapshot = queueManager.getSnapshot(),
-            positionMs = player?.currentPosition?.coerceAtLeast(0L) ?: 0L,
+            positionMs = getPositionMs(),
             playWhenReady = player?.playWhenReady == true
         )
     }
@@ -724,6 +796,7 @@ class MusicService : MediaSessionService() {
                 return
             }
             if (advancing) return
+            // SEEK / PLAYLIST_CHANGED transitions — keep nowPlaying aligned
             val song = queueManager.currentSong() ?: _nowPlaying.value
             if (song != null) {
                 _nowPlaying.value = song
@@ -734,16 +807,39 @@ class MusicService : MediaSessionService() {
 
         override fun onPlaybackStateChanged(playbackState: Int) {
             if (playbackState != Player.STATE_ENDED || advancing) return
+
+            // Near-end scrub can trip STATE_ENDED while the user is still on this track.
+            if (inUserSeekGuard()) {
+                val p = player ?: return
+                val target = stickySeekTargetMs.takeIf { it >= 0L } ?: p.currentPosition
+                Log.i(TAG, "STATE_ENDED suppressed after user seek → reseek $target")
+                try {
+                    val idx = p.currentMediaItemIndex.coerceAtLeast(0)
+                    p.seekTo(idx, target.coerceAtLeast(0L))
+                    if (p.playWhenReady) p.play()
+                } catch (e: Exception) {
+                    Log.w(TAG, "reseek after suppressed ENDED failed", e)
+                    rebufferWindow(
+                        startPositionMs = target.coerceAtLeast(0L),
+                        autoPlay = p.playWhenReady,
+                        forceReload = true
+                    )
+                }
+                return
+            }
+
             val p = player
             if (p != null && p.hasNextMediaItem()) {
                 Log.i(TAG, "STATE_ENDED with next item — defer to AUTO transition")
                 return
             }
+
             if (isRepeatOne()) {
                 Log.i(TAG, "STATE_ENDED under repeat-one → hardRestart")
                 hardRestartCurrent(autoPlay = true)
                 return
             }
+
             advancing = true
             try {
                 applyAdvance(queueManager.advance(userInitiated = false))
@@ -836,8 +932,32 @@ class MusicService : MediaSessionService() {
 
     fun isPlaying(): Boolean = player?.isPlaying == true
     fun getCurrentSong(): Song? = _nowPlaying.value ?: queueManager.currentSong()
-    fun getPositionMs(): Long = player?.currentPosition?.coerceAtLeast(0L) ?: 0L
-    fun getDurationMs(): Long = player?.duration?.takeIf { it > 0 && it != C.TIME_UNSET } ?: 0L
+
+    /**
+     * While a user scrub is settling, report the drop target so the UI does not
+     * snap back to the pre-seek position for ~1s.
+     */
+    fun getPositionMs(): Long {
+        val real = player?.currentPosition?.coerceAtLeast(0L) ?: 0L
+        val now = SystemClock.elapsedRealtime()
+        if (stickySeekTargetMs >= 0L && now < stickySeekUntilElapsed) {
+            if (abs(real - stickySeekTargetMs) <= SEEK_CONFIRM_MS) {
+                clearStickySeek()
+                return real
+            }
+            return stickySeekTargetMs
+        }
+        if (stickySeekTargetMs >= 0L) clearStickySeek()
+        return real
+    }
+
+    fun getDurationMs(): Long {
+        val p = player ?: return 0L
+        val d = p.duration
+        if (d > 0L && d != C.TIME_UNSET) return d
+        return queueManager.currentSong()?.durationMs?.takeIf { it > 0 } ?: 0L
+    }
+
     fun getQueueSnapshot(): QueueSnapshot = queueManager.getSnapshot()
     fun setPlaylist(songs: List<Song>, startIndex: Int = 0) = playSource(songs, startIndex, autoPlay = false)
     fun getQueue(): List<Song> = queueManager.getSnapshot().flatQueue
@@ -899,5 +1019,8 @@ class MusicService : MediaSessionService() {
         private const val STALL_POLL_MS = 500L
         private const val STALL_MS = 2_000L
         private const val NEAR_END_MS = 500L
+        private const val STICKY_SEEK_MS = 1_200L
+        private const val USER_SEEK_GUARD_MS = 1_000L
+        private const val SEEK_CONFIRM_MS = 600L
     }
 }
