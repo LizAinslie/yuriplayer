@@ -19,7 +19,7 @@ data class AlbumPrefsEntity(
     val updatedAtMs: Long = System.currentTimeMillis()
 )
 
-/** Per-playlist prefs (future). */
+/** Per-playlist prefs (shuffle default when playing as cold source). */
 @Entity(
     tableName = "playlist_prefs",
     indices = [Index(value = ["playlistId"], unique = true)]
@@ -31,6 +31,63 @@ data class PlaylistPrefsEntity(
     val repeatMode: String = "ALL",
     val pinnedToMyStuff: Boolean = false,
     val updatedAtMs: Long = System.currentTimeMillis()
+)
+
+/** User-owned local playlist. */
+@Entity(tableName = "playlists")
+data class PlaylistEntity(
+    @PrimaryKey val id: String,
+    val name: String,
+    val description: String? = null,
+    /** Optional user-uploaded cover; overrides collage / single-art defaults. */
+    val customImageUri: String? = null,
+    val createdAtMs: Long = System.currentTimeMillis(),
+    val updatedAtMs: Long = System.currentTimeMillis()
+)
+
+/** Ordered track membership in a playlist (songKey = path or content URI). */
+@Entity(
+    tableName = "playlist_tracks",
+    primaryKeys = ["playlistId", "position"],
+    indices = [
+        Index(value = ["playlistId"]),
+        Index(value = ["songKey"])
+    ]
+)
+data class PlaylistTrackEntity(
+    val playlistId: String,
+    val position: Int,
+    val songKey: String
+)
+
+/** Cached / merged artist profile from local + remote providers. */
+@Entity(tableName = "artist_profiles")
+data class ArtistProfileEntity(
+    @PrimaryKey val artistKey: String,
+    val displayName: String,
+    val bio: String? = null,
+    val imageUri: String? = null,
+    val websiteUrl: String? = null,
+    /** JSON array of {"label":"…","url":"…"}. */
+    val linksJson: String? = null,
+    val source: String = "local",
+    val updatedAtMs: Long = System.currentTimeMillis()
+)
+
+/**
+ * User override: prefer a specific source for a track / album / playlist.
+ * scope = TRACK | ALBUM | PLAYLIST; scopeKey = songKey / albumKey / playlistId.
+ */
+@Entity(
+    tableName = "source_overrides",
+    indices = [Index(value = ["scope", "scopeKey"], unique = true)]
+)
+data class SourceOverrideEntity(
+    @PrimaryKey(autoGenerate = true) val id: Long = 0,
+    val scope: String,
+    val scopeKey: String,
+    val preferredSourceId: Long? = null,
+    val preferredSourceType: String? = null
 )
 
 /** App-level key/value settings. */
