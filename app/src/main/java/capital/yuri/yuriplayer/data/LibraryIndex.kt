@@ -10,9 +10,17 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
+/**
+ * In-memory view of the **persisted** catalog for UI.
+ *
+ * Refresh pulls local files via [CatalogRepository.syncLocalLibrary] (Room is
+ * source of truth for local + My Stuff). External Explore results are never
+ * written here unless the user saves them through [CatalogRepository.importToMyStuff].
+ */
 class LibraryIndex(
     private val repository: MusicRepository,
-    private val cache: LibraryCache
+    private val cache: LibraryCache,
+    private val catalog: CatalogRepository
 ) {
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
@@ -29,18 +37,22 @@ class LibraryIndex(
     private val _error = MutableStateFlow<String?>(null)
     val error: StateFlow<String?> = _error.asStateFlow()
 
-    /** albumKey → enriched year from MusicBrainz (survives until next full scan overlay). */
-    private val enrichedYears = mutableMapOf<String, Int>()
-
     fun bootstrap(staleAfterMs: Long = DEFAULT_STALE_MS) {
         scope.launch {
-            val cached = withContext(Dispatchers.IO) { cache.load() }
-            if (cached != null && cached.songs.isNotEmpty()) {
-                _songs.value = applyYearOverlays(cached.songs)
-                _lastScannedAt.value = cached.scannedAt
+            // Prefer Room catalog if it already has rows (local + My Stuff).
+            val fromDb = withContext(Dispatchers.IO) { catalog.getAllSongs() }
+            if (fromDb.isNotEmpty()) {
+                _songs.value = fromDb
+                _lastScannedAt.value = System.currentTimeMillis()
+            } else {
+                val cached = withContext(Dispatchers.IO) { cache.load() }
+                if (cached != null && cached.songs.isNotEmpty()) {
+                    _songs.value = cached.songs
+                    _lastScannedAt.value = cached.scannedAt
+                }
             }
-            val age = System.currentTimeMillis() - (cached?.scannedAt ?: 0L)
-            if (cached == null || cached.songs.isEmpty() || age > staleAfterMs) {
+            val age = System.currentTimeMillis() - _lastScannedAt.value
+            if (_songs.value.isEmpty() || age > staleAfterMs) {
                 refresh()
             }
         }
@@ -52,10 +64,10 @@ class LibraryIndex(
             _isLoading.value = true
             _error.value = null
             try {
-                val scanned = withContext(Dispatchers.IO) {
-                    repository.scanLibrary().also { cache.save(it) }
+                val songs = withContext(Dispatchers.IO) {
+                    catalog.syncLocalLibrary().also { cache.save(it) }
                 }
-                _songs.value = applyYearOverlays(scanned)
+                _songs.value = songs
                 _lastScannedAt.value = System.currentTimeMillis()
             } catch (e: SecurityException) {
                 _error.value = "Storage permission required"
@@ -71,10 +83,13 @@ class LibraryIndex(
     /**
      * Overlay an API-fetched year onto every track belonging to [albumKey].
      * Only fills missing years — never overwrites a file tag.
+     * Also persists via [CatalogRepository] when available.
      */
     fun applyAlbumYear(albumKey: String, year: Int) {
         if (year !in 1000..2100) return
-        enrichedYears[albumKey] = year
+        scope.launch(Dispatchers.IO) {
+            runCatching { catalog.applyAlbumYear(albumKey, year) }
+        }
         val current = _songs.value
         var changed = false
         val next = current.map { song ->
@@ -87,16 +102,6 @@ class LibraryIndex(
         if (changed) {
             _songs.value = next
             Log.i(TAG, "applied year $year to albumKey=$albumKey")
-        }
-    }
-
-    private fun applyYearOverlays(songs: List<Song>): List<Song> {
-        if (enrichedYears.isEmpty()) return songs
-        return songs.map { song ->
-            if (song.year != null && song.year > 0) return@map song
-            val key = albumKey(song.album, song.effectiveAlbumArtist)
-            val y = enrichedYears[key] ?: return@map song
-            song.copy(year = y)
         }
     }
 
@@ -116,11 +121,6 @@ class LibraryIndex(
         return base.filter { songMatches(it, q) }
     }
 
-    /**
-     * One row per album title (normalized), not per track-artist combo.
-     * Album artist = majority of explicit albumArtist tags, else majority of track artists.
-     * That stops MILDRED-style feature tracks from splitting the album.
-     */
     fun albums(query: String = "", taggedOnly: Boolean = true): List<AlbumItem> {
         val q = query.trim()
         val source = if (taggedOnly) {
@@ -131,8 +131,8 @@ class LibraryIndex(
 
         return source
             .groupBy { normalizeKey(it.album) }
-            .mapNotNull { (albumKey, tracks) ->
-                if (albumKey == null) return@mapNotNull null
+            .mapNotNull { (albumKeyNorm, tracks) ->
+                if (albumKeyNorm == null) return@mapNotNull null
 
                 val albumArtistVotes = tracks
                     .mapNotNull { it.albumArtist?.let { a -> normalizeKey(a) to a } }
@@ -195,8 +195,8 @@ class LibraryIndex(
 
         return source
             .groupBy { normalizeKey(it.effectiveAlbumArtist) }
-            .mapNotNull { (artistKey, tracks) ->
-                if (artistKey == null) return@mapNotNull null
+            .mapNotNull { (artistKeyNorm, tracks) ->
+                if (artistKeyNorm == null) return@mapNotNull null
                 val displayName = tracks
                     .mapNotNull { it.effectiveAlbumArtist }
                     .groupingBy { it }
