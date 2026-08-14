@@ -18,20 +18,26 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.ArrowDropDown
 import androidx.compose.material.icons.filled.Language
 import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material3.Checkbox
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -47,6 +53,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import capital.yuri.yuriplayer.data.AlbumItem
 import capital.yuri.yuriplayer.data.ArtistItem
@@ -63,6 +70,42 @@ import org.koin.compose.koinInject
 
 private enum class ArtistReleaseFilter { All, Albums, EPs, Singles }
 
+/** Multi-select type filters for the full discography list. */
+private data class DiscographyFilters(
+    val albums: Boolean = true,
+    val eps: Boolean = true,
+    val singles: Boolean = true
+) {
+    fun matches(type: ReleaseType): Boolean = when (type) {
+        ReleaseType.ALBUM, ReleaseType.COMPILATION, ReleaseType.OTHER -> albums
+        ReleaseType.EP -> eps
+        ReleaseType.SINGLE -> singles
+    }
+
+    fun label(): String {
+        val parts = buildList {
+            if (albums) add("LPs")
+            if (eps) add("EPs")
+            if (singles) add("Singles")
+        }
+        return when {
+            parts.isEmpty() -> "None"
+            parts.size == 3 -> "All types"
+            else -> parts.joinToString(", ")
+        }
+    }
+
+    companion object {
+        /** Seed checkboxes from the artist-page chip the user was browsing. */
+        fun fromPageFilter(filter: ArtistReleaseFilter): DiscographyFilters = when (filter) {
+            ArtistReleaseFilter.All -> DiscographyFilters()
+            ArtistReleaseFilter.Albums -> DiscographyFilters(albums = true, eps = false, singles = false)
+            ArtistReleaseFilter.EPs -> DiscographyFilters(albums = false, eps = true, singles = false)
+            ArtistReleaseFilter.Singles -> DiscographyFilters(albums = false, eps = false, singles = true)
+        }
+    }
+}
+
 @Composable
 fun ArtistDetailScreen(
     artist: ArtistItem,
@@ -77,6 +120,9 @@ fun ArtistDetailScreen(
     val context = LocalContext.current
     var themeColors by remember { mutableStateOf(fallbackPlayerColors(base)) }
     var filter by remember { mutableStateOf(ArtistReleaseFilter.All) }
+    var showAll by remember { mutableStateOf(false) }
+    // Carried into Show all so filters match what the user was already viewing.
+    var discographyFilters by remember { mutableStateOf(DiscographyFilters()) }
     val uriHandler = LocalUriHandler.current
 
     val profile by profileRepo.observe(artist.displayName).collectAsState(initial = null)
@@ -118,6 +164,20 @@ fun ArtistDetailScreen(
             color = scheme.background,
             contentColor = onBg
         ) {
+            if (showAll) {
+                DiscographyAllScreen(
+                    artistName = artist.displayName,
+                    albums = sortedAlbums,
+                    filters = discographyFilters,
+                    onFiltersChange = { discographyFilters = it },
+                    titleColor = onBg,
+                    mutedColor = muted,
+                    onBack = { showAll = false },
+                    onOpenAlbum = onOpenAlbum
+                )
+                return@Surface
+            }
+
             BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
                 Box(
                     modifier = Modifier
@@ -165,8 +225,36 @@ fun ArtistDetailScreen(
                             Row(
                                 modifier = Modifier
                                     .fillMaxWidth()
+                                    .padding(horizontal = 16.dp, vertical = 4.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Text(
+                                    "Discography",
+                                    style = MaterialTheme.typography.titleMedium,
+                                    fontWeight = FontWeight.Bold,
+                                    color = onBg,
+                                    modifier = Modifier.weight(1f)
+                                )
+                                if (sortedAlbums.isNotEmpty()) {
+                                    TextButton(
+                                        onClick = {
+                                            discographyFilters =
+                                                DiscographyFilters.fromPageFilter(filter)
+                                            showAll = true
+                                        }
+                                    ) {
+                                        Text("Show all", color = scheme.primary)
+                                    }
+                                }
+                            }
+                        }
+
+                        item {
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
                                     .horizontalScroll(rememberScrollState())
-                                    .padding(horizontal = 16.dp, vertical = 8.dp),
+                                    .padding(horizontal = 16.dp, vertical = 4.dp),
                                 horizontalArrangement = Arrangement.spacedBy(8.dp)
                             ) {
                                 ArtistReleaseFilter.entries.forEach { f ->
@@ -185,29 +273,196 @@ fun ArtistDetailScreen(
                             }
                         }
 
-                        if (filtered.isEmpty()) {
-                            item {
+                        item {
+                            if (filtered.isEmpty()) {
                                 Text(
                                     "No releases in this filter.",
                                     modifier = Modifier.padding(16.dp),
                                     color = muted
                                 )
-                            }
-                        } else {
-                            items(
-                                filtered,
-                                key = { "${it.name}|${it.artist}|${it.releaseYear()}" }
-                            ) { album ->
-                                ArtistReleaseRow(
-                                    album = album,
-                                    titleColor = onBg,
-                                    mutedColor = muted,
-                                    onClick = { onOpenAlbum(album) }
-                                )
+                            } else {
+                                LazyRow(
+                                    contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
+                                    horizontalArrangement = Arrangement.spacedBy(14.dp)
+                                ) {
+                                    items(
+                                        filtered,
+                                        key = { "${it.name}|${it.artist}|${it.releaseYear()}" }
+                                    ) { album ->
+                                        ArtistReleaseCard(
+                                            album = album,
+                                            titleColor = onBg,
+                                            mutedColor = muted,
+                                            onClick = { onOpenAlbum(album) }
+                                        )
+                                    }
+                                }
                             }
                         }
                     }
                 }
+            }
+        }
+    }
+}
+
+@Composable
+private fun DiscographyAllScreen(
+    artistName: String,
+    albums: List<AlbumItem>,
+    filters: DiscographyFilters,
+    onFiltersChange: (DiscographyFilters) -> Unit,
+    titleColor: Color,
+    mutedColor: Color,
+    onBack: () -> Unit,
+    onOpenAlbum: (AlbumItem) -> Unit
+) {
+    var filterMenuOpen by remember { mutableStateOf(false) }
+    val visible = remember(albums, filters) {
+        albums.filter { filters.matches(it.releaseType()) }
+    }
+
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .statusBarsPadding()
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(end = 8.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            IconButton(onClick = onBack) {
+                Icon(
+                    Icons.AutoMirrored.Filled.ArrowBack,
+                    contentDescription = "Back",
+                    tint = titleColor
+                )
+            }
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    "Discography",
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.Bold,
+                    color = titleColor
+                )
+                Text(
+                    artistName,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = mutedColor,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
+        }
+
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 16.dp, vertical = 4.dp)
+        ) {
+            Surface(
+                shape = RoundedCornerShape(8.dp),
+                color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clickable { filterMenuOpen = true }
+            ) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 12.dp, vertical = 10.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        text = "Filter: ${filters.label()}",
+                        style = MaterialTheme.typography.labelLarge,
+                        color = titleColor,
+                        modifier = Modifier.weight(1f)
+                    )
+                    Icon(
+                        Icons.Default.ArrowDropDown,
+                        contentDescription = "Filter types",
+                        tint = mutedColor
+                    )
+                }
+            }
+            DropdownMenu(
+                expanded = filterMenuOpen,
+                onDismissRequest = { filterMenuOpen = false }
+            ) {
+                DropdownMenuItem(
+                    text = {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Checkbox(
+                                checked = filters.albums,
+                                onCheckedChange = null
+                            )
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text("LPs")
+                        }
+                    },
+                    onClick = {
+                        onFiltersChange(filters.copy(albums = !filters.albums))
+                    }
+                )
+                DropdownMenuItem(
+                    text = {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Checkbox(
+                                checked = filters.eps,
+                                onCheckedChange = null
+                            )
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text("EPs")
+                        }
+                    },
+                    onClick = {
+                        onFiltersChange(filters.copy(eps = !filters.eps))
+                    }
+                )
+                DropdownMenuItem(
+                    text = {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Checkbox(
+                                checked = filters.singles,
+                                onCheckedChange = null
+                            )
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text("Singles")
+                        }
+                    },
+                    onClick = {
+                        onFiltersChange(filters.copy(singles = !filters.singles))
+                    }
+                )
+            }
+        }
+
+        Text(
+            if (visible.isEmpty()) "No releases match these filters."
+            else formatTrackCount(visible.size).replace("tracks", "releases")
+                .let { if (visible.size == 1) "1 release" else "${visible.size} releases" },
+            style = MaterialTheme.typography.labelMedium,
+            color = mutedColor,
+            modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp)
+        )
+
+        LazyColumn(
+            modifier = Modifier.fillMaxSize(),
+            contentPadding = PaddingValues(bottom = 96.dp)
+        ) {
+            items(
+                visible,
+                key = { "${it.name}|${it.artist}|${it.releaseYear()}" }
+            ) { album ->
+                ArtistReleaseListRow(
+                    album = album,
+                    titleColor = titleColor,
+                    mutedColor = mutedColor,
+                    onClick = { onOpenAlbum(album) }
+                )
             }
         }
     }
@@ -318,8 +573,52 @@ private fun ArtistHero(
     }
 }
 
+/** Spotify-style horizontal discography card. */
 @Composable
-private fun ArtistReleaseRow(
+private fun ArtistReleaseCard(
+    album: AlbumItem,
+    titleColor: Color,
+    mutedColor: Color,
+    onClick: () -> Unit
+) {
+    val year = album.releaseYear()
+    val type = album.releaseType()
+    Column(
+        modifier = Modifier
+            .width(148.dp)
+            .clickable(onClick = onClick)
+    ) {
+        AlbumArt(
+            song = album.songs.firstOrNull(),
+            size = 148.dp,
+            corner = 6.dp
+        )
+        Spacer(modifier = Modifier.height(8.dp))
+        Text(
+            text = album.displayName,
+            style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.SemiBold),
+            color = titleColor,
+            maxLines = 2,
+            overflow = TextOverflow.Ellipsis
+        )
+        Text(
+            text = buildString {
+                if (year != null) append("$year · ")
+                append(type.label)
+                append(" · ")
+                append(formatTrackCount(album.trackCount))
+            },
+            style = MaterialTheme.typography.bodySmall,
+            color = mutedColor,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis
+        )
+    }
+}
+
+/** Vertical list row used on the Show all discography screen. */
+@Composable
+private fun ArtistReleaseListRow(
     album: AlbumItem,
     titleColor: Color,
     mutedColor: Color,
