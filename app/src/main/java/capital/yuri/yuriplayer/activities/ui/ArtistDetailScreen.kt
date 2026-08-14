@@ -30,6 +30,7 @@ import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -88,7 +89,10 @@ fun ArtistDetailScreen(
 
     val scheme = playerColorScheme(themeColors, base)
     val artistBg = scheme.background
+    val onBg = scheme.onBackground
+    val muted = onBg.copy(alpha = 0.6f)
 
+    // Latest year first; undated releases sink to the bottom.
     val sortedAlbums = remember(albums) {
         albums.sortedWith(
             compareByDescending<AlbumItem> { it.releaseYear() ?: Int.MIN_VALUE }
@@ -98,7 +102,9 @@ fun ArtistDetailScreen(
     val filtered = remember(sortedAlbums, filter) {
         when (filter) {
             ArtistReleaseFilter.All -> sortedAlbums
-            ArtistReleaseFilter.Albums -> sortedAlbums.filter { it.releaseType() == ReleaseType.ALBUM }
+            ArtistReleaseFilter.Albums -> sortedAlbums.filter {
+                it.releaseType() == ReleaseType.ALBUM || it.releaseType() == ReleaseType.COMPILATION
+            }
             ArtistReleaseFilter.EPs -> sortedAlbums.filter { it.releaseType() == ReleaseType.EP }
             ArtistReleaseFilter.Singles -> sortedAlbums.filter { it.releaseType() == ReleaseType.SINGLE }
         }
@@ -107,83 +113,98 @@ fun ArtistDetailScreen(
     ThemedStatusBar(color = artistBg, enabled = true)
 
     MaterialTheme(colorScheme = scheme) {
-        BoxWithConstraints(
-            modifier = Modifier
-                .fillMaxSize()
-                .background(base.background)
+        Surface(
+            modifier = Modifier.fillMaxSize(),
+            color = scheme.background,
+            contentColor = onBg
         ) {
-            Box(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(280.dp)
-                    .background(
-                        Brush.verticalGradient(
-                            listOf(artistBg, artistBg.copy(alpha = 0.5f), Color.Transparent)
+            BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(280.dp)
+                        .background(
+                            Brush.verticalGradient(
+                                listOf(artistBg, artistBg.copy(alpha = 0.55f), Color.Transparent)
+                            )
                         )
-                    )
-            )
+                )
 
-            Column(modifier = Modifier.fillMaxSize().statusBarsPadding()) {
-                IconButton(onClick = onBack) {
-                    Icon(
-                        Icons.AutoMirrored.Filled.ArrowBack,
-                        contentDescription = "Back",
-                        tint = scheme.onBackground
-                    )
-                }
-
-                LazyColumn(
-                    modifier = Modifier.fillMaxSize(),
-                    contentPadding = PaddingValues(bottom = 96.dp)
-                ) {
-                    item {
-                        ArtistHero(
-                            name = artist.displayName,
-                            seedSong = albums.firstOrNull()?.songs?.firstOrNull()
-                                ?: artist.songs.firstOrNull(),
-                            stats = "${formatAlbumCount(artist.albumCount)} · ${formatTrackCount(artist.trackCount)}",
-                            bio = profile?.bio,
-                            website = profile?.websiteUrl,
-                            links = profile?.links.orEmpty(),
-                            onPlayAll = {
-                                if (artist.songs.isNotEmpty()) onPlaySongs(artist.songs, 0)
-                            },
-                            onOpenLink = { url -> runCatching { uriHandler.openUri(url) } }
+                Column(modifier = Modifier.fillMaxSize().statusBarsPadding()) {
+                    IconButton(onClick = onBack) {
+                        Icon(
+                            Icons.AutoMirrored.Filled.ArrowBack,
+                            contentDescription = "Back",
+                            tint = onBg
                         )
                     }
 
-                    item {
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .horizontalScroll(rememberScrollState())
-                                .padding(horizontal = 16.dp, vertical = 8.dp),
-                            horizontalArrangement = Arrangement.spacedBy(8.dp)
-                        ) {
-                            ArtistReleaseFilter.entries.forEach { f ->
-                                FilterChip(
-                                    selected = filter == f,
-                                    onClick = { filter = f },
-                                    label = { Text(f.name) }
-                                )
-                            }
-                        }
-                    }
-
-                    if (filtered.isEmpty()) {
+                    LazyColumn(
+                        modifier = Modifier.fillMaxSize(),
+                        contentPadding = PaddingValues(bottom = 96.dp)
+                    ) {
                         item {
-                            Text(
-                                "No releases in this filter.",
-                                modifier = Modifier.padding(16.dp),
-                                color = scheme.onBackground.copy(alpha = 0.6f)
+                            ArtistHero(
+                                name = artist.displayName,
+                                seedSong = albums.firstOrNull()?.songs?.firstOrNull()
+                                    ?: artist.songs.firstOrNull(),
+                                stats = "${formatAlbumCount(artist.albumCount)} · ${formatTrackCount(artist.trackCount)}",
+                                bio = profile?.bio,
+                                website = profile?.websiteUrl,
+                                links = profile?.links.orEmpty(),
+                                titleColor = onBg,
+                                mutedColor = muted,
+                                onPlayAll = {
+                                    if (artist.songs.isNotEmpty()) onPlaySongs(artist.songs, 0)
+                                },
+                                onOpenLink = { url -> runCatching { uriHandler.openUri(url) } }
                             )
                         }
-                    } else {
-                        items(
-                            filtered,
-                            key = { "${it.name}|${it.artist}|${it.releaseYear()}" }
-                        ) { album ->
-                            ArtistReleaseRow(album) { onOpenAlbum(album) }
+
+                        item {
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .horizontalScroll(rememberScrollState())
+                                    .padding(horizontal = 16.dp, vertical = 8.dp),
+                                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                ArtistReleaseFilter.entries.forEach { f ->
+                                    FilterChip(
+                                        selected = filter == f,
+                                        onClick = { filter = f },
+                                        label = {
+                                            Text(
+                                                f.name,
+                                                color = if (filter == f) scheme.onSecondaryContainer
+                                                else onBg
+                                            )
+                                        }
+                                    )
+                                }
+                            }
+                        }
+
+                        if (filtered.isEmpty()) {
+                            item {
+                                Text(
+                                    "No releases in this filter.",
+                                    modifier = Modifier.padding(16.dp),
+                                    color = muted
+                                )
+                            }
+                        } else {
+                            items(
+                                filtered,
+                                key = { "${it.name}|${it.artist}|${it.releaseYear()}" }
+                            ) { album ->
+                                ArtistReleaseRow(
+                                    album = album,
+                                    titleColor = onBg,
+                                    mutedColor = muted,
+                                    onClick = { onOpenAlbum(album) }
+                                )
+                            }
                         }
                     }
                 }
@@ -200,9 +221,12 @@ private fun ArtistHero(
     bio: String?,
     website: String?,
     links: List<ArtistLink>,
+    titleColor: Color,
+    mutedColor: Color,
     onPlayAll: () -> Unit,
     onOpenLink: (String) -> Unit
 ) {
+    val scheme = MaterialTheme.colorScheme
     Column(
         modifier = Modifier
             .fillMaxWidth()
@@ -214,7 +238,7 @@ private fun ArtistHero(
             modifier = Modifier
                 .size(160.dp)
                 .clip(CircleShape)
-                .background(MaterialTheme.colorScheme.surfaceVariant),
+                .background(scheme.surfaceVariant),
             contentAlignment = Alignment.Center
         ) {
             AlbumArt(song = seedSong, size = 160.dp, corner = 80.dp)
@@ -225,14 +249,14 @@ private fun ArtistHero(
         MarqueeText(
             text = name,
             style = MaterialTheme.typography.headlineMedium.copy(fontWeight = FontWeight.Bold),
-            color = MaterialTheme.colorScheme.onBackground,
+            color = titleColor,
             modifier = Modifier.fillMaxWidth()
         )
 
         Text(
             stats,
             style = MaterialTheme.typography.bodyMedium,
-            color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.6f),
+            color = mutedColor,
             modifier = Modifier
                 .fillMaxWidth()
                 .padding(top = 4.dp)
@@ -250,12 +274,12 @@ private fun ArtistHero(
                 modifier = Modifier
                     .size(48.dp)
                     .clip(CircleShape)
-                    .background(MaterialTheme.colorScheme.primary)
+                    .background(scheme.primary)
             ) {
                 Icon(
                     Icons.Default.PlayArrow,
                     contentDescription = "Play all",
-                    tint = MaterialTheme.colorScheme.onPrimary
+                    tint = scheme.onPrimary
                 )
             }
             if (!website.isNullOrBlank()) {
@@ -264,7 +288,7 @@ private fun ArtistHero(
                     Icon(
                         Icons.Default.Language,
                         contentDescription = "Website",
-                        tint = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.8f)
+                        tint = titleColor.copy(alpha = 0.85f)
                     )
                 }
             }
@@ -273,7 +297,7 @@ private fun ArtistHero(
                 Text(
                     link.label,
                     style = MaterialTheme.typography.labelLarge,
-                    color = MaterialTheme.colorScheme.primary,
+                    color = scheme.primary,
                     modifier = Modifier
                         .clip(RoundedCornerShape(8.dp))
                         .clickable { onOpenLink(link.url) }
@@ -287,7 +311,7 @@ private fun ArtistHero(
             Text(
                 bio,
                 style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.75f),
+                color = titleColor.copy(alpha = 0.75f),
                 modifier = Modifier.fillMaxWidth()
             )
         }
@@ -295,7 +319,12 @@ private fun ArtistHero(
 }
 
 @Composable
-private fun ArtistReleaseRow(album: AlbumItem, onClick: () -> Unit) {
+private fun ArtistReleaseRow(
+    album: AlbumItem,
+    titleColor: Color,
+    mutedColor: Color,
+    onClick: () -> Unit
+) {
     val year = album.releaseYear()
     val type = album.releaseType()
     Row(
@@ -310,7 +339,8 @@ private fun ArtistReleaseRow(album: AlbumItem, onClick: () -> Unit) {
         Column(modifier = Modifier.weight(1f)) {
             MarqueeText(
                 text = album.displayName,
-                style = MaterialTheme.typography.bodyLarge.copy(fontWeight = FontWeight.SemiBold)
+                style = MaterialTheme.typography.bodyLarge.copy(fontWeight = FontWeight.SemiBold),
+                color = titleColor
             )
             Text(
                 buildString {
@@ -319,7 +349,7 @@ private fun ArtistReleaseRow(album: AlbumItem, onClick: () -> Unit) {
                     append(" · ${formatTrackCount(album.trackCount)}")
                 },
                 style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
+                color = mutedColor
             )
         }
     }
