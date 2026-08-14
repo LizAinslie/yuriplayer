@@ -25,7 +25,6 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -66,6 +65,7 @@ import capital.yuri.yuriplayer.player.QueueSnapshot
 import org.koin.compose.koinInject
 import java.text.DateFormat
 import java.util.Date
+import kotlin.math.abs
 import kotlin.math.roundToInt
 
 private enum class QueueTab { Queue, History }
@@ -428,46 +428,53 @@ private fun SwipeableQueueRow(
         label = "rowShift"
     )
 
+    // Delete / promote underlays only while this row is being *horizontally*
+    // swiped — never during vertical reorder drag (otherwise they flash under
+    // every moving row).
+    val showSwipeUnderlay = abs(swipeX) > 1f && !drag.active
+
     Box(
         modifier = modifier
             .fillMaxWidth()
             .zIndex(if (isDragged) 10f else 0f)
     ) {
-        Row(
-            modifier = Modifier
-                .matchParentSize()
-                .padding(vertical = 2.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            if (onSwipePromote != null) {
+        if (showSwipeUnderlay) {
+            Row(
+                modifier = Modifier
+                    .matchParentSize()
+                    .padding(vertical = 2.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                if (onSwipePromote != null) {
+                    Box(
+                        modifier = Modifier
+                            .weight(1f)
+                            .padding(end = 4.dp)
+                            .background(
+                                MaterialTheme.colorScheme.primaryContainer,
+                                RoundedCornerShape(8.dp)
+                            )
+                            .padding(horizontal = 16.dp, vertical = 12.dp),
+                        contentAlignment = Alignment.CenterStart
+                    ) {
+                        Icon(Icons.Default.PlaylistAdd, "Add to queue", tint = MaterialTheme.colorScheme.primary)
+                    }
+                } else {
+                    Spacer(modifier = Modifier.weight(1f))
+                }
                 Box(
                     modifier = Modifier
                         .weight(1f)
-                        .padding(end = 4.dp)
+                        .padding(start = 4.dp)
                         .background(
-                            MaterialTheme.colorScheme.primaryContainer,
+                            MaterialTheme.colorScheme.errorContainer,
                             RoundedCornerShape(8.dp)
                         )
                         .padding(horizontal = 16.dp, vertical = 12.dp),
-                    contentAlignment = Alignment.CenterStart
+                    contentAlignment = Alignment.CenterEnd
                 ) {
-                    Icon(Icons.Default.PlaylistAdd, "Add to queue", tint = MaterialTheme.colorScheme.primary)
+                    Icon(Icons.Default.Delete, "Remove", tint = MaterialTheme.colorScheme.error)
                 }
-            } else {
-                Spacer(modifier = Modifier.weight(1f))
-            }
-            Box(
-                modifier = Modifier
-                    .weight(1f)
-                    .padding(start = 4.dp)
-                    .background(
-                        MaterialTheme.colorScheme.errorContainer,
-                        RoundedCornerShape(8.dp)
-                    )
-                    .padding(horizontal = 16.dp, vertical = 12.dp),
-                contentAlignment = Alignment.CenterEnd
-            ) {
-                Icon(Icons.Default.Delete, "Remove", tint = MaterialTheme.colorScheme.error)
             }
         }
 
@@ -494,7 +501,10 @@ private fun SwipeableQueueRow(
                 .clickable(enabled = !drag.active && swipeX == 0f, onClick = onClick)
                 .pointerInput(index, listSize) {
                     detectDragGesturesAfterLongPress(
-                        onDragStart = { drag.start(index) },
+                        onDragStart = {
+                            swipeX = 0f // clear any residual swipe before reorder
+                            drag.start(index)
+                        },
                         onDragEnd = {
                             drag.end()?.let { (f, t, promote) ->
                                 if (promote && allowPromoteToHot) onDragPromote?.invoke(f)
@@ -508,7 +518,8 @@ private fun SwipeableQueueRow(
                         }
                     )
                 }
-                .pointerInput(index) {
+                .pointerInput(index, drag.active) {
+                    if (drag.active) return@pointerInput
                     detectHorizontalDragGestures(
                         onDragEnd = {
                             when {
