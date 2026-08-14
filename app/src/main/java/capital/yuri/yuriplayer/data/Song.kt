@@ -43,6 +43,19 @@ data class Song(
     val displayAlbumArtist: String
         get() = effectiveAlbumArtist ?: "Unknown Artist"
 
+    /**
+     * Individual credited artists for linking (Spotify-style).
+     * Prefer the track `artist` tag; fall back to album artist as a single credit.
+     */
+    val creditArtists: List<String>
+        get() {
+            val fromArtist = parseArtistCredits(artist)
+            if (fromArtist.isNotEmpty()) return fromArtist
+            val fromAlbum = parseArtistCredits(albumArtist)
+            if (fromAlbum.isNotEmpty()) return fromAlbum
+            return emptyList()
+        }
+
     val isTagged: Boolean
         get() = artist.isMeaningfulTag() ||
             albumArtist.isMeaningfulTag() ||
@@ -51,6 +64,10 @@ data class Song(
     val hasAlbum: Boolean get() = album.isMeaningfulTag()
     val hasArtist: Boolean get() = artist.isMeaningfulTag() || albumArtist.isMeaningfulTag()
     val hasTitle: Boolean get() = title.isMeaningfulTag()
+
+    /** Stable key for playlists / source overrides / queue identity. */
+    val songKey: String
+        get() = path?.lowercase() ?: contentUri.toString()
 
     /** Stable identity for “is this the same track” checks. */
     fun isSameAs(other: Song?): Boolean {
@@ -90,4 +107,11 @@ fun albumKey(name: String?, artist: String?): String {
     val a = (artist ?: "").trim().lowercase()
     val n = (name ?: "").trim().lowercase()
     return "$a|$n"
+}
+
+/** Normalized artist page key (case-insensitive, collapsed whitespace). */
+fun artistKey(name: String?): String? {
+    if (name == null) return null
+    val t = name.trim().replace(Regex("\\s+"), " ").lowercase()
+    return t.takeIf { it.isNotEmpty() }
 }
