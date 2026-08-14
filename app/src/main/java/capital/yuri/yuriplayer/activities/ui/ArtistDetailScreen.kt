@@ -138,7 +138,7 @@ fun ArtistDetailScreen(
     val onBg = scheme.onBackground
     val muted = onBg.copy(alpha = 0.6f)
 
-    // Latest year first; undated releases sink to the bottom.
+    // Latest year first → oldest last; undated releases sink to the end.
     val sortedAlbums = remember(albums) {
         albums.sortedWith(
             compareByDescending<AlbumItem> { it.releaseYear() ?: Int.MIN_VALUE }
@@ -442,8 +442,8 @@ private fun DiscographyAllScreen(
 
         Text(
             if (visible.isEmpty()) "No releases match these filters."
-            else formatTrackCount(visible.size).replace("tracks", "releases")
-                .let { if (visible.size == 1) "1 release" else "${visible.size} releases" },
+            else if (visible.size == 1) "1 release"
+            else "${visible.size} releases",
             style = MaterialTheme.typography.labelMedium,
             color = mutedColor,
             modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp)
@@ -573,7 +573,7 @@ private fun ArtistHero(
     }
 }
 
-/** Spotify-style horizontal discography card. */
+/** Spotify-style horizontal discography card — subtitle is year only. */
 @Composable
 private fun ArtistReleaseCard(
     album: AlbumItem,
@@ -582,7 +582,6 @@ private fun ArtistReleaseCard(
     onClick: () -> Unit
 ) {
     val year = album.releaseYear()
-    val type = album.releaseType()
     Column(
         modifier = Modifier
             .width(148.dp)
@@ -602,12 +601,7 @@ private fun ArtistReleaseCard(
             overflow = TextOverflow.Ellipsis
         )
         Text(
-            text = buildString {
-                if (year != null) append("$year · ")
-                append(type.label)
-                append(" · ")
-                append(formatTrackCount(album.trackCount))
-            },
+            text = year?.toString() ?: album.releaseType().label,
             style = MaterialTheme.typography.bodySmall,
             color = mutedColor,
             maxLines = 1,
@@ -645,7 +639,6 @@ private fun ArtistReleaseListRow(
                 buildString {
                     append(type.label)
                     if (year != null) append(" · $year")
-                    append(" · ${formatTrackCount(album.trackCount)}")
                 },
                 style = MaterialTheme.typography.bodySmall,
                 color = mutedColor
