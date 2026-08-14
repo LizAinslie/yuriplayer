@@ -20,6 +20,10 @@ import kotlin.random.Random
  * Previous does **not** use a side-channel "floating" playhead: the prior track
  * is placed at the head of the active lane and the interrupted track is pushed
  * in right after it, so it shows in the queue UI and is the natural next.
+ *
+ * [playItem] is the queue-UI jump path only (not album/search/library play):
+ *  - Hot: drop every song before the tapped index (not kept in history).
+ *  - Cold: move every song before the tapped index into [playedStack].
  */
 class QueueManager {
 
@@ -107,6 +111,23 @@ class QueueManager {
         while (playedStack.size > MAX_PLAYED_STACK) {
             playedStack.removeAt(0)
         }
+    }
+
+    /** Detach the currently playing item from lists without consuming into history. */
+    private fun detachCurrentWithoutHistory() {
+        if (floatingCurrent != null) {
+            floatingCurrent = null
+            return
+        }
+        when (lane) {
+            QueueLane.HOT -> {
+                if (indexInLane in hotQueue.indices) hotQueue.removeAt(indexInLane)
+            }
+            QueueLane.COLD -> {
+                if (indexInLane in coldQueue.indices) coldQueue.removeAt(indexInLane)
+            }
+        }
+        indexInLane = -1
     }
 
     fun restore(snap: QueueSnapshot) {
@@ -307,21 +328,89 @@ class QueueManager {
         publish()
     }
 
+    /**
+     * Queue-UI jump only (not used by album/search/library play).
+     *
+     * Hot: discard every entry before [index], play the tapped song.
+     * Cold: push every entry before [index] into [playedStack], play the tapped song.
+     * The interrupted current track (if different) always goes into [playedStack].
+     */
     fun playItem(laneTarget: QueueLane, index: Int) {
-        floatingCurrent = null
         when (laneTarget) {
             QueueLane.HOT -> {
                 if (index !in hotQueue.indices) return
+                val target = hotQueue[index]
+                val current = currentSong()
+                if (current != null && !sameSong(current, target)) {
+                    pushPlayed(current)
+                }
+                // Drop current out of whichever list it lived in so indices stay sane.
+                if (current != null && sameSong(current, target)) {
+                    // Already this track — just ensure playhead is on it after trim.
+                } else {
+                    detachCurrentWithoutHistory()
+                }
+
+                // Re-find target after detach (index may have shifted if current was
+                // earlier in the same hot list).
+                var targetIdx = hotQueue.indexOfFirst { sameSong(it, target) }
+                if (targetIdx < 0) {
+                    // Detach shouldn't remove the target; safety net.
+                    hotQueue.add(0, target)
+                    targetIdx = 0
+                }
+
+                // Discard everything before the tapped hot item (not history).
+                if (targetIdx > 0) {
+                    repeat(targetIdx) { hotQueue.removeAt(0) }
+                }
+
+                floatingCurrent = null
                 lane = QueueLane.HOT
-                indexInLane = index
+                indexInLane = 0
+                publish()
+                Log.i(
+                    TAG,
+                    "playItem HOT → '${target.displayTitle}' " +
+                        "hotLeft=${hotQueue.size} played=${playedStack.size}"
+                )
             }
             QueueLane.COLD -> {
                 if (index !in coldQueue.indices) return
+                val target = coldQueue[index]
+                val current = currentSong()
+                if (current != null && !sameSong(current, target)) {
+                    pushPlayed(current)
+                }
+                if (current == null || !sameSong(current, target)) {
+                    detachCurrentWithoutHistory()
+                }
+
+                var targetIdx = coldQueue.indexOfFirst { sameSong(it, target) }
+                if (targetIdx < 0) {
+                    coldQueue.add(0, target)
+                    targetIdx = 0
+                }
+
+                // Spotify: jumped-over cold tracks stay reachable via Previous.
+                if (targetIdx > 0) {
+                    for (i in 0 until targetIdx) {
+                        pushPlayed(coldQueue[i])
+                    }
+                    repeat(targetIdx) { coldQueue.removeAt(0) }
+                }
+
+                floatingCurrent = null
                 lane = QueueLane.COLD
-                indexInLane = index
+                indexInLane = 0
+                publish()
+                Log.i(
+                    TAG,
+                    "playItem COLD → '${target.displayTitle}' " +
+                        "coldLeft=${coldQueue.size} played=${playedStack.size}"
+                )
             }
         }
-        publish()
     }
 
     fun setShuffle(enabled: Boolean) {
