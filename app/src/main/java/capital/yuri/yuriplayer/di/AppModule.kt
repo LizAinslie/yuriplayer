@@ -2,14 +2,17 @@ package capital.yuri.yuriplayer.di
 
 import capital.yuri.yuriplayer.data.AlbumArtCache
 import capital.yuri.yuriplayer.data.ArtistProfileRepository
+import capital.yuri.yuriplayer.data.CatalogRepository
 import capital.yuri.yuriplayer.data.LibraryCache
 import capital.yuri.yuriplayer.data.LibraryIndex
 import capital.yuri.yuriplayer.data.LibrarySettings
+import capital.yuri.yuriplayer.data.MetadataEnrichmentService
 import capital.yuri.yuriplayer.data.MusicRepository
 import capital.yuri.yuriplayer.data.PlayerThemeStore
 import capital.yuri.yuriplayer.data.PlaylistRepository
 import capital.yuri.yuriplayer.data.db.YuriDatabase
 import capital.yuri.yuriplayer.data.source.LocalArtistProfileProvider
+import capital.yuri.yuriplayer.data.source.MusicBrainzClient
 import capital.yuri.yuriplayer.data.source.SourceResolver
 import capital.yuri.yuriplayer.data.theme.ThemeService
 import capital.yuri.yuriplayer.player.PlaybackHistoryStore
@@ -23,10 +26,11 @@ val appModule = module {
     single { LibrarySettings(androidContext()) }
     single { LibraryCache(androidContext()) }
     single { MusicRepository(androidContext(), get()) }
-    single { LibraryIndex(get(), get()) }
 
     single { YuriDatabase.create(androidContext()) }
     single { get<YuriDatabase>().albumPrefs() }
+    single { get<YuriDatabase>().albumMetadata() }
+    single { get<YuriDatabase>().catalog() }
     single { get<YuriDatabase>().playlistPrefs() }
     single { get<YuriDatabase>().playlists() }
     single { get<YuriDatabase>().artistProfiles() }
@@ -34,6 +38,11 @@ val appModule = module {
     single { get<YuriDatabase>().appSettings() }
     single { get<YuriDatabase>().sources() }
     single { get<YuriDatabase>().scrobblers() }
+
+    // Room catalog = local files + My Stuff only. External Explore stays ephemeral
+    // until importToMyStuff().
+    single { CatalogRepository(get(), get()) }
+    single { LibraryIndex(get(), get(), get()) }
 
     single { PlaylistRepository(get(), get()) }
     single {
@@ -43,6 +52,9 @@ val appModule = module {
         )
     }
     single { SourceResolver(get()) }
+
+    single { MusicBrainzClient() }
+    single { MetadataEnrichmentService(androidContext(), get(), get(), get()) }
 
     single { AlbumArtCache(androidContext()) }
     single { ThemeService(get()) }
