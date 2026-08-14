@@ -344,23 +344,16 @@ class QueueManager {
                 if (current != null && !sameSong(current, target)) {
                     pushPlayed(current)
                 }
-                // Drop current out of whichever list it lived in so indices stay sane.
-                if (current != null && sameSong(current, target)) {
-                    // Already this track — just ensure playhead is on it after trim.
-                } else {
+                if (current == null || !sameSong(current, target)) {
                     detachCurrentWithoutHistory()
                 }
 
-                // Re-find target after detach (index may have shifted if current was
-                // earlier in the same hot list).
                 var targetIdx = hotQueue.indexOfFirst { sameSong(it, target) }
                 if (targetIdx < 0) {
-                    // Detach shouldn't remove the target; safety net.
                     hotQueue.add(0, target)
                     targetIdx = 0
                 }
 
-                // Discard everything before the tapped hot item (not history).
                 if (targetIdx > 0) {
                     repeat(targetIdx) { hotQueue.removeAt(0) }
                 }
@@ -392,7 +385,6 @@ class QueueManager {
                     targetIdx = 0
                 }
 
-                // Spotify: jumped-over cold tracks stay reachable via Previous.
                 if (targetIdx > 0) {
                     for (i in 0 until targetIdx) {
                         pushPlayed(coldQueue[i])
@@ -492,8 +484,6 @@ class QueueManager {
             return resolveNextFromHeads()
         }
 
-        // After removing current at fromIndex, the next item in that lane
-        // slides into fromIndex (list shrinks left).
         if (fromLane == QueueLane.HOT && fromIndex in hotQueue.indices) {
             lane = QueueLane.HOT
             indexInLane = fromIndex
@@ -561,19 +551,27 @@ class QueueManager {
     }
 
     /**
-     * Previous track: place [prev] at the head of the active lane as the new
-     * current, and re-insert the interrupted track immediately after it so it
-     * appears in the queue UI and is the natural next on advance.
+     * Previous track.
+     *
+     * Default (button / notification): if past [PREV_RESTART_MS] or no history,
+     * restart current. Album-art swipe passes [forceTrackChange]=true so it
+     * always walks history when available (gesture is disabled when empty).
      */
-    fun skipPrevious(currentPositionMs: Long): AdvanceResult {
+    fun skipPrevious(
+        currentPositionMs: Long,
+        forceTrackChange: Boolean = false
+    ): AdvanceResult {
         val current = currentSong()
-        if (currentPositionMs > PREV_RESTART_MS || playedStack.isEmpty()) {
+        val canGoPrev = playedStack.isNotEmpty()
+        if (!canGoPrev) {
+            return AdvanceResult(song = current, seekToStart = true)
+        }
+        if (!forceTrackChange && currentPositionMs > PREV_RESTART_MS) {
             return AdvanceResult(song = current, seekToStart = true)
         }
 
         val prev = playedStack.removeAt(playedStack.lastIndex)
 
-        // Detach whatever is currently playing from the lists
         if (floatingCurrent != null) {
             floatingCurrent = null
         } else {
@@ -589,7 +587,6 @@ class QueueManager {
 
         val useCold = coldSource != null || coldQueue.isNotEmpty() || coldOriginal.isNotEmpty()
         if (useCold) {
-            // [prev (now playing), interrupted current, ...rest]
             if (current != null) coldQueue.add(0, current)
             coldQueue.add(0, prev)
             lane = QueueLane.COLD
@@ -605,8 +602,8 @@ class QueueManager {
         publish()
         Log.i(
             TAG,
-            "skipPrevious → '${prev.displayTitle}' next='${current?.displayTitle}' " +
-                "lane=$lane cold=${coldQueue.size} hot=${hotQueue.size} " +
+            "skipPrevious force=$forceTrackChange → '${prev.displayTitle}' " +
+                "next='${current?.displayTitle}' lane=$lane " +
                 "playedLeft=${playedStack.size}"
         )
         return AdvanceResult(song = prev)
@@ -646,7 +643,7 @@ class QueueManager {
 
     companion object {
         private const val TAG = "YuriPlayer.Queue"
-        private const val PREV_RESTART_MS = 3_000L
+        const val PREV_RESTART_MS = 3_000L
         private const val MAX_PLAYED_STACK = 200
     }
 }
