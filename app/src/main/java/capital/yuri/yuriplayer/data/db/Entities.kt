@@ -19,6 +19,32 @@ data class AlbumPrefsEntity(
     val updatedAtMs: Long = System.currentTimeMillis()
 )
 
+/**
+ * Remote / enriched metadata for an album (MusicBrainz, Cover Art Archive, …).
+ * Does not rewrite audio files — overlays missing year / art in the library.
+ */
+@Entity(
+    tableName = "album_metadata",
+    indices = [Index(value = ["albumKey"], unique = true)]
+)
+data class AlbumMetadataEntity(
+    @PrimaryKey(autoGenerate = true) val id: Long = 0,
+    /** Normalized "artist|album" key (same as album prefs). */
+    val albumKey: String,
+    val year: Int? = null,
+    /** MusicBrainz release MBID when known. */
+    val mbid: String? = null,
+    /** Absolute path to a downloaded cover image in app storage. */
+    val coverPath: String? = null,
+    /** Original remote cover URL (optional). */
+    val coverUrl: String? = null,
+    val source: String = "musicbrainz",
+    /** Last successful lookup (or definitive miss). */
+    val updatedAtMs: Long = System.currentTimeMillis(),
+    /** True when MB was queried and returned nothing useful — avoid hammering. */
+    val lookupFailed: Boolean = false
+)
+
 /** Per-playlist prefs (shuffle default when playing as cold source). */
 @Entity(
     tableName = "playlist_prefs",
