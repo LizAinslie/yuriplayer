@@ -32,13 +32,16 @@ import kotlin.math.sin
 /**
  * Expressive seek bar: traveling sine wave while [playing], flattens when
  * paused or while the user is dragging the thumb.
+ *
+ * [onProgressChangeFinished] receives the **exact** drop fraction so callers
+ * do not race Compose state or lose the last drag sample.
  */
 @Composable
 fun WavySeekBar(
     progress: Float,
     playing: Boolean,
     onProgressChange: (Float) -> Unit,
-    onProgressChangeFinished: () -> Unit,
+    onProgressChangeFinished: (fraction: Float) -> Unit,
     activeColor: Color,
     inactiveColor: Color,
     modifier: Modifier = Modifier,
@@ -49,8 +52,6 @@ fun WavySeekBar(
     val isDragging = dragging >= 0f
     val shown = if (isDragging) dragging else progress.coerceIn(0f, 1f)
 
-    // Wave only when playing *and* not scrubbing — scrubbing always flattens
-    // so the thumb tracks a clean line under the finger.
     val wantWave = playing && !isDragging
     val amplitudeFactor = remember { Animatable(if (wantWave) 1f else 0f) }
     LaunchedEffect(wantWave) {
@@ -73,6 +74,12 @@ fun WavySeekBar(
 
     val effectivePhase = if (amplitudeFactor.value > 0.01f) phase else 0f
 
+    fun finishAt(fraction: Float) {
+        val f = fraction.coerceIn(0f, 1f)
+        onProgressChange(f)
+        onProgressChangeFinished(f)
+    }
+
     Canvas(
         modifier = modifier
             .fillMaxWidth()
@@ -80,23 +87,25 @@ fun WavySeekBar(
             .pointerInput(Unit) {
                 detectTapGestures { offset ->
                     val p = (offset.x / size.width).coerceIn(0f, 1f)
-                    onProgressChange(p)
-                    onProgressChangeFinished()
+                    finishAt(p)
                 }
             }
             .pointerInput(Unit) {
                 detectHorizontalDragGestures(
                     onDragStart = { offset ->
-                        dragging = (offset.x / size.width).coerceIn(0f, 1f)
-                        onProgressChange(dragging)
+                        val p = (offset.x / size.width).coerceIn(0f, 1f)
+                        dragging = p
+                        onProgressChange(p)
                     },
                     onDragEnd = {
+                        val drop = if (dragging >= 0f) dragging else progress
                         dragging = -1f
-                        onProgressChangeFinished()
+                        finishAt(drop)
                     },
                     onDragCancel = {
                         dragging = -1f
-                        onProgressChangeFinished()
+                        // Cancel: do not seek — report current progress only
+                        onProgressChangeFinished(progress.coerceIn(0f, 1f))
                     },
                     onHorizontalDrag = { change, _ ->
                         val p = (change.position.x / size.width).coerceIn(0f, 1f)
