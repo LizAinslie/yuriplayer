@@ -144,14 +144,14 @@ fun AlbumDetailScreen(
     val nestedScroll = remember(collapseRangePx) {
         object : NestedScrollConnection {
             override fun onPreScroll(
-                available: androidx.compose.ui.geometry.Offset,
+                available: Offset,
                 source: NestedScrollSource
-            ): androidx.compose.ui.geometry.Offset {
+            ): Offset {
                 val delta = available.y
                 if (delta < 0f && collapsePx < collapseRangePx) {
                     val consumed = (-delta).coerceAtMost(collapseRangePx - collapsePx)
                     collapsePx += consumed
-                    return androidx.compose.ui.geometry.Offset(0f, -consumed)
+                    return Offset(0f, -consumed)
                 }
                 if (delta > 0f && collapsePx > 0f &&
                     listState.firstVisibleItemIndex == 0 &&
@@ -159,9 +159,9 @@ fun AlbumDetailScreen(
                 ) {
                     val consumed = delta.coerceAtMost(collapsePx)
                     collapsePx -= consumed
-                    return androidx.compose.ui.geometry.Offset(0f, consumed)
+                    return Offset(0f, consumed)
                 }
-                return androidx.compose.ui.geometry.Offset.Zero
+                return Offset.Zero
             }
         }
     }

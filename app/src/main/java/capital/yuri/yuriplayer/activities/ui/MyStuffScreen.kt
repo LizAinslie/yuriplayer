@@ -170,7 +170,7 @@ fun MyStuffScreen(
                         val albums = remember(allSongs) { library.albums(taggedOnly = false) }
                         LazyColumn(modifier = Modifier.fillMaxSize()) {
                             items(albums, key = { "${it.name}|${it.artist}" }) { album ->
-                                AlbumRow(album) { onOpenAlbum(album) }
+                                AlbumRow(album, onClick = { onOpenAlbum(album) })
                             }
                         }
                     }

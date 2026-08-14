@@ -9,6 +9,8 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.serialization.Serializable
 import java.io.File
+import androidx.core.net.toUri
+import androidx.core.content.edit
 
 @Serializable
 data class HistoryEntry(
@@ -32,7 +34,7 @@ class PlaybackHistoryStore(context: Context) {
     var maxEntries: Int
         get() = prefs.getInt(KEY_MAX, DEFAULT_MAX).coerceIn(10, 500)
         set(value) {
-            prefs.edit().putInt(KEY_MAX, value.coerceIn(10, 500)).apply()
+            prefs.edit { putInt(KEY_MAX, value.coerceIn(10, 500)) }
             trimToMax()
             persist()
         }
