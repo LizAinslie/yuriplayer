@@ -2,8 +2,10 @@ package capital.yuri.yuriplayer.activities.ui
 
 import android.widget.Toast
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
@@ -152,7 +154,6 @@ fun LibraryScreen(
     var sortMode by remember { mutableStateOf(SortMode.TITLE) }
     var section by remember { mutableStateOf(LibrarySection.Songs) }
 
-    // Hide keyboard on first open without locking the field read-only.
     LaunchedEffect(Unit) {
         focusManager.clearFocus(force = true)
         keyboard?.hide()
@@ -166,6 +167,38 @@ fun LibraryScreen(
     }
     val albums = remember(allSongs, query) { library.albums(query, taggedOnly = true) }
     val artists = remember(allSongs, query) { library.artists(query, taggedOnly = true) }
+
+    fun openArtistForSong(song: Song) {
+        val name = song.albumArtist?.takeIf { it.isNotBlank() }
+            ?: song.artist?.takeIf { it.isNotBlank() }
+            ?: return
+        val match = library.artists(taggedOnly = false)
+            .firstOrNull { it.name.equals(name, ignoreCase = true) }
+            ?: ArtistItem(name = name, songs = listOf(song))
+        onOpenArtist(match)
+    }
+
+    fun openAlbumForSong(song: Song) {
+        val albumName = song.album?.takeIf { it.isNotBlank() } ?: return
+        val artistKey = song.albumArtist ?: song.artist
+        val match = library.albums(taggedOnly = false).firstOrNull {
+            it.name.equals(albumName, ignoreCase = true) &&
+                (artistKey == null || it.artist.equals(artistKey, ignoreCase = true))
+        } ?: AlbumItem(
+            name = albumName,
+            artist = artistKey,
+            songs = listOf(song)
+        )
+        onOpenAlbum(match)
+    }
+
+    fun openArtistForAlbum(album: AlbumItem) {
+        val name = album.artist?.takeIf { it.isNotBlank() } ?: return
+        val match = library.artists(taggedOnly = false)
+            .firstOrNull { it.name.equals(name, ignoreCase = true) }
+            ?: ArtistItem(name = name, songs = album.songs)
+        onOpenArtist(match)
+    }
 
     Column(modifier = Modifier.fillMaxSize()) {
         OutlinedTextField(
@@ -236,17 +269,31 @@ fun LibraryScreen(
 
         when (section) {
             LibrarySection.Songs -> SongList(
-                taggedSongs, loading, nowPlaying, isPlaybackActive, onPlay
-            ) {
-                onAddToQueue(it)
-                Toast.makeText(context, "Added to queue", Toast.LENGTH_SHORT).show()
-            }
+                songs = taggedSongs,
+                loading = loading,
+                nowPlaying = nowPlaying,
+                isPlaybackActive = isPlaybackActive,
+                onPlay = onPlay,
+                onAddToQueue = {
+                    onAddToQueue(it)
+                    Toast.makeText(context, "Added to queue", Toast.LENGTH_SHORT).show()
+                },
+                onGoToAlbum = { openAlbumForSong(it) },
+                onGoToArtist = { openArtistForSong(it) }
+            )
             LibrarySection.Untagged -> SongList(
-                untaggedSongs, loading, nowPlaying, isPlaybackActive, onPlay
-            ) {
-                onAddToQueue(it)
-                Toast.makeText(context, "Added to queue", Toast.LENGTH_SHORT).show()
-            }
+                songs = untaggedSongs,
+                loading = loading,
+                nowPlaying = nowPlaying,
+                isPlaybackActive = isPlaybackActive,
+                onPlay = onPlay,
+                onAddToQueue = {
+                    onAddToQueue(it)
+                    Toast.makeText(context, "Added to queue", Toast.LENGTH_SHORT).show()
+                },
+                onGoToAlbum = { openAlbumForSong(it) },
+                onGoToArtist = { openArtistForSong(it) }
+            )
             LibrarySection.Albums -> {
                 if (albums.isEmpty()) Text("No albums match.", modifier = Modifier.padding(16.dp))
                 else LazyColumn(modifier = Modifier.fillMaxSize()) {
@@ -261,7 +308,8 @@ fun LibraryScreen(
                                     "Queued ${formatTrackCount(album.songs.size)}",
                                     Toast.LENGTH_SHORT
                                 ).show()
-                            }
+                            },
+                            onGoToArtist = { openArtistForAlbum(album) }
                         )
                     }
                 }
@@ -285,7 +333,9 @@ private fun SongList(
     nowPlaying: Song?,
     isPlaybackActive: Boolean,
     onPlay: (List<Song>, Int) -> Unit,
-    onAddToQueue: (Song) -> Unit
+    onAddToQueue: (Song) -> Unit,
+    onGoToAlbum: (Song) -> Unit,
+    onGoToArtist: (Song) -> Unit
 ) {
     if (songs.isEmpty() && !loading) {
         Text("Nothing here yet.", modifier = Modifier.padding(16.dp))
@@ -298,13 +348,16 @@ private fun SongList(
                     onSwipeAdd = { onAddToQueue(song) },
                     showTrackNumber = false,
                     isPlaying = song.isSameAs(nowPlaying),
-                    isPlaybackActive = isPlaybackActive
+                    isPlaybackActive = isPlaybackActive,
+                    onGoToAlbum = { onGoToAlbum(song) },
+                    onGoToArtist = { onGoToArtist(song) }
                 )
             }
         }
     }
 }
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 fun SwipeAddSongRow(
     song: Song,
@@ -314,13 +367,17 @@ fun SwipeAddSongRow(
     isPlaying: Boolean = false,
     isPlaybackActive: Boolean = false,
     transparentSurface: Boolean = false,
-    surfaceColor: Color? = null
+    surfaceColor: Color? = null,
+    onGoToAlbum: (() -> Unit)? = null,
+    onGoToArtist: (() -> Unit)? = null
 ) {
     var offsetX by remember { mutableFloatStateOf(0f) }
+    var showSheet by remember { mutableStateOf(false) }
     val density = LocalDensity.current
     val threshold = with(density) { 96.dp.toPx() }
     val accent = MaterialTheme.colorScheme.primary
     val onSurface = MaterialTheme.colorScheme.onSurface
+    val hasContext = onGoToAlbum != null || onGoToArtist != null
 
     val revealAlpha = (offsetX / (threshold * 0.35f)).coerceIn(0f, 1f)
 
@@ -367,7 +424,10 @@ fun SwipeAddSongRow(
                         }
                     )
                 }
-                .clickable(onClick = onClick)
+                .combinedClickable(
+                    onClick = onClick,
+                    onLongClick = { if (hasContext) showSheet = true }
+                )
                 .padding(
                     start = if (showTrackNumber) 8.dp else 16.dp,
                     end = 16.dp,
@@ -417,15 +477,28 @@ fun SwipeAddSongRow(
             }
         }
     }
+
+    if (showSheet) {
+        SongContextSheet(
+            song = song,
+            onDismiss = { showSheet = false },
+            onGoToAlbum = onGoToAlbum,
+            onGoToArtist = onGoToArtist,
+            onAddToQueue = onSwipeAdd
+        )
+    }
 }
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 fun SwipeAddAlbumRow(
     album: AlbumItem,
     onClick: () -> Unit,
-    onSwipeAdd: () -> Unit
+    onSwipeAdd: () -> Unit,
+    onGoToArtist: (() -> Unit)? = null
 ) {
     var offsetX by remember { mutableFloatStateOf(0f) }
+    var showSheet by remember { mutableStateOf(false) }
     val density = LocalDensity.current
     val threshold = with(density) { 96.dp.toPx() }
     val revealAlpha = (offsetX / (threshold * 0.35f)).coerceIn(0f, 1f)
@@ -465,7 +538,10 @@ fun SwipeAddAlbumRow(
                         }
                     )
                 }
-                .clickable(onClick = onClick)
+                .combinedClickable(
+                    onClick = onClick,
+                    onLongClick = { if (onGoToArtist != null) showSheet = true }
+                )
                 .padding(horizontal = 16.dp, vertical = 12.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
@@ -481,14 +557,32 @@ fun SwipeAddAlbumRow(
             }
         }
     }
+
+    if (showSheet) {
+        AlbumContextSheet(
+            album = album,
+            onDismiss = { showSheet = false },
+            onGoToArtist = onGoToArtist,
+            onAddToQueue = onSwipeAdd
+        )
+    }
 }
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
-fun AlbumRow(album: AlbumItem, onClick: () -> Unit) {
+fun AlbumRow(
+    album: AlbumItem,
+    onClick: () -> Unit,
+    onGoToArtist: (() -> Unit)? = null
+) {
+    var showSheet by remember { mutableStateOf(false) }
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .clickable(onClick = onClick)
+            .combinedClickable(
+                onClick = onClick,
+                onLongClick = { if (onGoToArtist != null) showSheet = true }
+            )
             .padding(horizontal = 16.dp, vertical = 12.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
@@ -502,6 +596,13 @@ fun AlbumRow(album: AlbumItem, onClick: () -> Unit) {
                 color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
             )
         }
+    }
+    if (showSheet) {
+        AlbumContextSheet(
+            album = album,
+            onDismiss = { showSheet = false },
+            onGoToArtist = onGoToArtist
+        )
     }
 }
 
