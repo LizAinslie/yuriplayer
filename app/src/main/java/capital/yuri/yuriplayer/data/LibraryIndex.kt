@@ -29,11 +29,14 @@ class LibraryIndex(
     private val _error = MutableStateFlow<String?>(null)
     val error: StateFlow<String?> = _error.asStateFlow()
 
+    /** albumKey → enriched year from MusicBrainz (survives until next full scan overlay). */
+    private val enrichedYears = mutableMapOf<String, Int>()
+
     fun bootstrap(staleAfterMs: Long = DEFAULT_STALE_MS) {
         scope.launch {
             val cached = withContext(Dispatchers.IO) { cache.load() }
             if (cached != null && cached.songs.isNotEmpty()) {
-                _songs.value = cached.songs
+                _songs.value = applyYearOverlays(cached.songs)
                 _lastScannedAt.value = cached.scannedAt
             }
             val age = System.currentTimeMillis() - (cached?.scannedAt ?: 0L)
@@ -52,7 +55,7 @@ class LibraryIndex(
                 val scanned = withContext(Dispatchers.IO) {
                     repository.scanLibrary().also { cache.save(it) }
                 }
-                _songs.value = scanned
+                _songs.value = applyYearOverlays(scanned)
                 _lastScannedAt.value = System.currentTimeMillis()
             } catch (e: SecurityException) {
                 _error.value = "Storage permission required"
@@ -62,6 +65,38 @@ class LibraryIndex(
             } finally {
                 _isLoading.value = false
             }
+        }
+    }
+
+    /**
+     * Overlay an API-fetched year onto every track belonging to [albumKey].
+     * Only fills missing years — never overwrites a file tag.
+     */
+    fun applyAlbumYear(albumKey: String, year: Int) {
+        if (year !in 1000..2100) return
+        enrichedYears[albumKey] = year
+        val current = _songs.value
+        var changed = false
+        val next = current.map { song ->
+            val key = albumKey(song.album, song.effectiveAlbumArtist)
+            if (key == albumKey && (song.year == null || song.year <= 0)) {
+                changed = true
+                song.copy(year = year)
+            } else song
+        }
+        if (changed) {
+            _songs.value = next
+            Log.i(TAG, "applied year $year to albumKey=$albumKey")
+        }
+    }
+
+    private fun applyYearOverlays(songs: List<Song>): List<Song> {
+        if (enrichedYears.isEmpty()) return songs
+        return songs.map { song ->
+            if (song.year != null && song.year > 0) return@map song
+            val key = albumKey(song.album, song.effectiveAlbumArtist)
+            val y = enrichedYears[key] ?: return@map song
+            song.copy(year = y)
         }
     }
 
@@ -99,7 +134,6 @@ class LibraryIndex(
             .mapNotNull { (albumKey, tracks) ->
                 if (albumKey == null) return@mapNotNull null
 
-                // Prefer explicit albumArtist tags for the display artist
                 val albumArtistVotes = tracks
                     .mapNotNull { it.albumArtist?.let { a -> normalizeKey(a) to a } }
                     .groupingBy { it.first }
@@ -119,7 +153,6 @@ class LibraryIndex(
                     else -> null
                 }
 
-                // Canonical album title: most common original casing among tracks
                 val displayName = tracks
                     .mapNotNull { it.album }
                     .groupingBy { it }
@@ -128,7 +161,6 @@ class LibraryIndex(
                     ?.key
                     ?: tracks.firstOrNull()?.album
 
-                // Dedupe tracks that appear twice (MediaStore + filesystem)
                 val deduped = tracks.distinctBy {
                     it.path?.lowercase() ?: it.contentUri.toString()
                 }
@@ -196,7 +228,6 @@ class LibraryIndex(
         private const val TAG = "LibraryIndex"
         const val DEFAULT_STALE_MS = 12L * 60 * 60 * 1000
 
-        /** Lowercase + collapse whitespace for stable grouping keys. */
         fun normalizeKey(value: String?): String? {
             if (value == null) return null
             val t = value.trim().replace(Regex("\\s+"), " ").lowercase()
