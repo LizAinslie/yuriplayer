@@ -1,0 +1,181 @@
+package capital.yuri.yuriplayer.data.source
+
+import android.util.Log
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withContext
+import org.json.JSONObject
+import java.io.BufferedInputStream
+import java.io.File
+import java.io.FileOutputStream
+import java.net.HttpURLConnection
+import java.net.URL
+import java.net.URLEncoder
+import java.nio.charset.StandardCharsets
+
+/**
+ * Minimal MusicBrainz + Cover Art Archive client.
+ *
+ * Respects MB's ~1 req/s guideline via a shared mutex + delay.
+ * User-Agent is required by MusicBrainz policy.
+ */
+class MusicBrainzClient {
+
+    data class ReleaseHit(
+        val mbid: String,
+        val title: String?,
+        val year: Int?,
+        val hasFrontCover: Boolean
+    )
+
+    private val rateLock = Mutex()
+    private var lastRequestAt = 0L
+
+    suspend fun searchRelease(artist: String?, album: String?): ReleaseHit? =
+        withContext(Dispatchers.IO) {
+            if (album.isNullOrBlank()) return@withContext null
+            val query = buildString {
+                append("release:\")
+                append(escapeLucene(album.trim()))
+                append("\"")
+                if (!artist.isNullOrBlank()) {
+                    append(" AND artist:\")
+                    append(escapeLucene(artist.trim()))
+                    append("\"")
+                }
+            }
+            val url = "https://musicbrainz.org/ws/2/release?query=" +
+                URLEncoder.encode(query, "UTF-8") +
+                "&fmt=json&limit=5"
+            val body = getText(url) ?: return@withContext null
+            parseReleaseSearch(body)
+        }
+
+    /**
+     * Download front cover (500px when available) into [destFile].
+     * Returns true on success.
+     */
+    suspend fun downloadFrontCover(mbid: String, destFile: File): Boolean =
+        withContext(Dispatchers.IO) {
+            // Prefer 500px; fall back to full front.
+            val urls = listOf(
+                "https://coverartarchive.org/release/$mbid/front-500",
+                "https://coverartarchive.org/release/$mbid/front"
+            )
+            for (u in urls) {
+                if (downloadToFile(u, destFile)) return@withContext true
+            }
+            false
+        }
+
+    private fun parseReleaseSearch(json: String): ReleaseHit? {
+        return try {
+            val root = JSONObject(json)
+            val releases = root.optJSONArray("releases") ?: return null
+            if (releases.length() == 0) return null
+            // Prefer official releases with a date.
+            var best: ReleaseHit? = null
+            for (i in 0 until releases.length()) {
+                val r = releases.optJSONObject(i) ?: continue
+                val mbid = r.optString("id").takeIf { it.isNotBlank() } ?: continue
+                val title = r.optString("title").takeIf { it.isNotBlank() }
+                val date = r.optString("date").takeIf { it.isNotBlank() }
+                val year = date?.take(4)?.toIntOrNull()?.takeIf { it in 1000..2100 }
+                val caa = r.optJSONObject("cover-art-archive")
+                val hasFront = caa?.optBoolean("front") == true
+                val hit = ReleaseHit(mbid, title, year, hasFront)
+                if (best == null) best = hit
+                else if (best.year == null && year != null) best = hit
+                else if (!best.hasFrontCover && hasFront) best = hit
+            }
+            best
+        } catch (e: Exception) {
+            Log.w(TAG, "parse release search failed", e)
+            null
+        }
+    }
+
+    private suspend fun getText(url: String): String? = rateLock.withLock {
+        throttle()
+        try {
+            val conn = open(url)
+            conn.requestMethod = "GET"
+            conn.connectTimeout = 12_000
+            conn.readTimeout = 12_000
+            conn.instanceFollowRedirects = true
+            val code = conn.responseCode
+            if (code !in 200..299) {
+                Log.w(TAG, "GET $url → $code")
+                conn.disconnect()
+                return@withLock null
+            }
+            val text = conn.inputStream.bufferedReader(StandardCharsets.UTF_8).use { it.readText() }
+            conn.disconnect()
+            text
+        } catch (e: Exception) {
+            Log.w(TAG, "GET failed $url", e)
+            null
+        }
+    }
+
+    private suspend fun downloadToFile(url: String, dest: File): Boolean = rateLock.withLock {
+        throttle()
+        try {
+            val conn = open(url)
+            conn.requestMethod = "GET"
+            conn.connectTimeout = 15_000
+            conn.readTimeout = 30_000
+            conn.instanceFollowRedirects = true
+            val code = conn.responseCode
+            if (code !in 200..299) {
+                conn.disconnect()
+                return@withLock false
+            }
+            dest.parentFile?.mkdirs()
+            val tmp = File(dest.parentFile, dest.name + ".part")
+            BufferedInputStream(conn.inputStream).use { input ->
+                FileOutputStream(tmp).use { out ->
+                    input.copyTo(out)
+                }
+            }
+            conn.disconnect()
+            if (dest.exists()) dest.delete()
+            tmp.renameTo(dest)
+            true
+        } catch (e: Exception) {
+            Log.w(TAG, "cover download failed $url", e)
+            false
+        }
+    }
+
+    private fun open(url: String): HttpURLConnection {
+        val conn = URL(url).openConnection() as HttpURLConnection
+        // MusicBrainz requires a descriptive User-Agent.
+        conn.setRequestProperty(
+            "User-Agent",
+            "YuriPlayer/1.0 (https://github.com/LizAinslie/yuriplayer)"
+        )
+        conn.setRequestProperty("Accept", "application/json")
+        return conn
+    }
+
+    private suspend fun throttle() {
+        val now = System.currentTimeMillis()
+        val wait = MIN_INTERVAL_MS - (now - lastRequestAt)
+        if (wait > 0) delay(wait)
+        lastRequestAt = System.currentTimeMillis()
+    }
+
+    private fun escapeLucene(s: String): String =
+        s.replace("\\", "\\\\")
+            .replace("\"", "\\\"")
+            .replace("(", "\\(")
+            .replace(")", "\\)")
+
+    companion object {
+        private const val TAG = "MusicBrainz"
+        private const val MIN_INTERVAL_MS = 1_100L
+    }
+}

@@ -8,6 +8,10 @@ import androidx.room.RoomDatabase
 @Database(
     entities = [
         AlbumPrefsEntity::class,
+        AlbumMetadataEntity::class,
+        CatalogTrackEntity::class,
+        CatalogAlbumEntity::class,
+        CatalogArtistEntity::class,
         PlaylistPrefsEntity::class,
         PlaylistEntity::class,
         PlaylistTrackEntity::class,
@@ -17,11 +21,13 @@ import androidx.room.RoomDatabase
         SourceInstanceEntity::class,
         ScrobblerInstanceEntity::class
     ],
-    version = 2,
+    version = 4,
     exportSchema = false
 )
 abstract class YuriDatabase : RoomDatabase() {
     abstract fun albumPrefs(): AlbumPrefsDao
+    abstract fun albumMetadata(): AlbumMetadataDao
+    abstract fun catalog(): CatalogDao
     abstract fun playlistPrefs(): PlaylistPrefsDao
     abstract fun playlists(): PlaylistDao
     abstract fun artistProfiles(): ArtistProfileDao
