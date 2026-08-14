@@ -50,8 +50,8 @@ private val SkipSpec = tween<Float>(durationMillis = 280, easing = FastOutSlowIn
 /**
  * Album art card with edge-to-edge neighbor peeks.
  *
- * Finger drag follows touch; settle / transport buttons ease off-screen,
- * promote the preloaded theme, then snap so the new cover is already current.
+ * [allowPrevTrackChange] must be false when Previous only restarts the current
+ * track (position > ~3s). In that case we never promote or slide previous art.
  */
 @Composable
 fun SwipeableAlbumArt(
@@ -65,6 +65,8 @@ fun SwipeableAlbumArt(
     onDismiss: () -> Unit,
     onHorizontalFraction: (Float) -> Unit,
     onDismissFraction: (Float) -> Unit,
+    /** True only when Previous will load a different track (not seek-to-start). */
+    allowPrevTrackChange: Boolean = true,
     skipToken: Long = 0L,
     skipDirection: Int = 0,
     onSkipConsumed: () -> Unit = {},
@@ -82,6 +84,9 @@ fun SwipeableAlbumArt(
     val screenWidthPx = with(density) {
         LocalConfiguration.current.screenWidthDp.dp.toPx()
     }
+
+    // Only use prev cover when we will actually change tracks.
+    val effectivePrev = if (allowPrevTrackChange) prev else null
 
     suspend fun animateSkipTo(targetX: Float) {
         offsetX.animateTo(targetX, SkipSpec) {
@@ -101,6 +106,14 @@ fun SwipeableAlbumArt(
         onPromotePrev()
         onHorizontalFraction(0f)
         offsetX.snapTo(0f)
+        offsetY.snapTo(0f)
+        onSwipePrev()
+    }
+
+    /** Restart current track only — no art/theme swap. */
+    suspend fun finishRestartOnly() {
+        onHorizontalFraction(0f)
+        offsetX.animateTo(0f, spring(stiffness = Spring.StiffnessMedium))
         offsetY.snapTo(0f)
         onSwipePrev()
     }
@@ -125,10 +138,16 @@ fun SwipeableAlbumArt(
                     finishNext()
                     animatingSkip = 0
                 }
-                x > trackThreshold && prev != null -> {
+                x > trackThreshold && effectivePrev != null -> {
                     animatingSkip = 1
                     animateSkipTo(screenWidthPx)
                     finishPrev()
+                    animatingSkip = 0
+                }
+                x > trackThreshold && !allowPrevTrackChange -> {
+                    // Past threshold but Previous is seek-to-start only.
+                    animatingSkip = 1
+                    finishRestartOnly()
                     animatingSkip = 0
                 }
                 else -> {
@@ -154,14 +173,17 @@ fun SwipeableAlbumArt(
                 finishNext()
                 animatingSkip = 0
             }
-            skipDirection > 0 && prev != null -> {
+            skipDirection > 0 && effectivePrev != null -> {
                 animatingSkip = 1
                 animateSkipTo(screenWidthPx)
                 finishPrev()
                 animatingSkip = 0
             }
+            // Button Previous while still in the "restart current" window.
+            skipDirection > 0 -> {
+                onSwipePrev()
+            }
             skipDirection < 0 -> onSwipeNext()
-            skipDirection > 0 -> onSwipePrev()
         }
         onSkipConsumed()
     }
@@ -169,7 +191,7 @@ fun SwipeableAlbumArt(
     BoxWithConstraints(
         modifier = modifier
             .fillMaxWidth()
-            .pointerInput(next, prev, animatingSkip) {
+            .pointerInput(next, effectivePrev, allowPrevTrackChange, animatingSkip) {
                 if (animatingSkip != 0) return@pointerInput
                 detectDragGestures(
                     onDragEnd = { settle() },
@@ -177,7 +199,11 @@ fun SwipeableAlbumArt(
                     onDrag = { change, dragAmount ->
                         change.consume()
                         scope.launch {
-                            val nx = offsetX.value + dragAmount.x
+                            var nx = offsetX.value + dragAmount.x
+                            // Rubber-band prev direction when restart-only (no track change).
+                            if (!allowPrevTrackChange && nx > 0f) {
+                                nx *= 0.35f
+                            }
                             val ny = (offsetY.value + dragAmount.y).coerceAtLeast(0f)
                             if (abs(nx) > abs(ny) * 1.1f || abs(offsetX.value) > 8f) {
                                 offsetX.snapTo(nx)
@@ -213,9 +239,10 @@ fun SwipeableAlbumArt(
                     }
             )
         }
-        if (hFrac > 0f && prev != null) {
+        // Never paint previous cover while Previous only seeks to start.
+        if (hFrac > 0f && effectivePrev != null) {
             ArtCard(
-                bitmap = prev.bitmap,
+                bitmap = effectivePrev.bitmap,
                 modifier = Modifier
                     .fillMaxWidth()
                     .padding(horizontal = horizontalInset)
