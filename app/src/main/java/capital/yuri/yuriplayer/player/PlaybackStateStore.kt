@@ -34,6 +34,7 @@ class PlaybackStateStore(context: Context) {
                 .put("hotQueue", songsToJson(snapshot.hotQueue))
                 .put("coldQueue", songsToJson(snapshot.coldQueue))
                 .put("coldOriginal", songsToJson(snapshot.coldOriginal))
+                .put("playedStack", songsToJson(snapshot.playedStack))
 
             snapshot.coldSource?.let { src ->
                 root.put(
@@ -67,6 +68,7 @@ class PlaybackStateStore(context: Context) {
             val hot = jsonToSongs(root.optJSONArray("hotQueue"))
             val cold = jsonToSongs(root.optJSONArray("coldQueue"))
             val coldOriginal = jsonToSongs(root.optJSONArray("coldOriginal")).ifEmpty { cold }
+            val playedStack = jsonToSongs(root.optJSONArray("playedStack"))
             if (hot.isEmpty() && cold.isEmpty()) return null
 
             val lane = try {
@@ -101,7 +103,8 @@ class PlaybackStateStore(context: Context) {
                     lane = lane,
                     indexInLane = root.optInt("indexInLane", 0),
                     shuffleEnabled = root.optBoolean("shuffleEnabled", false),
-                    repeatMode = repeat
+                    repeatMode = repeat,
+                    playedStack = playedStack
                 ),
                 positionMs = root.optLong("positionMs", 0L),
                 playWhenReady = root.optBoolean("playWhenReady", false)
@@ -124,7 +127,8 @@ class PlaybackStateStore(context: Context) {
                 lane = QueueLane.COLD,
                 indexInLane = index,
                 shuffleEnabled = false,
-                repeatMode = RepeatMode.OFF
+                repeatMode = RepeatMode.OFF,
+                playedStack = emptyList()
             ),
             positionMs = root.optLong("positionMs", 0L),
             playWhenReady = root.optBoolean("playWhenReady", false)
@@ -208,6 +212,7 @@ class PlaybackStateStore(context: Context) {
     companion object {
         private const val TAG = "PlaybackStateStore"
         private const val FILE_NAME = "playback_state.json"
-        private const val VERSION = 3
+        /** v4: playedStack for Previous across restarts. */
+        private const val VERSION = 4
     }
 }
