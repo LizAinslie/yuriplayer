@@ -102,8 +102,6 @@ class MusicService : MediaSessionService() {
             .setPauseAtEndOfMediaItems(false)
             .build()
             .also {
-                // Never use Exo's own REPEAT_MODE_ONE — on API 27 same-URI
-                // seeks/transitions kill the AudioTrack (UnexpectedDiscontinuity).
                 it.repeatMode = Player.REPEAT_MODE_OFF
                 it.addListener(playerListener)
             }
@@ -122,7 +120,7 @@ class MusicService : MediaSessionService() {
             ACTION_PAUSE -> pause()
             ACTION_TOGGLE -> togglePlayPause()
             ACTION_NEXT -> skipToNext()
-            ACTION_PREV -> skipToPrevious()
+            ACTION_PREV -> skipToPrevious(forceTrackChange = false)
             else -> startForeground(
                 NOTIFICATION_ID,
                 buildMediaNotification(_nowPlaying.value, _isPlaying.value)
@@ -161,12 +159,6 @@ class MusicService : MediaSessionService() {
         return toMediaItem(song, mediaIdSuffix = "loop-$loopGeneration")
     }
 
-    /**
-     * Full stop → clear → prepare of a *single* media item.
-     * Required on API 27: transitioning between two items that share the same
-     * URI leaves DefaultAudioSink in a dead state (UnexpectedDiscontinuity +
-     * silence while the clock keeps running).
-     */
     private fun hardRestartCurrent(autoPlay: Boolean = true) {
         val p = player ?: return
         val current = queueManager.currentSong() ?: return
@@ -193,10 +185,6 @@ class MusicService : MediaSessionService() {
         persistState()
     }
 
-    /**
-     * After seamless advance between *different* tracks: drop finished items and
-     * attach the true next. Never used for repeat-one (same URI).
-     */
     private fun softNormalizeWindow() {
         val p = player ?: return
         val current = queueManager.currentSong() ?: return
@@ -226,8 +214,6 @@ class MusicService : MediaSessionService() {
         }
 
         val repeatOne = isRepeatOne()
-        // Repeat-one: ONE item only. A second same-URI item is what triggers
-        // UnexpectedDiscontinuityException on Android 8.1 audio track.
         val nextSong = if (repeatOne) null else queueManager.peekNext()
         val wantCount = if (repeatOne) 1 else 1 + (if (nextSong != null) 1 else 0)
         val haveUris = (0 until p.mediaItemCount).mapNotNull { mediaItemUriAt(it) }
@@ -287,10 +273,6 @@ class MusicService : MediaSessionService() {
         persistState()
     }
 
-    /**
-     * Soft queue-window sync: never touches the currently playing item.
-     * Used for shuffle/repeat toggles and queue mutations so playback stays continuous.
-     */
     private fun updateNextMediaItemOnly() {
         val p = player ?: return
         val current = queueManager.currentSong() ?: return
@@ -303,11 +285,9 @@ class MusicService : MediaSessionService() {
             )
             return
         }
-        // Strip anything after the playing item
         while (p.mediaItemCount > p.currentMediaItemIndex + 1) {
             p.removeMediaItem(p.mediaItemCount - 1)
         }
-        // Repeat-one stays single-item; never prebuffer a same-URI copy
         if (!isRepeatOne()) {
             queueManager.peekNext()?.let { p.addMediaItem(toMediaItem(it)) }
         }
@@ -333,8 +313,6 @@ class MusicService : MediaSessionService() {
                 persistState()
             }
             result.seekToStart -> {
-                // Restart current (previous button past 3s). Prefer hard restart
-                // over seekTo(0) so the audio sink can't go silent on API 27.
                 hardRestartCurrent(autoPlay = autoPlay)
             }
             result.reload -> hardRestartCurrent(autoPlay = autoPlay)
@@ -368,7 +346,6 @@ class MusicService : MediaSessionService() {
 
     private fun syncQueueAfterExoAutoAdvance() {
         if (advancing) return
-        // Should not happen under repeat-one (single item), but if it does:
         if (isRepeatOne()) {
             hardRestartCurrent(autoPlay = true)
             return
@@ -477,11 +454,6 @@ class MusicService : MediaSessionService() {
         persistState()
     }
 
-    /**
-     * Repeat mode only changes whether we prebuffer a *next* item.
-     * Never force-reload the playing media item — that is what caused the
-     * audible hitch on every repeat toggle (shuffle already used the soft path).
-     */
     fun cycleRepeatMode() {
         queueManager.cycleRepeatMode()
         updateNextMediaItemOnly()
@@ -522,8 +494,17 @@ class MusicService : MediaSessionService() {
         }
     }
 
-    fun skipToPrevious() {
-        applyAdvance(queueManager.skipPrevious(player?.currentPosition ?: 0L))
+    /**
+     * @param forceTrackChange true for album-art swipe (always previous when
+     * history exists). false for button/notification (3s restart rule).
+     */
+    fun skipToPrevious(forceTrackChange: Boolean = false) {
+        applyAdvance(
+            queueManager.skipPrevious(
+                currentPositionMs = player?.currentPosition ?: 0L,
+                forceTrackChange = forceTrackChange
+            )
+        )
     }
 
     fun seekTo(positionMs: Long) {
