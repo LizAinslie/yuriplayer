@@ -30,8 +30,8 @@ import kotlin.math.PI
 import kotlin.math.sin
 
 /**
- * Expressive seek bar: animates a traveling sine wave while [playing],
- * smoothly flattens to a line when paused.
+ * Expressive seek bar: traveling sine wave while [playing], flattens when
+ * paused or while the user is dragging the thumb.
  */
 @Composable
 fun WavySeekBar(
@@ -46,13 +46,17 @@ fun WavySeekBar(
     waveLength: Float = 32f
 ) {
     var dragging by remember { mutableFloatStateOf(-1f) }
-    val shown = if (dragging >= 0f) dragging else progress.coerceIn(0f, 1f)
+    val isDragging = dragging >= 0f
+    val shown = if (isDragging) dragging else progress.coerceIn(0f, 1f)
 
-    val amplitudeFactor = remember { Animatable(if (playing) 1f else 0f) }
-    LaunchedEffect(playing) {
+    // Wave only when playing *and* not scrubbing — scrubbing always flattens
+    // so the thumb tracks a clean line under the finger.
+    val wantWave = playing && !isDragging
+    val amplitudeFactor = remember { Animatable(if (wantWave) 1f else 0f) }
+    LaunchedEffect(wantWave) {
         amplitudeFactor.animateTo(
-            targetValue = if (playing) 1f else 0f,
-            animationSpec = tween(durationMillis = 420)
+            targetValue = if (wantWave) 1f else 0f,
+            animationSpec = tween(durationMillis = if (isDragging) 120 else 420)
         )
     }
 
@@ -114,7 +118,6 @@ fun WavySeekBar(
             return midY + amp * sin(2f * PI.toFloat() * x / len + effectivePhase).toFloat()
         }
 
-        // Full inactive track first (must stay visible on dark stages)
         val inactivePath = Path().apply {
             moveTo(0f, waveY(0f))
             var x = 0f
@@ -148,7 +151,6 @@ fun WavySeekBar(
 
         val thumbX = endX.coerceIn(0f, w)
         val thumbY = waveY(thumbX)
-        // Soft glow so the thumb reads on any stage
         drawCircle(
             color = activeColor.copy(alpha = 0.35f),
             radius = 12f * density,
