@@ -321,8 +321,14 @@ fun NowPlayingScreen(
                             sliderPosition = it
                         },
                         onProgressChangeFinished = {
+                            // Capture drop position before clearing sliding so the
+                            // position poll cannot race and overwrite the target.
+                            val drop = sliderPosition
+                            val targetMs = if (durationMs > 0L) {
+                                (drop * durationMs).toLong().coerceAtLeast(0L)
+                            } else 0L
+                            if (durationMs > 0L) onSeek(targetMs)
                             sliding = false
-                            if (durationMs > 0) onSeek((sliderPosition * durationMs).toLong())
                         },
                         activeColor = scheme.primary,
                         inactiveColor = Color.White.copy(alpha = 0.28f)
