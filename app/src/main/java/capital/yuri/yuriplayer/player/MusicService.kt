@@ -9,6 +9,7 @@ import android.net.Uri
 import android.os.Binder
 import android.os.Build
 import android.os.IBinder
+import android.os.SystemClock
 import android.util.Log
 import androidx.annotation.OptIn
 import androidx.core.app.NotificationCompat
@@ -54,11 +55,16 @@ class MusicService : MediaSessionService() {
 
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private var persistJob: Job? = null
+    private var stallWatchJob: Job? = null
     private var restoredOnce = false
     private var advancing = false
     private var recoveringAudio = false
     private var lastHistoryKey: String? = null
     private var loopGeneration = 0L
+
+    /** Stall detection: last media clock sample while playWhenReady. */
+    private var stallSamplePos = -1L
+    private var stallSampleAtElapsed = 0L
 
     private val _nowPlaying = MutableStateFlow<Song?>(null)
     val nowPlaying: StateFlow<Song?> = _nowPlaying.asStateFlow()
@@ -112,6 +118,7 @@ class MusicService : MediaSessionService() {
 
         restorePlaybackState()
         startPeriodicPersist()
+        startStallWatchdog()
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -159,17 +166,19 @@ class MusicService : MediaSessionService() {
         return toMediaItem(song, mediaIdSuffix = "loop-$loopGeneration")
     }
 
-    private fun hardRestartCurrent(autoPlay: Boolean = true) {
+    private fun hardRestartCurrent(autoPlay: Boolean = true, startPositionMs: Long = 0L) {
         val p = player ?: return
         val current = queueManager.currentSong() ?: return
         val wasPlaying = autoPlay || p.playWhenReady
-        Log.i(TAG, "hardRestartCurrent '${current.displayTitle}' gen=$loopGeneration")
+        val pos = startPositionMs.coerceAtLeast(0L)
+        Log.i(TAG, "hardRestartCurrent '${current.displayTitle}' pos=$pos gen=$loopGeneration")
         try {
             p.playWhenReady = false
             p.stop()
             p.clearMediaItems()
             p.setMediaItem(nextLoopItem(current), /* resetPosition = */ true)
             p.prepare()
+            if (pos > 0L) p.seekTo(pos)
             p.repeatMode = Player.REPEAT_MODE_OFF
             if (wasPlaying) {
                 p.playWhenReady = true
@@ -177,7 +186,7 @@ class MusicService : MediaSessionService() {
             }
         } catch (e: Exception) {
             Log.e(TAG, "hardRestartCurrent failed", e)
-            rebufferWindow(0L, autoPlay = wasPlaying, forceReload = true)
+            rebufferWindow(pos, autoPlay = wasPlaying, forceReload = true)
             return
         }
         _nowPlaying.value = current
@@ -504,13 +513,9 @@ class MusicService : MediaSessionService() {
     }
 
     /**
-     * Scrubber seek — lands exactly where the user dropped, on the *current*
-     * media item only. Never advances the queue.
-     *
-     * Timeline is taken from the live player duration first so a drop maps 1:1
-     * onto what's actually playing. If the drop is at (or past) the end we park
-     * 1ms before EOF so Exo does not fire STATE_ENDED / auto-advance into the
-     * prebuffered next item.
+     * Scrubber seek — lands where the user dropped, on the *current* media item
+     * only. Never advances the queue. Drop at 100% parks 1ms before EOF so Exo
+     * does not fire STATE_ENDED from the scrub itself.
      */
     fun seekTo(positionMs: Long) {
         val p = player ?: return
@@ -518,8 +523,6 @@ class MusicService : MediaSessionService() {
 
         val playerDuration = p.duration.takeIf { it > 0 } ?: 0L
         val metaDuration = queueManager.currentSong()?.durationMs?.takeIf { it > 0 } ?: 0L
-        // Prefer the live decoder duration when known — avoids overshooting a
-        // shorter real file with a stale UI/metadata length.
         val duration = when {
             playerDuration > 0L -> playerDuration
             metaDuration > 0L -> metaDuration
@@ -527,7 +530,6 @@ class MusicService : MediaSessionService() {
         }
 
         val target = if (duration > 0L) {
-            // Inclusive mapping for [0, duration]: drop at 100% → last sample.
             positionMs.coerceIn(0L, (duration - 1L).coerceAtLeast(0L))
         } else {
             positionMs.coerceAtLeast(0L)
@@ -535,9 +537,10 @@ class MusicService : MediaSessionService() {
 
         val idx = p.currentMediaItemIndex.coerceAtLeast(0)
         try {
-            // Explicit index keeps seek inside the playing item even when a
-            // next track is already buffered in the window.
             p.seekTo(idx, target)
+            // Reset stall baseline so a post-seek settle isn't treated as frozen.
+            stallSamplePos = target
+            stallSampleAtElapsed = SystemClock.elapsedRealtime()
             Log.i(TAG, "seekTo target=$target (raw=$positionMs) duration=$duration idx=$idx")
         } catch (e: Exception) {
             Log.w(TAG, "seekTo failed", e)
@@ -592,6 +595,65 @@ class MusicService : MediaSessionService() {
         }
     }
 
+    /**
+     * Detects the "UI says playing, clock frozen, silence" state that shows up
+     * after some seeks / AudioTrack glitches on API 27+ (and occasionally newer).
+     * Recovers by rebuffering the current track at the frozen position.
+     */
+    private fun startStallWatchdog() {
+        stallWatchJob?.cancel()
+        stallWatchJob = serviceScope.launch {
+            while (isActive) {
+                delay(STALL_POLL_MS)
+                val p = player ?: continue
+                if (recoveringAudio || advancing) {
+                    stallSamplePos = -1L
+                    continue
+                }
+                if (!p.playWhenReady) {
+                    stallSamplePos = -1L
+                    continue
+                }
+                // Buffering/idle: clock may not advance — that's fine.
+                if (p.playbackState != Player.STATE_READY) {
+                    stallSamplePos = p.currentPosition
+                    stallSampleAtElapsed = SystemClock.elapsedRealtime()
+                    continue
+                }
+
+                val pos = p.currentPosition.coerceAtLeast(0L)
+                val duration = p.duration.takeIf { it > 0 } ?: 0L
+                // Near natural EOF — let STATE_ENDED handle advance, don't recover.
+                if (duration > 0L && pos >= duration - NEAR_END_MS) {
+                    stallSamplePos = pos
+                    stallSampleAtElapsed = SystemClock.elapsedRealtime()
+                    continue
+                }
+
+                val now = SystemClock.elapsedRealtime()
+                if (pos != stallSamplePos) {
+                    stallSamplePos = pos
+                    stallSampleAtElapsed = now
+                    continue
+                }
+
+                // playWhenReady + READY but media clock frozen (and often isPlaying
+                // still reports true while the AudioTrack is dead).
+                val frozenFor = now - stallSampleAtElapsed
+                val looksStuck = frozenFor >= STALL_MS &&
+                    (p.isPlaying || p.playWhenReady)
+                if (looksStuck && stallSamplePos >= 0L) {
+                    Log.w(
+                        TAG,
+                        "stall watchdog: pos frozen at $pos for ${frozenFor}ms " +
+                            "isPlaying=${p.isPlaying} — recovering"
+                    )
+                    recoverFromAudioGlitch(atPositionMs = pos)
+                }
+            }
+        }
+    }
+
     private fun persistState() {
         stateStore.save(
             snapshot = queueManager.getSnapshot(),
@@ -600,17 +662,23 @@ class MusicService : MediaSessionService() {
         )
     }
 
-    private fun recoverFromAudioGlitch() {
+    private fun recoverFromAudioGlitch(atPositionMs: Long? = null) {
         if (recoveringAudio) return
         recoveringAudio = true
         serviceScope.launch {
             try {
-                val wasPlaying = player?.playWhenReady == true || player?.isPlaying == true
-                Log.w(TAG, "audio glitch → hard restart")
-                hardRestartCurrent(autoPlay = wasPlaying)
+                val p = player
+                val pos = (atPositionMs ?: p?.currentPosition ?: 0L).coerceAtLeast(0L)
+                val wasPlaying = p?.playWhenReady == true || p?.isPlaying == true
+                Log.w(TAG, "audio glitch → rebuffer at $pos autoPlay=$wasPlaying")
+                // Prefer full window rebuffer over hardRestart so we keep the
+                // next-item prebuffer and resume mid-track.
+                rebufferWindow(pos, autoPlay = wasPlaying, forceReload = true)
             } finally {
-                delay(400)
+                delay(600)
                 recoveringAudio = false
+                stallSamplePos = -1L
+                stallSampleAtElapsed = SystemClock.elapsedRealtime()
             }
         }
     }
@@ -775,6 +843,7 @@ class MusicService : MediaSessionService() {
     override fun onDestroy() {
         persistState()
         persistJob?.cancel()
+        stallWatchJob?.cancel()
         serviceScope.cancel()
         mediaSession?.run {
             player?.release()
@@ -799,5 +868,8 @@ class MusicService : MediaSessionService() {
         private const val REQUEST_TOGGLE = 102
         private const val REQUEST_NEXT = 103
         private const val REQUEST_DELETE = 104
+        private const val STALL_POLL_MS = 500L
+        private const val STALL_MS = 2_000L
+        private const val NEAR_END_MS = 500L
     }
 }
