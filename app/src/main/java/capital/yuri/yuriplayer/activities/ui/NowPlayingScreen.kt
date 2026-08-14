@@ -78,7 +78,6 @@ fun NowPlayingScreen(
     onCollapse: () -> Unit,
     onToggle: () -> Unit,
     onPrev: () -> Unit,
-    /** Album-art swipe / animated button-prev that must change tracks. */
     onForcePrev: () -> Unit = onPrev,
     onNext: () -> Unit,
     onSeek: (Long) -> Unit,
@@ -120,9 +119,7 @@ fun NowPlayingScreen(
 
     val dismissThreshold = with(density) { 140.dp.toPx() }
 
-    // Swipe: only when there is a previous track in history.
     val canSwipePrev = peekPrevSong != null
-    // Button: Spotify 3s restart rule when past threshold or no history.
     val buttonGoesToPrevTrack = positionMs <= PREV_RESTART_MS && canSwipePrev
 
     fun requestSkipNext() {
@@ -132,7 +129,7 @@ fun NowPlayingScreen(
 
     fun requestSkipPrev() {
         if (!buttonGoesToPrevTrack) {
-            onPrev() // seek-to-start (or no-op if nothing)
+            onPrev()
             return
         }
         skipDirection = 1
@@ -148,7 +145,9 @@ fun NowPlayingScreen(
 
     LaunchedEffect(positionMs, durationMs, sliding) {
         if (!sliding && durationMs > 0) {
-            sliderPosition = (positionMs.toFloat() / durationMs).coerceIn(0f, 1f)
+            sliderPosition = (positionMs.toDouble() / durationMs.toDouble())
+                .toFloat()
+                .coerceIn(0f, 1f)
         }
     }
 
@@ -320,12 +319,14 @@ fun NowPlayingScreen(
                             sliding = true
                             sliderPosition = it
                         },
-                        onProgressChangeFinished = {
-                            // Capture drop position before clearing sliding so the
-                            // position poll cannot race and overwrite the target.
-                            val drop = sliderPosition
+                        onProgressChangeFinished = { fraction ->
+                            // Use the fraction handed back from the bar — not
+                            // sliderPosition, which can race with position polls.
+                            sliderPosition = fraction
                             val targetMs = if (durationMs > 0L) {
-                                (drop * durationMs).toLong().coerceAtLeast(0L)
+                                (fraction.toDouble() * durationMs.toDouble())
+                                    .toLong()
+                                    .coerceIn(0L, (durationMs - 1L).coerceAtLeast(0L))
                             } else 0L
                             if (durationMs > 0L) onSeek(targetMs)
                             sliding = false
