@@ -9,6 +9,7 @@ import android.net.Uri
 import android.os.Binder
 import android.os.Build
 import android.os.IBinder
+import android.os.SystemClock
 import android.util.Log
 import androidx.annotation.OptIn
 import androidx.core.app.NotificationCompat
@@ -60,6 +61,11 @@ class MusicService : MediaSessionService() {
     private var lastHistoryKey: String? = null
     private var loopGeneration = 0L
 
+    /** Last position requested by the user via the scrubber. */
+    private var lastUserSeekMs = 0L
+    /** While elapsedRealtime is below this, ignore ENDED / AUTO transitions. */
+    private var suppressAutoAdvanceUntilElapsed = 0L
+
     private val _nowPlaying = MutableStateFlow<Song?>(null)
     val nowPlaying: StateFlow<Song?> = _nowPlaying.asStateFlow()
 
@@ -71,6 +77,14 @@ class MusicService : MediaSessionService() {
 
     inner class LocalBinder : Binder() {
         fun getService(): MusicService = this@MusicService
+    }
+
+    private fun shouldSuppressAutoAdvance(): Boolean =
+        SystemClock.elapsedRealtime() < suppressAutoAdvanceUntilElapsed
+
+    private fun armSeekGuard(positionMs: Long) {
+        lastUserSeekMs = positionMs.coerceAtLeast(0L)
+        suppressAutoAdvanceUntilElapsed = SystemClock.elapsedRealtime() + SEEK_GUARD_MS
     }
 
     @OptIn(UnstableApi::class)
@@ -230,7 +244,7 @@ class MusicService : MediaSessionService() {
 
         if (alreadySynced) {
             if (startPositionMs > 0L && kotlin.math.abs(p.currentPosition - startPositionMs) > 400L) {
-                p.seekTo(startPositionMs)
+                p.seekTo(0, startPositionMs)
             }
             if (autoPlay && !p.isPlaying) p.play()
             p.repeatMode = Player.REPEAT_MODE_OFF
@@ -494,10 +508,6 @@ class MusicService : MediaSessionService() {
         }
     }
 
-    /**
-     * @param forceTrackChange true for album-art swipe (always previous when
-     * history exists). false for button/notification (3s restart rule).
-     */
     fun skipToPrevious(forceTrackChange: Boolean = false) {
         applyAdvance(
             queueManager.skipPrevious(
@@ -507,8 +517,35 @@ class MusicService : MediaSessionService() {
         )
     }
 
+    /**
+     * User scrubber seek. Always targets the *current* media item and clamps
+     * below the end so Exo cannot treat the scrub as STATE_ENDED and auto-advance
+     * into the prebuffered next track (common after Previous, which leaves the
+     * interrupted song as item 1).
+     */
     fun seekTo(positionMs: Long) {
-        player?.seekTo(positionMs.coerceAtLeast(0L))
+        val p = player ?: return
+        val playerDuration = p.duration.takeIf { it > 0 } ?: 0L
+        val metaDuration = queueManager.currentSong()?.durationMs?.takeIf { it > 0 } ?: 0L
+        val duration = maxOf(playerDuration, metaDuration)
+        val maxPos = if (duration > 0L) {
+            (duration - END_SEEK_MARGIN_MS).coerceAtLeast(0L)
+        } else {
+            positionMs.coerceAtLeast(0L)
+        }
+        val clamped = positionMs.coerceIn(0L, maxPos)
+        armSeekGuard(clamped)
+        try {
+            val idx = p.currentMediaItemIndex
+            if (idx >= 0 && p.mediaItemCount > 0) {
+                p.seekTo(idx, clamped)
+            } else {
+                p.seekTo(clamped)
+            }
+            Log.i(TAG, "seekTo clamped=$clamped (raw=$positionMs) duration=$duration idx=$idx")
+        } catch (e: Exception) {
+            Log.w(TAG, "seekTo failed", e)
+        }
         persistState()
     }
 
@@ -595,6 +632,15 @@ class MusicService : MediaSessionService() {
                 return
             }
             if (reason == Player.MEDIA_ITEM_TRANSITION_REASON_AUTO) {
+                if (shouldSuppressAutoAdvance()) {
+                    Log.w(TAG, "AUTO transition suppressed after user seek — restoring current")
+                    rebufferWindow(
+                        startPositionMs = lastUserSeekMs,
+                        autoPlay = player?.playWhenReady == true,
+                        forceReload = true
+                    )
+                    return
+                }
                 syncQueueAfterExoAutoAdvance()
                 return
             }
@@ -609,6 +655,15 @@ class MusicService : MediaSessionService() {
 
         override fun onPlaybackStateChanged(playbackState: Int) {
             if (playbackState == Player.STATE_ENDED && !advancing) {
+                if (shouldSuppressAutoAdvance()) {
+                    Log.w(TAG, "STATE_ENDED suppressed after user seek — restoring current")
+                    rebufferWindow(
+                        startPositionMs = lastUserSeekMs,
+                        autoPlay = player?.playWhenReady == true,
+                        forceReload = true
+                    )
+                    return
+                }
                 if (isRepeatOne()) {
                     Log.i(TAG, "STATE_ENDED under repeat-one → hardRestart")
                     hardRestartCurrent(autoPlay = true)
@@ -766,5 +821,9 @@ class MusicService : MediaSessionService() {
         private const val REQUEST_TOGGLE = 102
         private const val REQUEST_NEXT = 103
         private const val REQUEST_DELETE = 104
+        /** Keep scrub seeks this far from the true end to avoid ENDED. */
+        private const val END_SEEK_MARGIN_MS = 120L
+        /** Window after a user seek where auto-advance is ignored. */
+        private const val SEEK_GUARD_MS = 800L
     }
 }
