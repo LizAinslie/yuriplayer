@@ -62,7 +62,6 @@ class MusicService : MediaSessionService() {
     private var lastHistoryKey: String? = null
     private var loopGeneration = 0L
 
-    /** Stall detection: last media clock sample while playWhenReady. */
     private var stallSamplePos = -1L
     private var stallSampleAtElapsed = 0L
 
@@ -194,17 +193,58 @@ class MusicService : MediaSessionService() {
         persistState()
     }
 
-    private fun softNormalizeWindow() {
-        val p = player ?: return
-        val current = queueManager.currentSong() ?: return
-        if (isRepeatOne()) return
+    /**
+     * After a seamless handoff: drop finished items and attach the true next.
+     * If the playing URI does not match [queueManager.currentSong], force a full
+     * rebuffer — never strip the window while still on the previous track
+     * (that left shuffle transitions playing Lane Boy while UI showed The Judge).
+     */
+    private fun softNormalizeWindow(): Boolean {
+        val p = player ?: return false
+        val current = queueManager.currentSong() ?: return false
+        if (isRepeatOne()) return true
+
+        val playingUri = mediaItemUriAt(p.currentMediaItemIndex)
+        val wantUri = songUri(current)
+        if (!urisEqual(playingUri, wantUri)) {
+            Log.w(
+                TAG,
+                "softNormalize refused desync: playing=$playingUri " +
+                    "want='${current.displayTitle}'"
+            )
+            return false
+        }
+
         try {
             while (p.currentMediaItemIndex > 0) p.removeMediaItem(0)
             while (p.mediaItemCount > 1) p.removeMediaItem(p.mediaItemCount - 1)
             queueManager.peekNext()?.let { p.addMediaItem(toMediaItem(it)) }
+            return true
         } catch (e: Exception) {
             Log.e(TAG, "softNormalizeWindow failed", e)
+            return false
         }
+    }
+
+    /** Make Exo play exactly [queueManager.currentSong] — soft path or rebuffer. */
+    private fun ensurePlayerMatchesQueue(autoPlay: Boolean = true) {
+        val p = player ?: return
+        val current = queueManager.currentSong() ?: return
+        val playingUri = mediaItemUriAt(p.currentMediaItemIndex)
+        if (urisEqual(playingUri, songUri(current))) {
+            if (!softNormalizeWindow()) {
+                rebufferWindow(0L, autoPlay = autoPlay, forceReload = true)
+            } else {
+                _nowPlaying.value = current
+                updateForegroundNotification()
+            }
+            return
+        }
+        Log.w(
+            TAG,
+            "ensurePlayerMatchesQueue desync → rebuffer '${current.displayTitle}'"
+        )
+        rebufferWindow(0L, autoPlay = autoPlay, forceReload = true)
     }
 
     private fun rebufferWindow(
@@ -343,8 +383,11 @@ class MusicService : MediaSessionService() {
                     Log.i(TAG, "seamless advance → '${target.displayTitle}'")
                     p.seekToNextMediaItem()
                     if (autoPlay) p.play()
-                    softNormalizeWindow()
-                    persistState()
+                    if (!softNormalizeWindow()) {
+                        rebufferWindow(0L, autoPlay = autoPlay, forceReload = true)
+                    } else {
+                        persistState()
+                    }
                 } else {
                     Log.i(TAG, "fallback rebuffer advance → '${target.displayTitle}'")
                     rebufferWindow(0L, autoPlay = autoPlay, forceReload = true)
@@ -375,7 +418,8 @@ class MusicService : MediaSessionService() {
                     _nowPlaying.value = result.song
                     maybeRecordHistory(result.song)
                     updateForegroundNotification()
-                    softNormalizeWindow()
+                    // Player already moved; verify it matches queue (shuffle-safe).
+                    ensurePlayerMatchesQueue(autoPlay = true)
                     persistState()
                 }
             }
@@ -512,11 +556,6 @@ class MusicService : MediaSessionService() {
         )
     }
 
-    /**
-     * Scrubber seek — lands where the user dropped, on the *current* media item
-     * only. Never advances the queue. Drop at 100% parks 1ms before EOF so Exo
-     * does not fire STATE_ENDED from the scrub itself.
-     */
     fun seekTo(positionMs: Long) {
         val p = player ?: return
         if (p.mediaItemCount <= 0) return
@@ -538,7 +577,6 @@ class MusicService : MediaSessionService() {
         val idx = p.currentMediaItemIndex.coerceAtLeast(0)
         try {
             p.seekTo(idx, target)
-            // Reset stall baseline so a post-seek settle isn't treated as frozen.
             stallSamplePos = target
             stallSampleAtElapsed = SystemClock.elapsedRealtime()
             Log.i(TAG, "seekTo target=$target (raw=$positionMs) duration=$duration idx=$idx")
@@ -595,11 +633,6 @@ class MusicService : MediaSessionService() {
         }
     }
 
-    /**
-     * Detects the "UI says playing, clock frozen, silence" state that shows up
-     * after some seeks / AudioTrack glitches on API 27+ (and occasionally newer).
-     * Recovers by rebuffering the current track at the frozen position.
-     */
     private fun startStallWatchdog() {
         stallWatchJob?.cancel()
         stallWatchJob = serviceScope.launch {
@@ -614,7 +647,6 @@ class MusicService : MediaSessionService() {
                     stallSamplePos = -1L
                     continue
                 }
-                // Buffering/idle: clock may not advance — that's fine.
                 if (p.playbackState != Player.STATE_READY) {
                     stallSamplePos = p.currentPosition
                     stallSampleAtElapsed = SystemClock.elapsedRealtime()
@@ -623,7 +655,6 @@ class MusicService : MediaSessionService() {
 
                 val pos = p.currentPosition.coerceAtLeast(0L)
                 val duration = p.duration.takeIf { it > 0 } ?: 0L
-                // Near natural EOF — let STATE_ENDED handle advance, don't recover.
                 if (duration > 0L && pos >= duration - NEAR_END_MS) {
                     stallSamplePos = pos
                     stallSampleAtElapsed = SystemClock.elapsedRealtime()
@@ -637,8 +668,6 @@ class MusicService : MediaSessionService() {
                     continue
                 }
 
-                // playWhenReady + READY but media clock frozen (and often isPlaying
-                // still reports true while the AudioTrack is dead).
                 val frozenFor = now - stallSampleAtElapsed
                 val looksStuck = frozenFor >= STALL_MS &&
                     (p.isPlaying || p.playWhenReady)
@@ -671,8 +700,6 @@ class MusicService : MediaSessionService() {
                 val pos = (atPositionMs ?: p?.currentPosition ?: 0L).coerceAtLeast(0L)
                 val wasPlaying = p?.playWhenReady == true || p?.isPlaying == true
                 Log.w(TAG, "audio glitch → rebuffer at $pos autoPlay=$wasPlaying")
-                // Prefer full window rebuffer over hardRestart so we keep the
-                // next-item prebuffer and resume mid-track.
                 rebufferWindow(pos, autoPlay = wasPlaying, forceReload = true)
             } finally {
                 delay(600)
@@ -696,6 +723,7 @@ class MusicService : MediaSessionService() {
                 return
             }
             if (reason == Player.MEDIA_ITEM_TRANSITION_REASON_AUTO) {
+                // Primary path for end-of-track when a next item is prebuffered.
                 syncQueueAfterExoAutoAdvance()
                 return
             }
@@ -709,18 +737,28 @@ class MusicService : MediaSessionService() {
         }
 
         override fun onPlaybackStateChanged(playbackState: Int) {
-            if (playbackState == Player.STATE_ENDED && !advancing) {
-                if (isRepeatOne()) {
-                    Log.i(TAG, "STATE_ENDED under repeat-one → hardRestart")
-                    hardRestartCurrent(autoPlay = true)
-                    return
-                }
-                advancing = true
-                try {
-                    applyAdvance(queueManager.advance(userInitiated = false))
-                } finally {
-                    advancing = false
-                }
+            if (playbackState != Player.STATE_ENDED || advancing) return
+
+            // If a next media item exists, Exo will (or already did) AUTO-transition.
+            // Handling ENDED here as well double-advances the queue under shuffle and
+            // desyncs audio from now-playing.
+            val p = player
+            if (p != null && p.hasNextMediaItem()) {
+                Log.i(TAG, "STATE_ENDED with next item — defer to AUTO transition")
+                return
+            }
+
+            if (isRepeatOne()) {
+                Log.i(TAG, "STATE_ENDED under repeat-one → hardRestart")
+                hardRestartCurrent(autoPlay = true)
+                return
+            }
+
+            advancing = true
+            try {
+                applyAdvance(queueManager.advance(userInitiated = false))
+            } finally {
+                advancing = false
             }
         }
 
