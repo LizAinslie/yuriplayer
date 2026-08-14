@@ -1,12 +1,16 @@
 package capital.yuri.yuriplayer.di
 
 import capital.yuri.yuriplayer.data.AlbumArtCache
+import capital.yuri.yuriplayer.data.ArtistProfileRepository
 import capital.yuri.yuriplayer.data.LibraryCache
 import capital.yuri.yuriplayer.data.LibraryIndex
 import capital.yuri.yuriplayer.data.LibrarySettings
 import capital.yuri.yuriplayer.data.MusicRepository
 import capital.yuri.yuriplayer.data.PlayerThemeStore
+import capital.yuri.yuriplayer.data.PlaylistRepository
 import capital.yuri.yuriplayer.data.db.YuriDatabase
+import capital.yuri.yuriplayer.data.source.LocalArtistProfileProvider
+import capital.yuri.yuriplayer.data.source.SourceResolver
 import capital.yuri.yuriplayer.data.theme.ThemeService
 import capital.yuri.yuriplayer.player.PlaybackHistoryStore
 import capital.yuri.yuriplayer.player.PlaybackStateStore
@@ -24,9 +28,21 @@ val appModule = module {
     single { YuriDatabase.create(androidContext()) }
     single { get<YuriDatabase>().albumPrefs() }
     single { get<YuriDatabase>().playlistPrefs() }
+    single { get<YuriDatabase>().playlists() }
+    single { get<YuriDatabase>().artistProfiles() }
+    single { get<YuriDatabase>().sourceOverrides() }
     single { get<YuriDatabase>().appSettings() }
     single { get<YuriDatabase>().sources() }
     single { get<YuriDatabase>().scrobblers() }
+
+    single { PlaylistRepository(get(), get()) }
+    single {
+        ArtistProfileRepository(
+            dao = get(),
+            providers = listOf(LocalArtistProfileProvider())
+        )
+    }
+    single { SourceResolver(get()) }
 
     single { AlbumArtCache(androidContext()) }
     single { ThemeService(get()) }
