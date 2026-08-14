@@ -3,16 +3,16 @@ package capital.yuri.yuriplayer.data
 /**
  * Split a raw artist tag into discrete credit names for linking.
  *
- * Handles ID3-style separators (`;`, `,`) and common collaboration markers
- * (`feat.` / `ft.` / `featuring` / `&` / `/`). Order is preserved; blanks dropped.
+ * Only hard separators (`;`, `,`) and simple collab marks (`&`, `/`).
+ * Does **not** split on `feat.` / `ft.` / `featuring` — those stay as part of
+ * the credit string (often mirrored in the title already).
  */
 fun parseArtistCredits(raw: String?): List<String> {
     if (raw.isNullOrBlank()) return emptyList()
     var s = raw.trim()
-    // Normalize collaboration markers to a hard separator
-    s = s.replace(Regex("(?i)\\s+(feat\.?|ft\.?|featuring)\\s+"), ";")
-    s = s.replace(Regex("\\s*[&/]\\s*"), ";")
-    return s.split(Regex("[,;]") )
+    // Normalize & / to semicolon separators (raw string keeps regex escapes valid)
+    s = s.replace(Regex("""\s*[&/]\s*"""), ";")
+    return s.split(Regex("[,;]"))
         .map { it.trim() }
         .filter { it.isNotEmpty() }
         .distinctBy { it.lowercase() }
