@@ -287,6 +287,10 @@ class MusicService : MediaSessionService() {
         persistState()
     }
 
+    /**
+     * Soft queue-window sync: never touches the currently playing item.
+     * Used for shuffle/repeat toggles and queue mutations so playback stays continuous.
+     */
     private fun updateNextMediaItemOnly() {
         val p = player ?: return
         val current = queueManager.currentSong() ?: return
@@ -473,24 +477,20 @@ class MusicService : MediaSessionService() {
         persistState()
     }
 
+    /**
+     * Repeat mode only changes whether we prebuffer a *next* item.
+     * Never force-reload the playing media item — that is what caused the
+     * audible hitch on every repeat toggle (shuffle already used the soft path).
+     */
     fun cycleRepeatMode() {
         queueManager.cycleRepeatMode()
-        // Entering/leaving repeat-one changes window shape (1 vs 1+next)
-        rebufferWindow(
-            startPositionMs = player?.currentPosition?.coerceAtLeast(0L) ?: 0L,
-            autoPlay = player?.playWhenReady == true,
-            forceReload = true
-        )
+        updateNextMediaItemOnly()
         persistState()
     }
 
     fun setRepeatMode(mode: RepeatMode) {
         queueManager.setRepeatMode(mode)
-        rebufferWindow(
-            startPositionMs = player?.currentPosition?.coerceAtLeast(0L) ?: 0L,
-            autoPlay = player?.playWhenReady == true,
-            forceReload = true
-        )
+        updateNextMediaItemOnly()
         persistState()
     }
 
