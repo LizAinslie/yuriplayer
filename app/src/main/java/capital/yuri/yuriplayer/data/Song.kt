@@ -1,12 +1,15 @@
 package capital.yuri.yuriplayer.data
 
 import android.net.Uri
+import capital.yuri.yuriplayer.data.json.UriAsStringSerializer
+import kotlinx.serialization.Serializable
 import java.io.File
 
 /**
  * All tag fields are nullable — missing tags stay null rather than "Unknown …".
  * Use [displayTitle] / [displayArtist] / [displayAlbum] only for UI strings.
  */
+@Serializable
 data class Song(
     val id: Long,
     val title: String? = null,
@@ -14,7 +17,9 @@ data class Song(
     val albumArtist: String? = null,
     val album: String? = null,
     val durationMs: Long? = null,
+    @Serializable(with = UriAsStringSerializer::class)
     val contentUri: Uri,
+    @Serializable(with = UriAsStringSerializer::class)
     val albumArtUri: Uri? = null,
     val trackNumber: Int? = null,
     /** Disc / media set number (1-based). Null = single-disc or unknown. */
@@ -46,6 +51,7 @@ data class Song(
     /**
      * Individual credited artists for linking (Spotify-style).
      * Prefer the track `artist` tag; fall back to album artist as a single credit.
+     * Local tags only split on `;` — structured sources should pass real arrays later.
      */
     val creditArtists: List<String>
         get() {
