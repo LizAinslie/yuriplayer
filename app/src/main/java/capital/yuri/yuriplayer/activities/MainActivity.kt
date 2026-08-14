@@ -33,8 +33,8 @@ import androidx.compose.foundation.layout.systemBars
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.Home
-import androidx.compose.material.icons.filled.LibraryMusic
 import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -66,8 +66,10 @@ import capital.yuri.yuriplayer.activities.ui.ArtistDetailScreen
 import capital.yuri.yuriplayer.activities.ui.LibraryScreen
 import capital.yuri.yuriplayer.activities.ui.LocalStatusBarStack
 import capital.yuri.yuriplayer.activities.ui.MiniPlayerBar
+import capital.yuri.yuriplayer.activities.ui.MyStuffScreen
 import capital.yuri.yuriplayer.activities.ui.NowPlayingScreen
 import capital.yuri.yuriplayer.activities.ui.PlaceholderScreen
+import capital.yuri.yuriplayer.activities.ui.PlaylistDetailScreen
 import capital.yuri.yuriplayer.activities.ui.SettingsScreen
 import capital.yuri.yuriplayer.activities.ui.StatusBarColorStack
 import capital.yuri.yuriplayer.activities.ui.theme.YuriPlayerTheme
@@ -76,8 +78,10 @@ import capital.yuri.yuriplayer.data.AlbumItem
 import capital.yuri.yuriplayer.data.ArtistItem
 import capital.yuri.yuriplayer.data.LibraryIndex
 import capital.yuri.yuriplayer.data.PlayerThemeStore
+import capital.yuri.yuriplayer.data.Playlist
 import capital.yuri.yuriplayer.data.Song
 import capital.yuri.yuriplayer.data.albumKey
+import capital.yuri.yuriplayer.data.artistKey
 import capital.yuri.yuriplayer.player.ColdSource
 import capital.yuri.yuriplayer.player.ColdSourceType
 import capital.yuri.yuriplayer.player.PlayerController
@@ -172,13 +176,14 @@ class MainActivity : ComponentActivity() {
 
 private enum class TopTab(val label: String, val icon: ImageVector) {
     Home("Home", Icons.Default.Home),
-    Library("Library", Icons.Default.LibraryMusic),
+    Explore("Explore", Icons.Default.Search),
     MyStuff("My Stuff", Icons.Default.Favorite)
 }
 
 private sealed class DetailRoute {
     data class Album(val album: AlbumItem) : DetailRoute()
     data class Artist(val artist: ArtistItem) : DetailRoute()
+    data class Playlist(val playlistId: String) : DetailRoute()
     data object Settings : DetailRoute()
 }
 
@@ -202,7 +207,7 @@ fun YuriApp(
         statusBarStack.replaceBase(baseScheme.background)
     }
 
-    var topTab by remember { mutableStateOf(TopTab.Library) }
+    var topTab by remember { mutableStateOf(TopTab.Explore) }
     var playerExpanded by remember { mutableStateOf(false) }
     var detailStack by remember { mutableStateOf<List<DetailRoute>>(emptyList()) }
 
@@ -274,6 +279,28 @@ fun YuriApp(
         )
     }
 
+    fun resolveArtist(name: String): ArtistItem {
+        val key = artistKey(name)
+        val found = library.artists().firstOrNull {
+            artistKey(it.name) == key
+        }
+        if (found != null) return found
+        // Build from any tracks that credit this name
+        val tracks = library.songs.value.filter { song ->
+            artistKey(song.effectiveAlbumArtist) == key ||
+                song.creditArtists.any { artistKey(it) == key }
+        }
+        val albumKeys = tracks.mapNotNull { artistKey(it.album)?.let { a -> a } }.toSet()
+        // album keys wrong - use album normalize
+        val albums = tracks.mapNotNull { it.album }.map { it.lowercase() }.toSet()
+        return ArtistItem(
+            name = name,
+            trackCount = tracks.size,
+            albumCount = albums.size,
+            songs = tracks
+        )
+    }
+
     fun openAlbumForSong(song: Song) {
         val key = albumKey(song.album, song.effectiveAlbumArtist)
         val found = library.albums().firstOrNull {
@@ -295,11 +322,13 @@ fun YuriApp(
             Toast.makeText(context, "No artist tag", Toast.LENGTH_SHORT).show()
             return
         }
-        val found = library.artists().firstOrNull {
-            it.name.equals(name, ignoreCase = true)
-        } ?: ArtistItem(name = name, trackCount = 0, albumCount = 0, songs = emptyList())
         playerExpanded = false
-        pushDetail(DetailRoute.Artist(found))
+        pushDetail(DetailRoute.Artist(resolveArtist(name)))
+    }
+
+    fun openArtistByName(name: String) {
+        playerExpanded = false
+        pushDetail(DetailRoute.Artist(resolveArtist(name)))
     }
 
     CompositionLocalProvider(LocalStatusBarStack provides statusBarStack) {
@@ -339,7 +368,7 @@ fun YuriApp(
                                 }
                             },
                             actions = {
-                                if (topTab == TopTab.Library) {
+                                if (topTab == TopTab.Explore) {
                                     val loading by library.isLoading.collectAsState()
                                     IconButton(onClick = { library.refresh() }) {
                                         if (loading) {
@@ -393,17 +422,11 @@ fun YuriApp(
                                 onTogglePlayPause = { player.togglePlayPause() },
                                 onToggleShuffle = { player.toggleShuffle() },
                                 onFavorite = {
-                                    Toast.makeText(context, "My Stuff coming soon", Toast.LENGTH_SHORT).show()
+                                    Toast.makeText(context, "Favorites coming soon", Toast.LENGTH_SHORT).show()
                                 },
                                 onOpenArtist = {
                                     val name = d.album.artist ?: return@AlbumDetailScreen
-                                    pushDetail(
-                                        DetailRoute.Artist(
-                                            library.artists().firstOrNull {
-                                                it.name.equals(name, ignoreCase = true)
-                                            } ?: ArtistItem(name, 0, 0, emptyList())
-                                        )
-                                    )
+                                    pushDetail(DetailRoute.Artist(resolveArtist(name)))
                                 },
                                 onAddSongToQueue = { player.addToHotQueue(it) },
                                 onAddAlbumToQueue = { player.addToHotQueue(it) }
@@ -427,10 +450,26 @@ fun YuriApp(
                                 }
                             )
                         }
+                        is DetailRoute.Playlist -> {
+                            PlaylistDetailScreen(
+                                playlistId = d.playlistId,
+                                nowPlaying = currentSong,
+                                isPlaybackActive = playing,
+                                onBack = { popDetail() },
+                                onPlay = { songs, i ->
+                                    player.setRepeatMode(RepeatMode.COLD)
+                                    player.playSource(
+                                        songs, i,
+                                        ColdSource(ColdSourceType.PLAYLIST, d.playlistId, null)
+                                    )
+                                },
+                                onAddToQueue = { player.addToHotQueue(it) }
+                            )
+                        }
                         is DetailRoute.Settings -> SettingsScreen(onBack = { popDetail() })
                         null -> when (topTab) {
                             TopTab.Home -> PlaceholderScreen("Home", "Pin playlists and shortcuts here later.")
-                            TopTab.Library -> LibraryScreen(
+                            TopTab.Explore -> LibraryScreen(
                                 library = library,
                                 nowPlaying = currentSong,
                                 isPlaybackActive = playing,
@@ -440,9 +479,17 @@ fun YuriApp(
                                 onOpenAlbum = { pushDetail(DetailRoute.Album(it)) },
                                 onOpenArtist = { pushDetail(DetailRoute.Artist(it)) }
                             )
-                            TopTab.MyStuff -> PlaceholderScreen(
-                                "My Stuff",
-                                "Favorites, playlists, and saved albums/artists will live here."
+                            TopTab.MyStuff -> MyStuffScreen(
+                                library = library,
+                                nowPlaying = currentSong,
+                                isPlaybackActive = playing,
+                                onPlay = { songs, index -> player.playSource(songs, index) },
+                                onAddToQueue = { player.addToHotQueue(it) },
+                                onOpenAlbum = { pushDetail(DetailRoute.Album(it)) },
+                                onOpenArtist = { pushDetail(DetailRoute.Artist(it)) },
+                                onOpenPlaylist = { pl: Playlist ->
+                                    pushDetail(DetailRoute.Playlist(pl.id))
+                                }
                             )
                         }
                     }
@@ -492,7 +539,11 @@ fun YuriApp(
                     onGoToAlbum = { openAlbumForSong(it) },
                     onGoToArtist = { openArtistForSong(it) },
                     onAddToPlaylist = {
-                        Toast.makeText(context, "Playlists coming soon", Toast.LENGTH_SHORT).show()
+                        Toast.makeText(
+                            context,
+                            "Open My Stuff → Playlists to manage playlists",
+                            Toast.LENGTH_SHORT
+                        ).show()
                     }
                 )
             }
