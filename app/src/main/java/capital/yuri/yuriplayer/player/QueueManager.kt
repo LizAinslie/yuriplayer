@@ -15,6 +15,7 @@ import kotlin.random.Random
  *
  * [playedStack] remembers consumed tracks so Previous can walk back
  * (Spotify-style: >3s restarts current, otherwise previous in play order).
+ * Persisted with the rest of the snapshot so Previous still works after restart.
  *
  * Previous does **not** use a side-channel "floating" playhead: the prior track
  * is placed at the head of the active lane and the interrupted track is pushed
@@ -95,7 +96,8 @@ class QueueManager {
             lane = lane,
             indexInLane = indexInLane,
             shuffleEnabled = shuffleEnabled,
-            repeatMode = repeatMode
+            repeatMode = repeatMode,
+            playedStack = playedStack.toList()
         )
     }
 
@@ -120,13 +122,18 @@ class QueueManager {
         repeatMode = snap.repeatMode
         floatingCurrent = null
         playedStack.clear()
+        playedStack.addAll(snap.playedStack)
         val max = when (lane) {
             QueueLane.HOT -> hotQueue.lastIndex
             QueueLane.COLD -> coldQueue.lastIndex
         }
         if (max >= 0) indexInLane = indexInLane.coerceIn(0, max)
         publish()
-        Log.i(TAG, "restore lane=$lane source=${coldSource?.type}:${coldSource?.id}")
+        Log.i(
+            TAG,
+            "restore lane=$lane source=${coldSource?.type}:${coldSource?.id} " +
+                "played=${playedStack.size}"
+        )
     }
 
     fun playSource(
@@ -510,7 +517,8 @@ class QueueManager {
         Log.i(
             TAG,
             "skipPrevious → '${prev.displayTitle}' next='${current?.displayTitle}' " +
-                "lane=$lane cold=${coldQueue.size} hot=${hotQueue.size}"
+                "lane=$lane cold=${coldQueue.size} hot=${hotQueue.size} " +
+                "playedLeft=${playedStack.size}"
         )
         return AdvanceResult(song = prev)
     }
