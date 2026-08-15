@@ -21,8 +21,10 @@ import java.io.File
 /**
  * Fills gaps in local tags using MusicBrainz (year) and Cover Art Archive (art).
  *
- * Only runs when the user has opted in via [LibrarySettings.isNetworkMetadataEnabled].
- * INTERNET is not a runtime permission on Android — the opt-in is our consent UI.
+ * **Manual** [enrichAlbumAsync] / [enrichAlbumsAsync] always run when the user
+ * taps "Fetch additional metadata".
+ * **Automatic** [enrichLibraryAsync] only runs when
+ * [LibrarySettings.isAutomaticMetadataEnabled] is true.
  */
 class MetadataEnrichmentService(
     private val context: Context,
@@ -42,6 +44,9 @@ class MetadataEnrichmentService(
     private val _coverGeneration = MutableStateFlow(0L)
     val coverGeneration: StateFlow<Long> = _coverGeneration.asStateFlow()
 
+    private val _statusMessage = MutableStateFlow<String?>(null)
+    val statusMessage: StateFlow<String?> = _statusMessage.asStateFlow()
+
     private val coverDir: File
         get() = File(context.filesDir, "covers").also { it.mkdirs() }
 
@@ -54,29 +59,29 @@ class MetadataEnrichmentService(
         }
     }
 
-    /**
-     * Background-enrich albums missing year and/or real local art.
-     * No-ops if the user has not allowed network metadata.
-     */
+    /** Background enrich — only when automatic is enabled in Settings. */
     fun enrichLibraryAsync(maxAlbums: Int = 60) {
-        if (!settings.isNetworkMetadataEnabled()) {
-            Log.i(TAG, "skip enrich — network metadata not enabled")
+        if (!settings.isAutomaticMetadataEnabled()) {
+            Log.i(TAG, "skip auto enrich — automatic metadata disabled")
             return
         }
         scope.launch {
             workLock.withLock {
                 _busy.value = true
+                _statusMessage.value = "Looking up metadata…"
                 try {
                     applyCachedToLibrary()
                     val albums = library.albums(taggedOnly = false)
                         .filter { needsWork(it) }
                         .take(maxAlbums)
-                    Log.i(TAG, "enrich queue size=${albums.size}")
+                    Log.i(TAG, "auto enrich queue size=${albums.size}")
                     for (album in albums) {
-                        enrichAlbum(album)
+                        enrichAlbum(album, force = false)
                     }
+                    _statusMessage.value = null
                 } catch (e: Exception) {
                     Log.e(TAG, "enrichLibrary failed", e)
+                    _statusMessage.value = "Metadata lookup failed"
                 } finally {
                     _busy.value = false
                 }
@@ -84,13 +89,44 @@ class MetadataEnrichmentService(
         }
     }
 
-    fun enrichAlbumAsync(album: AlbumItem) {
-        if (!settings.isNetworkMetadataEnabled()) return
+    /**
+     * User-initiated fetch for one album. Always allowed (manual consent).
+     * [force] retries even if a previous lookup was marked failed.
+     */
+    fun enrichAlbumAsync(album: AlbumItem, force: Boolean = true) {
         scope.launch {
+            _busy.value = true
+            _statusMessage.value = "Fetching metadata for ${album.displayName}…"
             try {
-                enrichAlbum(album)
+                enrichAlbum(album, force = force)
+                _statusMessage.value = "Done: ${album.displayName}"
             } catch (e: Exception) {
                 Log.w(TAG, "enrichAlbum failed ${album.displayName}", e)
+                _statusMessage.value = "Failed: ${album.displayName}"
+            } finally {
+                _busy.value = false
+            }
+        }
+    }
+
+    /** User-initiated fetch for several albums (artist page). */
+    fun enrichAlbumsAsync(albums: List<AlbumItem>, force: Boolean = true) {
+        if (albums.isEmpty()) return
+        scope.launch {
+            workLock.withLock {
+                _busy.value = true
+                _statusMessage.value = "Fetching metadata for ${albums.size} releases…"
+                try {
+                    for (album in albums) {
+                        enrichAlbum(album, force = force)
+                    }
+                    _statusMessage.value = "Fetched metadata for ${albums.size} releases"
+                } catch (e: Exception) {
+                    Log.e(TAG, "enrichAlbums failed", e)
+                    _statusMessage.value = "Metadata lookup failed"
+                } finally {
+                    _busy.value = false
+                }
             }
         }
     }
@@ -98,7 +134,6 @@ class MetadataEnrichmentService(
     suspend fun coverPathFor(albumKey: String): String? =
         dao.get(albumKey)?.coverPath?.takeIf { File(it).isFile }
 
-    /** Same filename scheme [AlbumArtResolver] uses for offline cover files. */
     fun coverFileForAlbumKey(key: String): File =
         File(coverDir, sanitizeFileName(key) + ".jpg")
 
@@ -106,18 +141,17 @@ class MetadataEnrichmentService(
         val key = albumKey(album.name, album.artist)
         if (key in inFlight) return false
         val hasYear = album.songs.any { it.year != null && it.year > 0 }
-        // Do NOT trust MediaStore albumArtUri — often points at empty placeholders.
         val hasRealArt = album.songs.any { hasEmbeddedOrFolderArt(it.path) } ||
             coverFileForAlbumKey(key).isFile
         return !hasYear || !hasRealArt
     }
 
-    private suspend fun enrichAlbum(album: AlbumItem) {
+    private suspend fun enrichAlbum(album: AlbumItem, force: Boolean) {
         val key = albumKey(album.name, album.artist)
         if (!inFlight.add(key)) return
         try {
             val existing = dao.get(key)
-            if (existing != null && existing.lookupFailed) {
+            if (!force && existing != null && existing.lookupFailed) {
                 existing.year?.let { library.applyAlbumYear(key, it) }
                 return
             }
@@ -127,42 +161,40 @@ class MetadataEnrichmentService(
             val needArt = !coverFileForAlbumKey(key).isFile &&
                 album.songs.none { hasEmbeddedOrFolderArt(it.path) }
 
-            if (!needYear && !needArt) {
+            if (!force && !needYear && !needArt) {
                 existing?.year?.let { library.applyAlbumYear(key, it) }
                 return
             }
 
-            Log.i(TAG, "lookup \"${album.displayName}\" / \"${album.displayArtist}\"")
-            val hit = client.searchRelease(album.artist, album.name)
+            Log.i(TAG, "lookup \"${album.displayName}\" / \"${album.displayArtist}\" force=$force")
+            var hit = client.searchRelease(album.artist, album.name)
             if (hit == null) {
-                // Retry with track-artist if album artist failed
                 val trackArtist = album.songs.firstOrNull()?.artist
-                val retry = if (!trackArtist.isNullOrBlank() &&
+                if (!trackArtist.isNullOrBlank() &&
                     !trackArtist.equals(album.artist, ignoreCase = true)
                 ) {
-                    client.searchRelease(trackArtist, album.name)
-                } else null
-
-                if (retry == null) {
-                    dao.upsert(
-                        AlbumMetadataEntity(
-                            id = existing?.id ?: 0,
-                            albumKey = key,
-                            year = existing?.year,
-                            mbid = existing?.mbid,
-                            coverPath = existing?.coverPath,
-                            coverUrl = existing?.coverUrl,
-                            lookupFailed = true,
-                            updatedAtMs = System.currentTimeMillis()
-                        )
-                    )
-                    Log.w(TAG, "no MB hit for $key")
-                    return
+                    hit = client.searchRelease(trackArtist, album.name)
                 }
-                applyHit(key, album, existing, retry, needYear, needArt)
-            } else {
-                applyHit(key, album, existing, hit, needYear, needArt)
             }
+
+            if (hit == null) {
+                dao.upsert(
+                    AlbumMetadataEntity(
+                        id = existing?.id ?: 0,
+                        albumKey = key,
+                        year = existing?.year,
+                        mbid = existing?.mbid,
+                        coverPath = existing?.coverPath,
+                        coverUrl = existing?.coverUrl,
+                        lookupFailed = true,
+                        updatedAtMs = System.currentTimeMillis()
+                    )
+                )
+                Log.w(TAG, "no MB hit for $key")
+                return
+            }
+
+            applyHit(key, album, existing, hit, needYear || force, needArt || force)
         } finally {
             inFlight.remove(key)
         }
@@ -177,7 +209,7 @@ class MetadataEnrichmentService(
         needArt: Boolean
     ) {
         var coverPath = existing?.coverPath?.takeIf { File(it).isFile }
-        if (needArt) {
+        if (needArt || coverPath == null) {
             val dest = coverFileForAlbumKey(key)
             if (client.downloadFrontCover(hit.mbid, dest)) {
                 coverPath = dest.absolutePath
