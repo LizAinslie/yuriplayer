@@ -2,6 +2,7 @@ package capital.yuri.yuriplayer
 
 import android.app.Application
 import capital.yuri.yuriplayer.data.LibraryIndex
+import capital.yuri.yuriplayer.data.LibrarySettings
 import capital.yuri.yuriplayer.di.appModule
 import org.koin.android.ext.android.get
 import org.koin.android.ext.koin.androidContext
@@ -19,7 +20,10 @@ class YuriPlayerApp : Application() {
             modules(appModule)
         }
 
-        // Load disk cache immediately; refresh in background if stale
+        get<LibrarySettings>().migrateLegacyNetworkConsentIfNeeded()
+
+        // Load disk cache immediately; refresh in background if stale.
+        // Online metadata is manual by default (album/artist "Fetch additional metadata").
         get<LibraryIndex>().bootstrap()
     }
 }
