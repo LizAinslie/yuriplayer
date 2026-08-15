@@ -1,0 +1,264 @@
+package capital.yuri.yuriplayer.data
+
+import android.content.ContentUris
+import android.content.ContentValues
+import android.content.Context
+import android.media.MediaScannerConnection
+import android.net.Uri
+import android.os.Build
+import android.provider.MediaStore
+import android.util.Log
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
+import org.jaudiotagger.audio.AudioFileIO
+import org.jaudiotagger.tag.FieldKey
+import org.jaudiotagger.tag.images.ArtworkFactory
+import java.io.File
+import java.io.FileOutputStream
+
+/**
+ * Local-file-only metadata editor.
+ *
+ * Writes tags into the actual audio files (MP3 / FLAC / Ogg / …) with
+ * jaudiotagger, mirrors a subset into MediaStore, optionally drops
+ * `cover.jpg` next to the tracks, then rescans so [LibraryIndex] picks up
+ * the changes.
+ *
+ * Remote / Explore-only items must never reach this path.
+ */
+class MetadataEditService(
+    private val context: Context,
+    private val libraryIndex: LibraryIndex
+) {
+
+    data class SongEdit(
+        val title: String?,
+        /** Semicolon-separated credits — same convention as local tags. */
+        val artist: String?
+    )
+
+    data class AlbumEdit(
+        val albumName: String?,
+        val albumArtist: String?,
+        val year: Int?,
+        /** Optional new cover image (JPEG/PNG bytes). Applied to every track + folder. */
+        val coverBytes: ByteArray? = null,
+        val coverMime: String? = null
+    )
+
+    data class Result(
+        val ok: Int,
+        val failed: Int,
+        val message: String
+    )
+
+    fun isLocalFile(song: Song): Boolean {
+        val path = resolveWritablePath(song) ?: return false
+        val f = File(path)
+        return f.isFile && f.canWrite()
+    }
+
+    fun isLocalAlbum(album: AlbumItem): Boolean =
+        album.songs.any { isLocalFile(it) }
+
+    suspend fun saveSong(song: Song, edit: SongEdit): Result = withContext(Dispatchers.IO) {
+        val path = resolveWritablePath(song)
+            ?: return@withContext Result(0, 1, "Not a writable local file")
+        try {
+            writeSongTags(File(path), edit)
+            updateMediaStoreSong(song, edit)
+            scanPaths(listOf(path))
+            libraryIndex.refresh()
+            Result(1, 0, "Saved")
+        } catch (e: Exception) {
+            Log.e(TAG, "saveSong failed path=$path", e)
+            Result(0, 1, e.message ?: "Write failed")
+        }
+    }
+
+    suspend fun saveAlbum(album: AlbumItem, edit: AlbumEdit): Result = withContext(Dispatchers.IO) {
+        var ok = 0
+        var failed = 0
+        val scanned = mutableListOf<String>()
+        val coverFile = edit.coverBytes?.let { bytes ->
+            // Prefer writing cover next to the first track's folder.
+            val firstPath = album.songs.firstNotNullOfOrNull { resolveWritablePath(it) }
+            val dir = firstPath?.let { File(it).parentFile }
+            if (dir != null && dir.isDirectory) {
+                val out = File(dir, "cover.jpg")
+                try {
+                    FileOutputStream(out).use { it.write(bytes) }
+                    scanned += out.absolutePath
+                    out
+                } catch (e: Exception) {
+                    Log.w(TAG, "cover.jpg write failed", e)
+                    null
+                }
+            } else null
+        }
+
+        for (song in album.songs) {
+            val path = resolveWritablePath(song) ?: run {
+                failed++
+                continue
+            }
+            try {
+                writeAlbumTags(File(path), edit, coverFile)
+                updateMediaStoreAlbumFields(song, edit)
+                scanned += path
+                ok++
+            } catch (e: Exception) {
+                Log.e(TAG, "saveAlbum track failed path=$path", e)
+                failed++
+            }
+        }
+        if (scanned.isNotEmpty()) scanPaths(scanned)
+        if (ok > 0) libraryIndex.refresh()
+        Result(
+            ok = ok,
+            failed = failed,
+            message = when {
+                failed == 0 -> "Saved $ok tracks"
+                ok == 0 -> "Could not write tags"
+                else -> "Saved $ok, failed $failed"
+            }
+        )
+    }
+
+    // ── tag IO ──────────────────────────────────────────────────────────
+
+    private fun writeSongTags(file: File, edit: SongEdit) {
+        val audio = AudioFileIO.read(file)
+        val tag = audio.tagOrCreateAndSetDefault
+        setOrDelete(tag, FieldKey.TITLE, edit.title)
+        setOrDelete(tag, FieldKey.ARTIST, edit.artist)
+        audio.commit()
+    }
+
+    private fun writeAlbumTags(file: File, edit: AlbumEdit, coverFile: File?) {
+        val audio = AudioFileIO.read(file)
+        val tag = audio.tagOrCreateAndSetDefault
+        setOrDelete(tag, FieldKey.ALBUM, edit.albumName)
+        setOrDelete(tag, FieldKey.ALBUM_ARTIST, edit.albumArtist)
+        if (edit.year != null && edit.year in 1000..2100) {
+            tag.setField(FieldKey.YEAR, edit.year.toString())
+        }
+        if (coverFile != null && coverFile.isFile) {
+            try {
+                tag.deleteArtworkField()
+                val art = ArtworkFactory.createArtworkFromFile(coverFile)
+                tag.setField(art)
+            } catch (e: Exception) {
+                Log.w(TAG, "embedded art failed for ${file.name}", e)
+            }
+        } else if (edit.coverBytes != null) {
+            try {
+                val tmp = File.createTempFile("yp_cover_", ".jpg", context.cacheDir)
+                tmp.writeBytes(edit.coverBytes)
+                tag.deleteArtworkField()
+                tag.setField(ArtworkFactory.createArtworkFromFile(tmp))
+                tmp.delete()
+            } catch (e: Exception) {
+                Log.w(TAG, "embedded art from bytes failed", e)
+            }
+        }
+        audio.commit()
+    }
+
+    private fun setOrDelete(tag: org.jaudiotagger.tag.Tag, key: FieldKey, value: String?) {
+        val v = value?.trim().orEmpty()
+        if (v.isEmpty()) {
+            try {
+                tag.deleteField(key)
+            } catch (_: Exception) {
+            }
+        } else {
+            tag.setField(key, v)
+        }
+    }
+
+    // ── path resolution ─────────────────────────────────────────────────
+
+    fun resolveWritablePath(song: Song): String? {
+        song.path?.takeIf { it.isNotBlank() }?.let { p ->
+            val f = File(p)
+            if (f.isFile) return f.absolutePath
+        }
+        // MediaStore DATA column (available on API 27–28 reliably; may be null later)
+        return try {
+            context.contentResolver.query(
+                song.contentUri,
+                arrayOf(MediaStore.MediaColumns.DATA),
+                null,
+                null,
+                null
+            )?.use { c ->
+                if (c.moveToFirst()) {
+                    val idx = c.getColumnIndex(MediaStore.MediaColumns.DATA)
+                    if (idx >= 0) c.getString(idx)?.takeIf { File(it).isFile }
+                    else null
+                } else null
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "DATA query failed for ${song.contentUri}", e)
+            null
+        }
+    }
+
+    // ── MediaStore mirror ───────────────────────────────────────────────
+
+    private fun updateMediaStoreSong(song: Song, edit: SongEdit) {
+        val values = ContentValues().apply {
+            edit.title?.let { put(MediaStore.Audio.Media.TITLE, it) }
+            edit.artist?.let { put(MediaStore.Audio.Media.ARTIST, it) }
+        }
+        if (values.size() == 0) return
+        runCatching {
+            context.contentResolver.update(song.contentUri, values, null, null)
+        }.onFailure { Log.w(TAG, "MediaStore song update failed", it) }
+    }
+
+    private fun updateMediaStoreAlbumFields(song: Song, edit: AlbumEdit) {
+        val values = ContentValues().apply {
+            edit.albumName?.let { put(MediaStore.Audio.Media.ALBUM, it) }
+            edit.albumArtist?.let {
+                if (Build.VERSION.SDK_INT >= 30) {
+                    // ALBUM_ARTIST exists on newer columns; older devices ignore unknown keys
+                }
+                put(MediaStore.Audio.Media.ARTIST, it) // best-effort on old APIs for album-level
+            }
+            edit.year?.let { put(MediaStore.Audio.Media.YEAR, it) }
+        }
+        if (values.size() == 0) return
+        runCatching {
+            context.contentResolver.update(song.contentUri, values, null, null)
+        }.onFailure { Log.w(TAG, "MediaStore album update failed", it) }
+    }
+
+    private fun scanPaths(paths: List<String>) {
+        if (paths.isEmpty()) return
+        MediaScannerConnection.scanFile(
+            context,
+            paths.toTypedArray(),
+            null,
+            null
+        )
+    }
+
+    /** Read cover image bytes from a content/file Uri for the album editor. */
+    suspend fun readImageBytes(uri: Uri): Pair<ByteArray, String>? = withContext(Dispatchers.IO) {
+        try {
+            val mime = context.contentResolver.getType(uri) ?: "image/jpeg"
+            val bytes = context.contentResolver.openInputStream(uri)?.use { it.readBytes() }
+                ?: return@withContext null
+            bytes to mime
+        } catch (e: Exception) {
+            Log.e(TAG, "readImageBytes failed", e)
+            null
+        }
+    }
+
+    companion object {
+        private const val TAG = "MetadataEdit"
+    }
+}
