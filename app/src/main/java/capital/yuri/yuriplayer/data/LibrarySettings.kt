@@ -9,9 +9,6 @@ import java.io.File
  *
  * Online year/art lookup is **manual by default** (album/artist "Fetch additional
  * metadata"). Users can enable automatic background enrichment in Settings.
- *
- * Note: [android.permission.INTERNET] is a normal permission granted at install;
- * there is no system runtime dialog for it.
  */
 class LibrarySettings(context: Context) {
 
@@ -38,9 +35,8 @@ class LibrarySettings(context: Context) {
     }
 
     /**
-     * When true, missing years/covers are fetched in the background after scans
-     * and when opening album/artist pages. Default **false** — use the manual
-     * "Fetch additional metadata" action instead.
+     * When true, missing years/covers are fetched in the background after scans.
+     * Default **false** — use the manual "Fetch additional metadata" action instead.
      */
     fun isAutomaticMetadataEnabled(): Boolean =
         prefs.getBoolean(KEY_AUTO_METADATA, false)
@@ -49,7 +45,16 @@ class LibrarySettings(context: Context) {
         prefs.edit().putBoolean(KEY_AUTO_METADATA, enabled).apply()
     }
 
-    // Keep old key readable once so existing opt-ins still map to automatic.
+    // ── legacy aliases (MainActivity / older builds) ─────────────────────
+
+    /** Always non-null so the old launch consent dialog never shows again. */
+    fun networkMetadataConsent(): Boolean? = isAutomaticMetadataEnabled()
+
+    fun isNetworkMetadataEnabled(): Boolean = isAutomaticMetadataEnabled()
+
+    fun setNetworkMetadataConsent(enabled: Boolean) =
+        setAutomaticMetadataEnabled(enabled)
+
     fun migrateLegacyNetworkConsentIfNeeded() {
         if (prefs.contains(KEY_NETWORK_META) && !prefs.contains(KEY_AUTO_METADATA)) {
             val legacy = prefs.getBoolean(KEY_NETWORK_META, false)
@@ -57,6 +62,10 @@ class LibrarySettings(context: Context) {
                 .putBoolean(KEY_AUTO_METADATA, legacy)
                 .remove(KEY_NETWORK_META)
                 .apply()
+        }
+        // Ensure key exists so we never treat as "unasked" again
+        if (!prefs.contains(KEY_AUTO_METADATA)) {
+            prefs.edit().putBoolean(KEY_AUTO_METADATA, false).apply()
         }
     }
 
