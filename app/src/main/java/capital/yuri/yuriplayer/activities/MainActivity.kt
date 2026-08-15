@@ -4,8 +4,11 @@ import android.Manifest
 import android.app.Activity
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.net.Uri
 import android.os.Build
 import android.os.Bundle
+import android.os.Environment
+import android.provider.Settings
 import android.view.WindowManager
 import android.widget.Toast
 import androidx.activity.ComponentActivity
@@ -107,11 +110,12 @@ class MainActivity : ComponentActivity() {
     private var isCarMode = false
     private val openPlayerState = mutableStateOf(false)
 
+    /** Shown when API 30+ needs All files access for rewriting music tags. */
+    private val showAllFilesPrompt = mutableStateOf(false)
+
     private val permissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
     ) { results ->
-        // Refresh library when read access is available.
-        // Write (API <= 28) is also requested so tag edits can succeed.
         val readOk = hasReadPermission() || results.any { (perm, granted) ->
             granted && perm in setOf(
                 Manifest.permission.READ_EXTERNAL_STORAGE,
@@ -119,6 +123,7 @@ class MainActivity : ComponentActivity() {
             )
         }
         if (readOk) libraryIndex.refresh()
+        maybePromptAllFilesAccess()
     }
 
     private fun hasReadPermission(): Boolean {
@@ -130,17 +135,33 @@ class MainActivity : ComponentActivity() {
         return ContextCompat.checkSelfPermission(this, read) == PackageManager.PERMISSION_GRANTED
     }
 
-    /** Permissions for library scan + local tag writes (WRITE only on API <= 28). */
+    private fun hasWritePermission(): Boolean {
+        if (Build.VERSION.SDK_INT >= 30) {
+            // Scoped storage: only All files access reliably allows rewriting tags on disk.
+            return Environment.isExternalStorageManager()
+        }
+        return ContextCompat.checkSelfPermission(
+            this,
+            Manifest.permission.WRITE_EXTERNAL_STORAGE
+        ) == PackageManager.PERMISSION_GRANTED
+    }
+
+    /**
+     * Runtime storage grants:
+     * - API 33+: READ_MEDIA_AUDIO
+     * - API 29–32: READ + WRITE_EXTERNAL_STORAGE
+     * - API ≤ 28 (Stylo 4): READ + WRITE_EXTERNAL_STORAGE
+     *
+     * Tag *writes* on API 30+ additionally need MANAGE_EXTERNAL_STORAGE
+     * (prompted separately via Settings).
+     */
     private fun requiredStoragePermissions(): Array<String> {
         val perms = mutableListOf<String>()
         if (Build.VERSION.SDK_INT >= 33) {
             perms += Manifest.permission.READ_MEDIA_AUDIO
         } else {
             perms += Manifest.permission.READ_EXTERNAL_STORAGE
-            // Needed to rewrite MP3/FLAC tags on Android 8.x (Stylo 4, etc.)
-            if (Build.VERSION.SDK_INT <= 28) {
-                perms += Manifest.permission.WRITE_EXTERNAL_STORAGE
-            }
+            perms += Manifest.permission.WRITE_EXTERNAL_STORAGE
         }
         return perms.toTypedArray()
     }
@@ -151,15 +172,41 @@ class MainActivity : ComponentActivity() {
         }
         if (needed.isEmpty()) {
             libraryIndex.refresh()
+            maybePromptAllFilesAccess()
         } else {
             permissionLauncher.launch(needed.toTypedArray())
+        }
+    }
+
+    private fun maybePromptAllFilesAccess() {
+        if (Build.VERSION.SDK_INT < 30) return
+        if (Environment.isExternalStorageManager()) return
+        showAllFilesPrompt.value = true
+    }
+
+    fun openAllFilesAccessSettings() {
+        try {
+            val intent = Intent(
+                Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION,
+                Uri.parse("package:$packageName")
+            )
+            startActivity(intent)
+        } catch (_: Exception) {
+            try {
+                startActivity(Intent(Settings.ACTION_MANAGE_ALL_FILES_ACCESS_PERMISSION))
+            } catch (_: Exception) {
+                Toast.makeText(
+                    this,
+                    "Open Settings → Apps → YuriPlayer → Permissions → All files",
+                    Toast.LENGTH_LONG
+                ).show()
+            }
         }
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
-        // adjustResize only — never STATE_ALWAYS_HIDDEN (blocks typing in metadata editors)
         window.setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE)
 
         isCarMode = intent?.action == "capital.yuri.yuriplayer.action.CAR_MODE" ||
@@ -173,6 +220,33 @@ class MainActivity : ComponentActivity() {
         setContent {
             YuriPlayerTheme {
                 val openPlayer by openPlayerState
+                val needAllFiles by showAllFilesPrompt
+                if (needAllFiles) {
+                    AlertDialog(
+                        onDismissRequest = { showAllFilesPrompt.value = false },
+                        title = { Text("Allow file access?") },
+                        text = {
+                            Text(
+                                "To edit song/album tags (and keep years accurate from FLAC files), " +
+                                    "YuriPlayer needs All files access. On the next screen, enable " +
+                                    "access for YuriPlayer, then return and refresh the library."
+                            )
+                        },
+                        confirmButton = {
+                            TextButton(
+                                onClick = {
+                                    showAllFilesPrompt.value = false
+                                    openAllFilesAccessSettings()
+                                }
+                            ) { Text("Open settings") }
+                        },
+                        dismissButton = {
+                            TextButton(onClick = { showAllFilesPrompt.value = false }) {
+                                Text("Not now")
+                            }
+                        }
+                    )
+                }
                 YuriApp(
                     library = libraryIndex,
                     player = playerController,
@@ -180,6 +254,14 @@ class MainActivity : ComponentActivity() {
                     onPlayerOpened = { openPlayerState.value = false }
                 )
             }
+        }
+    }
+
+    override fun onResume() {
+        super.onResume()
+        // User may have just granted All files access from Settings
+        if (Build.VERSION.SDK_INT >= 30 && Environment.isExternalStorageManager()) {
+            showAllFilesPrompt.value = false
         }
     }
 
