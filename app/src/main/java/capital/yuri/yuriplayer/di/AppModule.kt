@@ -39,8 +39,6 @@ val appModule = module {
     single { get<YuriDatabase>().sources() }
     single { get<YuriDatabase>().scrobblers() }
 
-    // Room catalog = local files + My Stuff only. External Explore stays ephemeral
-    // until importToMyStuff().
     single { CatalogRepository(get(), get()) }
     single { LibraryIndex(get(), get(), get()) }
 
@@ -53,12 +51,23 @@ val appModule = module {
     }
     single { SourceResolver(get()) }
 
-    single { MusicBrainzClient() }
-    single { MetadataEnrichmentService(androidContext(), get(), get(), get(), get()) }
-
     single { AlbumArtCache(androidContext()) }
     single { ThemeService(get()) }
     single { PlayerThemeStore(get(), get()) }
+
+    single { MusicBrainzClient() }
+    single {
+        MetadataEnrichmentService(
+            context = androidContext(),
+            dao = get(),
+            client = get(),
+            library = get(),
+            settings = get(),
+            artCache = get(),
+            themeService = get()
+        )
+    }
+
     single { QueueManager() }
     single { PlaybackStateStore(androidContext()) }
     single { PlaybackHistoryStore(androidContext()) }
