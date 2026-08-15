@@ -33,11 +33,11 @@ class MusicRepository(
             "/ringtones/", "/notifications/", "/alarms/",
             "/ui/", "/system/media/"
         )
-        private val YEAR_REGEX = Regex("""(19|20)\\d{2}""")
+        // NOTE: in a raw """ string use \d once — "\\d" matches a literal backslash+d
+        private val YEAR_REGEX = Regex("""(19|20)\d{2}""")
     }
 
     suspend fun scanLibrary(): List<Song> = withContext(Dispatchers.IO) {
-        // ADB-pushed / freshly copied files are invisible to MediaStore until scanned.
         requestMediaScan()
 
         val byKey = LinkedHashMap<String, Song>()
@@ -54,7 +54,6 @@ class MusicRepository(
         byKey.values.toList()
     }
 
-    /** Kick MediaScanner on configured roots so new files show up in MediaStore. */
     private suspend fun requestMediaScan() {
         val roots = settings.getScanRoots().filter { it.exists() }
         if (roots.isEmpty()) return
@@ -119,7 +118,6 @@ class MusicRepository(
             COL_ALBUM_ARTIST
         )
 
-        // Prefer real music; still accept audio under common library roots.
         val selection = buildString {
             append("(")
             append("${MediaStore.Audio.Media.IS_MUSIC} != 0")
@@ -130,7 +128,6 @@ class MusicRepository(
             }
             append(")")
             append(" AND (${MediaStore.Audio.Media.DURATION} IS NULL OR ${MediaStore.Audio.Media.DURATION} > 1000)")
-            // Exclude obvious system notification/ringtone buckets when columns exist
             append(" AND (${MediaStore.Audio.Media.IS_RINGTONE} = 0 OR ${MediaStore.Audio.Media.IS_RINGTONE} IS NULL)")
             append(" AND (${MediaStore.Audio.Media.IS_NOTIFICATION} = 0 OR ${MediaStore.Audio.Media.IS_NOTIFICATION} IS NULL)")
             append(" AND (${MediaStore.Audio.Media.IS_ALARM} = 0 OR ${MediaStore.Audio.Media.IS_ALARM} IS NULL)")
@@ -139,7 +136,6 @@ class MusicRepository(
         val cursor = try {
             context.contentResolver.query(collection, projection, selection, null, null)
         } catch (_: IllegalArgumentException) {
-            // Some devices lack album_artist or IS_* columns — fall back soft
             try {
                 context.contentResolver.query(
                     collection,
@@ -183,7 +179,6 @@ class MusicRepository(
                     val n = if (t >= 1000) t % 1000 else t
                     n.takeIf { it > 0 }
                 }
-                // MediaStore often leaves YEAR=0 for FLAC / poorly indexed files
                 var year = it.getInt(yearCol).takeIf { y -> y in 1000..2100 }
                 val albumId = it.getLong(albumIdCol)
 
@@ -195,8 +190,8 @@ class MusicRepository(
                     if (albumArtist == null) albumArtist = tags.albumArtist
                     if (duration == null && tags.durationMs != null) duration = tags.durationMs
                     if (track == null && tags.trackNumber != null) track = tags.trackNumber
-                    // Prefer embedded year when MediaStore has none (common on API 27 + FLAC)
-                    if (year == null && tags.year != null) year = tags.year
+                    // File tags win — MediaStore YEAR is often 0 for FLAC
+                    if (tags.year != null) year = tags.year
                     if (title == fileNameTitle(path)) {
                         title = tags.title
                     }
@@ -284,19 +279,10 @@ class MusicRepository(
     )
 
     /**
-     * Read embedded tags. MediaMetadataRetriever first (fast), then jaudiotagger
-     * when year (or core tags) are still missing — MMR often skips YEAR on FLAC
-     * under older Android builds.
+     * Always try jaudiotagger for year — MMR is unreliable for FLAC YEAR on many devices.
      */
     private fun readTagsFromFile(path: String): FileTags {
         val fromMmr = readTagsWithRetriever(path)
-        if (fromMmr.year != null &&
-            fromMmr.title != null &&
-            fromMmr.artist != null &&
-            fromMmr.album != null
-        ) {
-            return fromMmr
-        }
         val fromJaudio = readTagsWithJaudio(path)
         return FileTags(
             title = fromMmr.title ?: fromJaudio.title,
@@ -305,7 +291,8 @@ class MusicRepository(
             album = fromMmr.album ?: fromJaudio.album,
             durationMs = fromMmr.durationMs ?: fromJaudio.durationMs,
             trackNumber = fromMmr.trackNumber ?: fromJaudio.trackNumber,
-            year = fromMmr.year ?: fromJaudio.year
+            // Prefer jaudio year (real file tags) over MMR
+            year = fromJaudio.year ?: fromMmr.year
         )
     }
 
@@ -343,8 +330,12 @@ class MusicRepository(
             fun field(key: FieldKey): String? =
                 cleanTag(runCatching { tag.getFirst(key) }.getOrNull())
 
+            // FLAC/Vorbis often store release year as DATE rather than YEAR
             val year = parseYear(field(FieldKey.YEAR))
                 ?: parseYear(field(FieldKey.ORIGINAL_YEAR))
+                ?: parseYear(runCatching { tag.getFirst("DATE") }.getOrNull())
+                ?: parseYear(runCatching { tag.getFirst("date") }.getOrNull())
+                ?: parseYear(runCatching { tag.getFirst("Year") }.getOrNull())
 
             FileTags(
                 title = field(FieldKey.TITLE),
@@ -363,7 +354,6 @@ class MusicRepository(
         }
     }
 
-    /** Pull a 19xx/20xx year out of messy tag strings ("2015", "2015-03-01", "2015/03/01"). */
     private fun parseYear(raw: String?): Int? {
         if (raw.isNullOrBlank()) return null
         val match = YEAR_REGEX.find(raw.trim()) ?: return null
