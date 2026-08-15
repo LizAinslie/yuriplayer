@@ -6,6 +6,7 @@ import capital.yuri.yuriplayer.data.CatalogRepository
 import capital.yuri.yuriplayer.data.LibraryCache
 import capital.yuri.yuriplayer.data.LibraryIndex
 import capital.yuri.yuriplayer.data.LibrarySettings
+import capital.yuri.yuriplayer.data.MetadataEditService
 import capital.yuri.yuriplayer.data.MetadataEnrichmentService
 import capital.yuri.yuriplayer.data.MusicRepository
 import capital.yuri.yuriplayer.data.PlayerThemeStore
@@ -67,6 +68,9 @@ val appModule = module {
             themeService = get()
         )
     }
+
+    // Local-file tag write (song/album edit screens)
+    single { MetadataEditService(androidContext(), get()) }
 
     single { QueueManager() }
     single { PlaybackStateStore(androidContext()) }
