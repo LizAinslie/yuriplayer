@@ -1,5 +1,6 @@
 package capital.yuri.yuriplayer.activities.ui
 
+import android.widget.Toast
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
@@ -54,7 +55,6 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import capital.yuri.yuriplayer.data.AlbumItem
@@ -67,7 +67,6 @@ import capital.yuri.yuriplayer.data.releaseYear
 import capital.yuri.yuriplayer.data.source.ArtistLink
 import capital.yuri.yuriplayer.data.theme.ThemeService
 import capital.yuri.yuriplayer.ui.formatAlbumCount
-import capital.yuri.yuriplayer.ui.formatDuration
 import capital.yuri.yuriplayer.ui.formatTrackCount
 import org.koin.compose.koinInject
 
@@ -120,7 +119,8 @@ fun ArtistDetailScreen(
     albums: List<AlbumItem>,
     onBack: () -> Unit,
     onOpenAlbum: (AlbumItem) -> Unit,
-    onPlaySongs: (List<Song>, Int) -> Unit
+    onPlaySongs: (List<Song>, Int) -> Unit,
+    onAddToQueue: (Song) -> Unit = {}
 ) {
     val themeService: ThemeService = koinInject()
     val profileRepo: ArtistProfileRepository = koinInject()
@@ -180,7 +180,8 @@ fun ArtistDetailScreen(
                     mutedColor = muted,
                     onBack = { showAll = false },
                     onOpenAlbum = onOpenAlbum,
-                    onPlaySongs = onPlaySongs
+                    onPlaySongs = onPlaySongs,
+                    onAddToQueue = onAddToQueue
                 )
                 return@Surface
             }
@@ -323,8 +324,10 @@ private fun DiscographyAllScreen(
     mutedColor: Color,
     onBack: () -> Unit,
     onOpenAlbum: (AlbumItem) -> Unit,
-    onPlaySongs: (List<Song>, Int) -> Unit
+    onPlaySongs: (List<Song>, Int) -> Unit,
+    onAddToQueue: (Song) -> Unit
 ) {
+    val context = LocalContext.current
     var filterMenuOpen by remember { mutableStateOf(false) }
     val visible = remember(albums, filters) {
         albums.filter { filters.matches(it.releaseType()) }
@@ -442,7 +445,6 @@ private fun DiscographyAllScreen(
             modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp)
         )
 
-        // Spotify-style: release header, then that release's tracks (LPs / EPs / singles).
         LazyColumn(
             modifier = Modifier.fillMaxSize(),
             contentPadding = PaddingValues(bottom = 96.dp)
@@ -464,12 +466,15 @@ private fun DiscographyAllScreen(
                     tracks,
                     key = { _, song -> "trk-$releaseKey-${song.songKey}" }
                 ) { index, song ->
-                    DiscographyTrackRow(
+                    SwipeAddSongRow(
                         song = song,
-                        indexInRelease = index,
-                        titleColor = titleColor,
-                        mutedColor = mutedColor,
-                        onClick = { onPlaySongs(tracks, index) }
+                        onClick = { onPlaySongs(tracks, index) },
+                        onSwipeAdd = {
+                            onAddToQueue(song)
+                            Toast.makeText(context, "Added to queue", Toast.LENGTH_SHORT).show()
+                        },
+                        showTrackNumber = true,
+                        transparentSurface = true
                     )
                 }
 
@@ -513,59 +518,6 @@ private fun DiscographyReleaseHeader(
                 },
                 style = MaterialTheme.typography.bodySmall,
                 color = mutedColor
-            )
-        }
-    }
-}
-
-@Composable
-private fun DiscographyTrackRow(
-    song: Song,
-    indexInRelease: Int,
-    titleColor: Color,
-    mutedColor: Color,
-    onClick: () -> Unit
-) {
-    val trackLabel = song.trackNumber?.toString()
-        ?: (indexInRelease + 1).toString()
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clickable(onClick = onClick)
-            .padding(start = 12.dp, end = 16.dp, top = 8.dp, bottom = 8.dp),
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        Text(
-            text = trackLabel,
-            style = MaterialTheme.typography.bodyMedium,
-            color = mutedColor,
-            textAlign = TextAlign.Center,
-            modifier = Modifier.width(40.dp)
-        )
-        Column(modifier = Modifier.weight(1f)) {
-            MarqueeText(
-                text = song.displayTitle,
-                style = MaterialTheme.typography.bodyLarge,
-                color = titleColor
-            )
-            val albumArtist = song.effectiveAlbumArtist
-            val trackArtist = song.artist
-            if (!trackArtist.isNullOrBlank() &&
-                !trackArtist.equals(albumArtist, ignoreCase = true)
-            ) {
-                MarqueeText(
-                    text = trackArtist,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = mutedColor
-                )
-            }
-        }
-        song.durationMs?.takeIf { it > 0 }?.let { ms ->
-            Text(
-                formatDuration(ms),
-                style = MaterialTheme.typography.bodySmall,
-                color = mutedColor,
-                modifier = Modifier.padding(start = 8.dp)
             )
         }
     }
