@@ -84,7 +84,7 @@ fun MediaSheetBottomPad() {
     Spacer(modifier = Modifier.height(28.dp))
 }
 
-/** Long-press sheet for a song: Go to album / Go to artist / Add to queue. */
+/** Long-press sheet for a song: Go to album / artist / Edit / Queue. */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun SongContextSheet(
@@ -92,6 +92,7 @@ fun SongContextSheet(
     onDismiss: () -> Unit,
     onGoToAlbum: (() -> Unit)? = null,
     onGoToArtist: (() -> Unit)? = null,
+    onEditMetadata: (() -> Unit)? = null,
     onAddToQueue: (() -> Unit)? = null
 ) {
     ModalBottomSheet(
@@ -121,6 +122,15 @@ fun SongContextSheet(
                 }
             )
         }
+        if (onEditMetadata != null) {
+            MediaSheetItem(
+                label = "Edit metadata",
+                onClick = {
+                    onDismiss()
+                    onEditMetadata()
+                }
+            )
+        }
         if (onAddToQueue != null) {
             MediaSheetItem(
                 label = "Add to queue",
@@ -134,13 +144,14 @@ fun SongContextSheet(
     }
 }
 
-/** Long-press sheet for an album: Go to artist / Add to queue. */
+/** Long-press sheet for an album. */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun AlbumContextSheet(
     album: AlbumItem,
     onDismiss: () -> Unit,
     onGoToArtist: (() -> Unit)? = null,
+    onEditMetadata: (() -> Unit)? = null,
     onAddToQueue: (() -> Unit)? = null
 ) {
     ModalBottomSheet(
@@ -158,6 +169,15 @@ fun AlbumContextSheet(
                 onClick = {
                     onDismiss()
                     onGoToArtist()
+                }
+            )
+        }
+        if (onEditMetadata != null) {
+            MediaSheetItem(
+                label = "Edit album metadata",
+                onClick = {
+                    onDismiss()
+                    onEditMetadata()
                 }
             )
         }
