@@ -1,5 +1,6 @@
 package capital.yuri.yuriplayer.activities.ui
 
+import android.widget.Toast
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
@@ -26,6 +27,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.ArrowDropDown
+import androidx.compose.material.icons.filled.CloudDownload
 import androidx.compose.material.icons.filled.Language
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material3.Checkbox
@@ -58,6 +60,7 @@ import androidx.compose.ui.unit.dp
 import capital.yuri.yuriplayer.data.AlbumItem
 import capital.yuri.yuriplayer.data.ArtistItem
 import capital.yuri.yuriplayer.data.ArtistProfileRepository
+import capital.yuri.yuriplayer.data.MetadataEnrichmentService
 import capital.yuri.yuriplayer.data.ReleaseType
 import capital.yuri.yuriplayer.data.Song
 import capital.yuri.yuriplayer.data.releaseType
@@ -70,7 +73,6 @@ import org.koin.compose.koinInject
 
 private enum class ArtistReleaseFilter { All, Albums, EPs, Singles }
 
-/** Multi-select type filters for the full discography list. */
 private data class DiscographyFilters(
     val albums: Boolean = true,
     val eps: Boolean = true,
@@ -96,7 +98,6 @@ private data class DiscographyFilters(
     }
 
     companion object {
-        /** Seed checkboxes from the artist-page chip the user was browsing. */
         fun fromPageFilter(filter: ArtistReleaseFilter): DiscographyFilters = when (filter) {
             ArtistReleaseFilter.All -> DiscographyFilters()
             ArtistReleaseFilter.Albums -> DiscographyFilters(albums = true, eps = false, singles = false)
@@ -116,14 +117,15 @@ fun ArtistDetailScreen(
 ) {
     val themeService: ThemeService = koinInject()
     val profileRepo: ArtistProfileRepository = koinInject()
+    val enrichment: MetadataEnrichmentService = koinInject()
     val base = MaterialTheme.colorScheme
     val context = LocalContext.current
     var themeColors by remember { mutableStateOf(fallbackPlayerColors(base)) }
     var filter by remember { mutableStateOf(ArtistReleaseFilter.All) }
     var showAll by remember { mutableStateOf(false) }
-    // Carried into Show all so filters match what the user was already viewing.
     var discographyFilters by remember { mutableStateOf(DiscographyFilters()) }
     val uriHandler = LocalUriHandler.current
+    val enrichBusy by enrichment.busy.collectAsState()
 
     val profile by profileRepo.observe(artist.displayName).collectAsState(initial = null)
 
@@ -138,7 +140,6 @@ fun ArtistDetailScreen(
     val onBg = scheme.onBackground
     val muted = onBg.copy(alpha = 0.6f)
 
-    // Latest year first → oldest last; undated releases sink to the end.
     val sortedAlbums = remember(albums) {
         albums.sortedWith(
             compareByDescending<AlbumItem> { it.releaseYear() ?: Int.MIN_VALUE }
@@ -236,6 +237,28 @@ fun ArtistDetailScreen(
                                     modifier = Modifier.weight(1f)
                                 )
                                 if (sortedAlbums.isNotEmpty()) {
+                                    TextButton(
+                                        onClick = {
+                                            enrichment.enrichAlbumsAsync(sortedAlbums, force = true)
+                                            Toast.makeText(
+                                                context,
+                                                "Looking up metadata for ${sortedAlbums.size} releases…",
+                                                Toast.LENGTH_SHORT
+                                            ).show()
+                                        },
+                                        enabled = !enrichBusy
+                                    ) {
+                                        Icon(
+                                            Icons.Default.CloudDownload,
+                                            contentDescription = null,
+                                            modifier = Modifier.size(18.dp)
+                                        )
+                                        Spacer(modifier = Modifier.width(4.dp))
+                                        Text(
+                                            if (enrichBusy) "Fetching…" else "Fetch metadata",
+                                            color = scheme.primary
+                                        )
+                                    }
                                     TextButton(
                                         onClick = {
                                             discographyFilters =
@@ -395,47 +418,32 @@ private fun DiscographyAllScreen(
                 DropdownMenuItem(
                     text = {
                         Row(verticalAlignment = Alignment.CenterVertically) {
-                            Checkbox(
-                                checked = filters.albums,
-                                onCheckedChange = null
-                            )
+                            Checkbox(checked = filters.albums, onCheckedChange = null)
                             Spacer(modifier = Modifier.width(8.dp))
                             Text("LPs")
                         }
                     },
-                    onClick = {
-                        onFiltersChange(filters.copy(albums = !filters.albums))
-                    }
+                    onClick = { onFiltersChange(filters.copy(albums = !filters.albums)) }
                 )
                 DropdownMenuItem(
                     text = {
                         Row(verticalAlignment = Alignment.CenterVertically) {
-                            Checkbox(
-                                checked = filters.eps,
-                                onCheckedChange = null
-                            )
+                            Checkbox(checked = filters.eps, onCheckedChange = null)
                             Spacer(modifier = Modifier.width(8.dp))
                             Text("EPs")
                         }
                     },
-                    onClick = {
-                        onFiltersChange(filters.copy(eps = !filters.eps))
-                    }
+                    onClick = { onFiltersChange(filters.copy(eps = !filters.eps)) }
                 )
                 DropdownMenuItem(
                     text = {
                         Row(verticalAlignment = Alignment.CenterVertically) {
-                            Checkbox(
-                                checked = filters.singles,
-                                onCheckedChange = null
-                            )
+                            Checkbox(checked = filters.singles, onCheckedChange = null)
                             Spacer(modifier = Modifier.width(8.dp))
                             Text("Singles")
                         }
                     },
-                    onClick = {
-                        onFiltersChange(filters.copy(singles = !filters.singles))
-                    }
+                    onClick = { onFiltersChange(filters.copy(singles = !filters.singles)) }
                 )
             }
         }
@@ -573,7 +581,6 @@ private fun ArtistHero(
     }
 }
 
-/** Spotify-style horizontal discography card — subtitle is year only. */
 @Composable
 private fun ArtistReleaseCard(
     album: AlbumItem,
@@ -610,7 +617,6 @@ private fun ArtistReleaseCard(
     }
 }
 
-/** Vertical list row used on the Show all discography screen. */
 @Composable
 private fun ArtistReleaseListRow(
     album: AlbumItem,
