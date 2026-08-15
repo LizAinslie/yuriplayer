@@ -67,6 +67,7 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import capital.yuri.yuriplayer.data.AlbumItem
+import capital.yuri.yuriplayer.data.MetadataEnrichmentService
 import capital.yuri.yuriplayer.data.Song
 import capital.yuri.yuriplayer.data.theme.ThemeService
 import capital.yuri.yuriplayer.ui.formatTrackCount
@@ -128,6 +129,7 @@ fun AlbumDetailScreen(
 ) {
     val context = LocalContext.current
     val themeService: ThemeService = koinInject()
+    val enrichment: MetadataEnrichmentService = koinInject()
     val base = MaterialTheme.colorScheme
     var themeColors by remember { mutableStateOf(fallbackPlayerColors(base)) }
     var showMenu by remember { mutableStateOf(false) }
@@ -355,6 +357,18 @@ fun AlbumDetailScreen(
                             Toast.makeText(
                                 context,
                                 "Queued ${formatTrackCount(album.songs.size)}",
+                                Toast.LENGTH_SHORT
+                            ).show()
+                            showMenu = false
+                        }
+                    )
+                    MediaSheetItem(
+                        label = "Fetch additional metadata",
+                        onClick = {
+                            enrichment.enrichAlbumAsync(album, force = true)
+                            Toast.makeText(
+                                context,
+                                "Looking up year & cover online…",
                                 Toast.LENGTH_SHORT
                             ).show()
                             showMenu = false
