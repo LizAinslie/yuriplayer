@@ -140,7 +140,9 @@ fun LibraryScreen(
     onAddToQueue: (Song) -> Unit,
     onAddAlbumToQueue: (List<Song>) -> Unit = {},
     onOpenAlbum: (AlbumItem) -> Unit = {},
-    onOpenArtist: (ArtistItem) -> Unit = {}
+    onOpenArtist: (ArtistItem) -> Unit = {},
+    onEditSong: (Song) -> Unit = {},
+    onEditAlbum: (AlbumItem) -> Unit = {}
 ) {
     val allSongs by library.songs.collectAsState()
     val loading by library.isLoading.collectAsState()
@@ -288,7 +290,8 @@ fun LibraryScreen(
                     Toast.makeText(context, "Added to queue", Toast.LENGTH_SHORT).show()
                 },
                 onGoToAlbum = { openAlbumForSong(it) },
-                onGoToArtist = { openArtistForSong(it) }
+                onGoToArtist = { openArtistForSong(it) },
+                onEditSong = onEditSong
             )
             LibrarySection.Untagged -> SongList(
                 songs = untaggedSongs,
@@ -301,7 +304,8 @@ fun LibraryScreen(
                     Toast.makeText(context, "Added to queue", Toast.LENGTH_SHORT).show()
                 },
                 onGoToAlbum = { openAlbumForSong(it) },
-                onGoToArtist = { openArtistForSong(it) }
+                onGoToArtist = { openArtistForSong(it) },
+                onEditSong = onEditSong
             )
             LibrarySection.Albums -> {
                 if (albums.isEmpty()) Text("No albums match.", modifier = Modifier.padding(16.dp))
@@ -318,7 +322,8 @@ fun LibraryScreen(
                                     Toast.LENGTH_SHORT
                                 ).show()
                             },
-                            onGoToArtist = { openArtistForAlbum(album) }
+                            onGoToArtist = { openArtistForAlbum(album) },
+                            onEditMetadata = { onEditAlbum(album) }
                         )
                     }
                 }
@@ -344,7 +349,8 @@ private fun SongList(
     onPlay: (List<Song>, Int) -> Unit,
     onAddToQueue: (Song) -> Unit,
     onGoToAlbum: (Song) -> Unit,
-    onGoToArtist: (Song) -> Unit
+    onGoToArtist: (Song) -> Unit,
+    onEditSong: (Song) -> Unit
 ) {
     if (songs.isEmpty() && !loading) {
         Text("Nothing here yet.", modifier = Modifier.padding(16.dp))
@@ -359,7 +365,8 @@ private fun SongList(
                     isPlaying = song.isSameAs(nowPlaying),
                     isPlaybackActive = isPlaybackActive,
                     onGoToAlbum = { onGoToAlbum(song) },
-                    onGoToArtist = { onGoToArtist(song) }
+                    onGoToArtist = { onGoToArtist(song) },
+                    onEditMetadata = { onEditSong(song) }
                 )
             }
         }
@@ -378,7 +385,8 @@ fun SwipeAddSongRow(
     transparentSurface: Boolean = false,
     surfaceColor: Color? = null,
     onGoToAlbum: (() -> Unit)? = null,
-    onGoToArtist: (() -> Unit)? = null
+    onGoToArtist: (() -> Unit)? = null,
+    onEditMetadata: (() -> Unit)? = null
 ) {
     var offsetX by remember { mutableFloatStateOf(0f) }
     var showSheet by remember { mutableStateOf(false) }
@@ -386,7 +394,7 @@ fun SwipeAddSongRow(
     val threshold = with(density) { 96.dp.toPx() }
     val accent = MaterialTheme.colorScheme.primary
     val onSurface = MaterialTheme.colorScheme.onSurface
-    val hasContext = onGoToAlbum != null || onGoToArtist != null
+    val hasContext = onGoToAlbum != null || onGoToArtist != null || onEditMetadata != null
 
     val revealAlpha = (offsetX / (threshold * 0.35f)).coerceIn(0f, 1f)
 
@@ -493,6 +501,7 @@ fun SwipeAddSongRow(
             onDismiss = { showSheet = false },
             onGoToAlbum = onGoToAlbum,
             onGoToArtist = onGoToArtist,
+            onEditMetadata = onEditMetadata,
             onAddToQueue = onSwipeAdd
         )
     }
@@ -504,7 +513,8 @@ fun SwipeAddAlbumRow(
     album: AlbumItem,
     onClick: () -> Unit,
     onSwipeAdd: () -> Unit,
-    onGoToArtist: (() -> Unit)? = null
+    onGoToArtist: (() -> Unit)? = null,
+    onEditMetadata: (() -> Unit)? = null
 ) {
     var offsetX by remember { mutableFloatStateOf(0f) }
     var showSheet by remember { mutableStateOf(false) }
@@ -549,7 +559,9 @@ fun SwipeAddAlbumRow(
                 }
                 .combinedClickable(
                     onClick = onClick,
-                    onLongClick = { if (onGoToArtist != null) showSheet = true }
+                    onLongClick = {
+                        if (onGoToArtist != null || onEditMetadata != null) showSheet = true
+                    }
                 )
                 .padding(horizontal = 16.dp, vertical = 12.dp),
             verticalAlignment = Alignment.CenterVertically
@@ -572,6 +584,7 @@ fun SwipeAddAlbumRow(
             album = album,
             onDismiss = { showSheet = false },
             onGoToArtist = onGoToArtist,
+            onEditMetadata = onEditMetadata,
             onAddToQueue = onSwipeAdd
         )
     }
@@ -582,7 +595,8 @@ fun SwipeAddAlbumRow(
 fun AlbumRow(
     album: AlbumItem,
     onClick: () -> Unit,
-    onGoToArtist: (() -> Unit)? = null
+    onGoToArtist: (() -> Unit)? = null,
+    onEditMetadata: (() -> Unit)? = null
 ) {
     var showSheet by remember { mutableStateOf(false) }
     Row(
@@ -590,7 +604,9 @@ fun AlbumRow(
             .fillMaxWidth()
             .combinedClickable(
                 onClick = onClick,
-                onLongClick = { if (onGoToArtist != null) showSheet = true }
+                onLongClick = {
+                    if (onGoToArtist != null || onEditMetadata != null) showSheet = true
+                }
             )
             .padding(horizontal = 16.dp, vertical = 12.dp),
         verticalAlignment = Alignment.CenterVertically
@@ -610,7 +626,8 @@ fun AlbumRow(
         AlbumContextSheet(
             album = album,
             onDismiss = { showSheet = false },
-            onGoToArtist = onGoToArtist
+            onGoToArtist = onGoToArtist,
+            onEditMetadata = onEditMetadata
         )
     }
 }
