@@ -129,10 +129,8 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
-        window.setSoftInputMode(
-            WindowManager.LayoutParams.SOFT_INPUT_STATE_ALWAYS_HIDDEN or
-                WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE
-        )
+        // adjustResize only — never STATE_ALWAYS_HIDDEN (blocks typing in metadata editors)
+        window.setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE)
 
         isCarMode = intent?.action == "capital.yuri.yuriplayer.action.CAR_MODE" ||
                 intent?.getBooleanExtra("car_mode", false) == true
@@ -468,7 +466,6 @@ fun YuriApp(
                     when (val d = detail) {
                         is DetailRoute.Album -> {
                             val key = albumKey(d.album.name, d.album.artist)
-                            // Prefer live library album if tags were just edited
                             val liveAlbum = library.albums().firstOrNull {
                                 albumKey(it.name, it.artist) == key
                             } ?: d.album
@@ -544,7 +541,7 @@ fun YuriApp(
                             EditSongMetadataScreen(
                                 song = d.song,
                                 onBack = { popDetail() },
-                                onSaved = { /* library refresh handled in service */ }
+                                onSaved = {}
                             )
                         }
                         is DetailRoute.EditAlbum -> {
