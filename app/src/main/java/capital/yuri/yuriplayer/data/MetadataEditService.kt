@@ -50,10 +50,14 @@ class MetadataEditService(
         val message: String
     )
 
+    /**
+     * True when we can resolve a real filesystem path for the track.
+     * Note: [File.canWrite] is often false on Android even when tag writes
+     * succeed with storage permission — do not require it for enabling the UI.
+     */
     fun isLocalFile(song: Song): Boolean {
         val path = resolveWritablePath(song) ?: return false
-        val f = File(path)
-        return f.isFile && f.canWrite()
+        return File(path).isFile
     }
 
     fun isLocalAlbum(album: AlbumItem): Boolean =
@@ -61,16 +65,21 @@ class MetadataEditService(
 
     suspend fun saveSong(song: Song, edit: SongEdit): Result = withContext(Dispatchers.IO) {
         val path = resolveWritablePath(song)
-            ?: return@withContext Result(0, 1, "Not a writable local file")
+            ?: return@withContext Result(0, 1, "Not a local file path (cannot write tags)")
         try {
-            writeSongTags(File(path), edit)
+            // Ensure writable bit when possible (no-op if already set / not allowed)
+            val file = File(path)
+            if (!file.canWrite()) {
+                runCatching { file.setWritable(true) }
+            }
+            writeSongTags(file, edit)
             updateMediaStoreSong(song, edit)
             scanPaths(listOf(path))
             libraryIndex.refresh()
             Result(1, 0, "Saved")
         } catch (e: Exception) {
             Log.e(TAG, "saveSong failed path=$path", e)
-            Result(0, 1, e.message ?: "Write failed")
+            Result(0, 1, e.message ?: "Write failed — need storage permission?")
         }
     }
 
@@ -100,7 +109,9 @@ class MetadataEditService(
                 continue
             }
             try {
-                writeAlbumTags(File(path), edit, coverFile)
+                val file = File(path)
+                if (!file.canWrite()) runCatching { file.setWritable(true) }
+                writeAlbumTags(file, edit, coverFile)
                 updateMediaStoreAlbumFields(song, edit)
                 scanned += path
                 ok++
@@ -116,7 +127,7 @@ class MetadataEditService(
             failed = failed,
             message = when {
                 failed == 0 -> "Saved $ok tracks"
-                ok == 0 -> "Could not write tags"
+                ok == 0 -> "Could not write tags — check storage permission"
                 else -> "Saved $ok, failed $failed"
             }
         )
@@ -212,7 +223,6 @@ class MetadataEditService(
         val values = ContentValues().apply {
             edit.albumName?.let { put(MediaStore.Audio.Media.ALBUM, it) }
             edit.year?.let { put(MediaStore.Audio.Media.YEAR, it) }
-            // Album artist is written to file tags only; MediaStore has limited support.
         }
         if (values.size() == 0) return
         runCatching {
