@@ -44,5 +44,9 @@
     kotlinx.serialization.KSerializer serializer(...);
 }
 
+# jaudiotagger (reflection + format handlers)
+-keep class org.jaudiotagger.** { *; }
+-dontwarn org.jaudiotagger.**
+
 # Compose
 -dontwarn androidx.compose.**
