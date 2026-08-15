@@ -43,7 +43,6 @@ android {
 
     buildTypes {
         debug {
-            // Same cert as release → install over release without uninstall / data wipe
             if (keystorePropsFile.exists()) {
                 signingConfig = signingConfigs.getByName("release")
             }
@@ -68,7 +67,6 @@ android {
         compose = true
     }
 
-    // AGP 9: register KSP output via android.sourceSets (preferred over kotlin.sourceSets)
     sourceSets {
         getByName("debug") {
             java.srcDir("build/generated/ksp/debug/java")
@@ -109,6 +107,9 @@ dependencies {
     implementation(libs.androidx.room.runtime)
     implementation(libs.androidx.room.ktx)
     ksp(libs.androidx.room.compiler)
+
+    // Local file tag read/write (MP3, FLAC, Ogg, …)
+    implementation(libs.jaudiotagger)
 
     testImplementation(libs.junit)
     androidTestImplementation(platform(libs.androidx.compose.bom))
