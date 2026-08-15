@@ -14,6 +14,7 @@ import java.net.HttpURLConnection
 import java.net.URL
 import java.net.URLEncoder
 import java.nio.charset.StandardCharsets
+import kotlin.time.Duration.Companion.milliseconds
 
 /**
  * Minimal MusicBrainz + Cover Art Archive client.
@@ -37,11 +38,11 @@ class MusicBrainzClient {
         withContext(Dispatchers.IO) {
             if (album.isNullOrBlank()) return@withContext null
             val query = buildString {
-                append("release:\")
+                append("release:\"")
                 append(escapeLucene(album.trim()))
                 append("\"")
                 if (!artist.isNullOrBlank()) {
-                    append(" AND artist:\")
+                    append(" AND artist:\"")
                     append(escapeLucene(artist.trim()))
                     append("\"")
                 }
@@ -164,7 +165,7 @@ class MusicBrainzClient {
     private suspend fun throttle() {
         val now = System.currentTimeMillis()
         val wait = MIN_INTERVAL_MS - (now - lastRequestAt)
-        if (wait > 0) delay(wait)
+        if (wait > 0) delay(wait.milliseconds)
         lastRequestAt = System.currentTimeMillis()
     }
 
