@@ -1,6 +1,5 @@
 package capital.yuri.yuriplayer.activities.ui
 
-import android.widget.Toast
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
@@ -27,7 +26,6 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.ArrowDropDown
-import androidx.compose.material.icons.filled.CloudDownload
 import androidx.compose.material.icons.filled.Language
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material3.Checkbox
@@ -60,7 +58,6 @@ import androidx.compose.ui.unit.dp
 import capital.yuri.yuriplayer.data.AlbumItem
 import capital.yuri.yuriplayer.data.ArtistItem
 import capital.yuri.yuriplayer.data.ArtistProfileRepository
-import capital.yuri.yuriplayer.data.MetadataEnrichmentService
 import capital.yuri.yuriplayer.data.ReleaseType
 import capital.yuri.yuriplayer.data.Song
 import capital.yuri.yuriplayer.data.releaseType
@@ -117,7 +114,6 @@ fun ArtistDetailScreen(
 ) {
     val themeService: ThemeService = koinInject()
     val profileRepo: ArtistProfileRepository = koinInject()
-    val enrichment: MetadataEnrichmentService = koinInject()
     val base = MaterialTheme.colorScheme
     val context = LocalContext.current
     var themeColors by remember { mutableStateOf(fallbackPlayerColors(base)) }
@@ -125,7 +121,6 @@ fun ArtistDetailScreen(
     var showAll by remember { mutableStateOf(false) }
     var discographyFilters by remember { mutableStateOf(DiscographyFilters()) }
     val uriHandler = LocalUriHandler.current
-    val enrichBusy by enrichment.busy.collectAsState()
 
     val profile by profileRepo.observe(artist.displayName).collectAsState(initial = null)
 
@@ -237,28 +232,6 @@ fun ArtistDetailScreen(
                                     modifier = Modifier.weight(1f)
                                 )
                                 if (sortedAlbums.isNotEmpty()) {
-                                    TextButton(
-                                        onClick = {
-                                            enrichment.enrichAlbumsAsync(sortedAlbums, force = true)
-                                            Toast.makeText(
-                                                context,
-                                                "Looking up metadata for ${sortedAlbums.size} releases…",
-                                                Toast.LENGTH_SHORT
-                                            ).show()
-                                        },
-                                        enabled = !enrichBusy
-                                    ) {
-                                        Icon(
-                                            Icons.Default.CloudDownload,
-                                            contentDescription = null,
-                                            modifier = Modifier.size(18.dp)
-                                        )
-                                        Spacer(modifier = Modifier.width(4.dp))
-                                        Text(
-                                            if (enrichBusy) "Fetching…" else "Fetch metadata",
-                                            color = scheme.primary
-                                        )
-                                    }
                                     TextButton(
                                         onClick = {
                                             discographyFilters =
