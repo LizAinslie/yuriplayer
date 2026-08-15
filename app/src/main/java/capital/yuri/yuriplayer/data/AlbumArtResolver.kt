@@ -11,7 +11,7 @@ import java.io.File
 import java.io.InputStream
 
 /**
- * Album art decode: embedded tags → folder cover → MediaStore URI.
+ * Album art decode: embedded tags → folder cover → enriched network file → MediaStore URI.
  * Caching lives in [AlbumArtCache] (4-slot); this object only decodes.
  */
 object AlbumArtResolver {
@@ -23,9 +23,22 @@ object AlbumArtResolver {
         withContext(Dispatchers.IO) {
             val bitmap = loadEmbedded(song.path)
                 ?: loadFolderCover(song.path)
+                ?: loadEnrichedCover(context, song)
                 ?: loadUri(context, song.albumArtUri)
             bitmap?.let { scaleDown(it, maxSize) }
         }
+
+    private fun loadEnrichedCover(context: Context, song: Song): Bitmap? {
+        val key = albumKey(song.album, song.effectiveAlbumArtist)
+        val name = MetadataEnrichmentService.sanitizeFileName(key) + ".jpg"
+        val f = File(File(context.filesDir, "covers"), name)
+        if (!f.isFile) return null
+        return try {
+            BitmapFactory.decodeFile(f.absolutePath)
+        } catch (_: Exception) {
+            null
+        }
+    }
 
     private fun loadEmbedded(path: String?): Bitmap? {
         if (path.isNullOrBlank()) return null
