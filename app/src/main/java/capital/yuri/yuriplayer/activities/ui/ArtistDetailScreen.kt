@@ -107,6 +107,13 @@ private data class DiscographyFilters(
     }
 }
 
+private fun sortedReleaseTracks(album: AlbumItem): List<Song> =
+    album.songs.sortedWith(
+        compareBy<Song> { it.discNumber ?: 1 }
+            .thenBy { it.trackNumber ?: Int.MAX_VALUE }
+            .thenBy(String.CASE_INSENSITIVE_ORDER) { it.displayTitle }
+    )
+
 @Composable
 fun ArtistDetailScreen(
     artist: ArtistItem,
@@ -435,20 +442,14 @@ private fun DiscographyAllScreen(
             modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp)
         )
 
-        // Spotify-style: each release header, then its tracks underneath (albums, EPs, singles).
+        // Spotify-style: release header, then that release's tracks (LPs / EPs / singles).
         LazyColumn(
             modifier = Modifier.fillMaxSize(),
             contentPadding = PaddingValues(bottom = 96.dp)
         ) {
             visible.forEach { album ->
                 val releaseKey = "${album.name}|${album.artist}|${album.releaseYear()}"
-                val tracks = remember(album.songs) {
-                    album.songs.sortedWith(
-                        compareBy<Song> { it.discNumber ?: 1 }
-                            .thenBy { it.trackNumber ?: Int.MAX_VALUE }
-                            .thenBy(String.CASE_INSENSITIVE_ORDER) { it.displayTitle }
-                    )
-                }
+                val tracks = sortedReleaseTracks(album)
 
                 item(key = "hdr-$releaseKey") {
                     DiscographyReleaseHeader(
@@ -547,7 +548,6 @@ private fun DiscographyTrackRow(
                 style = MaterialTheme.typography.bodyLarge,
                 color = titleColor
             )
-            // Show track artist when it differs from album artist (features, etc.)
             val albumArtist = song.effectiveAlbumArtist
             val trackArtist = song.artist
             if (!trackArtist.isNullOrBlank() &&
