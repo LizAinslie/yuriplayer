@@ -124,6 +124,8 @@ fun AlbumDetailScreen(
     onToggleShuffle: () -> Unit = {},
     onFavorite: () -> Unit = {},
     onOpenArtist: () -> Unit = {},
+    onEditAlbum: () -> Unit = {},
+    onEditSong: (Song) -> Unit = {},
     onAddSongToQueue: (Song) -> Unit,
     onAddAlbumToQueue: (List<Song>) -> Unit
 ) {
@@ -173,7 +175,6 @@ fun AlbumDetailScreen(
         collapsePx = 0f
     }
 
-    // Re-extract Material You colors whenever enriched cover lands.
     LaunchedEffect(album.name, album.artist, coverGen) {
         themeColors = themeService.themeFromSong(
             context = context,
@@ -343,7 +344,8 @@ fun AlbumDetailScreen(
                                 showTrackNumber = true,
                                 isPlaying = song.isSameAs(nowPlaying),
                                 isPlaybackActive = isPlaying,
-                                transparentSurface = true
+                                transparentSurface = true,
+                                onEditMetadata = { onEditSong(song) }
                             )
                         }
                     }
@@ -370,6 +372,13 @@ fun AlbumDetailScreen(
                                 Toast.LENGTH_SHORT
                             ).show()
                             showMenu = false
+                        }
+                    )
+                    MediaSheetItem(
+                        label = "Edit album metadata",
+                        onClick = {
+                            showMenu = false
+                            onEditAlbum()
                         }
                     )
                     MediaSheetItem(
