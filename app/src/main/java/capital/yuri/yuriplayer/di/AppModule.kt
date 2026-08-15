@@ -54,7 +54,7 @@ val appModule = module {
     single { SourceResolver(get()) }
 
     single { MusicBrainzClient() }
-    single { MetadataEnrichmentService(androidContext(), get(), get(), get()) }
+    single { MetadataEnrichmentService(androidContext(), get(), get(), get(), get()) }
 
     single { AlbumArtCache(androidContext()) }
     single { ThemeService(get()) }
