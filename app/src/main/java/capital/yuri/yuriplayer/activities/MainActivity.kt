@@ -137,7 +137,6 @@ class MainActivity : ComponentActivity() {
 
     private fun hasWritePermission(): Boolean {
         if (Build.VERSION.SDK_INT >= 30) {
-            // Scoped storage: only All files access reliably allows rewriting tags on disk.
             return Environment.isExternalStorageManager()
         }
         return ContextCompat.checkSelfPermission(
@@ -146,15 +145,6 @@ class MainActivity : ComponentActivity() {
         ) == PackageManager.PERMISSION_GRANTED
     }
 
-    /**
-     * Runtime storage grants:
-     * - API 33+: READ_MEDIA_AUDIO
-     * - API 29–32: READ + WRITE_EXTERNAL_STORAGE
-     * - API ≤ 28 (Stylo 4): READ + WRITE_EXTERNAL_STORAGE
-     *
-     * Tag *writes* on API 30+ additionally need MANAGE_EXTERNAL_STORAGE
-     * (prompted separately via Settings).
-     */
     private fun requiredStoragePermissions(): Array<String> {
         val perms = mutableListOf<String>()
         if (Build.VERSION.SDK_INT >= 33) {
@@ -259,7 +249,6 @@ class MainActivity : ComponentActivity() {
 
     override fun onResume() {
         super.onResume()
-        // User may have just granted All files access from Settings
         if (Build.VERSION.SDK_INT >= 30 && Environment.isExternalStorageManager()) {
             showAllFilesPrompt.value = false
         }
@@ -630,7 +619,8 @@ fun YuriApp(
                                         songs, i,
                                         ColdSource(ColdSourceType.ARTIST, d.artist.name ?: "", d.artist.name)
                                     )
-                                }
+                                },
+                                onAddToQueue = { player.addToHotQueue(it) }
                             )
                         }
                         is DetailRoute.Playlist -> {
