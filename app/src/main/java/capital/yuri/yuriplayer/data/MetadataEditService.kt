@@ -1,11 +1,9 @@
 package capital.yuri.yuriplayer.data
 
-import android.content.ContentUris
 import android.content.ContentValues
 import android.content.Context
 import android.media.MediaScannerConnection
 import android.net.Uri
-import android.os.Build
 import android.provider.MediaStore
 import android.util.Log
 import kotlinx.coroutines.Dispatchers
@@ -81,7 +79,6 @@ class MetadataEditService(
         var failed = 0
         val scanned = mutableListOf<String>()
         val coverFile = edit.coverBytes?.let { bytes ->
-            // Prefer writing cover next to the first track's folder.
             val firstPath = album.songs.firstNotNullOfOrNull { resolveWritablePath(it) }
             val dir = firstPath?.let { File(it).parentFile }
             if (dir != null && dir.isDirectory) {
@@ -124,8 +121,6 @@ class MetadataEditService(
             }
         )
     }
-
-    // ── tag IO ──────────────────────────────────────────────────────────
 
     private fun writeSongTags(file: File, edit: SongEdit) {
         val audio = AudioFileIO.read(file)
@@ -177,14 +172,11 @@ class MetadataEditService(
         }
     }
 
-    // ── path resolution ─────────────────────────────────────────────────
-
     fun resolveWritablePath(song: Song): String? {
         song.path?.takeIf { it.isNotBlank() }?.let { p ->
             val f = File(p)
             if (f.isFile) return f.absolutePath
         }
-        // MediaStore DATA column (available on API 27–28 reliably; may be null later)
         return try {
             context.contentResolver.query(
                 song.contentUri,
@@ -205,8 +197,6 @@ class MetadataEditService(
         }
     }
 
-    // ── MediaStore mirror ───────────────────────────────────────────────
-
     private fun updateMediaStoreSong(song: Song, edit: SongEdit) {
         val values = ContentValues().apply {
             edit.title?.let { put(MediaStore.Audio.Media.TITLE, it) }
@@ -221,13 +211,8 @@ class MetadataEditService(
     private fun updateMediaStoreAlbumFields(song: Song, edit: AlbumEdit) {
         val values = ContentValues().apply {
             edit.albumName?.let { put(MediaStore.Audio.Media.ALBUM, it) }
-            edit.albumArtist?.let {
-                if (Build.VERSION.SDK_INT >= 30) {
-                    // ALBUM_ARTIST exists on newer columns; older devices ignore unknown keys
-                }
-                put(MediaStore.Audio.Media.ARTIST, it) // best-effort on old APIs for album-level
-            }
             edit.year?.let { put(MediaStore.Audio.Media.YEAR, it) }
+            // Album artist is written to file tags only; MediaStore has limited support.
         }
         if (values.size() == 0) return
         runCatching {
@@ -245,7 +230,6 @@ class MetadataEditService(
         )
     }
 
-    /** Read cover image bytes from a content/file Uri for the album editor. */
     suspend fun readImageBytes(uri: Uri): Pair<ByteArray, String>? = withContext(Dispatchers.IO) {
         try {
             val mime = context.contentResolver.getType(uri) ?: "image/jpeg"
