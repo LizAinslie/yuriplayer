@@ -6,6 +6,7 @@ import android.util.Log
 import capital.yuri.yuriplayer.data.db.AlbumMetadataDao
 import capital.yuri.yuriplayer.data.db.AlbumMetadataEntity
 import capital.yuri.yuriplayer.data.source.MusicBrainzClient
+import capital.yuri.yuriplayer.data.theme.ThemeService
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -21,17 +22,18 @@ import java.io.File
 /**
  * Fills gaps in local tags using MusicBrainz (year) and Cover Art Archive (art).
  *
- * **Manual** [enrichAlbumAsync] / [enrichAlbumsAsync] always run when the user
- * taps "Fetch additional metadata".
- * **Automatic** [enrichLibraryAsync] only runs when
- * [LibrarySettings.isAutomaticMetadataEnabled] is true.
+ * Manual fetch always runs; automatic only when Settings allows it.
+ * New covers invalidate [AlbumArtCache] / [ThemeService] and bump [coverGeneration]
+ * so UI reloads art **and** Material You colors.
  */
 class MetadataEnrichmentService(
     private val context: Context,
     private val dao: AlbumMetadataDao,
     private val client: MusicBrainzClient,
     private val library: LibraryIndex,
-    private val settings: LibrarySettings
+    private val settings: LibrarySettings,
+    private val artCache: AlbumArtCache,
+    private val themeService: ThemeService
 ) {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val workLock = Mutex()
@@ -40,7 +42,7 @@ class MetadataEnrichmentService(
     private val _busy = MutableStateFlow(false)
     val busy: StateFlow<Boolean> = _busy.asStateFlow()
 
-    /** Bumped when a cover file is written so Compose can reload art. */
+    /** Bumped when a cover file is written so Compose can reload art + colors. */
     private val _coverGeneration = MutableStateFlow(0L)
     val coverGeneration: StateFlow<Long> = _coverGeneration.asStateFlow()
 
@@ -59,7 +61,6 @@ class MetadataEnrichmentService(
         }
     }
 
-    /** Background enrich — only when automatic is enabled in Settings. */
     fun enrichLibraryAsync(maxAlbums: Int = 60) {
         if (!settings.isAutomaticMetadataEnabled()) {
             Log.i(TAG, "skip auto enrich — automatic metadata disabled")
@@ -89,10 +90,6 @@ class MetadataEnrichmentService(
         }
     }
 
-    /**
-     * User-initiated fetch for one album. Always allowed (manual consent).
-     * [force] retries even if a previous lookup was marked failed.
-     */
     fun enrichAlbumAsync(album: AlbumItem, force: Boolean = true) {
         scope.launch {
             _busy.value = true
@@ -109,7 +106,6 @@ class MetadataEnrichmentService(
         }
     }
 
-    /** User-initiated fetch for several albums (artist page). */
     fun enrichAlbumsAsync(albums: List<AlbumItem>, force: Boolean = true) {
         if (albums.isEmpty()) return
         scope.launch {
@@ -209,12 +205,13 @@ class MetadataEnrichmentService(
         needArt: Boolean
     ) {
         var coverPath = existing?.coverPath?.takeIf { File(it).isFile }
+        var coverChanged = false
         if (needArt || coverPath == null) {
             val dest = coverFileForAlbumKey(key)
             if (client.downloadFrontCover(hit.mbid, dest)) {
                 coverPath = dest.absolutePath
+                coverChanged = true
                 Log.i(TAG, "cover saved $coverPath for ${album.displayName}")
-                _coverGeneration.value = System.currentTimeMillis()
             } else {
                 Log.w(TAG, "cover download failed mbid=${hit.mbid}")
             }
@@ -236,6 +233,14 @@ class MetadataEnrichmentService(
         )
         if (year != null) {
             library.applyAlbumYear(key, year)
+        }
+
+        if (coverChanged) {
+            // Drop stale bitmaps / palettes keyed by the old "no cover" identity.
+            runCatching { artCache.invalidateAlbum(key) }
+            runCatching { artCache.invalidateAllMemory() }
+            themeService.invalidateAll()
+            _coverGeneration.value = System.currentTimeMillis()
         }
     }
 
