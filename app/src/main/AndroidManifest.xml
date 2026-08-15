@@ -15,6 +15,16 @@
         android:name="android.permission.READ_MEDIA_AUDIO" />
 
     <!--
+      Write tags into local audio files (edit song/album metadata).
+      On API 29+ requestLegacyExternalStorage + existing read grant is used;
+      this permission is only declared for older devices.
+    -->
+    <uses-permission
+        android:name="android.permission.WRITE_EXTERNAL_STORAGE"
+        android:maxSdkVersion="28"
+        tools:ignore="ScopedStorage" />
+
+    <!--
       Network
       Justification: optional metadata enrichment (MusicBrainz year, Cover Art
       Archive images) and future remote library / scrobbler connections.
