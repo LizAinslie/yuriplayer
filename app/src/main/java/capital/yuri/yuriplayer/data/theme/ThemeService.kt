@@ -40,14 +40,19 @@ class ThemeService(
         context: Context,
         song: Song?,
         base: ColorScheme,
-        maxSize: Int = 768
+        maxSize: Int = 768,
+        forceRefresh: Boolean = false
     ): ResolvedTheme {
         if (song == null) {
             return ResolvedTheme("none", fallbackPlayerColors(base), null)
         }
         val key = artCache.artKey(song)
-        cache[key]?.let {
-            return ResolvedTheme(key, it, artCache.get(context, song, maxSize))
+        if (!forceRefresh) {
+            cache[key]?.let {
+                return ResolvedTheme(key, it, artCache.get(context, song, maxSize))
+            }
+        } else {
+            cache.remove(key)
         }
         val bmp = artCache.get(context, song, maxSize)
         val colors = extractFromBitmap(bmp, base)
@@ -82,6 +87,12 @@ class ThemeService(
 
     fun peekCached(key: String): PlayerColors? = cache[key]
 
+    fun invalidate(key: String) {
+        cache.remove(key)
+    }
+
+    fun invalidateAll() = cache.clear()
+
     fun clearCache() = cache.clear()
 
     private fun loadBitmap(context: Context, uri: Uri, maxSize: Int): Bitmap? {
@@ -92,18 +103,13 @@ class ThemeService(
             }
             context.contentResolver.openInputStream(uri)?.use { stream ->
                 val opts = BitmapFactory.Options().apply {
-                    inSampleSize = calcInSampleSize(maxSize)
+                    inSampleSize = 1
                 }
                 BitmapFactory.decodeStream(stream, null, opts)
             }
         } catch (_: Exception) {
             null
         }
-    }
-
-    private fun calcInSampleSize(maxSize: Int): Int {
-        // Conservative default; AlbumArtCache already sizes song art.
-        return 1.coerceAtLeast(1)
     }
 
     companion object {
@@ -127,13 +133,11 @@ class ThemeService(
             )
             val lightVibrant = palette.getLightVibrantColor(vibrant)
 
-            // Background: prefer darkMuted → muted, then force dark + desat
             val bgSeed = Color(darkMuted).let { c ->
                 if (c.luminance() > 0.25f) Color(muted) else c
             }
             val container = toMutedBackground(bgSeed)
 
-            // Accent: vibrant first, punch up
             val accentSeed = Color(vibrant).let { c ->
                 if (c.luminance() < 0.15f) Color(lightVibrant) else c
             }
@@ -153,13 +157,11 @@ class ThemeService(
             )
         }
 
-        /** Dark + desaturated stage for backgrounds. */
         fun toMutedBackground(c: Color): Color {
             val r = c.red
             val g = c.green
             val b = c.blue
             val gray = 0.299f * r + 0.587f * g + 0.114f * b
-            // Desaturate ~55%, then darken toward ~0.10–0.16 luminance
             val desatR = r + (gray - r) * 0.55f
             val desatG = g + (gray - g) * 0.55f
             val desatB = b + (gray - b) * 0.55f
@@ -182,21 +184,16 @@ class ThemeService(
             return out
         }
 
-        /** Higher saturation, mid brightness for controls. */
         fun toPunchyAccent(c: Color): Color {
             val r = c.red
             val g = c.green
             val b = c.blue
-            val max = max(r, max(g, b))
-            val min = kotlin.math.min(r, kotlin.math.min(g, b))
             val gray = 0.299f * r + 0.587f * g + 0.114f * b
-            // Push away from gray (boost sat)
             val satBoost = 1.35f
             var nr = (gray + (r - gray) * satBoost).coerceIn(0f, 1f)
             var ng = (gray + (g - gray) * satBoost).coerceIn(0f, 1f)
             var nb = (gray + (b - gray) * satBoost).coerceIn(0f, 1f)
             var out = Color(nr, ng, nb)
-            // Lift if too dark
             if (out.luminance() < 0.40f) {
                 val t = ((0.48f - out.luminance()) / 0.48f).coerceIn(0.1f, 0.7f)
                 out = Color(
@@ -205,7 +202,6 @@ class ThemeService(
                     nb + (1f - nb) * t
                 )
             }
-            // Soften if too bright
             if (out.luminance() > 0.72f) {
                 out = Color(out.red * 0.85f, out.green * 0.85f, out.blue * 0.85f)
             }
