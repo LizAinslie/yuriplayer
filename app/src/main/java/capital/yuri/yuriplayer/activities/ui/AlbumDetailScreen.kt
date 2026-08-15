@@ -42,6 +42,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -78,7 +79,6 @@ private val ExpandedHeaderBody = 420.dp
 private val CollapsedBarHeight = 56.dp
 private val GradientFadeLength = 220.dp
 
-/** Guaranteed circle play/pause. */
 @Composable
 private fun CircularPlayButton(
     showPause: Boolean,
@@ -130,6 +130,7 @@ fun AlbumDetailScreen(
     val context = LocalContext.current
     val themeService: ThemeService = koinInject()
     val enrichment: MetadataEnrichmentService = koinInject()
+    val coverGen by enrichment.coverGeneration.collectAsState()
     val base = MaterialTheme.colorScheme
     var themeColors by remember { mutableStateOf(fallbackPlayerColors(base)) }
     var showMenu by remember { mutableStateOf(false) }
@@ -169,8 +170,17 @@ fun AlbumDetailScreen(
     }
 
     LaunchedEffect(album.name, album.artist) {
-        themeColors = themeService.themeFromSong(context, album.songs.firstOrNull(), base).colors
         collapsePx = 0f
+    }
+
+    // Re-extract Material You colors whenever enriched cover lands.
+    LaunchedEffect(album.name, album.artist, coverGen) {
+        themeColors = themeService.themeFromSong(
+            context = context,
+            song = album.songs.firstOrNull(),
+            base = base,
+            forceRefresh = coverGen > 0L
+        ).colors
     }
 
     val discs = remember(album.songs) { groupByDisc(album.songs) }
@@ -179,7 +189,7 @@ fun AlbumDetailScreen(
     val albumBg = scheme.background
     val defaultBg = base.background
 
-    val releaseYear = remember(album.songs) {
+    val releaseYear = remember(album.songs, coverGen) {
         album.songs.mapNotNull { it.year }.maxOrNull()
     }
     val releaseType = guessReleaseType(album.trackCount)
