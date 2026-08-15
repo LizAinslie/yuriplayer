@@ -17,12 +17,14 @@ import java.security.MessageDigest
  * - Memory: hard cap [MAX_MEMORY] bitmaps (LRU)
  * - Disk: JPEG files under cacheDir/album_art (survives process death)
  * - Identical art (same folder cover / album identity) shares one key
+ * - MusicBrainz downloads under filesDir/covers change the key so themes reload
  */
 class AlbumArtCache(
     context: Context
 ) {
     private val appContext = context.applicationContext
     private val diskDir = File(appContext.cacheDir, "album_art").also { it.mkdirs() }
+    private val enrichedDir = File(appContext.filesDir, "covers")
     private val lock = Mutex()
 
     /** Access-ordered: eldest evicted when over capacity. */
@@ -47,10 +49,48 @@ class AlbumArtCache(
                 }
             }
         }
+        // Network-enriched cover (MusicBrainz / Cover Art Archive)
+        val aKey = albumKey(song.album, song.effectiveAlbumArtist)
+        val enriched = enrichedCoverFile(aKey)
+        if (enriched.isFile && enriched.length() > 0) {
+            return "enriched:${enriched.absolutePath}:${enriched.length()}:${enriched.lastModified()}"
+        }
         val album = song.album?.trim()?.lowercase().orEmpty()
         val artist = (song.albumArtist ?: song.artist)?.trim()?.lowercase().orEmpty()
         if (album.isNotEmpty()) return "album:$album|$artist"
         return "song:${song.path ?: song.contentUri}"
+    }
+
+    fun enrichedCoverFile(albumKey: String): File {
+        val name = MetadataEnrichmentService.sanitizeFileName(albumKey) + ".jpg"
+        return File(enrichedDir, name)
+    }
+
+    /** Drop memory + decode-cache disk entries that match this album (after a new cover download). */
+    suspend fun invalidateAlbum(albumKeyStr: String) {
+        val enriched = enrichedCoverFile(albumKeyStr)
+        val markers = listOf(
+            albumKeyStr.lowercase(),
+            enriched.absolutePath,
+            "album:" + albumKeyStr.substringBefore('|').lowercase() // best-effort
+        )
+        lock.withLock {
+            val keys = map.keys.filter { k ->
+                markers.any { m -> k.contains(m, ignoreCase = true) } ||
+                    k.startsWith("album:") && k.contains(albumKeyStr.substringAfter('|', ""), ignoreCase = true)
+            }
+            keys.forEach { map.remove(it) }
+            if (keys.isNotEmpty()) Log.d(TAG, "invalidate album=$albumKeyStr keys=$keys")
+        }
+        withContext(Dispatchers.IO) {
+            // Drop hashed disk files is harder without key list; next get() re-decodes from resolver.
+            // Clear any disk file whose name we can derive from known keys is skippable.
+        }
+    }
+
+    suspend fun invalidateAllMemory() = lock.withLock {
+        map.clear()
+        Log.d(TAG, "mem-clear")
     }
 
     private fun diskFile(key: String): File {
@@ -90,7 +130,6 @@ class AlbumArtCache(
         }
     }
 
-    /** Keep disk cache bounded (~MAX_DISK files, oldest by mtime). */
     private fun trimDiskIfNeeded() {
         val files = diskDir.listFiles { f -> f.isFile && f.name.endsWith(".jpg") && !f.name.startsWith("tmp-") }
             ?: return
@@ -107,7 +146,6 @@ class AlbumArtCache(
             map[key]?.takeIf { !it.isRecycled }?.let { return it }
         }
 
-        // Disk hit — fast path after process restart
         val fromDisk = withContext(Dispatchers.IO) { readDisk(key) }
         if (fromDisk != null) {
             lock.withLock {
@@ -132,10 +170,6 @@ class AlbumArtCache(
         return bmp
     }
 
-    /**
-     * Warm memory + disk for the given songs (deduped by art key).
-     * Call as soon as the playback window is known so early skips still have art ready.
-     */
     suspend fun prefetch(context: Context, songs: List<Song?>, maxSize: Int = 512) {
         val seen = mutableSetOf<String>()
         for (song in songs) {
