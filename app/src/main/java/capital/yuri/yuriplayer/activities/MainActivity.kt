@@ -66,6 +66,8 @@ import androidx.core.content.ContextCompat
 import capital.yuri.yuriplayer.activities.ui.AlbumDetailScreen
 import capital.yuri.yuriplayer.activities.ui.ApplyStatusBarStack
 import capital.yuri.yuriplayer.activities.ui.ArtistDetailScreen
+import capital.yuri.yuriplayer.activities.ui.EditAlbumMetadataScreen
+import capital.yuri.yuriplayer.activities.ui.EditSongMetadataScreen
 import capital.yuri.yuriplayer.activities.ui.LibraryScreen
 import capital.yuri.yuriplayer.activities.ui.LocalStatusBarStack
 import capital.yuri.yuriplayer.activities.ui.MiniPlayerBar
@@ -189,6 +191,8 @@ private sealed class DetailRoute {
     data class Album(val album: AlbumItem) : DetailRoute()
     data class Artist(val artist: ArtistItem) : DetailRoute()
     data class Playlist(val playlistId: String) : DetailRoute()
+    data class EditSong(val song: Song) : DetailRoute()
+    data class EditAlbum(val album: AlbumItem) : DetailRoute()
     data object Settings : DetailRoute()
 }
 
@@ -214,7 +218,6 @@ fun YuriApp(
         statusBarStack.replaceBase(baseScheme.background)
     }
 
-    // INTERNET is not a runtime permission — ask once before calling remote APIs.
     var showNetworkPrompt by remember {
         mutableStateOf(settings.networkMetadataConsent() == null)
     }
@@ -222,7 +225,6 @@ fun YuriApp(
     val songCount by library.songs.collectAsState()
     val loading by library.isLoading.collectAsState()
 
-    // After library has tracks and user allowed network metadata, fill years/covers.
     LaunchedEffect(songCount.size, loading, showNetworkPrompt) {
         if (!showNetworkPrompt &&
             settings.isNetworkMetadataEnabled() &&
@@ -236,7 +238,6 @@ fun YuriApp(
     if (showNetworkPrompt) {
         AlertDialog(
             onDismissRequest = {
-                // Dismiss = decline for now; user can enable later in Settings.
                 settings.setNetworkMetadataConsent(false)
                 showNetworkPrompt = false
             },
@@ -467,29 +468,35 @@ fun YuriApp(
                     when (val d = detail) {
                         is DetailRoute.Album -> {
                             val key = albumKey(d.album.name, d.album.artist)
-                            LaunchedEffect(d.album.songs.size, key) {
-                                player.updateColdFromSource(d.album.songs, key)
+                            // Prefer live library album if tags were just edited
+                            val liveAlbum = library.albums().firstOrNull {
+                                albumKey(it.name, it.artist) == key
+                            } ?: d.album
+                            LaunchedEffect(liveAlbum.songs.size, key) {
+                                player.updateColdFromSource(liveAlbum.songs, key)
                                 if (settings.isNetworkMetadataEnabled()) {
-                                    enrichment.enrichAlbumAsync(d.album)
+                                    enrichment.enrichAlbumAsync(liveAlbum)
                                 }
                             }
                             AlbumDetailScreen(
-                                album = d.album,
+                                album = liveAlbum,
                                 nowPlaying = currentSong,
                                 isSourceActive = snapshot.isPlayingFromAlbum(key),
                                 isPlaying = playing,
                                 shuffleEnabled = snapshot.shuffleEnabled,
                                 onBack = { popDetail() },
-                                onPlayAlbum = { songs, index -> playAlbumFrom(d.album, songs, index) },
+                                onPlayAlbum = { songs, index -> playAlbumFrom(liveAlbum, songs, index) },
                                 onTogglePlayPause = { player.togglePlayPause() },
                                 onToggleShuffle = { player.toggleShuffle() },
                                 onFavorite = {
                                     Toast.makeText(context, "Favorites coming soon", Toast.LENGTH_SHORT).show()
                                 },
                                 onOpenArtist = {
-                                    val name = d.album.artist ?: return@AlbumDetailScreen
+                                    val name = liveAlbum.artist ?: return@AlbumDetailScreen
                                     pushDetail(DetailRoute.Artist(resolveArtist(name)))
                                 },
+                                onEditAlbum = { pushDetail(DetailRoute.EditAlbum(liveAlbum)) },
+                                onEditSong = { pushDetail(DetailRoute.EditSong(it)) },
                                 onAddSongToQueue = { player.addToHotQueue(it) },
                                 onAddAlbumToQueue = { player.addToHotQueue(it) }
                             )
@@ -533,6 +540,20 @@ fun YuriApp(
                                 onAddToQueue = { player.addToHotQueue(it) }
                             )
                         }
+                        is DetailRoute.EditSong -> {
+                            EditSongMetadataScreen(
+                                song = d.song,
+                                onBack = { popDetail() },
+                                onSaved = { /* library refresh handled in service */ }
+                            )
+                        }
+                        is DetailRoute.EditAlbum -> {
+                            EditAlbumMetadataScreen(
+                                album = d.album,
+                                onBack = { popDetail() },
+                                onSaved = {}
+                            )
+                        }
                         is DetailRoute.Settings -> SettingsScreen(onBack = { popDetail() })
                         null -> when (topTab) {
                             TopTab.Home -> PlaceholderScreen("Home", "Pin playlists and shortcuts here later.")
@@ -544,7 +565,9 @@ fun YuriApp(
                                 onAddToQueue = { player.addToHotQueue(it) },
                                 onAddAlbumToQueue = { player.addToHotQueue(it) },
                                 onOpenAlbum = { pushDetail(DetailRoute.Album(it)) },
-                                onOpenArtist = { pushDetail(DetailRoute.Artist(it)) }
+                                onOpenArtist = { pushDetail(DetailRoute.Artist(it)) },
+                                onEditSong = { pushDetail(DetailRoute.EditSong(it)) },
+                                onEditAlbum = { pushDetail(DetailRoute.EditAlbum(it)) }
                             )
                             TopTab.MyStuff -> MyStuffScreen(
                                 library = library,
