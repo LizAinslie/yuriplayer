@@ -108,21 +108,51 @@ class MainActivity : ComponentActivity() {
     private val openPlayerState = mutableStateOf(false)
 
     private val permissionLauncher = registerForActivityResult(
-        ActivityResultContracts.RequestPermission()
-    ) { granted ->
-        if (granted) libraryIndex.refresh()
+        ActivityResultContracts.RequestMultiplePermissions()
+    ) { results ->
+        // Refresh library when read access is available.
+        // Write (API <= 28) is also requested so tag edits can succeed.
+        val readOk = hasReadPermission() || results.any { (perm, granted) ->
+            granted && perm in setOf(
+                Manifest.permission.READ_EXTERNAL_STORAGE,
+                Manifest.permission.READ_MEDIA_AUDIO
+            )
+        }
+        if (readOk) libraryIndex.refresh()
     }
 
-    private fun audioReadPermission(): String =
-        if (Build.VERSION.SDK_INT >= 33) Manifest.permission.READ_MEDIA_AUDIO
-        else Manifest.permission.READ_EXTERNAL_STORAGE
+    private fun hasReadPermission(): Boolean {
+        val read = if (Build.VERSION.SDK_INT >= 33) {
+            Manifest.permission.READ_MEDIA_AUDIO
+        } else {
+            Manifest.permission.READ_EXTERNAL_STORAGE
+        }
+        return ContextCompat.checkSelfPermission(this, read) == PackageManager.PERMISSION_GRANTED
+    }
 
-    private fun ensureAudioPermission() {
-        val perm = audioReadPermission()
-        if (ContextCompat.checkSelfPermission(this, perm) == PackageManager.PERMISSION_GRANTED) {
+    /** Permissions for library scan + local tag writes (WRITE only on API <= 28). */
+    private fun requiredStoragePermissions(): Array<String> {
+        val perms = mutableListOf<String>()
+        if (Build.VERSION.SDK_INT >= 33) {
+            perms += Manifest.permission.READ_MEDIA_AUDIO
+        } else {
+            perms += Manifest.permission.READ_EXTERNAL_STORAGE
+            // Needed to rewrite MP3/FLAC tags on Android 8.x (Stylo 4, etc.)
+            if (Build.VERSION.SDK_INT <= 28) {
+                perms += Manifest.permission.WRITE_EXTERNAL_STORAGE
+            }
+        }
+        return perms.toTypedArray()
+    }
+
+    private fun ensureStoragePermissions() {
+        val needed = requiredStoragePermissions().filter {
+            ContextCompat.checkSelfPermission(this, it) != PackageManager.PERMISSION_GRANTED
+        }
+        if (needed.isEmpty()) {
             libraryIndex.refresh()
         } else {
-            permissionLauncher.launch(perm)
+            permissionLauncher.launch(needed.toTypedArray())
         }
     }
 
@@ -136,7 +166,7 @@ class MainActivity : ComponentActivity() {
                 intent?.getBooleanExtra("car_mode", false) == true
         openPlayerState.value = intent?.getBooleanExtra(EXTRA_OPEN_PLAYER, false) == true
 
-        ensureAudioPermission()
+        ensureStoragePermissions()
 
         title = "YuriPlayer"
         enableEdgeToEdge()
