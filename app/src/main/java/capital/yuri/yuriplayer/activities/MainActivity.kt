@@ -36,12 +36,15 @@ import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
@@ -77,6 +80,8 @@ import capital.yuri.yuriplayer.data.ActivityTitleFormat
 import capital.yuri.yuriplayer.data.AlbumItem
 import capital.yuri.yuriplayer.data.ArtistItem
 import capital.yuri.yuriplayer.data.LibraryIndex
+import capital.yuri.yuriplayer.data.LibrarySettings
+import capital.yuri.yuriplayer.data.MetadataEnrichmentService
 import capital.yuri.yuriplayer.data.PlayerThemeStore
 import capital.yuri.yuriplayer.data.Playlist
 import capital.yuri.yuriplayer.data.Song
@@ -198,6 +203,8 @@ fun YuriApp(
     val context = LocalContext.current
     val activity = context as? Activity
     val themeStore: PlayerThemeStore = koinInject()
+    val settings: LibrarySettings = koinInject()
+    val enrichment: MetadataEnrichmentService = koinInject()
     val baseScheme = MaterialTheme.colorScheme
 
     val statusBarStack = remember(baseScheme.background) {
@@ -205,6 +212,61 @@ fun YuriApp(
     }
     LaunchedEffect(baseScheme.background) {
         statusBarStack.replaceBase(baseScheme.background)
+    }
+
+    // INTERNET is not a runtime permission — ask once before calling remote APIs.
+    var showNetworkPrompt by remember {
+        mutableStateOf(settings.networkMetadataConsent() == null)
+    }
+
+    val songCount by library.songs.collectAsState()
+    val loading by library.isLoading.collectAsState()
+
+    // After library has tracks and user allowed network metadata, fill years/covers.
+    LaunchedEffect(songCount.size, loading, showNetworkPrompt) {
+        if (!showNetworkPrompt &&
+            settings.isNetworkMetadataEnabled() &&
+            !loading &&
+            songCount.isNotEmpty()
+        ) {
+            enrichment.enrichLibraryAsync()
+        }
+    }
+
+    if (showNetworkPrompt) {
+        AlertDialog(
+            onDismissRequest = {
+                // Dismiss = decline for now; user can enable later in Settings.
+                settings.setNetworkMetadataConsent(false)
+                showNetworkPrompt = false
+            },
+            title = { Text("Online album metadata?") },
+            text = {
+                Text(
+                    "YuriPlayer can look up missing release years and album art " +
+                        "from MusicBrainz and the Cover Art Archive (e.g. VOIDSTAR). " +
+                        "This uses the internet. Nothing is uploaded — only public " +
+                        "catalog searches. You can change this later in Settings."
+                )
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        settings.setNetworkMetadataConsent(true)
+                        showNetworkPrompt = false
+                        enrichment.enrichLibraryAsync()
+                    }
+                ) { Text("Allow") }
+            },
+            dismissButton = {
+                TextButton(
+                    onClick = {
+                        settings.setNetworkMetadataConsent(false)
+                        showNetworkPrompt = false
+                    }
+                ) { Text("Not now") }
+            }
+        )
     }
 
     var topTab by remember { mutableStateOf(TopTab.Explore) }
@@ -323,11 +385,6 @@ fun YuriApp(
         pushDetail(DetailRoute.Artist(resolveArtist(name)))
     }
 
-    fun openArtistByName(name: String) {
-        playerExpanded = false
-        pushDetail(DetailRoute.Artist(resolveArtist(name)))
-    }
-
     CompositionLocalProvider(LocalStatusBarStack provides statusBarStack) {
         ApplyStatusBarStack(statusBarStack)
 
@@ -366,9 +423,14 @@ fun YuriApp(
                             },
                             actions = {
                                 if (topTab == TopTab.Explore) {
-                                    val loading by library.isLoading.collectAsState()
-                                    IconButton(onClick = { library.refresh() }) {
-                                        if (loading) {
+                                    val libLoading by library.isLoading.collectAsState()
+                                    IconButton(onClick = {
+                                        library.refresh()
+                                        if (settings.isNetworkMetadataEnabled()) {
+                                            enrichment.enrichLibraryAsync()
+                                        }
+                                    }) {
+                                        if (libLoading) {
                                             CircularProgressIndicator(
                                                 modifier = Modifier.size(20.dp),
                                                 strokeWidth = 2.dp
@@ -407,6 +469,9 @@ fun YuriApp(
                             val key = albumKey(d.album.name, d.album.artist)
                             LaunchedEffect(d.album.songs.size, key) {
                                 player.updateColdFromSource(d.album.songs, key)
+                                if (settings.isNetworkMetadataEnabled()) {
+                                    enrichment.enrichAlbumAsync(d.album)
+                                }
                             }
                             AlbumDetailScreen(
                                 album = d.album,
@@ -432,6 +497,11 @@ fun YuriApp(
                         is DetailRoute.Artist -> {
                             val albums = library.albums().filter {
                                 it.artist.equals(d.artist.name, ignoreCase = true)
+                            }
+                            LaunchedEffect(d.artist.name, albums.size) {
+                                if (settings.isNetworkMetadataEnabled()) {
+                                    albums.forEach { enrichment.enrichAlbumAsync(it) }
+                                }
                             }
                             ArtistDetailScreen(
                                 artist = d.artist,
