@@ -20,6 +20,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -53,6 +54,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import capital.yuri.yuriplayer.data.AlbumItem
@@ -65,6 +67,7 @@ import capital.yuri.yuriplayer.data.releaseYear
 import capital.yuri.yuriplayer.data.source.ArtistLink
 import capital.yuri.yuriplayer.data.theme.ThemeService
 import capital.yuri.yuriplayer.ui.formatAlbumCount
+import capital.yuri.yuriplayer.ui.formatDuration
 import capital.yuri.yuriplayer.ui.formatTrackCount
 import org.koin.compose.koinInject
 
@@ -169,7 +172,8 @@ fun ArtistDetailScreen(
                     titleColor = onBg,
                     mutedColor = muted,
                     onBack = { showAll = false },
-                    onOpenAlbum = onOpenAlbum
+                    onOpenAlbum = onOpenAlbum,
+                    onPlaySongs = onPlaySongs
                 )
                 return@Surface
             }
@@ -311,7 +315,8 @@ private fun DiscographyAllScreen(
     titleColor: Color,
     mutedColor: Color,
     onBack: () -> Unit,
-    onOpenAlbum: (AlbumItem) -> Unit
+    onOpenAlbum: (AlbumItem) -> Unit,
+    onPlaySongs: (List<Song>, Int) -> Unit
 ) {
     var filterMenuOpen by remember { mutableStateOf(false) }
     val visible = remember(albums, filters) {
@@ -430,21 +435,138 @@ private fun DiscographyAllScreen(
             modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp)
         )
 
+        // Spotify-style: each release header, then its tracks underneath (albums, EPs, singles).
         LazyColumn(
             modifier = Modifier.fillMaxSize(),
             contentPadding = PaddingValues(bottom = 96.dp)
         ) {
-            items(
-                visible,
-                key = { "${it.name}|${it.artist}|${it.releaseYear()}" }
-            ) { album ->
-                ArtistReleaseListRow(
-                    album = album,
-                    titleColor = titleColor,
-                    mutedColor = mutedColor,
-                    onClick = { onOpenAlbum(album) }
+            visible.forEach { album ->
+                val releaseKey = "${album.name}|${album.artist}|${album.releaseYear()}"
+                val tracks = remember(album.songs) {
+                    album.songs.sortedWith(
+                        compareBy<Song> { it.discNumber ?: 1 }
+                            .thenBy { it.trackNumber ?: Int.MAX_VALUE }
+                            .thenBy(String.CASE_INSENSITIVE_ORDER) { it.displayTitle }
+                    )
+                }
+
+                item(key = "hdr-$releaseKey") {
+                    DiscographyReleaseHeader(
+                        album = album,
+                        titleColor = titleColor,
+                        mutedColor = mutedColor,
+                        onClick = { onOpenAlbum(album) }
+                    )
+                }
+
+                itemsIndexed(
+                    tracks,
+                    key = { _, song -> "trk-$releaseKey-${song.songKey}" }
+                ) { index, song ->
+                    DiscographyTrackRow(
+                        song = song,
+                        indexInRelease = index,
+                        titleColor = titleColor,
+                        mutedColor = mutedColor,
+                        onClick = { onPlaySongs(tracks, index) }
+                    )
+                }
+
+                item(key = "sp-$releaseKey") {
+                    Spacer(modifier = Modifier.height(16.dp))
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun DiscographyReleaseHeader(
+    album: AlbumItem,
+    titleColor: Color,
+    mutedColor: Color,
+    onClick: () -> Unit
+) {
+    val year = album.releaseYear()
+    val type = album.releaseType()
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onClick)
+            .padding(horizontal = 16.dp, vertical = 12.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        AlbumArt(song = album.songs.firstOrNull(), size = 64.dp, corner = 4.dp)
+        Spacer(modifier = Modifier.width(14.dp))
+        Column(modifier = Modifier.weight(1f)) {
+            MarqueeText(
+                text = album.displayName,
+                style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
+                color = titleColor
+            )
+            Text(
+                buildString {
+                    append(type.label)
+                    if (year != null) append(" · $year")
+                    append(" · ${formatTrackCount(album.trackCount)}")
+                },
+                style = MaterialTheme.typography.bodySmall,
+                color = mutedColor
+            )
+        }
+    }
+}
+
+@Composable
+private fun DiscographyTrackRow(
+    song: Song,
+    indexInRelease: Int,
+    titleColor: Color,
+    mutedColor: Color,
+    onClick: () -> Unit
+) {
+    val trackLabel = song.trackNumber?.toString()
+        ?: (indexInRelease + 1).toString()
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onClick)
+            .padding(start = 12.dp, end = 16.dp, top = 8.dp, bottom = 8.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Text(
+            text = trackLabel,
+            style = MaterialTheme.typography.bodyMedium,
+            color = mutedColor,
+            textAlign = TextAlign.Center,
+            modifier = Modifier.width(40.dp)
+        )
+        Column(modifier = Modifier.weight(1f)) {
+            MarqueeText(
+                text = song.displayTitle,
+                style = MaterialTheme.typography.bodyLarge,
+                color = titleColor
+            )
+            // Show track artist when it differs from album artist (features, etc.)
+            val albumArtist = song.effectiveAlbumArtist
+            val trackArtist = song.artist
+            if (!trackArtist.isNullOrBlank() &&
+                !trackArtist.equals(albumArtist, ignoreCase = true)
+            ) {
+                MarqueeText(
+                    text = trackArtist,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = mutedColor
                 )
             }
+        }
+        song.durationMs?.takeIf { it > 0 }?.let { ms ->
+            Text(
+                formatDuration(ms),
+                style = MaterialTheme.typography.bodySmall,
+                color = mutedColor,
+                modifier = Modifier.padding(start = 8.dp)
+            )
         }
     }
 }
@@ -587,41 +709,5 @@ private fun ArtistReleaseCard(
             maxLines = 1,
             overflow = TextOverflow.Ellipsis
         )
-    }
-}
-
-@Composable
-private fun ArtistReleaseListRow(
-    album: AlbumItem,
-    titleColor: Color,
-    mutedColor: Color,
-    onClick: () -> Unit
-) {
-    val year = album.releaseYear()
-    val type = album.releaseType()
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clickable(onClick = onClick)
-            .padding(horizontal = 16.dp, vertical = 10.dp),
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        AlbumArt(song = album.songs.firstOrNull(), size = 56.dp, corner = 4.dp)
-        Spacer(modifier = Modifier.width(12.dp))
-        Column(modifier = Modifier.weight(1f)) {
-            MarqueeText(
-                text = album.displayName,
-                style = MaterialTheme.typography.bodyLarge.copy(fontWeight = FontWeight.SemiBold),
-                color = titleColor
-            )
-            Text(
-                buildString {
-                    append(type.label)
-                    if (year != null) append(" · $year")
-                },
-                style = MaterialTheme.typography.bodySmall,
-                color = mutedColor
-            )
-        }
     }
 }
