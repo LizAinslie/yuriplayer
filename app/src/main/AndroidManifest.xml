@@ -16,11 +16,21 @@
 
     <!--
       Write tags into local audio files (edit song/album metadata).
-      On API 29+ requestLegacyExternalStorage + existing read grant is used;
-      this permission is only declared for older devices.
+      Runtime-grantable through API 28; on API 29+ pair with requestLegacyExternalStorage
+      and/or MANAGE_EXTERNAL_STORAGE for full file tag rewrites.
     -->
     <uses-permission
         android:name="android.permission.WRITE_EXTERNAL_STORAGE"
+        tools:ignore="ScopedStorage" />
+
+    <!--
+      All-files access (API 30+)
+      Justification: rewrite embedded tags (title/artist/year/cover) in the user's
+      own music files under Music/. Without this, scoped storage blocks File writes
+      even when the user explicitly edits metadata in-app.
+    -->
+    <uses-permission
+        android:name="android.permission.MANAGE_EXTERNAL_STORAGE"
         tools:ignore="ScopedStorage" />
 
     <!--
