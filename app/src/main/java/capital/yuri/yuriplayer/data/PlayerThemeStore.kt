@@ -13,10 +13,6 @@ import kotlinx.coroutines.flow.asStateFlow
 /**
  * Holds the active now-playing palette + art so reopening the full player
  * does not FOUC. Uses [ThemeService] for muted-bg / punchy-accent extraction.
- *
- * [promoteNext] / [promotePrev] copy the already-loaded neighbor into current
- * *before* the player advances, so swipe/button animations never flash the
- * outgoing cover or default palette.
  */
 class PlayerThemeStore(
     private val artCache: AlbumArtCache,
@@ -39,16 +35,13 @@ class PlayerThemeStore(
     private val _peekPrev = MutableStateFlow<Theme?>(null)
     val peekPrev: StateFlow<Theme?> = _peekPrev.asStateFlow()
 
-    /** Slide the preloaded next theme into current (swipe / skip-forward). */
     fun promoteNext() {
         val n = _peekNext.value ?: return
         _current.value = n
-        // Outgoing becomes previous; next will be filled by updateNeighbors.
-        _peekPrev.value = n // temporary; neighbors refresh replaces both
+        _peekPrev.value = n
         _peekNext.value = null
     }
 
-    /** Slide the preloaded previous theme into current (swipe / skip-back). */
     fun promotePrev() {
         val p = _peekPrev.value ?: return
         _current.value = p
@@ -56,10 +49,14 @@ class PlayerThemeStore(
         _peekPrev.value = null
     }
 
+    /**
+     * @param forceRefresh re-decode art and palette (e.g. after MusicBrainz cover lands).
+     */
     suspend fun updateCurrent(
         context: Context,
         song: Song?,
-        baseScheme: ColorScheme
+        baseScheme: ColorScheme,
+        forceRefresh: Boolean = false
     ) {
         if (song == null) {
             _current.value = null
@@ -67,24 +64,24 @@ class PlayerThemeStore(
         }
         val key = artCache.artKey(song)
         val existing = _current.value
-        // Already showing this art (e.g. just promoted) — keep bitmap/colors,
-        // only refresh song identity if needed.
-        if (existing != null && existing.artKey == key) {
+        if (!forceRefresh && existing != null && existing.artKey == key) {
             if (existing.songId != song.id || existing.path != song.path) {
                 _current.value = existing.copy(songId = song.id, path = song.path)
             }
             return
         }
-        // Prefer already-resolved neighbor with matching art to avoid a flash
-        // of fallback colors while themeFromSong runs.
-        val fromNext = _peekNext.value?.takeIf { it.artKey == key }
-        val fromPrev = _peekPrev.value?.takeIf { it.artKey == key }
-        val warm = fromNext ?: fromPrev
-        if (warm != null) {
-            _current.value = warm.copy(songId = song.id, path = song.path)
-            return
+        if (!forceRefresh) {
+            val fromNext = _peekNext.value?.takeIf { it.artKey == key }
+            val fromPrev = _peekPrev.value?.takeIf { it.artKey == key }
+            val warm = fromNext ?: fromPrev
+            if (warm != null) {
+                _current.value = warm.copy(songId = song.id, path = song.path)
+                return
+            }
         }
-        val resolved = themeService.themeFromSong(context, song, baseScheme, maxSize = 768)
+        val resolved = themeService.themeFromSong(
+            context, song, baseScheme, maxSize = 768, forceRefresh = forceRefresh
+        )
         _current.value = Theme(
             artKey = resolved.key,
             songId = song.id,
