@@ -11,6 +11,8 @@ import android.webkit.MimeTypeMap
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
+import org.jaudiotagger.audio.AudioFileIO
+import org.jaudiotagger.tag.FieldKey
 import java.io.File
 import java.util.concurrent.atomic.AtomicInteger
 import kotlin.coroutines.resume
@@ -31,6 +33,7 @@ class MusicRepository(
             "/ringtones/", "/notifications/", "/alarms/",
             "/ui/", "/system/media/"
         )
+        private val YEAR_REGEX = Regex("""(19|20)\\d{2}""")
     }
 
     suspend fun scanLibrary(): List<Song> = withContext(Dispatchers.IO) {
@@ -46,7 +49,8 @@ class MusicRepository(
             val key = song.path?.lowercase() ?: return@forEach
             if (!byKey.containsKey(key)) byKey[key] = song
         }
-        Log.i(TAG, "scan complete: ${byKey.size} tracks")
+        val withYear = byKey.values.count { it.year != null }
+        Log.i(TAG, "scan complete: ${byKey.size} tracks ($withYear with year)")
         byKey.values.toList()
     }
 
@@ -179,7 +183,8 @@ class MusicRepository(
                     val n = if (t >= 1000) t % 1000 else t
                     n.takeIf { it > 0 }
                 }
-                val year = it.getInt(yearCol).takeIf { y -> y > 0 }
+                // MediaStore often leaves YEAR=0 for FLAC / poorly indexed files
+                var year = it.getInt(yearCol).takeIf { y -> y in 1000..2100 }
                 val albumId = it.getLong(albumIdCol)
 
                 if (path != null) {
@@ -190,6 +195,8 @@ class MusicRepository(
                     if (albumArtist == null) albumArtist = tags.albumArtist
                     if (duration == null && tags.durationMs != null) duration = tags.durationMs
                     if (track == null && tags.trackNumber != null) track = tags.trackNumber
+                    // Prefer embedded year when MediaStore has none (common on API 27 + FLAC)
+                    if (year == null && tags.year != null) year = tags.year
                     if (title == fileNameTitle(path)) {
                         title = tags.title
                     }
@@ -276,10 +283,38 @@ class MusicRepository(
         val year: Int? = null
     )
 
+    /**
+     * Read embedded tags. MediaMetadataRetriever first (fast), then jaudiotagger
+     * when year (or core tags) are still missing — MMR often skips YEAR on FLAC
+     * under older Android builds.
+     */
     private fun readTagsFromFile(path: String): FileTags {
+        val fromMmr = readTagsWithRetriever(path)
+        if (fromMmr.year != null &&
+            fromMmr.title != null &&
+            fromMmr.artist != null &&
+            fromMmr.album != null
+        ) {
+            return fromMmr
+        }
+        val fromJaudio = readTagsWithJaudio(path)
+        return FileTags(
+            title = fromMmr.title ?: fromJaudio.title,
+            artist = fromMmr.artist ?: fromJaudio.artist,
+            albumArtist = fromMmr.albumArtist ?: fromJaudio.albumArtist,
+            album = fromMmr.album ?: fromJaudio.album,
+            durationMs = fromMmr.durationMs ?: fromJaudio.durationMs,
+            trackNumber = fromMmr.trackNumber ?: fromJaudio.trackNumber,
+            year = fromMmr.year ?: fromJaudio.year
+        )
+    }
+
+    private fun readTagsWithRetriever(path: String): FileTags {
         val retriever = MediaMetadataRetriever()
         return try {
             retriever.setDataSource(path)
+            val yearRaw = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_YEAR)
+            val dateRaw = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DATE)
             FileTags(
                 title = cleanTag(retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_TITLE)),
                 artist = cleanTag(retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_ARTIST)),
@@ -289,8 +324,7 @@ class MusicRepository(
                     ?.toLongOrNull()?.takeIf { it > 0 },
                 trackNumber = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_CD_TRACK_NUMBER)
                     ?.let { parseTrackNumber(it) },
-                year = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_YEAR)
-                    ?.take(4)?.toIntOrNull()?.takeIf { it > 0 }
+                year = parseYear(yearRaw) ?: parseYear(dateRaw)
             )
         } catch (_: Exception) {
             FileTags()
@@ -300,6 +334,40 @@ class MusicRepository(
             } catch (_: Exception) {
             }
         }
+    }
+
+    private fun readTagsWithJaudio(path: String): FileTags {
+        return try {
+            val audio = AudioFileIO.read(File(path))
+            val tag = audio.tag ?: return FileTags()
+            fun field(key: FieldKey): String? =
+                cleanTag(runCatching { tag.getFirst(key) }.getOrNull())
+
+            val year = parseYear(field(FieldKey.YEAR))
+                ?: parseYear(field(FieldKey.ORIGINAL_YEAR))
+
+            FileTags(
+                title = field(FieldKey.TITLE),
+                artist = field(FieldKey.ARTIST),
+                albumArtist = field(FieldKey.ALBUM_ARTIST),
+                album = field(FieldKey.ALBUM),
+                durationMs = runCatching {
+                    audio.audioHeader?.trackLength?.toLong()?.times(1000)?.takeIf { it > 0 }
+                }.getOrNull(),
+                trackNumber = field(FieldKey.TRACK)?.let { parseTrackNumber(it) },
+                year = year
+            )
+        } catch (e: Exception) {
+            Log.d(TAG, "jaudio tags failed for $path: ${e.message}")
+            FileTags()
+        }
+    }
+
+    /** Pull a 19xx/20xx year out of messy tag strings ("2015", "2015-03-01", "2015/03/01"). */
+    private fun parseYear(raw: String?): Int? {
+        if (raw.isNullOrBlank()) return null
+        val match = YEAR_REGEX.find(raw.trim()) ?: return null
+        return match.value.toIntOrNull()?.takeIf { it in 1000..2100 }
     }
 
     private fun cleanTag(raw: String?): String? {
