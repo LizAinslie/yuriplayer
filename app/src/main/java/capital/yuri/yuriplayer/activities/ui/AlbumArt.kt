@@ -13,6 +13,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -26,7 +27,9 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import capital.yuri.yuriplayer.data.AlbumArtResolver
+import capital.yuri.yuriplayer.data.MetadataEnrichmentService
 import capital.yuri.yuriplayer.data.Song
+import org.koin.compose.koinInject
 
 @Composable
 fun AlbumArt(
@@ -36,9 +39,11 @@ fun AlbumArt(
     corner: Dp = 8.dp
 ) {
     val context = LocalContext.current
-    var bitmap by remember(song?.path, song?.contentUri) { mutableStateOf<Bitmap?>(null) }
+    val enrichment: MetadataEnrichmentService = koinInject()
+    val coverGen by enrichment.coverGeneration.collectAsState()
+    var bitmap by remember(song?.path, song?.contentUri, coverGen) { mutableStateOf<Bitmap?>(null) }
 
-    LaunchedEffect(song?.path, song?.contentUri) {
+    LaunchedEffect(song?.path, song?.contentUri, coverGen) {
         bitmap = null
         if (song != null) {
             bitmap = AlbumArtResolver.load(context, song)
