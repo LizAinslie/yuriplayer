@@ -2,16 +2,19 @@ package capital.yuri.yuriplayer.player
 
 import android.util.Log
 import capital.yuri.yuriplayer.data.Song
+import kotlinx.coroutines.channels.BufferOverflow
+import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlin.random.Random
 
 /**
  * Dual-queue with consume-on-play semantics + cold [ColdSource] tracking.
  *
- * [onExhausted] is invoked when advance runs out of tracks (Repeat off / no
- * cold repopulate). Used by MusicService for Auto-play recommended.
+ * Continuous UI state → [snapshot]. Discrete moments → [events].
  */
 class QueueManager {
 
@@ -30,12 +33,15 @@ class QueueManager {
     private val _snapshot = MutableStateFlow(QueueSnapshot())
     val snapshot: StateFlow<QueueSnapshot> = _snapshot.asStateFlow()
 
-    /**
-     * Fired when [advance] would return [AdvanceResult.finished].
-     * If the handler returns a non-null [AdvanceResult], that result is used
-     * instead of finished (e.g. auto-play loaded a new album into the queue).
-     */
-    var onExhausted: ((seed: Song?, source: ColdSource?) -> AdvanceResult?)? = null
+    private val _events = MutableSharedFlow<QueueEvent>(
+        extraBufferCapacity = 32,
+        onBufferOverflow = BufferOverflow.DROP_OLDEST
+    )
+    val events: SharedFlow<QueueEvent> = _events.asSharedFlow()
+
+    private fun emit(event: QueueEvent) {
+        _events.tryEmit(event)
+    }
 
     fun currentSong(): Song? {
         floatingCurrent?.let { return it }
@@ -183,6 +189,13 @@ class QueueManager {
         }
         lane = QueueLane.COLD
         publish()
+        emit(
+            QueueEvent.SourceChanged(
+                source = source,
+                songCount = songs.size,
+                startSong = currentSong()
+            )
+        )
     }
 
     fun updateColdFromSource(songs: List<Song>, sourceId: String): Boolean {
@@ -393,6 +406,7 @@ class QueueManager {
                 indexInLane = if (idx >= 0) idx else 0
             }
             publish()
+            emit(QueueEvent.ShuffleChanged(false))
             return
         }
         shuffleEnabled = true
@@ -413,6 +427,7 @@ class QueueManager {
             coldQueue.addAll(shuffled)
         }
         publish()
+        emit(QueueEvent.ShuffleChanged(true))
     }
 
     fun cycleRepeatMode() {
@@ -422,11 +437,14 @@ class QueueManager {
             RepeatMode.COLD -> RepeatMode.OFF
         }
         publish()
+        emit(QueueEvent.RepeatModeChanged(repeatMode))
     }
 
     fun setRepeatMode(mode: RepeatMode) {
+        if (repeatMode == mode) return
         repeatMode = mode
         publish()
+        emit(QueueEvent.RepeatModeChanged(mode))
     }
 
     fun advance(userInitiated: Boolean): AdvanceResult {
@@ -498,12 +516,14 @@ class QueueManager {
             return AdvanceResult(song = coldQueue[0])
         }
 
-        // Queue exhausted — offer auto-play / radio a chance to refill
-        val rescued = onExhausted?.invoke(seedBefore ?: playedStack.lastOrNull(), sourceBefore)
-        if (rescued != null) {
-            return rescued
-        }
-
+        // Queue exhausted — emit event; auto-play / radio collect and may playSource.
+        emit(
+            QueueEvent.Exhausted(
+                seed = seedBefore ?: playedStack.lastOrNull(),
+                source = sourceBefore,
+                repeatMode = repeatMode
+            )
+        )
         indexInLane = -1
         publish()
         return AdvanceResult(finished = true)
@@ -532,8 +552,13 @@ class QueueManager {
             publish()
             return AdvanceResult(song = coldQueue[0])
         }
-        val rescued = onExhausted?.invoke(seedBefore ?: playedStack.lastOrNull(), sourceBefore)
-        if (rescued != null) return rescued
+        emit(
+            QueueEvent.Exhausted(
+                seed = seedBefore ?: playedStack.lastOrNull(),
+                source = sourceBefore,
+                repeatMode = repeatMode
+            )
+        )
         indexInLane = -1
         publish()
         return AdvanceResult(finished = true)
