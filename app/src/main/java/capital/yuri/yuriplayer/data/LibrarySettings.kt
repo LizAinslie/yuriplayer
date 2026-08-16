@@ -5,7 +5,7 @@ import android.os.Environment
 import java.io.File
 
 /**
- * User-configurable library roots + metadata preferences.
+ * User-configurable library roots + metadata / playback preferences.
  *
  * Online year/art lookup is **manual by default** (album/artist "Fetch additional
  * metadata"). Users can enable automatic background enrichment in Settings.
@@ -45,6 +45,18 @@ class LibrarySettings(context: Context) {
         prefs.edit().putBoolean(KEY_AUTO_METADATA, enabled).apply()
     }
 
+    /**
+     * When true and Repeat is Off, ending a cold queue auto-starts another album
+     * from the same artist (random, excluding the album that just finished and
+     * the one before that). Singles/EPs are included.
+     */
+    fun isAutoPlayRecommendedEnabled(): Boolean =
+        prefs.getBoolean(KEY_AUTO_PLAY_RECOMMENDED, false)
+
+    fun setAutoPlayRecommendedEnabled(enabled: Boolean) {
+        prefs.edit().putBoolean(KEY_AUTO_PLAY_RECOMMENDED, enabled).apply()
+    }
+
     // ── legacy aliases (MainActivity / older builds) ─────────────────────
 
     /** Always non-null so the old launch consent dialog never shows again. */
@@ -63,7 +75,6 @@ class LibrarySettings(context: Context) {
                 .remove(KEY_NETWORK_META)
                 .apply()
         }
-        // Ensure key exists so we never treat as "unasked" again
         if (!prefs.contains(KEY_AUTO_METADATA)) {
             prefs.edit().putBoolean(KEY_AUTO_METADATA, false).apply()
         }
@@ -73,6 +84,7 @@ class LibrarySettings(context: Context) {
         private const val PREFS = "library_settings"
         private const val KEY_ROOTS = "scan_roots"
         private const val KEY_AUTO_METADATA = "automatic_metadata_enabled"
+        private const val KEY_AUTO_PLAY_RECOMMENDED = "auto_play_recommended"
         private const val KEY_NETWORK_META = "network_metadata_enabled" // legacy
 
         val DEFAULT_ROOTS = listOf(
