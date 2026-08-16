@@ -5,6 +5,7 @@ import android.content.Context
 import android.content.Intent
 import android.content.ServiceConnection
 import android.os.IBinder
+import android.util.Log
 import androidx.core.content.ContextCompat
 import capital.yuri.yuriplayer.data.Song
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -19,6 +20,9 @@ class PlayerController(
     private var service: MusicService? = null
     private var bound = false
 
+    /** Runs once on next onServiceConnected (covers auto-play race). */
+    private var pendingAction: (() -> Unit)? = null
+
     private val _isConnected = MutableStateFlow(false)
     val isConnected: StateFlow<Boolean> = _isConnected.asStateFlow()
 
@@ -30,6 +34,13 @@ class PlayerController(
             service = local.getService()
             bound = true
             _isConnected.value = true
+            val pending = pendingAction
+            pendingAction = null
+            try {
+                pending?.invoke()
+            } catch (e: Exception) {
+                Log.e(TAG, "pending action failed", e)
+            }
         }
 
         override fun onServiceDisconnected(name: ComponentName?) {
@@ -56,11 +67,24 @@ class PlayerController(
         bound = false
         service = null
         _isConnected.value = false
+        pendingAction = null
+    }
+
+    private fun runOrQueue(action: (MusicService) -> Unit) {
+        ensureServiceStarted()
+        val s = service
+        if (s != null) {
+            action(s)
+        } else {
+            Log.i(TAG, "service not bound yet — queueing action")
+            pendingAction = {
+                service?.let(action)
+            }
+        }
     }
 
     fun setPlaylist(songs: List<Song>, startIndex: Int = 0) {
-        ensureServiceStarted()
-        service?.playSource(songs, startIndex, autoPlay = true)
+        runOrQueue { it.playSource(songs, startIndex, autoPlay = true) }
     }
 
     fun playSource(
@@ -68,28 +92,23 @@ class PlayerController(
         startIndex: Int = 0,
         source: ColdSource? = null
     ) {
-        ensureServiceStarted()
-        service?.playSource(songs, startIndex, autoPlay = true, source = source)
+        runOrQueue { it.playSource(songs, startIndex, autoPlay = true, source = source) }
     }
 
     fun updateColdFromSource(songs: List<Song>, sourceId: String) {
-        ensureServiceStarted()
-        service?.updateColdFromSource(songs, sourceId)
+        runOrQueue { it.updateColdFromSource(songs, sourceId) }
     }
 
     fun addToHotQueue(song: Song) {
-        ensureServiceStarted()
-        service?.addToHotQueue(song)
+        runOrQueue { it.addToHotQueue(song) }
     }
 
     fun addToHotQueue(songs: List<Song>) {
-        ensureServiceStarted()
-        service?.addToHotQueue(songs)
+        runOrQueue { it.addToHotQueue(songs) }
     }
 
     fun clearHotQueue() {
-        ensureServiceStarted()
-        service?.clearHotQueue()
+        runOrQueue { it.clearHotQueue() }
     }
 
     fun removeFromHot(index: Int) = service?.removeFromHot(index)
@@ -99,8 +118,7 @@ class PlayerController(
     fun moveColdToHot(index: Int) = service?.moveColdToHot(index)
 
     fun playQueueItem(lane: QueueLane, index: Int) {
-        ensureServiceStarted()
-        service?.playQueueItem(lane, index)
+        runOrQueue { it.playQueueItem(lane, index) }
     }
 
     fun setShuffle(enabled: Boolean) = service?.setShuffle(enabled)
@@ -128,21 +146,17 @@ class PlayerController(
     }
 
     fun skipToNext() {
-        ensureServiceStarted()
-        service?.skipToNext()
+        runOrQueue { it.skipToNext() }
     }
 
     fun skipToPrevious(forceTrackChange: Boolean = false) {
-        ensureServiceStarted()
-        service?.skipToPrevious(forceTrackChange)
+        runOrQueue { it.skipToPrevious(forceTrackChange) }
     }
 
     fun seekTo(positionMs: Long) = service?.seekTo(positionMs)
 
-    /** Prefer this for scrubbers — maps fraction with live decoder duration. */
     fun seekToFraction(fraction: Float) {
-        ensureServiceStarted()
-        service?.seekToFraction(fraction)
+        runOrQueue { it.seekToFraction(fraction) }
     }
 
     fun peekNext(): Song? = service?.peekNext()
@@ -182,5 +196,9 @@ class PlayerController(
                 Context.BIND_AUTO_CREATE
             )
         }
+    }
+
+    companion object {
+        private const val TAG = "YuriPlayer.Ctrl"
     }
 }

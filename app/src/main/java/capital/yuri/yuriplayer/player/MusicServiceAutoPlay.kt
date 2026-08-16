@@ -23,6 +23,7 @@ class MusicServiceAutoPlay(
         if (id.equals(lastAlbumKey, ignoreCase = true)) return
         priorAlbumKey = lastAlbumKey
         lastAlbumKey = id
+        Log.d(TAG, "noteSource last=$lastAlbumKey prior=$priorAlbumKey")
     }
 
     /**
@@ -33,8 +34,14 @@ class MusicServiceAutoPlay(
         finishedSource: ColdSource?,
         repeatMode: RepeatMode
     ): ArtistRadio.Pick? {
-        if (!settings.isAutoPlayRecommendedEnabled()) return null
-        if (repeatMode != RepeatMode.OFF) return null
+        if (!settings.isAutoPlayRecommendedEnabled()) {
+            Log.d(TAG, "maybePick skip — setting off")
+            return null
+        }
+        if (repeatMode != RepeatMode.OFF) {
+            Log.d(TAG, "maybePick skip — repeatMode=$repeatMode (need OFF)")
+            return null
+        }
 
         val exclude = buildSet {
             lastAlbumKey?.let { add(it) }
@@ -42,9 +49,15 @@ class MusicServiceAutoPlay(
             finishedSource?.takeIf { it.type == ColdSourceType.ALBUM }?.id?.let { add(it) }
             seedSong?.let {
                 val k = albumKey(it.album, it.effectiveAlbumArtist)
-                if (k.isNotBlank()) add(k)
+                if (k.isNotBlank() && k != "|") add(k)
             }
         }
+
+        Log.i(
+            TAG,
+            "maybePick seed='${seedSong?.displayTitle}' artist='${seedSong?.effectiveAlbumArtist}' " +
+                "source=$finishedSource exclude=$exclude"
+        )
 
         val pick = ArtistRadio.pickNextAlbum(
             library = library,
