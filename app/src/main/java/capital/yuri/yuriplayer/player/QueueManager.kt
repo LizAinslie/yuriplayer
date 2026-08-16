@@ -10,20 +10,8 @@ import kotlin.random.Random
 /**
  * Dual-queue with consume-on-play semantics + cold [ColdSource] tracking.
  *
- * Pure playback/queue state — UI only observes [snapshot] and issues commands
- * via the service (play, skip, reorder). No UI types or view concerns live here.
- *
- * [playedStack] remembers consumed tracks so Previous can walk back
- * (Spotify-style: >3s restarts current, otherwise previous in play order).
- * Persisted with the rest of the snapshot so Previous still works after restart.
- *
- * Previous does **not** use a side-channel "floating" playhead: the prior track
- * is placed at the head of the active lane and the interrupted track is pushed
- * in right after it, so it shows in the queue UI and is the natural next.
- *
- * [playItem] is the queue-UI jump path only (not album/search/library play):
- *  - Hot: drop every song before the tapped index (not kept in history).
- *  - Cold: move every song before the tapped index into [playedStack].
+ * [onExhausted] is invoked when advance runs out of tracks (Repeat off / no
+ * cold repopulate). Used by MusicService for Auto-play recommended.
  */
 class QueueManager {
 
@@ -35,13 +23,19 @@ class QueueManager {
     private var indexInLane = -1
     private var shuffleEnabled = false
     private var repeatMode = RepeatMode.OFF
-    /** Only used when hot is cleared while that song is still playing. */
     private var floatingCurrent: Song? = null
 
     private val playedStack = mutableListOf<Song>()
 
     private val _snapshot = MutableStateFlow(QueueSnapshot())
     val snapshot: StateFlow<QueueSnapshot> = _snapshot.asStateFlow()
+
+    /**
+     * Fired when [advance] would return [AdvanceResult.finished].
+     * If the handler returns a non-null [AdvanceResult], that result is used
+     * instead of finished (e.g. auto-play loaded a new album into the queue).
+     */
+    var onExhausted: ((seed: Song?, source: ColdSource?) -> AdvanceResult?)? = null
 
     fun currentSong(): Song? {
         floatingCurrent?.let { return it }
@@ -113,7 +107,6 @@ class QueueManager {
         }
     }
 
-    /** Detach the currently playing item from lists without consuming into history. */
     private fun detachCurrentWithoutHistory() {
         if (floatingCurrent != null) {
             floatingCurrent = null
@@ -328,13 +321,6 @@ class QueueManager {
         publish()
     }
 
-    /**
-     * Queue-UI jump only (not used by album/search/library play).
-     *
-     * Hot: discard every entry before [index], play the tapped song.
-     * Cold: push every entry before [index] into [playedStack], play the tapped song.
-     * The interrupted current track (if different) always goes into [playedStack].
-     */
     fun playItem(laneTarget: QueueLane, index: Int) {
         when (laneTarget) {
             QueueLane.HOT -> {
@@ -362,11 +348,6 @@ class QueueManager {
                 lane = QueueLane.HOT
                 indexInLane = 0
                 publish()
-                Log.i(
-                    TAG,
-                    "playItem HOT → '${target.displayTitle}' " +
-                        "hotLeft=${hotQueue.size} played=${playedStack.size}"
-                )
             }
             QueueLane.COLD -> {
                 if (index !in coldQueue.indices) return
@@ -396,11 +377,6 @@ class QueueManager {
                 lane = QueueLane.COLD
                 indexInLane = 0
                 publish()
-                Log.i(
-                    TAG,
-                    "playItem COLD → '${target.displayTitle}' " +
-                        "coldLeft=${coldQueue.size} played=${playedStack.size}"
-                )
             }
         }
     }
@@ -461,6 +437,8 @@ class QueueManager {
         val wasFloating = floatingCurrent != null
         val fromLane = lane
         val fromIndex = indexInLane
+        val seedBefore = currentSong()
+        val sourceBefore = coldSource
 
         if (floatingCurrent != null) {
             pushPlayed(floatingCurrent!!)
@@ -481,7 +459,7 @@ class QueueManager {
         }
 
         if (wasFloating) {
-            return resolveNextFromHeads()
+            return resolveNextFromHeads(seedBefore, sourceBefore)
         }
 
         if (fromLane == QueueLane.HOT && fromIndex in hotQueue.indices) {
@@ -520,12 +498,21 @@ class QueueManager {
             return AdvanceResult(song = coldQueue[0])
         }
 
+        // Queue exhausted — offer auto-play / radio a chance to refill
+        val rescued = onExhausted?.invoke(seedBefore ?: playedStack.lastOrNull(), sourceBefore)
+        if (rescued != null) {
+            return rescued
+        }
+
         indexInLane = -1
         publish()
         return AdvanceResult(finished = true)
     }
 
-    private fun resolveNextFromHeads(): AdvanceResult {
+    private fun resolveNextFromHeads(
+        seedBefore: Song?,
+        sourceBefore: ColdSource?
+    ): AdvanceResult {
         if (hotQueue.isNotEmpty()) {
             lane = QueueLane.HOT
             indexInLane = 0
@@ -545,18 +532,13 @@ class QueueManager {
             publish()
             return AdvanceResult(song = coldQueue[0])
         }
+        val rescued = onExhausted?.invoke(seedBefore ?: playedStack.lastOrNull(), sourceBefore)
+        if (rescued != null) return rescued
         indexInLane = -1
         publish()
         return AdvanceResult(finished = true)
     }
 
-    /**
-     * Previous track.
-     *
-     * Default (button / notification): if past [PREV_RESTART_MS] or no history,
-     * restart current. Album-art swipe passes [forceTrackChange]=true so it
-     * always walks history when available (gesture is disabled when empty).
-     */
     fun skipPrevious(
         currentPositionMs: Long,
         forceTrackChange: Boolean = false
@@ -600,12 +582,6 @@ class QueueManager {
         floatingCurrent = null
 
         publish()
-        Log.i(
-            TAG,
-            "skipPrevious force=$forceTrackChange → '${prev.displayTitle}' " +
-                "next='${current?.displayTitle}' lane=$lane " +
-                "playedLeft=${playedStack.size}"
-        )
         return AdvanceResult(song = prev)
     }
 
