@@ -80,6 +80,5 @@ val appModule = module {
     single { PlaybackHistoryStore(androidContext()) }
     single { PlayerController(androidContext(), get()) }
 
-    // After PlayerController — collects QueueEvent.Exhausted → auto-play via playSource.
-    single(createdAtStart = true) { QueueEventBridge(get(), get(), get()) }
+    single(createdAtStart = true) { QueueEventBridge(get(), get()) }
 }
