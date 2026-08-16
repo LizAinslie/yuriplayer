@@ -16,6 +16,7 @@ import capital.yuri.yuriplayer.data.source.LocalArtistProfileProvider
 import capital.yuri.yuriplayer.data.source.MusicBrainzClient
 import capital.yuri.yuriplayer.data.source.SourceResolver
 import capital.yuri.yuriplayer.data.theme.ThemeService
+import capital.yuri.yuriplayer.player.MusicServiceAutoPlay
 import capital.yuri.yuriplayer.player.PlaybackHistoryStore
 import capital.yuri.yuriplayer.player.PlaybackStateStore
 import capital.yuri.yuriplayer.player.PlayerController
@@ -69,10 +70,26 @@ val appModule = module {
         )
     }
 
-    // Local-file tag write (song/album edit screens)
     single { MetadataEditService(androidContext(), get()) }
 
     single { QueueManager() }
+    single { MusicServiceAutoPlay(get(), get()) }
+    single(createdAtStart = true) {
+        val qm: QueueManager = get()
+        val autoPlay: MusicServiceAutoPlay = get()
+        qm.onExhausted = { seed, source ->
+            autoPlay.noteSource(source)
+            val pick = autoPlay.maybePick(
+                seedSong = seed,
+                finishedSource = source,
+                repeatMode = qm.getSnapshot().repeatMode
+            ) ?: return@onExhausted null
+            qm.playSource(pick.album.songs, startIndex = 0, source = pick.source)
+            QueueManager.AdvanceResult(song = qm.currentSong())
+        }
+        autoPlay
+    }
+
     single { PlaybackStateStore(androidContext()) }
     single { PlaybackHistoryStore(androidContext()) }
     single { PlayerController(androidContext(), get()) }
