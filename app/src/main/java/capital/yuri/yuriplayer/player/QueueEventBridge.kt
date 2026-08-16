@@ -1,28 +1,22 @@
 package capital.yuri.yuriplayer.player
 
 import android.util.Log
-import capital.yuri.yuriplayer.data.Song
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
-import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
 
 /**
- * Collects [QueueManager.events] and routes auto-play decisions.
- *
- * [MusicService] registers [playSourceHandler] in onCreate so refill still goes
- * through the real player path (rebuffer / notification / persist).
+ * Collects [QueueManager.events] and routes auto-play decisions through
+ * [PlayerController] so the real service path (rebuffer / notification / persist)
+ * stays authoritative.
  */
 class QueueEventBridge(
     private val queue: QueueManager,
-    private val autoPlay: MusicServiceAutoPlay
+    private val autoPlay: MusicServiceAutoPlay,
+    private val player: PlayerController
 ) {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
-
-    /** Set by MusicService; cleared on destroy. */
-    @Volatile
-    var playSourceHandler: ((songs: List<Song>, source: ColdSource?) -> Unit)? = null
 
     init {
         scope.launch {
@@ -47,18 +41,12 @@ class QueueEventBridge(
             finishedSource = event.source,
             repeatMode = event.repeatMode
         ) ?: return
-        val handler = playSourceHandler
-        if (handler == null) {
-            Log.w(TAG, "auto-play pick ready but MusicService not registered yet")
-            return
-        }
         Log.i(TAG, "auto-play → ${pick.album.displayName}")
-        handler(pick.album.songs, pick.source)
-    }
-
-    fun close() {
-        playSourceHandler = null
-        scope.cancel()
+        player.playSource(
+            songs = pick.album.songs,
+            startIndex = 0,
+            source = pick.source
+        )
     }
 
     companion object {

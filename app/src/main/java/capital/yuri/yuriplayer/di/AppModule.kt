@@ -75,10 +75,11 @@ val appModule = module {
 
     single { QueueManager() }
     single { MusicServiceAutoPlay(get(), get()) }
-    // Starts collecting QueueEvents immediately; MusicService registers playSourceHandler.
-    single(createdAtStart = true) { QueueEventBridge(get(), get()) }
 
     single { PlaybackStateStore(androidContext()) }
     single { PlaybackHistoryStore(androidContext()) }
     single { PlayerController(androidContext(), get()) }
+
+    // After PlayerController — collects QueueEvent.Exhausted → auto-play via playSource.
+    single(createdAtStart = true) { QueueEventBridge(get(), get(), get()) }
 }
