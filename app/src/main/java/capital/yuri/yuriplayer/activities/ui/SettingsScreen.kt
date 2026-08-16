@@ -40,6 +40,9 @@ fun SettingsScreen(onBack: () -> Unit) {
     var autoMetadata by remember {
         mutableStateOf(settings.isAutomaticMetadataEnabled())
     }
+    var autoPlayRecommended by remember {
+        mutableStateOf(settings.isAutoPlayRecommendedEnabled())
+    }
 
     Column(
         modifier = Modifier
@@ -84,6 +87,17 @@ fun SettingsScreen(onBack: () -> Unit) {
         SettingsRow("Last.fm", "Off") {}
 
         SettingsSection("Playback")
+        SettingsSwitchRow(
+            title = "Auto-play recommended",
+            subtitle = "When a queue ends and Repeat is off, play another random " +
+                "album/single from the same artist (skips the album that just " +
+                "finished and the one before it).",
+            checked = autoPlayRecommended,
+            onCheckedChange = { enabled ->
+                autoPlayRecommended = enabled
+                settings.setAutoPlayRecommendedEnabled(enabled)
+            }
+        )
         SettingsRow("History size", "50") {}
         SettingsRow("Activity title format", "YuriPlayer: {title} by {artist}") {}
 
