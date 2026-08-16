@@ -15,6 +15,8 @@ import kotlin.random.Random
  * Dual-queue with consume-on-play semantics + cold [ColdSource] tracking.
  *
  * Continuous UI state → [snapshot]. Discrete moments → [events].
+ * Auto-play recommended is applied on exhaust via [autoPlayHelper] so
+ * [advance] can return a new [AdvanceResult.song] and MusicService rebuffers.
  */
 class QueueManager {
 
@@ -38,6 +40,10 @@ class QueueManager {
         onBufferOverflow = BufferOverflow.DROP_OLDEST
     )
     val events: SharedFlow<QueueEvent> = _events.asSharedFlow()
+
+    /** Wired from Koin ([MusicServiceAutoPlay]). */
+    @Volatile
+    var autoPlayHelper: MusicServiceAutoPlay? = null
 
     private fun emit(event: QueueEvent) {
         _events.tryEmit(event)
@@ -127,6 +133,21 @@ class QueueManager {
             }
         }
         indexInLane = -1
+    }
+
+    /**
+     * If auto-play is enabled and Repeat is Off, load another same-artist album
+     * and return an AdvanceResult with that first track so MusicService rebuffers.
+     */
+    private fun tryAutoPlayRescue(seed: Song?, source: ColdSource?): AdvanceResult? {
+        val helper = autoPlayHelper ?: return null
+        val pick = helper.maybePick(seed, source, repeatMode) ?: return null
+        val songs = pick.album.songs
+        if (songs.isEmpty()) return null
+        Log.i(TAG, "auto-play rescue → '${pick.album.displayName}' (${songs.size} tracks)")
+        playSource(songs, startIndex = 0, source = pick.source)
+        val next = currentSong() ?: return null
+        return AdvanceResult(song = next)
     }
 
     fun restore(snap: QueueSnapshot) {
@@ -516,14 +537,10 @@ class QueueManager {
             return AdvanceResult(song = coldQueue[0])
         }
 
-        // Queue exhausted — emit event; auto-play / radio collect and may playSource.
-        emit(
-            QueueEvent.Exhausted(
-                seed = seedBefore ?: playedStack.lastOrNull(),
-                source = sourceBefore,
-                repeatMode = repeatMode
-            )
-        )
+        val seed = seedBefore ?: playedStack.lastOrNull()
+        emit(QueueEvent.Exhausted(seed = seed, source = sourceBefore, repeatMode = repeatMode))
+        tryAutoPlayRescue(seed, sourceBefore)?.let { return it }
+
         indexInLane = -1
         publish()
         return AdvanceResult(finished = true)
@@ -552,13 +569,9 @@ class QueueManager {
             publish()
             return AdvanceResult(song = coldQueue[0])
         }
-        emit(
-            QueueEvent.Exhausted(
-                seed = seedBefore ?: playedStack.lastOrNull(),
-                source = sourceBefore,
-                repeatMode = repeatMode
-            )
-        )
+        val seed = seedBefore ?: playedStack.lastOrNull()
+        emit(QueueEvent.Exhausted(seed = seed, source = sourceBefore, repeatMode = repeatMode))
+        tryAutoPlayRescue(seed, sourceBefore)?.let { return it }
         indexInLane = -1
         publish()
         return AdvanceResult(finished = true)

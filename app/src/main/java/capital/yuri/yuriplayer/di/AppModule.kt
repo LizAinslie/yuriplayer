@@ -76,9 +76,15 @@ val appModule = module {
     single { QueueManager() }
     single { MusicServiceAutoPlay(get(), get()) }
 
+    // Attach auto-play helper so QueueManager.advance can rescue with a new song.
+    single(createdAtStart = true) {
+        val qm: QueueManager = get()
+        val auto: MusicServiceAutoPlay = get()
+        qm.autoPlayHelper = auto
+        QueueEventBridge(qm, auto)
+    }
+
     single { PlaybackStateStore(androidContext()) }
     single { PlaybackHistoryStore(androidContext()) }
     single { PlayerController(androidContext(), get()) }
-
-    single(createdAtStart = true) { QueueEventBridge(get(), get()) }
 }
