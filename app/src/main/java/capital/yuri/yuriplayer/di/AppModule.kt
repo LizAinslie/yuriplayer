@@ -73,10 +73,9 @@ val appModule = module {
     single { MetadataEditService(androidContext(), get()) }
 
     single { QueueManager() }
-    single { MusicServiceAutoPlay(get(), get()) }
     single(createdAtStart = true) {
         val qm: QueueManager = get()
-        val autoPlay: MusicServiceAutoPlay = get()
+        val autoPlay = MusicServiceAutoPlay(get(), get())
         qm.onExhausted = { seed, source ->
             autoPlay.noteSource(source)
             val pick = autoPlay.maybePick(
