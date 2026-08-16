@@ -4,6 +4,7 @@ import android.util.Log
 import capital.yuri.yuriplayer.data.LibraryIndex
 import capital.yuri.yuriplayer.data.LibrarySettings
 import capital.yuri.yuriplayer.data.Song
+import capital.yuri.yuriplayer.data.albumKey
 
 /**
  * Tracks last two cold album keys and, when enabled, starts another same-artist
@@ -25,24 +26,26 @@ class MusicServiceAutoPlay(
     }
 
     /**
-     * @return true if a new album was selected (caller should [QueueManager.playSource]
-     * and rebuffer).
+     * @return a pick if auto-play should start a new album; null otherwise.
      */
     fun maybePick(
         seedSong: Song?,
-        finishedSource: ColdSource?
+        finishedSource: ColdSource?,
+        repeatMode: RepeatMode
     ): ArtistRadio.Pick? {
         if (!settings.isAutoPlayRecommendedEnabled()) return null
-        // Only when the user is not in any repeat mode
+        if (repeatMode != RepeatMode.OFF) return null
+
         val exclude = buildSet {
             lastAlbumKey?.let { add(it) }
             priorAlbumKey?.let { add(it) }
             finishedSource?.takeIf { it.type == ColdSourceType.ALBUM }?.id?.let { add(it) }
             seedSong?.let {
-                val k = capital.yuri.yuriplayer.data.albumKey(it.album, it.effectiveAlbumArtist)
+                val k = albumKey(it.album, it.effectiveAlbumArtist)
                 if (k.isNotBlank()) add(k)
             }
         }
+
         val pick = ArtistRadio.pickNextAlbum(
             library = library,
             seedSong = seedSong,
