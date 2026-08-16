@@ -4,8 +4,12 @@ import android.util.Log
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.channels.BufferOverflow
+import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -13,9 +17,7 @@ import kotlinx.coroutines.withContext
 /**
  * In-memory view of the **persisted** catalog for UI.
  *
- * Refresh pulls local files via [CatalogRepository.syncLocalLibrary] (Room is
- * source of truth for local + My Stuff). External Explore results are never
- * written here unless the user saves them through [CatalogRepository.importToMyStuff].
+ * Continuous lists → StateFlows. Discrete scan moments → [events].
  */
 class LibraryIndex(
     private val repository: MusicRepository,
@@ -37,9 +39,14 @@ class LibraryIndex(
     private val _error = MutableStateFlow<String?>(null)
     val error: StateFlow<String?> = _error.asStateFlow()
 
+    private val _events = MutableSharedFlow<LibraryEvent>(
+        extraBufferCapacity = 16,
+        onBufferOverflow = BufferOverflow.DROP_OLDEST
+    )
+    val events: SharedFlow<LibraryEvent> = _events.asSharedFlow()
+
     fun bootstrap(staleAfterMs: Long = DEFAULT_STALE_MS) {
         scope.launch {
-            // Prefer Room catalog if it already has rows (local + My Stuff).
             val fromDb = withContext(Dispatchers.IO) { catalog.getAllSongs() }
             if (fromDb.isNotEmpty()) {
                 _songs.value = fromDb
@@ -63,28 +70,27 @@ class LibraryIndex(
         scope.launch {
             _isLoading.value = true
             _error.value = null
+            _events.tryEmit(LibraryEvent.ScanStarted())
             try {
                 val songs = withContext(Dispatchers.IO) {
                     catalog.syncLocalLibrary().also { cache.save(it) }
                 }
                 _songs.value = songs
                 _lastScannedAt.value = System.currentTimeMillis()
+                _events.tryEmit(LibraryEvent.ScanCompleted(songCount = songs.size))
             } catch (e: SecurityException) {
                 _error.value = "Storage permission required"
+                _events.tryEmit(LibraryEvent.ScanFailed("Storage permission required"))
             } catch (e: Exception) {
                 _error.value = e.message ?: "Scan failed"
                 Log.e(TAG, "Refresh failed", e)
+                _events.tryEmit(LibraryEvent.ScanFailed(e.message ?: "Scan failed"))
             } finally {
                 _isLoading.value = false
             }
         }
     }
 
-    /**
-     * Overlay an API-fetched year onto every track belonging to [albumKey].
-     * Only fills missing years — never overwrites a file tag.
-     * Also persists via [CatalogRepository] when available.
-     */
     fun applyAlbumYear(albumKey: String, year: Int) {
         if (year !in 1000..2100) return
         scope.launch(Dispatchers.IO) {

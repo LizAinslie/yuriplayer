@@ -1,10 +1,11 @@
-Auto-play recommended is wired via MusicServiceAutoPlay + ArtistRadio.
+Auto-play recommended
+=====================
 
-MusicService must call:
-1. autoPlay.noteSource(source) in playSource()
-2. on AdvanceResult.finished / empty queue end:
-   val seed = queueManager.peekPrevious()
-   val pick = autoPlay.maybePick(seed, queueManager.coldSource(), snap.repeatMode)
-   if (pick != null) playSource(pick.album.songs, 0, pick.source)
+Flow:
+1. QueueManager.advance() runs out of tracks → emits QueueEvent.Exhausted
+2. MusicService collects queueManager.events
+3. On Exhausted + setting on + RepeatMode.OFF → MusicServiceAutoPlay.maybePick()
+4. If pick ≠ null → MusicService.playSource(album songs, source)
 
-Inject LibraryIndex + LibrarySettings into MusicService and construct MusicServiceAutoPlay.
+No DI callbacks. Decision logic stays in MusicServiceAutoPlay / ArtistRadio;
+playback loading stays in MusicService.
