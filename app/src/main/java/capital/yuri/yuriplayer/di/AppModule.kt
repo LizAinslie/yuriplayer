@@ -76,15 +76,21 @@ val appModule = module {
     single(createdAtStart = true) {
         val qm: QueueManager = get()
         val autoPlay = MusicServiceAutoPlay(get(), get())
+        // Property lambda — not an inline function, so no labeled return.
+        // Expression body via if/else is the correct non-local exit.
         qm.onExhausted = { seed, source ->
             autoPlay.noteSource(source)
             val pick = autoPlay.maybePick(
                 seedSong = seed,
                 finishedSource = source,
                 repeatMode = qm.getSnapshot().repeatMode
-            ) ?: return@onExhausted null
-            qm.playSource(pick.album.songs, startIndex = 0, source = pick.source)
-            QueueManager.AdvanceResult(song = qm.currentSong())
+            )
+            if (pick == null) {
+                null
+            } else {
+                qm.playSource(pick.album.songs, startIndex = 0, source = pick.source)
+                QueueManager.AdvanceResult(song = qm.currentSong())
+            }
         }
         autoPlay
     }
