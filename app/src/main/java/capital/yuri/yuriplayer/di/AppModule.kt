@@ -20,6 +20,7 @@ import capital.yuri.yuriplayer.player.MusicServiceAutoPlay
 import capital.yuri.yuriplayer.player.PlaybackHistoryStore
 import capital.yuri.yuriplayer.player.PlaybackStateStore
 import capital.yuri.yuriplayer.player.PlayerController
+import capital.yuri.yuriplayer.player.QueueEventBridge
 import capital.yuri.yuriplayer.player.QueueManager
 import org.koin.android.ext.koin.androidContext
 import org.koin.dsl.module
@@ -73,8 +74,9 @@ val appModule = module {
     single { MetadataEditService(androidContext(), get()) }
 
     single { QueueManager() }
-    // Pure decision helper — MusicService collects QueueEvent.Exhausted and calls playSource.
     single { MusicServiceAutoPlay(get(), get()) }
+    // Starts collecting QueueEvents immediately; MusicService registers playSourceHandler.
+    single(createdAtStart = true) { QueueEventBridge(get(), get()) }
 
     single { PlaybackStateStore(androidContext()) }
     single { PlaybackHistoryStore(androidContext()) }

@@ -1,11 +1,10 @@
-Auto-play recommended
-=====================
+Auto-play recommended (event-driven)
+====================================
 
-Flow:
-1. QueueManager.advance() runs out of tracks → emits QueueEvent.Exhausted
-2. MusicService collects queueManager.events
-3. On Exhausted + setting on + RepeatMode.OFF → MusicServiceAutoPlay.maybePick()
-4. If pick ≠ null → MusicService.playSource(album songs, source)
+1. QueueManager.advance() empties hot+cold → emits QueueEvent.Exhausted
+2. QueueEventBridge collects queue.events (createdAtStart in Koin)
+3. MusicServiceAutoPlay.maybePick() decides next album
+4. Bridge calls MusicService.playSource via playSourceHandler
 
-No DI callbacks. Decision logic stays in MusicServiceAutoPlay / ArtistRadio;
-playback loading stays in MusicService.
+MusicService.onCreate registers the handler; onDestroy clears it.
+No labeled returns / DI callback properties.
