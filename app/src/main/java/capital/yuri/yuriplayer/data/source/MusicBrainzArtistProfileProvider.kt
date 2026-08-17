@@ -9,7 +9,8 @@ import java.io.File
 
 /**
  * MusicBrainz-backed [ArtistInfoSource] + legacy [ArtistProfileProvider].
- * Images: direct MB image rel → Wikidata P18 → Wikipedia summary.
+ * Candidates: MB image rel, every Wikidata P18 via MB links, Wikipedia summary
+ * via MB wikipedia rel (other sources also search those catalogs directly).
  */
 class MusicBrainzArtistProfileProvider(
     private val context: Context,
@@ -59,19 +60,18 @@ class MusicBrainzArtistProfileProvider(
         kind: ArtistImageKind
     ): List<ArtistImageCandidate> = withContext(Dispatchers.IO) {
         val hit = mb.searchArtist(artistName) ?: return@withContext emptyList()
-        val out = mutableListOf<ArtistImageCandidate>()
-        hit.imageUrl?.let {
-            out += ArtistImageCandidate(it, id, "MusicBrainz image")
+        val out = LinkedHashMap<String, ArtistImageCandidate>()
+
+        hit.imageUrl?.takeIf { it.isNotBlank() }?.let {
+            out[it] = ArtistImageCandidate(it, id, "MusicBrainz resolved")
         }
-        // Wikidata / Wikipedia URLs themselves aren't images; searchArtist already
-        // resolved imageUrl from those. Also surface any remaining link-derived images.
-        hit.links.filter {
-            it.url.contains("upload.wikimedia.org", true) ||
-                it.url.contains("commons.wikimedia.org", true)
-        }.forEach {
-            out += ArtistImageCandidate(it.url, id, it.label)
+
+        // Extra candidates resolved from MB url-rels (may overlap other sources — deduped upstream)
+        mb.expandImageCandidates(hit).forEach { (url, label) ->
+            if (url !in out) out[url] = ArtistImageCandidate(url, id, label)
         }
-        out.distinctBy { it.url }
+
+        out.values.toList()
     }
 
     companion object {
