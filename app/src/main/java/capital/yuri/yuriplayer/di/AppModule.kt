@@ -14,6 +14,7 @@ import capital.yuri.yuriplayer.data.PlayerThemeStore
 import capital.yuri.yuriplayer.data.PlaylistRepository
 import capital.yuri.yuriplayer.data.db.YuriDatabase
 import capital.yuri.yuriplayer.data.source.LocalArtistProfileProvider
+import capital.yuri.yuriplayer.data.source.MusicBrainzArtistProfileProvider
 import capital.yuri.yuriplayer.data.source.MusicBrainzClient
 import capital.yuri.yuriplayer.data.source.SourceResolver
 import capital.yuri.yuriplayer.data.theme.ThemeService
@@ -51,10 +52,14 @@ val appModule = module {
     single { LibraryIndex(get(), get(), get()) }
 
     single { PlaylistRepository(get(), get()) }
+    single { MusicBrainzClient() }
     single {
         ArtistProfileRepository(
             dao = get(),
-            providers = listOf(LocalArtistProfileProvider())
+            providers = listOf(
+                LocalArtistProfileProvider(),
+                MusicBrainzArtistProfileProvider(androidContext(), get())
+            )
         )
     }
     single { SourceResolver(get()) }
@@ -63,7 +68,6 @@ val appModule = module {
     single { ThemeService(get()) }
     single { PlayerThemeStore(get(), get()) }
 
-    single { MusicBrainzClient() }
     single {
         MetadataEnrichmentService(
             context = androidContext(),
