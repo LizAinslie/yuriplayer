@@ -5,7 +5,6 @@ import android.net.Uri
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.io.File
-import java.util.UUID
 
 /**
  * Copies picker content:// (or other transient) URIs into app-private storage
@@ -31,7 +30,6 @@ class UserImageStore(private val context: Context) {
         val src = runCatching { Uri.parse(sourceUri) }.getOrNull() ?: return@withContext null
         val dir = File(root, namespace).also { if (!it.exists()) it.mkdirs() }
         val safeKey = key.replace(Regex("[^a-zA-Z0-9._-]"), "_")
-        // Replace any previous image for this key
         dir.listFiles()?.filter { it.name.startsWith("${safeKey}.") }?.forEach { it.delete() }
 
         val ext = guessExtension(context, src)
@@ -50,6 +48,18 @@ class UserImageStore(private val context: Context) {
             dest.delete()
             null
         }
+    }
+
+    /** Existing persisted file:// URI for [key], or null. */
+    fun resolve(namespace: String, key: String): String? {
+        val dir = File(root, namespace)
+        if (!dir.isDirectory) return null
+        val safeKey = key.replace(Regex("[^a-zA-Z0-9._-]"), "_")
+        val file = dir.listFiles()
+            ?.filter { it.isFile && it.name.startsWith("${safeKey}.") && it.length() > 0L }
+            ?.maxByOrNull { it.lastModified() }
+            ?: return null
+        return Uri.fromFile(file).toString()
     }
 
     /** Delete persisted image(s) for a key. */
