@@ -58,7 +58,6 @@ import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
-import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
@@ -66,6 +65,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.zIndex
 import androidx.core.content.ContextCompat
+import capital.yuri.yuriplayer.activities.ui.AddToPlaylistSheet
 import capital.yuri.yuriplayer.activities.ui.AlbumDetailScreen
 import capital.yuri.yuriplayer.activities.ui.ApplyStatusBarStack
 import capital.yuri.yuriplayer.activities.ui.ArtistDetailScreen
@@ -367,6 +367,7 @@ fun YuriApp(
     var topTab by remember { mutableStateOf(TopTab.Explore) }
     var playerExpanded by remember { mutableStateOf(false) }
     var detailStack by remember { mutableStateOf<List<DetailRoute>>(emptyList()) }
+    var npPlaylistSong by remember { mutableStateOf<Song?>(null) }
 
     fun pushDetail(route: DetailRoute) {
         detailStack = detailStack + route
@@ -431,7 +432,7 @@ fun YuriApp(
             source = ColdSource(
                 type = ColdSourceType.ALBUM,
                 id = key,
-                title = album.name
+                title = album.displayName
             )
         )
     }
@@ -501,7 +502,7 @@ fun YuriApp(
                             title = {
                                 Row(
                                     horizontalArrangement = Arrangement.spacedBy(4.dp),
-                                    verticalAlignment = Alignment.CenterVertically
+                                    verticalAlignment = androidx.compose.ui.Alignment.CenterVertically
                                 ) {
                                     TopTab.entries.forEach { tab ->
                                         val selected = topTab == tab
@@ -582,7 +583,7 @@ fun YuriApp(
                                 onTogglePlayPause = { player.togglePlayPause() },
                                 onToggleShuffle = { player.toggleShuffle() },
                                 onFavorite = {
-                                    pinStore.add(
+                                    val added = pinStore.toggleEntry(
                                         StuffPin(
                                             kind = StuffPinKind.ALBUM,
                                             id = key,
@@ -590,7 +591,11 @@ fun YuriApp(
                                             subtitle = liveAlbum.displayArtist
                                         )
                                     )
-                                    Toast.makeText(context, "Added to My Stuff", Toast.LENGTH_SHORT).show()
+                                    Toast.makeText(
+                                        context,
+                                        if (added) "Added to My Stuff" else "Removed from My Stuff",
+                                        Toast.LENGTH_SHORT
+                                    ).show()
                                 },
                                 onOpenArtist = {
                                     val name = liveAlbum.artist ?: return@AlbumDetailScreen
@@ -621,7 +626,11 @@ fun YuriApp(
                                     player.setRepeatMode(RepeatMode.COLD)
                                     player.playSource(
                                         songs, i,
-                                        ColdSource(ColdSourceType.ARTIST, d.artist.name ?: "", d.artist.name)
+                                        ColdSource(
+                                            ColdSourceType.ARTIST,
+                                            d.artist.name ?: "",
+                                            d.artist.displayName
+                                        )
                                     )
                                 },
                                 onStartRadio = {
@@ -631,24 +640,40 @@ fun YuriApp(
                             )
                         }
                         is DetailRoute.Playlist -> {
+                            val livePl by playlistRepo.observePlaylist(d.playlistId)
+                                .collectAsState(initial = null)
+                            LaunchedEffect(livePl?.songs?.size, d.playlistId) {
+                                val songs = livePl?.songs.orEmpty()
+                                if (songs.isNotEmpty()) {
+                                    player.updateColdFromSource(songs, d.playlistId)
+                                }
+                            }
                             PlaylistDetailScreen(
                                 playlistId = d.playlistId,
                                 nowPlaying = currentSong,
+                                isSourceActive = snapshot.isPlayingFromPlaylist(d.playlistId),
+                                isPlaying = playing,
                                 isPlaybackActive = playing,
                                 onBack = { popDetail() },
                                 onPlay = { songs, i ->
+                                    val title = livePl?.name ?: "Playlist"
                                     player.setRepeatMode(RepeatMode.COLD)
                                     player.playSource(
                                         songs, i,
-                                        ColdSource(ColdSourceType.PLAYLIST, d.playlistId, null)
+                                        ColdSource(
+                                            type = ColdSourceType.PLAYLIST,
+                                            id = d.playlistId,
+                                            title = title
+                                        )
                                     )
                                 },
+                                onTogglePlayPause = { player.togglePlayPause() },
                                 onAddToQueue = { player.addToHotQueue(it) },
                                 onStartRadio = {
-                                    // Resolve songs from live playlist flow isn't here — use library via repo async-less
-                                    // PlaylistDetail already has songs in its own scope; MainActivity passes lambda that
-                                    // starts radio from whatever is currently known via a quick playSource seed.
-                                    // Prefer PlayerController API that takes song list from the screen.
+                                    val songs = livePl?.songs.orEmpty()
+                                    if (songs.isNotEmpty()) {
+                                        player.startPlaylistRadio(songs, livePl?.name)
+                                    }
                                 }
                             )
                         }
@@ -741,13 +766,14 @@ fun YuriApp(
                     onClearHistory = { player.clearHistory() },
                     onGoToAlbum = { openAlbumForSong(it) },
                     onGoToArtist = { openArtistForSong(it) },
-                    onAddToPlaylist = {
-                        Toast.makeText(
-                            context,
-                            "Long-press a track → Add to playlist",
-                            Toast.LENGTH_SHORT
-                        ).show()
-                    }
+                    onAddToPlaylist = { song -> npPlaylistSong = song }
+                )
+            }
+
+            npPlaylistSong?.let { song ->
+                AddToPlaylistSheet(
+                    songs = listOf(song),
+                    onDismiss = { npPlaylistSong = null }
                 )
             }
         }
