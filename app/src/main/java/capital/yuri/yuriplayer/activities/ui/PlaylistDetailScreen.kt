@@ -60,6 +60,7 @@ import capital.yuri.yuriplayer.data.PlaylistRepository
 import capital.yuri.yuriplayer.data.Song
 import capital.yuri.yuriplayer.data.StuffPin
 import capital.yuri.yuriplayer.data.StuffPinKind
+import capital.yuri.yuriplayer.player.PlayerController
 import capital.yuri.yuriplayer.ui.formatTrackCount
 import kotlinx.coroutines.launch
 import org.koin.compose.koinInject
@@ -77,6 +78,7 @@ fun PlaylistDetailScreen(
 ) {
     val repo: PlaylistRepository = koinInject()
     val pinStore: MyStuffPinStore = koinInject()
+    val player: PlayerController = koinInject()
     val playlist by repo.observePlaylist(playlistId).collectAsState(initial = null)
     val scope = rememberCoroutineScope()
     val context = LocalContext.current
@@ -92,6 +94,17 @@ fun PlaylistDetailScreen(
             repo.setCustomImage(playlistId, uri.toString())
             Toast.makeText(context, "Cover updated", Toast.LENGTH_SHORT).show()
         }
+    }
+
+    fun startRadio() {
+        val songs = playlist?.songs.orEmpty()
+        if (songs.isEmpty()) {
+            Toast.makeText(context, "Playlist is empty", Toast.LENGTH_SHORT).show()
+            return
+        }
+        if (onStartRadio != null) onStartRadio()
+        else player.startPlaylistRadio(songs, playlist?.name)
+        Toast.makeText(context, "Radio · ${playlist?.name ?: "Playlist"}", Toast.LENGTH_SHORT).show()
     }
 
     val pl = playlist
@@ -196,11 +209,9 @@ fun PlaylistDetailScreen(
                         modifier = Modifier.size(32.dp)
                     )
                 }
-                if (onStartRadio != null) {
-                    Spacer(modifier = Modifier.width(8.dp))
-                    IconButton(onClick = onStartRadio) {
-                        Icon(Icons.Default.Radio, contentDescription = "Start radio")
-                    }
+                Spacer(modifier = Modifier.width(8.dp))
+                IconButton(onClick = { startRadio() }) {
+                    Icon(Icons.Default.Radio, contentDescription = "Start radio")
                 }
             }
         }
@@ -209,7 +220,7 @@ fun PlaylistDetailScreen(
 
         if (editMode) {
             Text(
-                "Drag arrows to reorder · swipe left to remove",
+                "Use arrows to reorder · swipe left to remove",
                 style = MaterialTheme.typography.labelMedium,
                 color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f),
                 modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp)
@@ -259,7 +270,7 @@ fun PlaylistDetailScreen(
         PlaylistContextSheet(
             playlist = pl,
             onDismiss = { showMenu = false },
-            onStartRadio = onStartRadio,
+            onStartRadio = { startRadio() },
             onChangeCover = { pickCover.launch("image/*") },
             onEdit = { editMode = true },
             onDelete = {
