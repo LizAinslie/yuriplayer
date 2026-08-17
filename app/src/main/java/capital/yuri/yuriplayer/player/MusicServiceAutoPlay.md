@@ -1,19 +1,34 @@
-Auto-play recommended
-=====================
+Radio / auto-play architecture
+==============================
 
-Requirements
-------------
-1. Settings → Playback → **Auto-play recommended** ON
-2. Repeat mode must be **OFF** (not one, not all/cold)
-3. Library must contain **another** album by the same artist
+On-device first. Network only behind explicit opt-in later.
 
-How it works
-------------
-When QueueManager.advance() empties hot+cold queues:
-1. Emits QueueEvent.Exhausted (logged by QueueEventBridge)
-2. MusicServiceAutoPlay.maybePick() chooses a random other album
-3. QueueManager.playSource(that album) runs inside advance
-4. AdvanceResult(song = first track) is returned
-5. MusicService.applyAdvance rebuffers → audio + art + title update
+Package: `player/radio/` (aim: extract to shared KMP / offload worker)
 
-Debug log tags: YuriPlayer.Queue, YuriPlayer.AutoPlay, YuriPlayer.Radio
+- **RadioEngine** — session + dispatch, settings gate (Repeat OFF + auto-play on)
+- **RadioPlaybackAlgorithm** — same-artist continuous radio
+  - hard cooldown per LP / EP / Single
+  - soft weight decay on recent history
+  - type weights + weighted random
+- **ReleasePoolAlgorithm** — artist/genre pool (playlist radios)
+  - `PlaylistRadioSeed.fromTracks()` builds pool from playlist tags
+  - `allowExternalFetch` stub (privacy gate closed)
+- **ReleaseCatalog** — algorithm-facing library view (swap for remote catalog later)
+
+Queue path
+----------
+QueueManager.exhaust → MusicServiceAutoPlay.maybePick → RadioEngine →
+playSource(album) → AdvanceResult.song → MusicService rebuffers
+
+Playlist radio (API ready, UI later)
+------------------------------------
+```kotlin
+radioEngine.startPlaylistRadio(playlist.tracks)
+// exhaust will use RELEASE_POOL with those artists
+```
+
+Offload later
+-------------
+RadioAlgorithm + ReleaseCatalog have no Room/ExoPlayer deps (Log only).
+Move package to `:radio-core`; Android app and a self-hosted service both
+implement ReleaseCatalog / optional ExternalReleaseSource.

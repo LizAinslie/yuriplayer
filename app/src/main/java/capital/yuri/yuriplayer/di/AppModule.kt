@@ -22,6 +22,9 @@ import capital.yuri.yuriplayer.player.PlaybackStateStore
 import capital.yuri.yuriplayer.player.PlayerController
 import capital.yuri.yuriplayer.player.QueueEventBridge
 import capital.yuri.yuriplayer.player.QueueManager
+import capital.yuri.yuriplayer.player.radio.RadioEngine
+import capital.yuri.yuriplayer.player.radio.RadioPlaybackAlgorithm
+import capital.yuri.yuriplayer.player.radio.ReleasePoolAlgorithm
 import org.koin.android.ext.koin.androidContext
 import org.koin.dsl.module
 
@@ -74,9 +77,19 @@ val appModule = module {
     single { MetadataEditService(androidContext(), get()) }
 
     single { QueueManager() }
-    single { MusicServiceAutoPlay(get(), get()) }
 
-    // Attach auto-play helper so QueueManager.advance can rescue with a new song.
+    single { RadioPlaybackAlgorithm() }
+    single { ReleasePoolAlgorithm() }
+    single {
+        RadioEngine(
+            library = get(),
+            settings = get(),
+            playbackAlgo = get(),
+            poolAlgo = get()
+        )
+    }
+    single { MusicServiceAutoPlay(get()) }
+
     single(createdAtStart = true) {
         val qm: QueueManager = get()
         val auto: MusicServiceAutoPlay = get()
