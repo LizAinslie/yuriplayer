@@ -70,7 +70,6 @@ import kotlin.math.roundToInt
 
 private enum class QueueTab { Queue, History }
 
-/** Stable Lazy keys that survive list head removals (index alone would break placement anim). */
 private data class QueuedSong(
     val key: String,
     val index: Int,
@@ -167,7 +166,12 @@ fun QueuePanel(
             FilterChip(
                 selected = tab == QueueTab.Queue,
                 onClick = { tab = QueueTab.Queue },
-                label = { Text("Queue") }
+                label = {
+                    Text(
+                        if (snapshot.isRadio) snapshot.radioSession?.displayName ?: "Radio"
+                        else "Queue"
+                    )
+                }
             )
             FilterChip(
                 selected = tab == QueueTab.History,
@@ -242,7 +246,11 @@ private fun QueueTabContent(
     val upcomingCold = remember(snapshot.coldQueue, currentKey) {
         keyedQueue("cold", snapshot.coldQueue, ::isCurrent)
     }
+    val radioNext = remember(snapshot.radioUpcoming, currentKey) {
+        keyedQueue("radio", snapshot.radioUpcoming) { false }
+    }
     val showHotSection = upcomingHot.isNotEmpty()
+    val isRadio = snapshot.isRadio
 
     val placementSpec = spring<androidx.compose.ui.unit.IntOffset>(
         stiffness = Spring.StiffnessMediumLow,
@@ -262,7 +270,10 @@ private fun QueueTabContent(
                 (it.path ?: it.contentUri.toString()) == key
             }
             if (song != null) {
-                NowPlayingQueueCard(song = song)
+                NowPlayingQueueCard(
+                    song = song,
+                    radioLabel = snapshot.radioSession?.displayName
+                )
             }
         }
 
@@ -299,14 +310,24 @@ private fun QueueTabContent(
             }
 
             item(key = "hdr-cold") {
-                val contextLabel = snapshot.coldSource?.title
-                    ?: snapshot.coldQueue.firstOrNull()?.album?.takeIf { it.isNotBlank() }
-                    ?: "Up next"
+                val contextLabel = when {
+                    isRadio -> snapshot.radioSession?.displayName ?: "Radio"
+                    else -> snapshot.coldSource?.title
+                        ?: snapshot.coldQueue.firstOrNull()?.album?.takeIf { it.isNotBlank() }
+                        ?: "Up next"
+                }
                 SectionHeader(
                     "$contextLabel · ${upcomingCold.size}" +
                         if (snapshot.shuffleEnabled) " · shuffled" else ""
                 )
-                if (showHotSection) {
+                if (isRadio) {
+                    Text(
+                        "Shuffle only mixes tracks in this release. Next release is radio-picked.",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.4f),
+                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp)
+                    )
+                } else if (showHotSection) {
                     Text(
                         "Swipe left to remove · swipe right or drag up into Queue to promote",
                         style = MaterialTheme.typography.labelSmall,
@@ -318,7 +339,8 @@ private fun QueueTabContent(
             if (upcomingCold.isEmpty()) {
                 item(key = "cold-empty") {
                     Text(
-                        "Play an album or list to fill what comes next.",
+                        if (isRadio) "Radio will load the next release when this one ends."
+                        else "Play an album or list to fill what comes next.",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f),
                         modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
@@ -350,12 +372,50 @@ private fun QueueTabContent(
                     )
                 )
             }
+
+            if (isRadio && radioNext.isNotEmpty()) {
+                item(key = "hdr-radio-next") {
+                    val nextAlbum = radioNext.firstOrNull()?.song?.displayAlbum ?: "Next"
+                    SectionHeader("Up next · $nextAlbum · ${radioNext.size}")
+                    Text(
+                        "Prefetched by radio — plays after this release",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.4f),
+                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp)
+                    )
+                }
+                items(
+                    items = radioNext,
+                    key = { it.key }
+                ) { entry ->
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(vertical = 6.dp, horizontal = 4.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Spacer(modifier = Modifier.width(32.dp))
+                        Column(modifier = Modifier.weight(1f)) {
+                            MarqueeText(
+                                text = entry.song.displayTitle,
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.75f)
+                            )
+                            MarqueeText(
+                                text = entry.song.displayArtist,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.45f)
+                            )
+                        }
+                    }
+                }
+            }
         }
     }
 }
 
 @Composable
-private fun NowPlayingQueueCard(song: Song) {
+private fun NowPlayingQueueCard(song: Song, radioLabel: String? = null) {
     Surface(
         modifier = Modifier
             .fillMaxWidth()
@@ -374,7 +434,7 @@ private fun NowPlayingQueueCard(song: Song) {
             Spacer(modifier = Modifier.width(12.dp))
             Column(modifier = Modifier.weight(1f)) {
                 Text(
-                    "Now playing",
+                    radioLabel ?: "Now playing",
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.primary,
                     fontWeight = FontWeight.SemiBold
@@ -428,9 +488,6 @@ private fun SwipeableQueueRow(
         label = "rowShift"
     )
 
-    // Delete / promote underlays only while this row is being *horizontally*
-    // swiped — never during vertical reorder drag (otherwise they flash under
-    // every moving row).
     val showSwipeUnderlay = abs(swipeX) > 1f && !drag.active
 
     Box(
@@ -502,7 +559,7 @@ private fun SwipeableQueueRow(
                 .pointerInput(index, listSize) {
                     detectDragGesturesAfterLongPress(
                         onDragStart = {
-                            swipeX = 0f // clear any residual swipe before reorder
+                            swipeX = 0f
                             drag.start(index)
                         },
                         onDragEnd = {
