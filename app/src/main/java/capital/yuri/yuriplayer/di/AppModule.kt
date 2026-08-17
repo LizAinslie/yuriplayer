@@ -16,6 +16,8 @@ import capital.yuri.yuriplayer.data.UserImageStore
 import capital.yuri.yuriplayer.data.db.YuriDatabase
 import capital.yuri.yuriplayer.data.source.ArtistInfoService
 import capital.yuri.yuriplayer.data.source.ArtistInfoSource
+import capital.yuri.yuriplayer.data.source.LibrarySource
+import capital.yuri.yuriplayer.data.source.LibrarySourceRegistry
 import capital.yuri.yuriplayer.data.source.LocalArtistProfileProvider
 import capital.yuri.yuriplayer.data.source.MusicBrainzArtistProfileProvider
 import capital.yuri.yuriplayer.data.source.MusicBrainzClient
@@ -57,6 +59,10 @@ val appModule = module {
 
     single { CatalogRepository(get(), get()) }
     single { LibraryIndex(get(), get(), get()) }
+
+    // Plugin SPI registries (JAR plugins will contribute more list entries later)
+    single<List<LibrarySource>> { emptyList() }
+    single { LibrarySourceRegistry(get()) }
 
     single { PlaylistRepository(get(), get(), get()) }
     single { MusicBrainzClient(get<HttpClient>()) }

@@ -79,8 +79,7 @@ class ArtistProfileRepository(
     }
 
     /**
-     * Wide banner for artist page theming. Returns persisted file:// URI or null.
-     * Banner is independent of the circular profile image.
+     * Wide banner for artist page theming. Independent of circular profile image.
      */
     suspend fun setBannerImage(artistName: String, imageUri: String?): String? =
         withContext(Dispatchers.IO) {
@@ -92,6 +91,12 @@ class ArtistProfileRepository(
                 images.persist(imageUri, UserImageStore.NS_ARTIST_BANNERS, key)
             }
         }
+
+    /** Current banner file:// URI if set. */
+    fun bannerUri(artistName: String): String? {
+        val key = artistKey(artistName) ?: return null
+        return images.resolve(UserImageStore.NS_ARTIST_BANNERS, key)
+    }
 
     private fun merge(base: ArtistProfile, incoming: ArtistProfile): ArtistProfile =
         base.copy(
