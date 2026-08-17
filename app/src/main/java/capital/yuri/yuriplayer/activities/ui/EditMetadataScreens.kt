@@ -64,6 +64,7 @@ fun EditSongMetadataScreen(
     var artist by remember(song.songKey) { mutableStateOf(song.artist.orEmpty()) }
     var coverBytes by remember { mutableStateOf<ByteArray?>(null) }
     var coverMime by remember { mutableStateOf<String?>(null) }
+    var cropUri by remember { mutableStateOf<Uri?>(null) }
     var saving by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf<String?>(null) }
 
@@ -72,19 +73,31 @@ fun EditSongMetadataScreen(
     val pickImage = rememberLauncherForActivityResult(
         ActivityResultContracts.GetContent()
     ) { uri ->
-        if (uri == null) return@rememberLauncherForActivityResult
-        scope.launch {
-            val pair = editor.readImageBytes(uri)
-            coverBytes = pair?.first
-            coverMime = pair?.second
-        }
+        if (uri != null) cropUri = uri
+    }
+
+    if (cropUri != null) {
+        ImageCropScreen(
+            sourceUri = cropUri!!,
+            title = "Crop cover",
+            aspect = 1f,
+            onCancel = { cropUri = null },
+            onCropped = { cropped ->
+                cropUri = null
+                scope.launch {
+                    val pair = editor.readImageBytes(cropped)
+                    coverBytes = pair?.first
+                    coverMime = pair?.second ?: "image/jpeg"
+                }
+            }
+        )
+        return
     }
 
     fun doSave() {
         saving = true
         error = null
         scope.launch {
-            // Song path: write title/artist; if cover set, reuse album writer for one track
             val tagResult = editor.saveSong(
                 song,
                 MetadataEditService.SongEdit(
@@ -233,6 +246,7 @@ fun EditAlbumMetadataScreen(
     }
     var coverBytes by remember { mutableStateOf<ByteArray?>(null) }
     var coverMime by remember { mutableStateOf<String?>(null) }
+    var cropUri by remember { mutableStateOf<Uri?>(null) }
     var saving by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf<String?>(null) }
 
@@ -241,12 +255,25 @@ fun EditAlbumMetadataScreen(
     val pickImage = rememberLauncherForActivityResult(
         ActivityResultContracts.GetContent()
     ) { uri ->
-        if (uri == null) return@rememberLauncherForActivityResult
-        scope.launch {
-            val pair = editor.readImageBytes(uri)
-            coverBytes = pair?.first
-            coverMime = pair?.second
-        }
+        if (uri != null) cropUri = uri
+    }
+
+    if (cropUri != null) {
+        ImageCropScreen(
+            sourceUri = cropUri!!,
+            title = "Crop cover",
+            aspect = 1f,
+            onCancel = { cropUri = null },
+            onCropped = { cropped ->
+                cropUri = null
+                scope.launch {
+                    val pair = editor.readImageBytes(cropped)
+                    coverBytes = pair?.first
+                    coverMime = pair?.second ?: "image/jpeg"
+                }
+            }
+        )
+        return
     }
 
     Scaffold(
