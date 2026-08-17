@@ -37,6 +37,19 @@ class MyStuffPinStore(context: Context) {
     private val _pins = MutableStateFlow(load())
     val pins: StateFlow<List<StuffPin>> = _pins.asStateFlow()
 
+    fun contains(kind: StuffPinKind, id: String): Boolean =
+        _pins.value.any { it.kind == kind && it.id == id }
+
+    fun toggle(pin: StuffPin): Boolean {
+        return if (contains(pin.kind, pin.id)) {
+            remove(pin)
+            false
+        } else {
+            add(pin)
+            true
+        }
+    }
+
     fun add(pin: StuffPin) {
         val cur = _pins.value.toMutableList()
         if (cur.any { it.kind == pin.kind && it.id == pin.id }) return
