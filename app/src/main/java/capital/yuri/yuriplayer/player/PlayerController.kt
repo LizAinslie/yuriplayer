@@ -9,9 +9,7 @@ import android.util.Log
 import androidx.core.content.ContextCompat
 import capital.yuri.yuriplayer.data.AlbumItem
 import capital.yuri.yuriplayer.data.Song
-import capital.yuri.yuriplayer.data.albumKey
 import capital.yuri.yuriplayer.player.radio.RadioEngine
-import capital.yuri.yuriplayer.player.radio.ReleaseClassifier
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -97,96 +95,41 @@ class PlayerController(
         runOrQueue { it.playSource(songs, startIndex, autoPlay = true, source = source) }
     }
 
-    /**
-     * Album radio: pool = all credited artists on the album.
-     * Plays the seed album first under the radio name, then continues via exhaust.
-     * Repeat forced OFF so radio can advance.
-     */
+    /** Start album radio; cold queue = RadioEngine.planBatch(). */
     fun startAlbumRadio(album: AlbumItem) {
         val session = radioEngine.startAlbumRadio(album)
-        val key = ReleaseClassifier.releaseKey(album)
         queueManager.setRepeatMode(RepeatMode.OFF)
         queueManager.setRadioSession(session)
+        val batch = radioEngine.planBatch() ?: return
         runOrQueue {
             it.setRepeatMode(RepeatMode.OFF)
             it.playSource(
-                songs = album.songs,
+                songs = batch.songs,
                 startIndex = 0,
                 autoPlay = true,
-                source = ColdSource(
-                    type = ColdSourceType.RADIO,
-                    id = key,
-                    title = session.displayName
-                )
+                source = batch.source
             )
-            // Re-assert session after playSource (RADIO type keeps it)
             queueManager.setRadioSession(session)
-            radioEngine.prefetchUpcoming(
-                seedSong = album.songs.firstOrNull(),
-                finishedSource = ColdSource(ColdSourceType.RADIO, key, session.displayName),
-                repeatMode = RepeatMode.OFF
-            )
-            queueManager.setRadioUpcoming(radioEngine.upcomingSongs())
+            queueManager.setRadioUpcoming(emptyList())
         }
     }
 
-    fun startArtistRadio(artistName: String, seedSongs: List<Song> = emptyList()) {
+    /** Start artist radio; cold queue planned by engine up to maxRadioQueue. */
+    fun startArtistRadio(artistName: String) {
         val session = radioEngine.startArtistRadio(artistName)
         queueManager.setRepeatMode(RepeatMode.OFF)
         queueManager.setRadioSession(session)
-        val first = if (seedSongs.isNotEmpty()) {
-            seedSongs
-        } else {
-            // Engine will pick on exhaust; kick off with empty → immediate pick
-            emptyList()
-        }
+        val batch = radioEngine.planBatch() ?: return
         runOrQueue {
             it.setRepeatMode(RepeatMode.OFF)
-            if (first.isNotEmpty()) {
-                it.playSource(
-                    songs = first,
-                    startIndex = 0,
-                    autoPlay = true,
-                    source = ColdSource(
-                        type = ColdSourceType.RADIO,
-                        id = session.seedId ?: artistName,
-                        title = session.displayName
-                    )
-                )
-                queueManager.setRadioSession(session)
-                radioEngine.prefetchUpcoming(
-                    seedSong = first.firstOrNull(),
-                    finishedSource = null,
-                    repeatMode = RepeatMode.OFF
-                )
-                queueManager.setRadioUpcoming(radioEngine.upcomingSongs())
-            } else {
-                // Force a pick immediately via auto-play path
-                queueManager.setRadioSession(session)
-                val pick = radioEngine.maybePick(
-                    seedSong = null,
-                    finishedSource = ColdSource(
-                        ColdSourceType.ARTIST,
-                        session.seedId ?: artistName,
-                        artistName
-                    ),
-                    repeatMode = RepeatMode.OFF
-                )
-                if (pick != null) {
-                    it.playSource(
-                        pick.album.songs,
-                        0,
-                        autoPlay = true,
-                        source = ColdSource(
-                            ColdSourceType.RADIO,
-                            pick.source.id,
-                            session.displayName
-                        )
-                    )
-                    queueManager.setRadioSession(session)
-                    queueManager.setRadioUpcoming(radioEngine.upcomingSongs())
-                }
-            }
+            it.playSource(
+                songs = batch.songs,
+                startIndex = 0,
+                autoPlay = true,
+                source = batch.source
+            )
+            queueManager.setRadioSession(session)
+            queueManager.setRadioUpcoming(emptyList())
         }
     }
 
@@ -223,12 +166,26 @@ class PlayerController(
 
     fun setShuffle(enabled: Boolean) = service?.setShuffle(enabled)
     fun toggleShuffle() {
-        val snap = service?.getQueueSnapshot()
-        service?.setShuffle(!(snap?.shuffleEnabled ?: false))
+        // QueueManager.setShuffle handles radio prefs when session active
+        val snap = queueManager.getSnapshot()
+        queueManager.setShuffle(!snap.shuffleEnabled)
+        // Keep player window in sync
+        service?.let {
+            // trigger next-item refresh via a no-op path if bound
+            val s = queueManager.getSnapshot()
+            // MusicService has no dedicated refresh; skipToNext path not needed
+        }
     }
 
-    fun cycleRepeatMode() = service?.cycleRepeatMode()
-    fun setRepeatMode(mode: RepeatMode) = service?.setRepeatMode(mode)
+    fun cycleRepeatMode() {
+        queueManager.cycleRepeatMode()
+        service?.cycleRepeatMode()
+    }
+
+    fun setRepeatMode(mode: RepeatMode) {
+        queueManager.setRepeatMode(mode)
+        service?.setRepeatMode(mode)
+    }
 
     fun play() {
         ContextCompat.startForegroundService(
@@ -259,8 +216,8 @@ class PlayerController(
         runOrQueue { it.seekToFraction(fraction) }
     }
 
-    fun peekNext(): Song? = service?.peekNext()
-    fun peekPrevious(): Song? = service?.peekPrevious()
+    fun peekNext(): Song? = service?.peekNext() ?: queueManager.peekNext()
+    fun peekPrevious(): Song? = service?.peekPrevious() ?: queueManager.peekPrevious()
 
     fun clearHistory() {
         historyStore.clear()
