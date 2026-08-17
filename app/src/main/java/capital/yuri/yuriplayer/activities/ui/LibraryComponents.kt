@@ -67,8 +67,10 @@ import capital.yuri.yuriplayer.data.LibraryIndex
 import capital.yuri.yuriplayer.data.Song
 import capital.yuri.yuriplayer.data.SortMode
 import capital.yuri.yuriplayer.data.label
+import capital.yuri.yuriplayer.player.PlayerController
 import capital.yuri.yuriplayer.ui.formatAlbumCount
 import capital.yuri.yuriplayer.ui.formatTrackCount
+import org.koin.compose.koinInject
 import java.text.DateFormat
 import java.util.Date
 import kotlin.math.roundToInt
@@ -151,6 +153,7 @@ fun LibraryScreen(
     val context = LocalContext.current
     val focusManager = LocalFocusManager.current
     val keyboard = LocalSoftwareKeyboardController.current
+    val player: PlayerController = koinInject()
 
     var query by remember { mutableStateOf("") }
     var sortMode by remember { mutableStateOf(SortMode.TITLE) }
@@ -291,7 +294,11 @@ fun LibraryScreen(
                 },
                 onGoToAlbum = { openAlbumForSong(it) },
                 onGoToArtist = { openArtistForSong(it) },
-                onEditSong = onEditSong
+                onEditSong = onEditSong,
+                onStartRadio = { song ->
+                    player.startSongRadio(song)
+                    Toast.makeText(context, "Radio · ${song.displayArtist}", Toast.LENGTH_SHORT).show()
+                }
             )
             LibrarySection.Untagged -> SongList(
                 songs = untaggedSongs,
@@ -305,7 +312,11 @@ fun LibraryScreen(
                 },
                 onGoToAlbum = { openAlbumForSong(it) },
                 onGoToArtist = { openArtistForSong(it) },
-                onEditSong = onEditSong
+                onEditSong = onEditSong,
+                onStartRadio = { song ->
+                    player.startSongRadio(song)
+                    Toast.makeText(context, "Radio · ${song.displayArtist}", Toast.LENGTH_SHORT).show()
+                }
             )
             LibrarySection.Albums -> {
                 if (albums.isEmpty()) Text("No albums match.", modifier = Modifier.padding(16.dp))
@@ -323,7 +334,11 @@ fun LibraryScreen(
                                 ).show()
                             },
                             onGoToArtist = { openArtistForAlbum(album) },
-                            onEditMetadata = { onEditAlbum(album) }
+                            onEditMetadata = { onEditAlbum(album) },
+                            onStartRadio = {
+                                player.startAlbumRadio(album)
+                                Toast.makeText(context, "Radio · ${album.displayName}", Toast.LENGTH_SHORT).show()
+                            }
                         )
                     }
                 }
@@ -350,7 +365,8 @@ private fun SongList(
     onAddToQueue: (Song) -> Unit,
     onGoToAlbum: (Song) -> Unit,
     onGoToArtist: (Song) -> Unit,
-    onEditSong: (Song) -> Unit
+    onEditSong: (Song) -> Unit,
+    onStartRadio: (Song) -> Unit = {}
 ) {
     if (songs.isEmpty() && !loading) {
         Text("Nothing here yet.", modifier = Modifier.padding(16.dp))
@@ -366,7 +382,8 @@ private fun SongList(
                     isPlaybackActive = isPlaybackActive,
                     onGoToAlbum = { onGoToAlbum(song) },
                     onGoToArtist = { onGoToArtist(song) },
-                    onEditMetadata = { onEditSong(song) }
+                    onEditMetadata = { onEditSong(song) },
+                    onStartRadio = { onStartRadio(song) }
                 )
             }
         }
@@ -386,7 +403,8 @@ fun SwipeAddSongRow(
     surfaceColor: Color? = null,
     onGoToAlbum: (() -> Unit)? = null,
     onGoToArtist: (() -> Unit)? = null,
-    onEditMetadata: (() -> Unit)? = null
+    onEditMetadata: (() -> Unit)? = null,
+    onStartRadio: (() -> Unit)? = null
 ) {
     var offsetX by remember { mutableFloatStateOf(0f) }
     var showSheet by remember { mutableStateOf(false) }
@@ -394,7 +412,7 @@ fun SwipeAddSongRow(
     val threshold = with(density) { 96.dp.toPx() }
     val accent = MaterialTheme.colorScheme.primary
     val onSurface = MaterialTheme.colorScheme.onSurface
-    val hasContext = onGoToAlbum != null || onGoToArtist != null || onEditMetadata != null
+    val hasContext = onGoToAlbum != null || onGoToArtist != null || onEditMetadata != null || onStartRadio != null
 
     val revealAlpha = (offsetX / (threshold * 0.35f)).coerceIn(0f, 1f)
 
@@ -502,7 +520,8 @@ fun SwipeAddSongRow(
             onGoToAlbum = onGoToAlbum,
             onGoToArtist = onGoToArtist,
             onEditMetadata = onEditMetadata,
-            onAddToQueue = onSwipeAdd
+            onAddToQueue = onSwipeAdd,
+            onStartRadio = onStartRadio
         )
     }
 }
@@ -514,7 +533,8 @@ fun SwipeAddAlbumRow(
     onClick: () -> Unit,
     onSwipeAdd: () -> Unit,
     onGoToArtist: (() -> Unit)? = null,
-    onEditMetadata: (() -> Unit)? = null
+    onEditMetadata: (() -> Unit)? = null,
+    onStartRadio: (() -> Unit)? = null
 ) {
     var offsetX by remember { mutableFloatStateOf(0f) }
     var showSheet by remember { mutableStateOf(false) }
@@ -560,7 +580,9 @@ fun SwipeAddAlbumRow(
                 .combinedClickable(
                     onClick = onClick,
                     onLongClick = {
-                        if (onGoToArtist != null || onEditMetadata != null) showSheet = true
+                        if (onGoToArtist != null || onEditMetadata != null || onStartRadio != null) {
+                            showSheet = true
+                        }
                     }
                 )
                 .padding(horizontal = 16.dp, vertical = 12.dp),
@@ -585,7 +607,8 @@ fun SwipeAddAlbumRow(
             onDismiss = { showSheet = false },
             onGoToArtist = onGoToArtist,
             onEditMetadata = onEditMetadata,
-            onAddToQueue = onSwipeAdd
+            onAddToQueue = onSwipeAdd,
+            onStartRadio = onStartRadio
         )
     }
 }
@@ -596,7 +619,8 @@ fun AlbumRow(
     album: AlbumItem,
     onClick: () -> Unit,
     onGoToArtist: (() -> Unit)? = null,
-    onEditMetadata: (() -> Unit)? = null
+    onEditMetadata: (() -> Unit)? = null,
+    onStartRadio: (() -> Unit)? = null
 ) {
     var showSheet by remember { mutableStateOf(false) }
     Row(
@@ -605,7 +629,9 @@ fun AlbumRow(
             .combinedClickable(
                 onClick = onClick,
                 onLongClick = {
-                    if (onGoToArtist != null || onEditMetadata != null) showSheet = true
+                    if (onGoToArtist != null || onEditMetadata != null || onStartRadio != null) {
+                        showSheet = true
+                    }
                 }
             )
             .padding(horizontal = 16.dp, vertical = 12.dp),
@@ -627,25 +653,36 @@ fun AlbumRow(
             album = album,
             onDismiss = { showSheet = false },
             onGoToArtist = onGoToArtist,
-            onEditMetadata = onEditMetadata
+            onEditMetadata = onEditMetadata,
+            onStartRadio = onStartRadio
         )
     }
 }
 
 @Composable
 fun ArtistRow(artist: ArtistItem, onClick: () -> Unit) {
-    Column(
+    Row(
         modifier = Modifier
             .fillMaxWidth()
             .clickable(onClick = onClick)
-            .padding(horizontal = 16.dp, vertical = 12.dp)
+            .padding(horizontal = 16.dp, vertical = 12.dp),
+        verticalAlignment = Alignment.CenterVertically
     ) {
-        MarqueeText(text = artist.displayName, style = MaterialTheme.typography.bodyLarge)
-        Text(
-            "${formatAlbumCount(artist.albumCount)} \u00b7 ${formatTrackCount(artist.trackCount)}",
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
+        ArtistArt(
+            artistName = artist.displayName,
+            seedSong = artist.songs.firstOrNull(),
+            size = 48.dp,
+            circular = true
         )
+        Spacer(modifier = Modifier.width(12.dp))
+        Column(modifier = Modifier.weight(1f)) {
+            MarqueeText(text = artist.displayName, style = MaterialTheme.typography.bodyLarge)
+            Text(
+                "${formatAlbumCount(artist.albumCount)} \u00b7 ${formatTrackCount(artist.trackCount)}",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
+            )
+        }
     }
 }
 
