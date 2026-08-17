@@ -95,7 +95,6 @@ class PlayerController(
         runOrQueue { it.playSource(songs, startIndex, autoPlay = true, source = source) }
     }
 
-    /** Start album radio; cold queue = RadioEngine.planBatch(). */
     fun startAlbumRadio(album: AlbumItem) {
         val session = radioEngine.startAlbumRadio(album)
         queueManager.setRepeatMode(RepeatMode.OFF)
@@ -114,7 +113,6 @@ class PlayerController(
         }
     }
 
-    /** Start artist radio; cold queue planned by engine up to maxRadioQueue. */
     fun startArtistRadio(artistName: String) {
         val session = radioEngine.startArtistRadio(artistName)
         queueManager.setRepeatMode(RepeatMode.OFF)
@@ -164,27 +162,26 @@ class PlayerController(
         runOrQueue { it.playQueueItem(lane, index) }
     }
 
-    fun setShuffle(enabled: Boolean) = service?.setShuffle(enabled)
+    fun setShuffle(enabled: Boolean) {
+        // Prefer QueueManager so radio prefs replan works even before bind settles
+        queueManager.setShuffle(enabled)
+        service?.setShuffle(enabled)
+    }
+
     fun toggleShuffle() {
-        // QueueManager.setShuffle handles radio prefs when session active
-        val snap = queueManager.getSnapshot()
-        queueManager.setShuffle(!snap.shuffleEnabled)
-        // Keep player window in sync
-        service?.let {
-            // trigger next-item refresh via a no-op path if bound
-            val s = queueManager.getSnapshot()
-            // MusicService has no dedicated refresh; skipToNext path not needed
-        }
+        val enabled = !queueManager.getSnapshot().shuffleEnabled
+        setShuffle(enabled)
     }
 
     fun cycleRepeatMode() {
-        queueManager.cycleRepeatMode()
-        service?.cycleRepeatMode()
+        // Single owner: service if bound (it drives queueManager), else queueManager
+        if (service != null) service?.cycleRepeatMode()
+        else queueManager.cycleRepeatMode()
     }
 
     fun setRepeatMode(mode: RepeatMode) {
-        queueManager.setRepeatMode(mode)
-        service?.setRepeatMode(mode)
+        if (service != null) service?.setRepeatMode(mode)
+        else queueManager.setRepeatMode(mode)
     }
 
     fun play() {
