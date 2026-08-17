@@ -20,7 +20,6 @@ serialization = "1.8.1"
 jaudiotagger = "2.2.7"
 ktor = "3.1.1"
 coil = "3.1.0"
-ffmpegKit = "6.0-2"
 
 [libraries]
 androidx-core-ktx = { group = "androidx.core", name = "core-ktx", version.ref = "coreKtx" }
@@ -67,9 +66,6 @@ ktor-serialization-kotlinx-json = { group = "io.ktor", name = "ktor-serializatio
 coil-compose = { group = "io.coil-kt.coil3", name = "coil-compose", version.ref = "coil" }
 coil-network-okhttp = { group = "io.coil-kt.coil3", name = "coil-network-okhttp", version.ref = "coil" }
 coil-gif = { group = "io.coil-kt.coil3", name = "coil-gif", version.ref = "coil" }
-
-# Optional native media tooling (GIF crop, transcode). Large AAR — min package.
-ffmpeg-kit-min = { group = "com.arthenica", name = "ffmpeg-kit-min", version.ref = "ffmpegKit" }
 
 [plugins]
 android-application = { id = "com.android.application", version.ref = "agp" }

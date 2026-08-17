@@ -79,6 +79,55 @@ android {
     }
 }
 
+// ---------------------------------------------------------------------------
+// NDK FFmpeg: build once, cache on script + constraints hash.
+// Outputs land in app/src/main/assets/ffmpeg/<abi>/ffmpeg
+// First run is long; later assemble* is a no-op unless native/ffmpeg changes.
+// ---------------------------------------------------------------------------
+val ffmpegAbis = listOf("arm64-v8a", "armeabi-v7a", "x86_64")
+val ffmpegRoot = rootProject.file("native/ffmpeg")
+val ffmpegAssetsDir = file("src/main/assets/ffmpeg")
+val ffmpegConstraints = ffmpegRoot.resolve("constraints.env")
+
+val buildFfmpeg by tasks.registering(Exec::class) {
+    group = "native"
+    description = "Cross-compile FFmpeg for Android ABIs via NDK (cached)"
+
+    inputs.file(ffmpegRoot.resolve("build.sh"))
+    inputs.file(ffmpegConstraints)
+    inputs.dir(ffmpegRoot.resolve("patches")).optional = true
+    ffmpegAbis.forEach { abi ->
+        outputs.file(ffmpegAssetsDir.resolve("$abi/ffmpeg"))
+    }
+
+    workingDir = ffmpegRoot
+    commandLine("bash", "build.sh")
+    environment("FFMPEG_ASSETS_DIR", ffmpegAssetsDir.absolutePath)
+    environment("FFMPEG_ABIS", ffmpegAbis.joinToString(","))
+
+    onlyIf {
+        val script = ffmpegRoot.resolve("build.sh")
+        script.isFile && ffmpegConstraints.isFile
+    }
+
+    doFirst {
+        if (System.getenv("ANDROID_NDK_HOME").isNullOrBlank() &&
+            System.getenv("ANDROID_NDK").isNullOrBlank()
+        ) {
+            logger.warn(
+                "ANDROID_NDK_HOME not set — skipping FFmpeg native build. " +
+                    "GIF crop will fall back to still-image path until you build."
+            )
+            // soft skip: don't fail the whole assemble
+        }
+    }
+}
+
+// Optional: wire into preBuild when binaries missing (does not re-run if outputs present)
+tasks.named("preBuild").configure {
+    dependsOn(buildFfmpeg)
+}
+
 dependencies {
     implementation(platform(libs.androidx.compose.bom))
     implementation(libs.androidx.activity.compose)
@@ -110,19 +159,14 @@ dependencies {
 
     implementation(libs.jaudiotagger)
 
-    // HTTP
     implementation(libs.ktor.client.android)
     implementation(libs.ktor.client.content.negotiation)
     implementation(libs.ktor.client.logging)
     implementation(libs.ktor.serialization.kotlinx.json)
 
-    // Images (incl. GIF playlist covers)
     implementation(libs.coil.compose)
     implementation(libs.coil.network.okhttp)
     implementation(libs.coil.gif)
-
-    // Native media (GIF crop / later video)
-    implementation(libs.ffmpeg.kit.min)
 
     testImplementation(libs.junit)
     androidTestImplementation(platform(libs.androidx.compose.bom))
