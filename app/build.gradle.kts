@@ -108,8 +108,21 @@ dependencies {
     implementation(libs.androidx.room.ktx)
     ksp(libs.androidx.room.compiler)
 
-    // Local file tag read/write (MP3, FLAC, Ogg, …)
     implementation(libs.jaudiotagger)
+
+    // HTTP
+    implementation(libs.ktor.client.android)
+    implementation(libs.ktor.client.content.negotiation)
+    implementation(libs.ktor.client.logging)
+    implementation(libs.ktor.serialization.kotlinx.json)
+
+    // Images (incl. GIF playlist covers)
+    implementation(libs.coil.compose)
+    implementation(libs.coil.network.okhttp)
+    implementation(libs.coil.gif)
+
+    // Native media (GIF crop / later video)
+    implementation(libs.ffmpeg.kit.min)
 
     testImplementation(libs.junit)
     androidTestImplementation(platform(libs.androidx.compose.bom))
