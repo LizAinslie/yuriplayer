@@ -24,6 +24,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -40,9 +41,6 @@ import capital.yuri.yuriplayer.data.MyStuffPinStore
 import capital.yuri.yuriplayer.data.Playlist
 import capital.yuri.yuriplayer.data.Song
 import capital.yuri.yuriplayer.data.SortMode
-import capital.yuri.yuriplayer.data.StuffPinKind
-import capital.yuri.yuriplayer.data.albumKey
-import capital.yuri.yuriplayer.data.artistKey
 import capital.yuri.yuriplayer.player.PlayerController
 import capital.yuri.yuriplayer.ui.formatTrackCount
 import org.koin.compose.koinInject
@@ -53,7 +51,7 @@ enum class MediaBrowserSection { Songs, Albums, Artists, Playlists }
  * Lookup / data source for [MediaBrowser].
  * Callers supply how to resolve each section (full library, My Stuff subset, …).
  */
-fun interface MediaBrowserLookup {
+interface MediaBrowserLookup {
     fun songs(): List<Song>
     fun albums(): List<AlbumItem> = emptyList()
     fun artists(): List<ArtistItem> = emptyList()
@@ -94,7 +92,8 @@ fun MediaBrowser(
     val keyboard = LocalSoftwareKeyboardController.current
     val player: PlayerController = koinInject()
     val pinStore: MyStuffPinStore = koinInject()
-    val entries by pinStore.entries.collectAsStateRemember()
+    // Re-render hearts when collection changes
+    val entries by pinStore.entries.collectAsState()
 
     var query by remember { mutableStateOf("") }
     var sortMode by remember { mutableStateOf(SortMode.TITLE) }
@@ -104,10 +103,10 @@ fun MediaBrowser(
 
     val q = query.trim()
 
-    val allSongs = remember(lookup, entries) { lookup.songs() }
-    val allAlbums = remember(lookup, entries) { lookup.albums() }
-    val allArtists = remember(lookup, entries) { lookup.artists() }
-    val allPlaylists = remember(lookup, entries) { lookup.playlists() }
+    val allSongs = remember(lookup, entries.size) { lookup.songs() }
+    val allAlbums = remember(lookup, entries.size) { lookup.albums() }
+    val allArtists = remember(lookup, entries.size) { lookup.artists() }
+    val allPlaylists = remember(lookup, entries.size) { lookup.playlists() }
 
     val filteredSongs = remember(allSongs, q, sortMode) {
         allSongs
@@ -122,8 +121,11 @@ fun MediaBrowser(
                     SortMode.TITLE -> list.sortedBy { it.displayTitle.lowercase() }
                     SortMode.ARTIST -> list.sortedBy { it.displayArtist.lowercase() }
                     SortMode.ALBUM -> list.sortedBy { it.displayAlbum.lowercase() }
-                    SortMode.RECENT -> list.sortedByDescending { it.dateAdded ?: 0L }
-                    SortMode.YEAR -> list.sortedByDescending { it.year ?: 0 }
+                    SortMode.TRACK -> list.sortedWith(
+                        compareBy<Song> { it.discNumber ?: 1 }
+                            .thenBy { it.trackNumber ?: Int.MAX_VALUE }
+                            .thenBy { it.displayTitle.lowercase() }
+                    )
                 }
             }
     }
@@ -282,7 +284,3 @@ fun MediaBrowser(
         }
     }
 }
-
-@Composable
-private fun MyStuffPinStore.entries.collectAsStateRemember() =
-    androidx.compose.runtime.collectAsState(initial = this.value)
