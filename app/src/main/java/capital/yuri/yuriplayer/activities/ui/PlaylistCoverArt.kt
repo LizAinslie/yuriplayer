@@ -1,6 +1,5 @@
 package capital.yuri.yuriplayer.activities.ui
 
-import android.net.Uri
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
@@ -44,9 +43,7 @@ fun PlaylistCoverArt(playlist: Playlist, size: Dp = 56.dp) {
             PlaylistCover.CoverMode.SINGLE,
             PlaylistCover.CoverMode.COLLAGE ->
                 cover.artUris.firstOrNull()
-                    ?: playlist.songs.firstOrNull()?.let { song ->
-                        song.albumArtUri?.let { Uri.parse(it) }
-                    }
+                    ?: playlist.songs.firstOrNull()?.albumArtUri
             PlaylistCover.CoverMode.EMPTY -> null
         }
     }
