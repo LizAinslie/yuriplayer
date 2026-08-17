@@ -110,7 +110,6 @@ class MainActivity : ComponentActivity() {
     private var isCarMode = false
     private val openPlayerState = mutableStateOf(false)
 
-    /** Shown when API 30+ needs All files access for rewriting music tags. */
     private val showAllFilesPrompt = mutableStateOf(false)
 
     private val permissionLauncher = registerForActivityResult(
@@ -133,16 +132,6 @@ class MainActivity : ComponentActivity() {
             Manifest.permission.READ_EXTERNAL_STORAGE
         }
         return ContextCompat.checkSelfPermission(this, read) == PackageManager.PERMISSION_GRANTED
-    }
-
-    private fun hasWritePermission(): Boolean {
-        if (Build.VERSION.SDK_INT >= 30) {
-            return Environment.isExternalStorageManager()
-        }
-        return ContextCompat.checkSelfPermission(
-            this,
-            Manifest.permission.WRITE_EXTERNAL_STORAGE
-        ) == PackageManager.PERMISSION_GRANTED
     }
 
     private fun requiredStoragePermissions(): Array<String> {
@@ -596,7 +585,8 @@ fun YuriApp(
                                 onEditAlbum = { pushDetail(DetailRoute.EditAlbum(liveAlbum)) },
                                 onEditSong = { pushDetail(DetailRoute.EditSong(it)) },
                                 onAddSongToQueue = { player.addToHotQueue(it) },
-                                onAddAlbumToQueue = { player.addToHotQueue(it) }
+                                onAddAlbumToQueue = { player.addToHotQueue(it) },
+                                onStartRadio = { player.startAlbumRadio(liveAlbum) }
                             )
                         }
                         is DetailRoute.Artist -> {
