@@ -2,6 +2,7 @@ package capital.yuri.yuriplayer.player
 
 import android.util.Log
 import capital.yuri.yuriplayer.data.Song
+import capital.yuri.yuriplayer.player.radio.RadioSession
 import kotlinx.coroutines.channels.BufferOverflow
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -12,11 +13,10 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlin.random.Random
 
 /**
- * Dual-queue with consume-on-play semantics + cold [ColdSource] tracking.
+ * Dual-queue with consume-on-play + cold source + optional radio session.
  *
- * Continuous UI state → [snapshot]. Discrete moments → [events].
- * Auto-play recommended is applied on exhaust via [autoPlayHelper] so
- * [advance] can return a new [AdvanceResult.song] and MusicService rebuffers.
+ * Radio shuffle policy: [setShuffle] only reorders the current cold segment.
+ * The next radio release is algorithm-picked, independent of shuffle.
  */
 class QueueManager {
 
@@ -29,8 +29,10 @@ class QueueManager {
     private var shuffleEnabled = false
     private var repeatMode = RepeatMode.OFF
     private var floatingCurrent: Song? = null
-
     private val playedStack = mutableListOf<Song>()
+
+    private var radioSession: RadioSession? = null
+    private var radioUpcoming: List<Song> = emptyList()
 
     private val _snapshot = MutableStateFlow(QueueSnapshot())
     val snapshot: StateFlow<QueueSnapshot> = _snapshot.asStateFlow()
@@ -41,7 +43,6 @@ class QueueManager {
     )
     val events: SharedFlow<QueueEvent> = _events.asSharedFlow()
 
-    /** Wired from Koin ([MusicServiceAutoPlay]). */
     @Volatile
     var autoPlayHelper: MusicServiceAutoPlay? = null
 
@@ -58,14 +59,31 @@ class QueueManager {
     }
 
     fun getSnapshot(): QueueSnapshot = _snapshot.value
-
     fun coldSource(): ColdSource? = coldSource
+
+    fun setRadioSession(session: RadioSession?) {
+        radioSession = session
+        publish()
+    }
+
+    fun setRadioUpcoming(songs: List<Song>) {
+        radioUpcoming = songs
+        publish()
+    }
+
+    fun clearRadio() {
+        radioSession = null
+        radioUpcoming = emptyList()
+        autoPlayHelper?.stopRadio()
+        publish()
+    }
 
     fun peekNext(): Song? {
         if (repeatMode == RepeatMode.ONE) return null
         if (floatingCurrent != null) {
             if (hotQueue.isNotEmpty()) return hotQueue.first()
             if (coldQueue.isNotEmpty()) return coldQueue.first()
+            if (radioUpcoming.isNotEmpty()) return radioUpcoming.first()
             if (repeatMode == RepeatMode.COLD && coldOriginal.isNotEmpty()) {
                 return if (shuffleEnabled) coldOriginal.random() else coldOriginal.first()
             }
@@ -77,6 +95,7 @@ class QueueManager {
                     return hotQueue[indexInLane + 1]
                 }
                 if (coldQueue.isNotEmpty()) return coldQueue.first()
+                if (radioUpcoming.isNotEmpty()) return radioUpcoming.first()
                 if (repeatMode == RepeatMode.COLD && coldOriginal.isNotEmpty()) {
                     return if (shuffleEnabled) coldOriginal.random() else coldOriginal.first()
                 }
@@ -87,6 +106,7 @@ class QueueManager {
                 if (indexInLane in coldQueue.indices && indexInLane < coldQueue.lastIndex) {
                     return coldQueue[indexInLane + 1]
                 }
+                if (radioUpcoming.isNotEmpty()) return radioUpcoming.first()
                 if (repeatMode == RepeatMode.COLD && coldOriginal.isNotEmpty()) {
                     return if (shuffleEnabled) coldOriginal.random() else coldOriginal.first()
                 }
@@ -107,7 +127,9 @@ class QueueManager {
             indexInLane = indexInLane,
             shuffleEnabled = shuffleEnabled,
             repeatMode = repeatMode,
-            playedStack = playedStack.toList()
+            playedStack = playedStack.toList(),
+            radioSession = radioSession,
+            radioUpcoming = radioUpcoming
         )
     }
 
@@ -135,17 +157,17 @@ class QueueManager {
         indexInLane = -1
     }
 
-    /**
-     * If auto-play is enabled and Repeat is Off, load another same-artist album
-     * and return an AdvanceResult with that first track so MusicService rebuffers.
-     */
     private fun tryAutoPlayRescue(seed: Song?, source: ColdSource?): AdvanceResult? {
         val helper = autoPlayHelper ?: return null
         val pick = helper.maybePick(seed, source, repeatMode) ?: return null
         val songs = pick.album.songs
         if (songs.isEmpty()) return null
         Log.i(TAG, "auto-play rescue → '${pick.album.displayName}' (${songs.size} tracks)")
-        playSource(songs, startIndex = 0, source = pick.source)
+        if (pick.session != null) {
+            radioSession = pick.session
+        }
+        radioUpcoming = pick.upcoming
+        playSource(songs, startIndex = 0, source = pick.source, keepRadio = true)
         val next = currentSong() ?: return null
         return AdvanceResult(song = next)
     }
@@ -164,29 +186,37 @@ class QueueManager {
         floatingCurrent = null
         playedStack.clear()
         playedStack.addAll(snap.playedStack)
+        radioSession = snap.radioSession
+        radioUpcoming = snap.radioUpcoming
         val max = when (lane) {
             QueueLane.HOT -> hotQueue.lastIndex
             QueueLane.COLD -> coldQueue.lastIndex
         }
         if (max >= 0) indexInLane = indexInLane.coerceIn(0, max)
         publish()
-        Log.i(
-            TAG,
-            "restore lane=$lane source=${coldSource?.type}:${coldSource?.id} " +
-                "played=${playedStack.size}"
-        )
     }
 
+    /**
+     * @param keepRadio when true (radio advance), preserve session; otherwise clear.
+     */
     fun playSource(
         songs: List<Song>,
         startIndex: Int = 0,
-        source: ColdSource? = null
+        source: ColdSource? = null,
+        keepRadio: Boolean = false
     ) {
         if (songs.isEmpty()) return
-        Log.i(TAG, "playSource size=${songs.size} start=$startIndex source=$source")
+        Log.i(TAG, "playSource size=${songs.size} start=$startIndex source=$source keepRadio=$keepRadio")
         floatingCurrent = null
         playedStack.clear()
         coldSource = source
+
+        if (!keepRadio && source?.type != ColdSourceType.RADIO) {
+            radioSession = null
+            radioUpcoming = emptyList()
+            autoPlayHelper?.stopRadio()
+        }
+
         coldOriginal = songs.toList()
         coldQueue.clear()
         if (shuffleEnabled) {
@@ -249,7 +279,6 @@ class QueueManager {
         }
 
         publish()
-        Log.i(TAG, "updateColdFromSource id=$sourceId original=${coldOriginal.size} cold=${coldQueue.size}")
         return true
     }
 
@@ -361,22 +390,15 @@ class QueueManager {
                 if (index !in hotQueue.indices) return
                 val target = hotQueue[index]
                 val current = currentSong()
-                if (current != null && !sameSong(current, target)) {
-                    pushPlayed(current)
-                }
-                if (current == null || !sameSong(current, target)) {
-                    detachCurrentWithoutHistory()
-                }
+                if (current != null && !sameSong(current, target)) pushPlayed(current)
+                if (current == null || !sameSong(current, target)) detachCurrentWithoutHistory()
 
                 var targetIdx = hotQueue.indexOfFirst { sameSong(it, target) }
                 if (targetIdx < 0) {
                     hotQueue.add(0, target)
                     targetIdx = 0
                 }
-
-                if (targetIdx > 0) {
-                    repeat(targetIdx) { hotQueue.removeAt(0) }
-                }
+                if (targetIdx > 0) repeat(targetIdx) { hotQueue.removeAt(0) }
 
                 floatingCurrent = null
                 lane = QueueLane.HOT
@@ -387,23 +409,16 @@ class QueueManager {
                 if (index !in coldQueue.indices) return
                 val target = coldQueue[index]
                 val current = currentSong()
-                if (current != null && !sameSong(current, target)) {
-                    pushPlayed(current)
-                }
-                if (current == null || !sameSong(current, target)) {
-                    detachCurrentWithoutHistory()
-                }
+                if (current != null && !sameSong(current, target)) pushPlayed(current)
+                if (current == null || !sameSong(current, target)) detachCurrentWithoutHistory()
 
                 var targetIdx = coldQueue.indexOfFirst { sameSong(it, target) }
                 if (targetIdx < 0) {
                     coldQueue.add(0, target)
                     targetIdx = 0
                 }
-
                 if (targetIdx > 0) {
-                    for (i in 0 until targetIdx) {
-                        pushPlayed(coldQueue[i])
-                    }
+                    for (i in 0 until targetIdx) pushPlayed(coldQueue[i])
                     repeat(targetIdx) { coldQueue.removeAt(0) }
                 }
 
@@ -485,21 +500,15 @@ class QueueManager {
         } else {
             when (fromLane) {
                 QueueLane.HOT -> {
-                    if (fromIndex in hotQueue.indices) {
-                        pushPlayed(hotQueue.removeAt(fromIndex))
-                    }
+                    if (fromIndex in hotQueue.indices) pushPlayed(hotQueue.removeAt(fromIndex))
                 }
                 QueueLane.COLD -> {
-                    if (fromIndex in coldQueue.indices) {
-                        pushPlayed(coldQueue.removeAt(fromIndex))
-                    }
+                    if (fromIndex in coldQueue.indices) pushPlayed(coldQueue.removeAt(fromIndex))
                 }
             }
         }
 
-        if (wasFloating) {
-            return resolveNextFromHeads(seedBefore, sourceBefore)
-        }
+        if (wasFloating) return resolveNextFromHeads(seedBefore, sourceBefore)
 
         if (fromLane == QueueLane.HOT && fromIndex in hotQueue.indices) {
             lane = QueueLane.HOT
