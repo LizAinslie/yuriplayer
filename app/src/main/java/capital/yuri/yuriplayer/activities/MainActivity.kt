@@ -610,6 +610,9 @@ fun YuriApp(
                                         ColdSource(ColdSourceType.ARTIST, d.artist.name ?: "", d.artist.name)
                                     )
                                 },
+                                onStartRadio = {
+                                    player.startArtistRadio(d.artist.name ?: d.artist.displayName)
+                                },
                                 onAddToQueue = { player.addToHotQueue(it) }
                             )
                         }
