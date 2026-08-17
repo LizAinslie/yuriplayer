@@ -13,10 +13,11 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlin.random.Random
 
 /**
- * Dual-queue with consume-on-play + cold source + optional radio session.
+ * Dual-queue + optional radio session.
  *
- * Radio shuffle policy: [setShuffle] only reorders the current cold segment.
- * The next radio release is algorithm-picked, independent of shuffle.
+ * Radio cold queue is planned by [RadioEngine] (visible on queue page).
+ * Shuffle radio restocks via [MusicServiceAutoPlay.restock] after each consume.
+ * Repeat-all is disabled while radio is active.
  */
 class QueueManager {
 
@@ -60,9 +61,14 @@ class QueueManager {
 
     fun getSnapshot(): QueueSnapshot = _snapshot.value
     fun coldSource(): ColdSource? = coldSource
+    fun isRadioActive(): Boolean = radioSession?.active == true
 
     fun setRadioSession(session: RadioSession?) {
         radioSession = session
+        if (session != null) {
+            shuffleEnabled = session.prefs.shuffle
+            if (repeatMode == RepeatMode.COLD) repeatMode = RepeatMode.OFF
+        }
         publish()
     }
 
@@ -160,16 +166,37 @@ class QueueManager {
     private fun tryAutoPlayRescue(seed: Song?, source: ColdSource?): AdvanceResult? {
         val helper = autoPlayHelper ?: return null
         val pick = helper.maybePick(seed, source, repeatMode) ?: return null
-        val songs = pick.album.songs
+        val songs = pick.songs
         if (songs.isEmpty()) return null
-        Log.i(TAG, "auto-play rescue → '${pick.album.displayName}' (${songs.size} tracks)")
+        Log.i(TAG, "radio/auto-play rescue → ${songs.size} tracks (${pick.source.title})")
         if (pick.session != null) {
             radioSession = pick.session
+            shuffleEnabled = pick.session.prefs.shuffle
+            if (repeatMode == RepeatMode.COLD) repeatMode = RepeatMode.OFF
         }
         radioUpcoming = pick.upcoming
         playSource(songs, startIndex = 0, source = pick.source, keepRadio = true)
         val next = currentSong() ?: return null
         return AdvanceResult(song = next)
+    }
+
+    /** After consuming a radio track, top up cold queue (shuffle mode). */
+    private fun maybeRestockRadio() {
+        val sess = radioSession?.takeIf { it.active } ?: return
+        if (!sess.prefs.shuffle) return
+        val helper = autoPlayHelper ?: return
+        val keys = buildSet {
+            coldQueue.forEach { add(songKey(it)) }
+            currentSong()?.let { add(songKey(it)) }
+            floatingCurrent?.let { add(songKey(it)) }
+            playedStack.takeLast(40).forEach { add(songKey(it)) }
+        }
+        val add = helper.restock(coldQueue.size, keys)
+        if (add.isEmpty()) return
+        coldQueue.addAll(add)
+        coldOriginal = coldOriginal + add
+        Log.i(TAG, "radio restock +${add.size} cold=${coldQueue.size}")
+        publish()
     }
 
     fun restore(snap: QueueSnapshot) {
@@ -188,6 +215,9 @@ class QueueManager {
         playedStack.addAll(snap.playedStack)
         radioSession = snap.radioSession
         radioUpcoming = snap.radioUpcoming
+        if (radioSession?.active == true && repeatMode == RepeatMode.COLD) {
+            repeatMode = RepeatMode.OFF
+        }
         val max = when (lane) {
             QueueLane.HOT -> hotQueue.lastIndex
             QueueLane.COLD -> coldQueue.lastIndex
@@ -196,9 +226,6 @@ class QueueManager {
         publish()
     }
 
-    /**
-     * @param keepRadio when true (radio advance), preserve session; otherwise clear.
-     */
     fun playSource(
         songs: List<Song>,
         startIndex: Int = 0,
@@ -219,7 +246,10 @@ class QueueManager {
 
         coldOriginal = songs.toList()
         coldQueue.clear()
-        if (shuffleEnabled) {
+
+        // Radio batches are already ordered by RadioEngine — do not reshuffle here.
+        val isRadio = source?.type == ColdSourceType.RADIO || keepRadio
+        if (!isRadio && shuffleEnabled) {
             coldQueue.addAll(songs.shuffled(Random(System.nanoTime())))
             val tapped = songs.getOrNull(startIndex)
             if (tapped != null) {
@@ -253,6 +283,7 @@ class QueueManager {
         val src = coldSource ?: return false
         if (!src.id.equals(sourceId, ignoreCase = true)) return false
         if (songs.isEmpty()) return false
+        if (src.type == ColdSourceType.RADIO) return false
 
         val current = currentSong()
         val newKeys = songs.map { songKey(it) }.toSet()
@@ -431,6 +462,37 @@ class QueueManager {
     }
 
     fun setShuffle(enabled: Boolean) {
+        // Radio shuffle is a source preference — flip via autoPlayHelper engine when active.
+        if (radioSession?.active == true) {
+            val helper = autoPlayHelper
+            val next = helper?.radioEngine?.toggleShufflePrefs()
+            if (next != null) {
+                radioSession = radioSession?.copy(prefs = next)
+                shuffleEnabled = next.shuffle
+                // Re-plan cold queue from engine
+                val batch = helper.radioEngine.planBatch()
+                if (batch != null && batch.songs.isNotEmpty()) {
+                    val cur = currentSong()
+                    val ordered = batch.songs.toMutableList()
+                    if (cur != null) {
+                        ordered.removeAll { sameSong(it, cur) }
+                        coldOriginal = listOf(cur) + ordered
+                        coldQueue.clear()
+                        coldQueue.add(cur)
+                        coldQueue.addAll(ordered)
+                        lane = QueueLane.COLD
+                        indexInLane = 0
+                        floatingCurrent = null
+                    } else {
+                        playSource(batch.songs, 0, batch.source, keepRadio = true)
+                    }
+                }
+                publish()
+                emit(QueueEvent.ShuffleChanged(next.shuffle))
+            }
+            return
+        }
+
         val current = currentSong()
         if (!enabled) {
             if (!shuffleEnabled) return
@@ -467,20 +529,31 @@ class QueueManager {
     }
 
     fun cycleRepeatMode() {
-        repeatMode = when (repeatMode) {
-            RepeatMode.OFF -> RepeatMode.ONE
-            RepeatMode.ONE -> RepeatMode.COLD
-            RepeatMode.COLD -> RepeatMode.OFF
+        repeatMode = if (radioSession?.active == true) {
+            // No repeat-all in radio mode
+            when (repeatMode) {
+                RepeatMode.OFF -> RepeatMode.ONE
+                else -> RepeatMode.OFF
+            }
+        } else {
+            when (repeatMode) {
+                RepeatMode.OFF -> RepeatMode.ONE
+                RepeatMode.ONE -> RepeatMode.COLD
+                RepeatMode.COLD -> RepeatMode.OFF
+            }
         }
         publish()
         emit(QueueEvent.RepeatModeChanged(repeatMode))
     }
 
     fun setRepeatMode(mode: RepeatMode) {
-        if (repeatMode == mode) return
-        repeatMode = mode
+        val resolved = if (radioSession?.active == true && mode == RepeatMode.COLD) {
+            RepeatMode.OFF
+        } else mode
+        if (repeatMode == resolved) return
+        repeatMode = resolved
         publish()
-        emit(QueueEvent.RepeatModeChanged(mode))
+        emit(QueueEvent.RepeatModeChanged(resolved))
     }
 
     fun advance(userInitiated: Boolean): AdvanceResult {
@@ -507,6 +580,9 @@ class QueueManager {
                 }
             }
         }
+
+        // Restock shuffle radio as tracks leave cold
+        maybeRestockRadio()
 
         if (wasFloating) return resolveNextFromHeads(seedBefore, sourceBefore)
 
@@ -538,7 +614,7 @@ class QueueManager {
             return AdvanceResult(song = coldQueue[0])
         }
 
-        if (repeatMode == RepeatMode.COLD && coldOriginal.isNotEmpty()) {
+        if (repeatMode == RepeatMode.COLD && coldOriginal.isNotEmpty() && radioSession?.active != true) {
             repopulateCold()
             lane = QueueLane.COLD
             indexInLane = 0
@@ -571,7 +647,7 @@ class QueueManager {
             publish()
             return AdvanceResult(song = coldQueue[0])
         }
-        if (repeatMode == RepeatMode.COLD && coldOriginal.isNotEmpty()) {
+        if (repeatMode == RepeatMode.COLD && coldOriginal.isNotEmpty() && radioSession?.active != true) {
             repopulateCold()
             lane = QueueLane.COLD
             indexInLane = 0
