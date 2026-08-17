@@ -92,8 +92,6 @@ import capital.yuri.yuriplayer.data.PlayerThemeStore
 import capital.yuri.yuriplayer.data.Playlist
 import capital.yuri.yuriplayer.data.PlaylistRepository
 import capital.yuri.yuriplayer.data.Song
-import capital.yuri.yuriplayer.data.StuffPin
-import capital.yuri.yuriplayer.data.StuffPinKind
 import capital.yuri.yuriplayer.data.albumKey
 import capital.yuri.yuriplayer.data.artistKey
 import capital.yuri.yuriplayer.player.ColdSource
@@ -301,7 +299,6 @@ fun YuriApp(
     val themeStore: PlayerThemeStore = koinInject()
     val settings: LibrarySettings = koinInject()
     val enrichment: MetadataEnrichmentService = koinInject()
-    val pinStore: MyStuffPinStore = koinInject()
     val playlistRepo: PlaylistRepository = koinInject()
     val baseScheme = MaterialTheme.colorScheme
 
@@ -582,21 +579,8 @@ fun YuriApp(
                                 onPlayAlbum = { songs, index -> playAlbumFrom(liveAlbum, songs, index) },
                                 onTogglePlayPause = { player.togglePlayPause() },
                                 onToggleShuffle = { player.toggleShuffle() },
-                                onFavorite = {
-                                    val added = pinStore.toggleEntry(
-                                        StuffPin(
-                                            kind = StuffPinKind.ALBUM,
-                                            id = key,
-                                            title = liveAlbum.displayName,
-                                            subtitle = liveAlbum.displayArtist
-                                        )
-                                    )
-                                    Toast.makeText(
-                                        context,
-                                        if (added) "Added to My Stuff" else "Removed from My Stuff",
-                                        Toast.LENGTH_SHORT
-                                    ).show()
-                                },
+                                // Heart is owned by AlbumDetailScreen (toggleAlbum once).
+                                onFavorite = {},
                                 onOpenArtist = {
                                     val name = liveAlbum.artist ?: return@AlbumDetailScreen
                                     pushDetail(DetailRoute.Artist(resolveArtist(name)))
