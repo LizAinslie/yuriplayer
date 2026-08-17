@@ -131,7 +131,15 @@ private fun sortedReleaseTracks(album: AlbumItem): List<Song> =
 private val ArtistHeaderHeight = 300.dp
 private val ArtistGradientFade = 200.dp
 
-private enum class ArtistMenuAction { DataSources, FetchProfile, UploadProfile, FetchBanner, UploadBanner, ClearProfile }
+private fun parseImageUri(raw: String?): Uri? {
+    if (raw.isNullOrBlank()) return null
+    return runCatching {
+        when {
+            raw.startsWith("/") -> Uri.fromFile(java.io.File(raw))
+            else -> Uri.parse(raw)
+        }
+    }.getOrNull()
+}
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -187,15 +195,9 @@ fun ArtistDetailScreen(
 
     LaunchedEffect(artist.name, albums.size, profile?.imageUri, themeTick) {
         val resolved = runCatching { profileRepo.resolve(artist.displayName) }.getOrNull()
-        val profileUri = (profile?.imageUri ?: resolved?.imageUri)?.takeIf { it.isNotBlank() }
-            ?.let { raw ->
-                runCatching {
-                    when {
-                        raw.startsWith("/") -> Uri.fromFile(java.io.File(raw))
-                        else -> Uri.parse(raw)
-                    }
-                }.getOrNull()
-            }
+        // Prefer banner for page theming when the user set one
+        val themeUri = parseImageUri(profileRepo.bannerUri(artist.displayName))
+            ?: parseImageUri(profile?.imageUri ?: resolved?.imageUri)
 
         dataLinks = buildList {
             resolved?.websiteUrl?.takeIf { it.isNotBlank() }?.let {
@@ -206,11 +208,11 @@ fun ArtistDetailScreen(
             add(ArtistLink("MusicBrainz", "https://musicbrainz.org/search?query=$q&type=artist"))
         }.distinctBy { it.url }
 
-        themeColors = if (profileUri != null) {
+        themeColors = if (themeUri != null) {
             themeService.themeFromUri(
                 context = context,
-                key = "artist:${artistKeyStr}:${profileUri}",
-                uri = profileUri,
+                key = "artist:${artistKeyStr}:${themeUri}",
+                uri = themeUri,
                 base = base
             ).colors
         } else {
@@ -252,7 +254,6 @@ fun ArtistDetailScreen(
         }
     }
 
-    // Full-screen crop
     if (cropUri != null) {
         ImageCropScreen(
             sourceUri = cropUri!!,
@@ -260,7 +261,6 @@ fun ArtistDetailScreen(
             aspect = if (cropKind == ArtistImageKind.BANNER) 16f / 9f else 1f,
             onCancel = { cropUri = null },
             onCropped = { cropped ->
-                val uri = cropUri
                 cropUri = null
                 scope.launch {
                     when (cropKind) {
@@ -306,34 +306,34 @@ fun ArtistDetailScreen(
                 fontWeight = FontWeight.Bold,
                 modifier = Modifier.padding(horizontal = 20.dp, vertical = 8.dp)
             )
-            MediaSheetItem("Fetch artist image", onClick = {
+            MediaSheetItem("Fetch artist image") {
                 showMenu = false
                 fetchKind = ArtistImageKind.PROFILE
-            })
-            MediaSheetItem("Upload artist image", onClick = {
+            }
+            MediaSheetItem("Upload artist image") {
                 showMenu = false
                 pickProfile.launch("image/*")
-            })
-            MediaSheetItem("Fetch banner image", onClick = {
+            }
+            MediaSheetItem("Fetch banner image") {
                 showMenu = false
                 fetchKind = ArtistImageKind.BANNER
-            })
-            MediaSheetItem("Upload banner image", onClick = {
+            }
+            MediaSheetItem("Upload banner image") {
                 showMenu = false
                 pickBanner.launch("image/*")
-            })
-            MediaSheetItem("Clear artist image", onClick = {
+            }
+            MediaSheetItem("Clear artist image") {
                 showMenu = false
                 scope.launch {
                     profileRepo.setCustomImage(artist.displayName, null)
                     themeTick++
                     Toast.makeText(context, "Artist image cleared", Toast.LENGTH_SHORT).show()
                 }
-            })
-            MediaSheetItem("Data sources", onClick = {
+            }
+            MediaSheetItem("Data sources") {
                 showMenu = false
                 showDataSources = true
-            })
+            }
             MediaSheetBottomPad()
         }
     }
@@ -353,7 +353,9 @@ fun ArtistDetailScreen(
                 "Links from MusicBrainz and related catalogs for ${artist.displayName}.",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
-                modifier = Modifier.padding(horizontal = 20.dp, bottom = 12.dp)
+                modifier = Modifier
+                    .padding(horizontal = 20.dp)
+                    .padding(bottom = 12.dp)
             )
             if (dataLinks.isEmpty()) {
                 Text(
