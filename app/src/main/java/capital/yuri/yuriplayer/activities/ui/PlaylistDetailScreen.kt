@@ -31,6 +31,7 @@ import androidx.compose.material.icons.filled.Image
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material.icons.filled.MoreVert
+import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Radio
 import androidx.compose.material3.Icon
@@ -70,9 +71,12 @@ import kotlin.math.roundToInt
 fun PlaylistDetailScreen(
     playlistId: String,
     nowPlaying: Song? = null,
+    isSourceActive: Boolean = false,
+    isPlaying: Boolean = false,
     isPlaybackActive: Boolean = false,
     onBack: () -> Unit,
     onPlay: (List<Song>, Int) -> Unit,
+    onTogglePlayPause: () -> Unit = {},
     onAddToQueue: (Song) -> Unit,
     onStartRadio: (() -> Unit)? = null
 ) {
@@ -121,6 +125,12 @@ fun PlaylistDetailScreen(
             Text("Playlist not found", style = MaterialTheme.typography.titleMedium)
         }
         return
+    }
+
+    val showPause = isSourceActive && isPlaying
+    val onPrimary = {
+        if (isSourceActive) onTogglePlayPause()
+        else if (pl.songs.isNotEmpty()) onPlay(pl.songs, 0)
     }
 
     Column(
@@ -196,15 +206,15 @@ fun PlaylistDetailScreen(
             Spacer(modifier = Modifier.height(12.dp))
             Row(verticalAlignment = Alignment.CenterVertically) {
                 IconButton(
-                    onClick = { if (pl.songs.isNotEmpty()) onPlay(pl.songs, 0) },
+                    onClick = onPrimary,
                     modifier = Modifier
                         .size(52.dp)
                         .clip(CircleShape)
                         .background(MaterialTheme.colorScheme.primary)
                 ) {
                     Icon(
-                        Icons.Default.PlayArrow,
-                        contentDescription = "Play",
+                        if (showPause) Icons.Default.Pause else Icons.Default.PlayArrow,
+                        contentDescription = if (showPause) "Pause" else "Play",
                         tint = MaterialTheme.colorScheme.onPrimary,
                         modifier = Modifier.size(32.dp)
                     )
@@ -259,7 +269,7 @@ fun PlaylistDetailScreen(
                             Toast.makeText(context, "Added to queue", Toast.LENGTH_SHORT).show()
                         },
                         isPlaying = song.isSameAs(nowPlaying),
-                        isPlaybackActive = isPlaybackActive
+                        isPlaybackActive = isPlaybackActive || isPlaying
                     )
                 }
             }
@@ -280,7 +290,7 @@ fun PlaylistDetailScreen(
                 }
             },
             onAddToMyStuff = {
-                pinStore.add(
+                pinStore.addEntry(
                     StuffPin(
                         kind = StuffPinKind.PLAYLIST,
                         id = pl.id,
