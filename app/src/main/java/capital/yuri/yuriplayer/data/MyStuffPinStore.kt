@@ -32,8 +32,9 @@ data class StuffPin(
  * - [entries]: everything the user saved via heart / "Add to My Stuff"
  * - [pins]: ordered subset shown on the home grid (max [PIN_SLOTS])
  *
- * Adding an album also saves every track on that album.
- * Adding to My Stuff does NOT auto-pin.
+ * Adding an album also saves every track on that album (cascade).
+ * Unhearting an album removes only cascade-added tracks — songs the user
+ * hearted on their own stay in the collection.
  */
 class MyStuffPinStore(context: Context) {
 
@@ -51,6 +52,9 @@ class MyStuffPinStore(context: Context) {
 
     private val _pinsResolved = MutableStateFlow(resolvePins())
 
+    /** albumKey → songKeys auto-added with that album (not independently hearted). */
+    private val cascadeByAlbum = loadCascade().toMutableMap()
+
     fun contains(kind: StuffPinKind, id: String): Boolean =
         _entries.value.any { it.kind == kind && it.id == id }
 
@@ -60,6 +64,16 @@ class MyStuffPinStore(context: Context) {
         val cur = _entries.value.toMutableList()
         if (cur.any { it.kind == pin.kind && it.id == pin.id }) return
         cur.add(pin)
+        // Independent song heart: drop from any cascade sets
+        if (pin.kind == StuffPinKind.SONG) {
+            cascadeByAlbum.keys.toList().forEach { ak ->
+                val set = cascadeByAlbum[ak] ?: return@forEach
+                if (pin.id in set) {
+                    cascadeByAlbum[ak] = set - pin.id
+                }
+            }
+            persistCascade()
+        }
         persistEntries(cur)
     }
 
@@ -76,30 +90,45 @@ class MyStuffPinStore(context: Context) {
         if (changed) persistEntries(cur)
     }
 
-    /** Album entry + every track on the album. */
+    /** Album entry + tracks not already in collection (those become cascade). */
     fun addAlbumWithSongs(album: AlbumItem) {
-        val key = albumKey(album.name, album.artist)
+        val aKey = albumKey(album.name, album.artist)
+        val existingSongIds = _entries.value
+            .filter { it.kind == StuffPinKind.SONG }
+            .map { it.id }
+            .toSet()
+
+        val cascadeKeys = mutableSetOf<String>()
         val batch = buildList {
             add(
                 StuffPin(
                     kind = StuffPinKind.ALBUM,
-                    id = key,
+                    id = aKey,
                     title = album.displayName,
                     subtitle = album.displayArtist
                 )
             )
             album.songs.forEach { song ->
-                add(
-                    StuffPin(
-                        kind = StuffPinKind.SONG,
-                        id = song.songKey,
-                        title = song.displayTitle,
-                        subtitle = song.displayArtist
+                val sk = song.songKey
+                if (sk !in existingSongIds) {
+                    cascadeKeys += sk
+                    add(
+                        StuffPin(
+                            kind = StuffPinKind.SONG,
+                            id = sk,
+                            title = song.displayTitle,
+                            subtitle = song.displayArtist
+                        )
                     )
-                )
+                }
+                // already present → independent, leave alone
             }
         }
         addEntries(batch)
+        if (cascadeKeys.isNotEmpty()) {
+            cascadeByAlbum[aKey] = (cascadeByAlbum[aKey] ?: emptySet()) + cascadeKeys
+            persistCascade()
+        }
     }
 
     fun removeEntry(pin: StuffPin) {
@@ -107,24 +136,55 @@ class MyStuffPinStore(context: Context) {
         persistEntries(next)
         val keys = _pinKeys.value.filterNot { it == pin.key }
         if (keys.size != _pinKeys.value.size) persistPinKeys(keys)
+        if (pin.kind == StuffPinKind.SONG) {
+            cascadeByAlbum.keys.toList().forEach { ak ->
+                val set = cascadeByAlbum[ak] ?: return@forEach
+                if (pin.id in set) cascadeByAlbum[ak] = set - pin.id
+            }
+            persistCascade()
+        }
     }
 
-    /** Toggle album only (does not remove cascaded songs). */
+    /**
+     * Heart album → album + missing songs (cascade).
+     * Unheart → drop album + cascade-only songs; independently hearted songs stay.
+     */
     fun toggleAlbum(album: AlbumItem): Boolean {
-        val key = albumKey(album.name, album.artist)
+        val aKey = albumKey(album.name, album.artist)
         val pin = StuffPin(
             kind = StuffPinKind.ALBUM,
-            id = key,
+            id = aKey,
             title = album.displayName,
             subtitle = album.displayArtist
         )
         return if (contains(pin)) {
-            removeEntry(pin)
+            removeAlbumWithCascade(album)
             false
         } else {
             addAlbumWithSongs(album)
             true
         }
+    }
+
+    fun removeAlbumWithCascade(album: AlbumItem) {
+        val aKey = albumKey(album.name, album.artist)
+        val cascade = cascadeByAlbum[aKey] ?: emptySet()
+        cascadeByAlbum.remove(aKey)
+        persistCascade()
+
+        val dropSongIds = cascade // only cascade-tracked songs
+        val next = _entries.value.filterNot { e ->
+            (e.kind == StuffPinKind.ALBUM && e.id == aKey) ||
+                (e.kind == StuffPinKind.SONG && e.id in dropSongIds)
+        }
+        persistEntries(next)
+
+        val dropKeys = buildSet {
+            add("${StuffPinKind.ALBUM.name}:$aKey")
+            dropSongIds.forEach { add("${StuffPinKind.SONG.name}:$it") }
+        }
+        val pinKeys = _pinKeys.value.filterNot { it in dropKeys }
+        if (pinKeys.size != _pinKeys.value.size) persistPinKeys(pinKeys)
     }
 
     fun toggleArtist(artist: ArtistItem): Boolean {
@@ -226,6 +286,20 @@ class MyStuffPinStore(context: Context) {
         _pinsResolved.value = resolvePins()
     }
 
+    private fun persistCascade() {
+        // Map<String, List<String>> for JSON
+        val serializable = cascadeByAlbum.mapValues { it.value.toList() }
+        prefs.edit().putString(KEY_CASCADE, json.encodeToString(serializable)).apply()
+    }
+
+    private fun loadCascade(): Map<String, Set<String>> {
+        val raw = prefs.getString(KEY_CASCADE, null) ?: return emptyMap()
+        return runCatching {
+            json.decodeFromString<Map<String, List<String>>>(raw)
+                .mapValues { it.value.toSet() }
+        }.getOrElse { emptyMap() }
+    }
+
     private fun loadEntries(): List<StuffPin> {
         val raw = prefs.getString(KEY_ENTRIES, null)
             ?: prefs.getString(KEY_LEGACY_PINS, null)
@@ -243,6 +317,7 @@ class MyStuffPinStore(context: Context) {
         private const val KEY_ENTRIES = "entries"
         private const val KEY_PIN_KEYS = "pin_keys"
         private const val KEY_LEGACY_PINS = "pins"
+        private const val KEY_CASCADE = "album_cascade_songs"
         const val PIN_SLOTS = 10
 
         @Deprecated("Use PIN_SLOTS")
