@@ -34,12 +34,11 @@ import capital.yuri.yuriplayer.data.Song
 import org.koin.compose.koinInject
 
 /**
- * Compact now-playing strip.
+ * Compact now-playing strip (bottom of library / detail pages).
  *
- * Chrome follows the ambient app theme. Accents (progress + play) use album-art
- * colors. Surface paints edge-to-edge under the system gesture / nav bar so
- * sticky or transparent bars always sit on the mini-player color; interactive
- * content is inset with [navigationBarsPadding].
+ * Uses the **app default background** — not album art colors — so it stays
+ * neutral across pages. Accents (progress + play) still come from current art.
+ * Full Now Playing screen keeps the art-derived background.
  */
 @Composable
 fun NowPlayingPreview(
@@ -51,23 +50,22 @@ fun NowPlayingPreview(
     onOpen: () -> Unit,
     modifier: Modifier = Modifier,
     enableSwipeUp: Boolean = false,
-    /** When true (shell bottom bar), draw under system bars. */
     edgeToEdgeBottom: Boolean = false,
-    tonalElevation: androidx.compose.ui.unit.Dp = 3.dp,
-    shadowElevation: androidx.compose.ui.unit.Dp = 6.dp
+    tonalElevation: androidx.compose.ui.unit.Dp = 0.dp,
+    shadowElevation: androidx.compose.ui.unit.Dp = 4.dp
 ) {
     val themeStore: PlayerThemeStore = koinInject()
     val theme by themeStore.current.collectAsState()
     val ambient = MaterialTheme.colorScheme
     val accent = theme?.colors?.accent ?: ambient.primary
     val onAccent = theme?.colors?.onAccent ?: ambient.onPrimary
-    val trackInactive = ambient.onSurface.copy(alpha = 0.2f)
+    val trackInactive = ambient.onBackground.copy(alpha = 0.2f)
 
     Surface(
         tonalElevation = tonalElevation,
         shadowElevation = shadowElevation,
-        color = ambient.surface,
-        contentColor = ambient.onSurface,
+        color = ambient.background,
+        contentColor = ambient.onBackground,
         modifier = modifier
             .fillMaxWidth()
             .then(
@@ -113,12 +111,12 @@ fun NowPlayingPreview(
                     MarqueeText(
                         text = song?.displayTitle ?: "Not playing",
                         style = MaterialTheme.typography.bodyMedium,
-                        color = ambient.onSurface
+                        color = ambient.onBackground
                     )
                     MarqueeText(
                         text = song?.displayArtist ?: "",
                         style = MaterialTheme.typography.bodySmall,
-                        color = ambient.onSurface.copy(alpha = 0.6f)
+                        color = ambient.onBackground.copy(alpha = 0.6f)
                     )
                 }
                 IconButton(onClick = onToggle) {
@@ -140,7 +138,6 @@ fun NowPlayingPreview(
     }
 }
 
-/** Shell bottom bar — always edge-to-edge under the gesture / nav bar. */
 @Composable
 fun MiniPlayerBar(
     song: Song?,
