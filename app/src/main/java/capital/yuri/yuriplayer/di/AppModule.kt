@@ -9,6 +9,7 @@ import capital.yuri.yuriplayer.data.LibrarySettings
 import capital.yuri.yuriplayer.data.MetadataEditService
 import capital.yuri.yuriplayer.data.MetadataEnrichmentService
 import capital.yuri.yuriplayer.data.MusicRepository
+import capital.yuri.yuriplayer.data.MyStuffPinStore
 import capital.yuri.yuriplayer.data.PlayerThemeStore
 import capital.yuri.yuriplayer.data.PlaylistRepository
 import capital.yuri.yuriplayer.data.db.YuriDatabase
@@ -32,6 +33,7 @@ val appModule = module {
     single { LibrarySettings(androidContext()) }
     single { LibraryCache(androidContext()) }
     single { MusicRepository(androidContext(), get()) }
+    single { MyStuffPinStore(androidContext()) }
 
     single { YuriDatabase.create(androidContext()) }
     single { get<YuriDatabase>().albumPrefs() }
