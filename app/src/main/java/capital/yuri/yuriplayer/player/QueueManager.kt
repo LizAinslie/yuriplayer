@@ -16,7 +16,9 @@ import kotlin.random.Random
  * Dual-queue + optional radio session.
  *
  * Radio cold queue is planned by [RadioEngine] (visible on queue page).
- * Shuffle radio restocks via [MusicServiceAutoPlay.restock] after each consume.
+ * After each advance (finish/skip), [maybeRestockRadio] tops up:
+ *   shuffle → random tracks until maxRadioQueue
+ *   ordered → next whole release only when cold size < max - 1
  * Repeat-all is disabled while radio is active.
  */
 class QueueManager {
@@ -180,10 +182,12 @@ class QueueManager {
         return AdvanceResult(song = next)
     }
 
-    /** After consuming a radio track, top up cold queue (shuffle mode). */
+    /**
+     * After consuming a radio track (finish or skip), top up cold queue.
+     * Shuffle → random tracks to max; ordered → next release if size < max - 1.
+     */
     private fun maybeRestockRadio() {
         val sess = radioSession?.takeIf { it.active } ?: return
-        if (!sess.prefs.shuffle) return
         val helper = autoPlayHelper ?: return
         val keys = buildSet {
             coldQueue.forEach { add(songKey(it)) }
@@ -195,7 +199,11 @@ class QueueManager {
         if (add.isEmpty()) return
         coldQueue.addAll(add)
         coldOriginal = coldOriginal + add
-        Log.i(TAG, "radio restock +${add.size} cold=${coldQueue.size}")
+        Log.i(
+            TAG,
+            "radio restock +${add.size} cold=${coldQueue.size} " +
+                "shuffle=${sess.prefs.shuffle}"
+        )
         publish()
     }
 
@@ -581,7 +589,7 @@ class QueueManager {
             }
         }
 
-        // Restock shuffle radio as tracks leave cold
+        // Restock radio as tracks leave cold (shuffle → max; ordered → next release if under)
         maybeRestockRadio()
 
         if (wasFloating) return resolveNextFromHeads(seedBefore, sourceBefore)

@@ -14,8 +14,10 @@ import kotlin.random.Random
 /**
  * Plans the radio cold queue (visible on the queue page) and restocks it.
  *
- * Shuffle OFF: append whole releases until song count ≥ maxRadioQueue.
- * Shuffle ON: random songs; [restock] tops cold up to maxRadioQueue after each finish.
+ * Shuffle OFF: whole LP/EP/Single blocks until ≥ maxRadioQueue (may exceed);
+ *   restock appends the next release only when cold size < max - 1.
+ * Shuffle ON: random songs up to maxRadioQueue;
+ *   restock tops cold back up to max after each finish/skip.
  */
 class RadioEngine(
     private val library: LibraryIndex,
@@ -177,26 +179,43 @@ class RadioEngine(
     }
 
     /**
-     * After a track is consumed in shuffle radio, return songs to append so
-     * cold size approaches maxRadioQueue. Empty if already full or not shuffle.
+     * After a track is consumed (finish or skip), return songs to append.
+     *
+     * Shuffle: top cold up to [maxRadioQueue] with random tracks not already queued.
+     * Ordered: append the next whole LP/EP/Single only when
+     *   currentColdSize < maxRadioQueue - 1 (may push past max).
      */
     fun restockSongs(
         currentColdSize: Int,
         alreadyQueuedKeys: Set<String>
     ): List<Song> {
         val sess = session?.takeIf { it.active } ?: return emptyList()
-        if (!sess.prefs.shuffle) return emptyList()
         val max = sess.prefs.maxRadioQueue.coerceIn(1, 500)
-        val need = max - currentColdSize
-        if (need <= 0) return emptyList()
 
-        val pool = songPool(availableReleases(emptySet()))
-            .filter { songKey(it) !in alreadyQueuedKeys }
-        if (pool.isEmpty()) return emptyList()
+        if (sess.prefs.shuffle) {
+            val need = max - currentColdSize
+            if (need <= 0) return emptyList()
+            val pool = songPool(availableReleases(emptySet()))
+                .filter { songKey(it) !in alreadyQueuedKeys }
+            if (pool.isEmpty()) return emptyList()
+            val pick = pool.shuffled(Random(System.nanoTime())).take(need)
+            Log.i(TAG, "restock shuffle +${pick.size} (cold was $currentColdSize / $max)")
+            return pick
+        }
 
-        val pick = pool.shuffled(Random(System.nanoTime())).take(need)
-        Log.i(TAG, "restock +${pick.size} (cold was $currentColdSize / $max)")
-        return pick
+        // Ordered: hysteresis — only pull next release when clearly under target
+        if (currentColdSize >= max - 1) return emptyList()
+
+        val next = nextOrderedRelease(alreadyQueuedKeys) ?: return emptyList()
+        val tracks = sortedTracks(next)
+        if (tracks.isEmpty()) return emptyList()
+        memory.note(ReleaseClassifier.releaseKey(next), ReleaseClassifier.kindOf(next))
+        Log.i(
+            TAG,
+            "restock ordered +${tracks.size} from '${next.displayName}' " +
+                "(cold was $currentColdSize / $max)"
+        )
+        return tracks
     }
 
     /**
@@ -246,20 +265,10 @@ class RadioEngine(
         max: Int,
         excludeAlbumKeys: Set<String>
     ): List<Song> {
-        val ordered = releases
-            .filter { ReleaseClassifier.releaseKey(it) !in excludeAlbumKeys }
-            .sortedWith(
-                compareByDescending<AlbumItem> {
-                    it.songs.mapNotNull { s -> s.year }.maxOrNull() ?: Int.MIN_VALUE
-                }.thenBy(String.CASE_INSENSITIVE_ORDER) { it.displayName }
-            )
+        val ordered = orderedReleases(releases, excludeAlbumKeys)
         val out = ArrayList<Song>(max + 32)
         for (rel in ordered) {
-            val tracks = rel.songs.sortedWith(
-                compareBy<Song> { it.discNumber ?: 1 }
-                    .thenBy { it.trackNumber ?: Int.MAX_VALUE }
-                    .thenBy(String.CASE_INSENSITIVE_ORDER) { it.displayTitle }
-            )
+            val tracks = sortedTracks(rel)
             if (tracks.isEmpty()) continue
             out.addAll(tracks)
             memory.note(ReleaseClassifier.releaseKey(rel), ReleaseClassifier.kindOf(rel))
@@ -267,6 +276,40 @@ class RadioEngine(
         }
         return out
     }
+
+    /**
+     * Next release in year-desc order that still has tracks not already queued.
+     * A release is considered "done" when every track key is in [alreadyQueuedKeys].
+     */
+    private fun nextOrderedRelease(alreadyQueuedKeys: Set<String>): AlbumItem? {
+        val ordered = orderedReleases(availableReleases(emptySet()), emptySet())
+        for (rel in ordered) {
+            val tracks = sortedTracks(rel)
+            if (tracks.isEmpty()) continue
+            val allQueued = tracks.all { songKey(it) in alreadyQueuedKeys }
+            if (!allQueued) return rel
+        }
+        return null
+    }
+
+    private fun orderedReleases(
+        releases: List<AlbumItem>,
+        excludeAlbumKeys: Set<String>
+    ): List<AlbumItem> =
+        releases
+            .filter { ReleaseClassifier.releaseKey(it) !in excludeAlbumKeys }
+            .sortedWith(
+                compareByDescending<AlbumItem> {
+                    it.songs.mapNotNull { s -> s.year }.maxOrNull() ?: Int.MIN_VALUE
+                }.thenBy(String.CASE_INSENSITIVE_ORDER) { it.displayName }
+            )
+
+    private fun sortedTracks(rel: AlbumItem): List<Song> =
+        rel.songs.sortedWith(
+            compareBy<Song> { it.discNumber ?: 1 }
+                .thenBy { it.trackNumber ?: Int.MAX_VALUE }
+                .thenBy(String.CASE_INSENSITIVE_ORDER) { it.displayTitle }
+        )
 
     private fun availableReleases(excludeKeys: Set<String>): List<AlbumItem> {
         val base = if (poolReleases.isNotEmpty()) poolReleases else catalog.albums()
