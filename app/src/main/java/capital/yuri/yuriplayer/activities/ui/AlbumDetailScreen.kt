@@ -137,6 +137,7 @@ fun AlbumDetailScreen(
     val base = MaterialTheme.colorScheme
     var themeColors by remember { mutableStateOf(fallbackPlayerColors(base)) }
     var showMenu by remember { mutableStateOf(false) }
+    var showAddToPlaylist by remember { mutableStateOf(false) }
     val listState = rememberLazyListState()
     val density = LocalDensity.current
 
@@ -210,6 +211,14 @@ fun AlbumDetailScreen(
     val fadePx = with(density) { GradientFadeLength.toPx() }
 
     ThemedStatusBar(color = albumBg, enabled = true)
+
+    // Whole album → multi-select playlist sheet
+    if (showAddToPlaylist) {
+        AddToPlaylistSheet(
+            songs = album.songs,
+            onDismiss = { showAddToPlaylist = false }
+        )
+    }
 
     MaterialTheme(colorScheme = scheme) {
         BoxWithConstraints(
@@ -388,6 +397,13 @@ fun AlbumDetailScreen(
                         }
                     )
                     MediaSheetItem(
+                        label = "Add to playlist",
+                        onClick = {
+                            showMenu = false
+                            showAddToPlaylist = true
+                        }
+                    )
+                    MediaSheetItem(
                         label = "Edit album metadata",
                         onClick = {
                             showMenu = false
@@ -411,13 +427,6 @@ fun AlbumDetailScreen(
                         onClick = {
                             showMenu = false
                             onOpenArtist()
-                        }
-                    )
-                    MediaSheetItem(
-                        label = "Add to playlist",
-                        onClick = {
-                            showMenu = false
-                            Toast.makeText(context, "Playlists coming soon", Toast.LENGTH_SHORT).show()
                         }
                     )
                     MediaSheetBottomPad()
