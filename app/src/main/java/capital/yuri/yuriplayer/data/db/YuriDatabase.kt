@@ -21,7 +21,7 @@ import androidx.room.RoomDatabase
         SourceInstanceEntity::class,
         ScrobblerInstanceEntity::class
     ],
-    version = 4,
+    version = 5,
     exportSchema = false
 )
 abstract class YuriDatabase : RoomDatabase() {

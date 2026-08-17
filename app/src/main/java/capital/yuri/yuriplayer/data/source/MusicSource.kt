@@ -6,7 +6,6 @@ import capital.yuri.yuriplayer.data.db.ArtistProfileEntity
 import capital.yuri.yuriplayer.data.db.SourceOverrideDao
 import capital.yuri.yuriplayer.data.db.SourceOverrideEntity
 
-/** Built-in precedence when no user override is set. Lower = preferred. */
 enum class SourceType(val rank: Int) {
     LOCAL(0),
     JELLYFIN(10),
@@ -27,10 +26,6 @@ data class SourceOffering(
     val song: Song
 )
 
-/**
- * A logical track that may exist on multiple backends.
- * [offerings] ordered by resolver preference when returned from [SourceResolver].
- */
 data class CatalogTrack(
     val identityKey: String,
     val offerings: List<SourceOffering>
@@ -44,7 +39,6 @@ interface MusicSourceProvider {
     suspend fun listSongs(): List<Song>
 }
 
-/** Local MediaStore / filesystem scan already owned by LibraryIndex. */
 class LocalMusicSourceProvider(
     private val songs: () -> List<Song>
 ) : MusicSourceProvider {
@@ -53,7 +47,19 @@ class LocalMusicSourceProvider(
     override suspend fun listSongs(): List<Song> = songs()
 }
 
-data class ArtistLink(val label: String, val url: String)
+enum class LinkCategory {
+    OFFICIAL,
+    SOCIAL,
+    STREAMING,
+    DATABASE,
+    OTHER
+}
+
+data class ArtistLink(
+    val label: String,
+    val url: String,
+    val category: LinkCategory = LinkCategory.OTHER
+)
 
 data class ArtistProfile(
     val artistKey: String,
@@ -62,7 +68,21 @@ data class ArtistProfile(
     val imageUri: String? = null,
     val websiteUrl: String? = null,
     val links: List<ArtistLink> = emptyList(),
+    val genres: List<String> = emptyList(),
     val source: String = "local"
+)
+
+/** Upcoming / scheduled live appearance. */
+data class ArtistEvent(
+    val id: String,
+    val title: String,
+    val venue: String? = null,
+    val city: String? = null,
+    val region: String? = null,
+    val country: String? = null,
+    val datetime: String? = null,
+    val url: String? = null,
+    val source: String = "bandsintown"
 )
 
 interface ArtistProfileProvider {
@@ -70,7 +90,6 @@ interface ArtistProfileProvider {
     suspend fun fetch(artistName: String): ArtistProfile?
 }
 
-/** Placeholder until MusicBrainz / Jellyfin artist endpoints land. */
 class LocalArtistProfileProvider : ArtistProfileProvider {
     override val id: String = "local"
     override suspend fun fetch(artistName: String): ArtistProfile? {
@@ -83,10 +102,6 @@ class LocalArtistProfileProvider : ArtistProfileProvider {
     }
 }
 
-/**
- * Picks which offering to play for a logical track.
- * Order: explicit override → type rank (local first) → first available.
- */
 class SourceResolver(
     private val overrideDao: SourceOverrideDao
 ) {
@@ -131,7 +146,10 @@ class SourceResolver(
     }
 }
 
-fun ArtistProfileEntity.toProfile(links: List<ArtistLink> = emptyList()): ArtistProfile =
+fun ArtistProfileEntity.toProfile(
+    links: List<ArtistLink> = emptyList(),
+    genres: List<String> = emptyList()
+): ArtistProfile =
     ArtistProfile(
         artistKey = artistKey,
         displayName = displayName,
@@ -139,5 +157,68 @@ fun ArtistProfileEntity.toProfile(links: List<ArtistLink> = emptyList()): Artist
         imageUri = imageUri,
         websiteUrl = websiteUrl,
         links = links,
+        genres = genres.ifEmpty {
+            genresJson?.let { parseGenresJson(it) }.orEmpty()
+        },
         source = source
     )
+
+fun parseGenresJson(json: String?): List<String> {
+    if (json.isNullOrBlank()) return emptyList()
+    return runCatching {
+        val arr = org.json.JSONArray(json)
+        buildList {
+            for (i in 0 until arr.length()) {
+                arr.optString(i).takeIf { it.isNotBlank() }?.let { add(it) }
+            }
+        }
+    }.getOrDefault(emptyList())
+}
+
+fun genresToJson(genres: List<String>): String? {
+    if (genres.isEmpty()) return null
+    val arr = org.json.JSONArray()
+    genres.distinctBy { it.lowercase() }.forEach { arr.put(it) }
+    return arr.toString()
+}
+
+/** Infer platform category + friendly label from a URL. */
+fun categorizeLink(url: String, fallbackLabel: String? = null): ArtistLink {
+    val u = url.lowercase()
+    val (label, cat) = when {
+        u.contains("bandcamp.com") -> "Bandcamp" to LinkCategory.STREAMING
+        u.contains("soundcloud.com") -> "SoundCloud" to LinkCategory.STREAMING
+        u.contains("open.spotify.com") || u.contains("spotify.com") ->
+            "Spotify" to LinkCategory.STREAMING
+        u.contains("music.apple.com") || u.contains("itunes.apple.com") ->
+            "Apple Music" to LinkCategory.STREAMING
+        u.contains("deezer.com") -> "Deezer" to LinkCategory.STREAMING
+        u.contains("tidal.com") -> "Tidal" to LinkCategory.STREAMING
+        u.contains("youtube.com") || u.contains("youtu.be") ->
+            "YouTube" to LinkCategory.STREAMING
+        u.contains("musicbrainz.org") -> "MusicBrainz" to LinkCategory.DATABASE
+        u.contains("discogs.com") -> "Discogs" to LinkCategory.DATABASE
+        u.contains("wikidata.org") -> "Wikidata" to LinkCategory.DATABASE
+        u.contains("wikipedia.org") -> "Wikipedia" to LinkCategory.DATABASE
+        u.contains("last.fm") || u.contains("lastfm") -> "Last.fm" to LinkCategory.DATABASE
+        u.contains("allmusic.com") -> "AllMusic" to LinkCategory.DATABASE
+        u.contains("rateyourmusic.com") || u.contains("rymc.") ->
+            "Rate Your Music" to LinkCategory.DATABASE
+        u.contains("facebook.com") -> "Facebook" to LinkCategory.SOCIAL
+        u.contains("instagram.com") -> "Instagram" to LinkCategory.SOCIAL
+        u.contains("twitter.com") || u.contains("x.com/") -> "X / Twitter" to LinkCategory.SOCIAL
+        u.contains("tiktok.com") -> "TikTok" to LinkCategory.SOCIAL
+        u.contains("bandsintown.com") -> "Bandsintown" to LinkCategory.OTHER
+        u.contains("songkick.com") -> "Songkick" to LinkCategory.OTHER
+        else -> (fallbackLabel ?: "Link") to LinkCategory.OTHER
+    }
+    // Official homepage often labeled Website
+    val finalLabel = when {
+        fallbackLabel.equals("Website", true) ||
+            fallbackLabel.equals("official homepage", true) -> "Website"
+        else -> label
+    }
+    val finalCat =
+        if (finalLabel == "Website") LinkCategory.OFFICIAL else cat
+    return ArtistLink(finalLabel, url, finalCat)
+}
