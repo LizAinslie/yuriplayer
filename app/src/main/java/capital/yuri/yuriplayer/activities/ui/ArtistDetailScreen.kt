@@ -2,6 +2,8 @@ package capital.yuri.yuriplayer.activities.ui
 
 import android.net.Uri
 import android.widget.Toast
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
@@ -29,7 +31,6 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.ArrowDropDown
-import androidx.compose.material.icons.filled.Language
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material3.Checkbox
@@ -50,6 +51,7 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -75,10 +77,12 @@ import capital.yuri.yuriplayer.data.StuffPinKind
 import capital.yuri.yuriplayer.data.artistKey
 import capital.yuri.yuriplayer.data.releaseType
 import capital.yuri.yuriplayer.data.releaseYear
+import capital.yuri.yuriplayer.data.source.ArtistImageKind
 import capital.yuri.yuriplayer.data.source.ArtistLink
 import capital.yuri.yuriplayer.data.theme.ThemeService
 import capital.yuri.yuriplayer.ui.formatAlbumCount
 import capital.yuri.yuriplayer.ui.formatTrackCount
+import kotlinx.coroutines.launch
 import org.koin.compose.koinInject
 
 private enum class ArtistReleaseFilter { All, Albums, EPs, Singles }
@@ -127,6 +131,8 @@ private fun sortedReleaseTracks(album: AlbumItem): List<Song> =
 private val ArtistHeaderHeight = 300.dp
 private val ArtistGradientFade = 200.dp
 
+private enum class ArtistMenuAction { DataSources, FetchProfile, UploadProfile, FetchBanner, UploadBanner, ClearProfile }
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun ArtistDetailScreen(
@@ -145,12 +151,18 @@ fun ArtistDetailScreen(
     val base = MaterialTheme.colorScheme
     val context = LocalContext.current
     val density = LocalDensity.current
+    val scope = rememberCoroutineScope()
     var themeColors by remember { mutableStateOf(fallbackPlayerColors(base)) }
     var filter by remember { mutableStateOf(ArtistReleaseFilter.All) }
     var showAll by remember { mutableStateOf(false) }
     var discographyFilters by remember { mutableStateOf(DiscographyFilters()) }
+    var showMenu by remember { mutableStateOf(false) }
     var showDataSources by remember { mutableStateOf(false) }
+    var fetchKind by remember { mutableStateOf<ArtistImageKind?>(null) }
+    var cropUri by remember { mutableStateOf<Uri?>(null) }
+    var cropKind by remember { mutableStateOf(ArtistImageKind.PROFILE) }
     var dataLinks by remember { mutableStateOf<List<ArtistLink>>(emptyList()) }
+    var themeTick by remember { mutableStateOf(0) }
     val uriHandler = LocalUriHandler.current
 
     val profile by profileRepo.observe(artist.displayName).collectAsState(initial = null)
@@ -160,11 +172,22 @@ fun ArtistDetailScreen(
         pinStore.contains(StuffPinKind.ARTIST, artistKeyStr)
     }
 
-    // Await resolve so we theme from the *fresh* profile image when MB has one,
-    // otherwise extract from the first release cover (same path as album pages).
-    LaunchedEffect(artist.name, albums.size) {
+    val pickProfile = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri ->
+        if (uri != null) {
+            cropKind = ArtistImageKind.PROFILE
+            cropUri = uri
+        }
+    }
+    val pickBanner = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri ->
+        if (uri != null) {
+            cropKind = ArtistImageKind.BANNER
+            cropUri = uri
+        }
+    }
+
+    LaunchedEffect(artist.name, albums.size, profile?.imageUri, themeTick) {
         val resolved = runCatching { profileRepo.resolve(artist.displayName) }.getOrNull()
-        val profileUri = resolved?.imageUri?.takeIf { it.isNotBlank() }
+        val profileUri = (profile?.imageUri ?: resolved?.imageUri)?.takeIf { it.isNotBlank() }
             ?.let { raw ->
                 runCatching {
                     when {
@@ -179,7 +202,6 @@ fun ArtistDetailScreen(
                 add(ArtistLink("Website", it))
             }
             addAll(resolved?.links.orEmpty())
-            // Always offer MusicBrainz search as a data source
             val q = java.net.URLEncoder.encode(artist.displayName, "UTF-8")
             add(ArtistLink("MusicBrainz", "https://musicbrainz.org/search?query=$q&type=artist"))
         }.distinctBy { it.url }
@@ -187,7 +209,7 @@ fun ArtistDetailScreen(
         themeColors = if (profileUri != null) {
             themeService.themeFromUri(
                 context = context,
-                key = "artist:${artistKeyStr}:${resolved?.imageUri}",
+                key = "artist:${artistKeyStr}:${profileUri}",
                 uri = profileUri,
                 base = base
             ).colors
@@ -230,7 +252,91 @@ fun ArtistDetailScreen(
         }
     }
 
+    // Full-screen crop
+    if (cropUri != null) {
+        ImageCropScreen(
+            sourceUri = cropUri!!,
+            title = if (cropKind == ArtistImageKind.BANNER) "Crop banner" else "Crop artist image",
+            aspect = if (cropKind == ArtistImageKind.BANNER) 16f / 9f else 1f,
+            onCancel = { cropUri = null },
+            onCropped = { cropped ->
+                val uri = cropUri
+                cropUri = null
+                scope.launch {
+                    when (cropKind) {
+                        ArtistImageKind.PROFILE -> {
+                            profileRepo.setCustomImage(artist.displayName, cropped.toString())
+                            Toast.makeText(context, "Artist image updated", Toast.LENGTH_SHORT).show()
+                        }
+                        ArtistImageKind.BANNER -> {
+                            profileRepo.setBannerImage(artist.displayName, cropped.toString())
+                            Toast.makeText(context, "Banner updated", Toast.LENGTH_SHORT).show()
+                        }
+                    }
+                    themeTick++
+                }
+            }
+        )
+        return
+    }
+
     ThemedStatusBar(color = artBg, enabled = true)
+
+    if (fetchKind != null) {
+        FetchArtistImageSheet(
+            artistName = artist.displayName,
+            kind = fetchKind!!,
+            onDismiss = { fetchKind = null },
+            onPicked = { uri ->
+                cropKind = fetchKind!!
+                fetchKind = null
+                cropUri = uri
+            }
+        )
+    }
+
+    if (showMenu) {
+        ModalBottomSheet(
+            onDismissRequest = { showMenu = false },
+            sheetState = rememberModalBottomSheetState()
+        ) {
+            Text(
+                artist.displayName,
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.Bold,
+                modifier = Modifier.padding(horizontal = 20.dp, vertical = 8.dp)
+            )
+            MediaSheetItem("Fetch artist image", onClick = {
+                showMenu = false
+                fetchKind = ArtistImageKind.PROFILE
+            })
+            MediaSheetItem("Upload artist image", onClick = {
+                showMenu = false
+                pickProfile.launch("image/*")
+            })
+            MediaSheetItem("Fetch banner image", onClick = {
+                showMenu = false
+                fetchKind = ArtistImageKind.BANNER
+            })
+            MediaSheetItem("Upload banner image", onClick = {
+                showMenu = false
+                pickBanner.launch("image/*")
+            })
+            MediaSheetItem("Clear artist image", onClick = {
+                showMenu = false
+                scope.launch {
+                    profileRepo.setCustomImage(artist.displayName, null)
+                    themeTick++
+                    Toast.makeText(context, "Artist image cleared", Toast.LENGTH_SHORT).show()
+                }
+            })
+            MediaSheetItem("Data sources", onClick = {
+                showMenu = false
+                showDataSources = true
+            })
+            MediaSheetBottomPad()
+        }
+    }
 
     if (showDataSources) {
         ModalBottomSheet(
@@ -244,8 +350,7 @@ fun ArtistDetailScreen(
                 modifier = Modifier.padding(horizontal = 20.dp, vertical = 8.dp)
             )
             Text(
-                "Links from MusicBrainz and related catalogs for ${artist.displayName}. " +
-                    "Not every artist has external links in the database.",
+                "Links from MusicBrainz and related catalogs for ${artist.displayName}.",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
                 modifier = Modifier.padding(horizontal = 20.dp, bottom = 12.dp)
@@ -264,9 +369,7 @@ fun ArtistDetailScreen(
                         color = MaterialTheme.colorScheme.primary,
                         modifier = Modifier
                             .fillMaxWidth()
-                            .clickable {
-                                runCatching { uriHandler.openUri(link.url) }
-                            }
+                            .clickable { runCatching { uriHandler.openUri(link.url) } }
                             .padding(horizontal = 20.dp, vertical = 14.dp)
                     )
                 }
@@ -337,7 +440,7 @@ fun ArtistDetailScreen(
                     )
                 }
                 Spacer(modifier = Modifier.weight(1f))
-                IconButton(onClick = { showDataSources = true }) {
+                IconButton(onClick = { showMenu = true }) {
                     Icon(
                         Icons.Default.MoreVert,
                         contentDescription = "More",
