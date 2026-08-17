@@ -31,6 +31,7 @@ import capital.yuri.yuriplayer.player.QueueManager
 import capital.yuri.yuriplayer.player.radio.RadioEngine
 import capital.yuri.yuriplayer.player.radio.RadioPlaybackAlgorithm
 import capital.yuri.yuriplayer.player.radio.ReleasePoolAlgorithm
+import io.ktor.client.HttpClient
 import org.koin.android.ext.koin.androidContext
 import org.koin.dsl.module
 
@@ -58,9 +59,8 @@ val appModule = module {
     single { LibraryIndex(get(), get(), get()) }
 
     single { PlaylistRepository(get(), get(), get()) }
-    single { MusicBrainzClient() }
+    single { MusicBrainzClient(get<HttpClient>()) }
 
-    // Plugin-style artist info sources (JAR plugins will add more of these)
     single<List<ArtistInfoSource>> {
         listOf(
             MusicBrainzArtistProfileProvider(androidContext(), get())

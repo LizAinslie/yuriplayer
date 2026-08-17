@@ -1,31 +1,29 @@
 package capital.yuri.yuriplayer.data.source
 
 import android.util.Log
+import io.ktor.client.HttpClient
+import io.ktor.client.request.get
+import io.ktor.client.request.prepareGet
+import io.ktor.client.statement.bodyAsChannel
+import io.ktor.client.statement.bodyAsText
+import io.ktor.http.isSuccess
+import io.ktor.utils.io.jvm.javaio.toInputStream
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import org.json.JSONObject
-import java.io.BufferedInputStream
 import java.io.File
-import java.io.FileOutputStream
-import java.net.HttpURLConnection
-import java.net.URL
 import java.net.URLEncoder
-import java.nio.charset.StandardCharsets
 import kotlin.time.Duration.Companion.milliseconds
 
 /**
- * Minimal MusicBrainz + Cover Art Archive + Wikidata image client.
- *
- * MB search is case-insensitive. We still rank results so short / all-caps
- * names (e.g. "TOP") prefer an exact name match over a weak first hit.
- *
- * Artist images almost never live on MB directly — we resolve Wikidata P18
- * or Wikipedia page image when url-rels include those.
+ * MusicBrainz + Cover Art Archive + Wikidata via shared Ktor [HttpClient].
  */
-class MusicBrainzClient {
+class MusicBrainzClient(
+    private val http: HttpClient
+) {
 
     data class ReleaseHit(
         val mbid: String,
@@ -69,27 +67,21 @@ class MusicBrainzClient {
         withContext(Dispatchers.IO) {
             if (name.isBlank()) return@withContext null
             val trimmed = name.trim()
-
-            // 1) Phrase search, then 2) loose token search — MB Lucene is case-insensitive
             val mbid = findBestArtistMbid(trimmed) ?: return@withContext null
-
             val detailUrl =
                 "https://musicbrainz.org/ws/2/artist/$mbid?inc=url-rels&fmt=json"
             val detail = getText(detailUrl) ?: return@withContext ArtistHit(mbid, trimmed)
             val hit = parseArtistDetail(detail, mbid)
-
-            // Prefer direct image rel; else Wikidata P18; else Wikipedia summary image
             val image = hit.imageUrl
                 ?: resolveWikidataImage(hit)
                 ?: resolveWikipediaImage(hit)
-
             hit.copy(imageUrl = image)
         }
 
     private suspend fun findBestArtistMbid(name: String): String? {
         val queries = listOf(
             "artist:\"${escapeLucene(name)}\"",
-            escapeLucene(name) // loose: helps short names like TOP
+            escapeLucene(name)
         )
         for (q in queries) {
             val url = "https://musicbrainz.org/ws/2/artist?query=" +
@@ -102,32 +94,26 @@ class MusicBrainzClient {
         return null
     }
 
-    /** Prefer exact name (ignore case), then highest score. */
     private fun pickBestArtistMbid(json: String, wanted: String): String? {
         return try {
             val root = JSONObject(json)
             val artists = root.optJSONArray("artists") ?: return null
             if (artists.length() == 0) return null
-
-            val target = wanted.trim().lowercase()
             var exactId: String? = null
             var exactScore = -1
             var bestId: String? = null
             var bestScore = -1
-
             for (i in 0 until artists.length()) {
                 val a = artists.optJSONObject(i) ?: continue
                 val id = a.optString("id").takeIf { it.isNotBlank() } ?: continue
                 val n = a.optString("name").trim()
                 val score = a.optInt("score", 0)
                 val aliases = a.optJSONArray("aliases")
-
                 val nameMatch = n.equals(wanted, ignoreCase = true)
                 val aliasMatch = aliases != null && (0 until aliases.length()).any { ai ->
                     aliases.optJSONObject(ai)?.optString("name")
                         ?.equals(wanted, ignoreCase = true) == true
                 }
-
                 if (nameMatch || aliasMatch) {
                     if (score >= exactScore) {
                         exactScore = score
@@ -139,8 +125,6 @@ class MusicBrainzClient {
                     bestId = id
                 }
             }
-
-            // Require a reasonable score for non-exact matches (avoid garbage for "TOP")
             when {
                 exactId != null -> exactId
                 bestScore >= 80 -> bestId
@@ -173,7 +157,6 @@ class MusicBrainzClient {
                 ?.optString("value")
                 ?.takeIf { it.isNotBlank() }
                 ?: return null
-            // Special:FilePath redirects to a usable image URL
             "https://commons.wikimedia.org/wiki/Special:FilePath/" +
                 URLEncoder.encode(fileName.replace(' ', '_'), "UTF-8") +
                 "?width=800"
@@ -187,7 +170,6 @@ class MusicBrainzClient {
         val wikiUrl = hit.links.firstOrNull {
             it.url.contains("wikipedia.org", ignoreCase = true)
         }?.url ?: return null
-        // https://en.wikipedia.org/wiki/Artist_Name
         val path = wikiUrl.substringAfter("/wiki/").takeIf { it.isNotBlank() } ?: return null
         val lang = Regex("https?://([a-z]{2,3})\\.wikipedia").find(wikiUrl)?.groupValues?.getOrNull(1) ?: "en"
         val api = "https://$lang.wikipedia.org/api/rest_v1/page/summary/$path"
@@ -295,20 +277,12 @@ class MusicBrainzClient {
     private suspend fun getText(url: String): String? = rateLock.withLock {
         throttle()
         try {
-            val conn = open(url)
-            conn.requestMethod = "GET"
-            conn.connectTimeout = 12_000
-            conn.readTimeout = 12_000
-            conn.instanceFollowRedirects = true
-            val code = conn.responseCode
-            if (code !in 200..299) {
-                Log.w(TAG, "GET $url → $code")
-                conn.disconnect()
+            val response = http.get(url)
+            if (!response.status.isSuccess()) {
+                Log.w(TAG, "GET $url → ${response.status}")
                 return@withLock null
             }
-            val text = conn.inputStream.bufferedReader(StandardCharsets.UTF_8).use { it.readText() }
-            conn.disconnect()
-            text
+            response.bodyAsText()
         } catch (e: Exception) {
             Log.w(TAG, "GET failed $url", e)
             null
@@ -318,41 +292,21 @@ class MusicBrainzClient {
     private suspend fun downloadToFile(url: String, dest: File): Boolean = rateLock.withLock {
         throttle()
         try {
-            val conn = open(url)
-            conn.requestMethod = "GET"
-            conn.connectTimeout = 15_000
-            conn.readTimeout = 30_000
-            conn.instanceFollowRedirects = true
-            val code = conn.responseCode
-            if (code !in 200..299) {
-                conn.disconnect()
-                return@withLock false
-            }
-            dest.parentFile?.mkdirs()
-            val tmp = File(dest.parentFile, dest.name + ".part")
-            BufferedInputStream(conn.inputStream).use { input ->
-                FileOutputStream(tmp).use { out ->
-                    input.copyTo(out)
+            http.prepareGet(url).execute { response ->
+                if (!response.status.isSuccess()) return@execute false
+                dest.parentFile?.mkdirs()
+                val tmp = File(dest.parentFile, dest.name + ".part")
+                response.bodyAsChannel().toInputStream().use { input ->
+                    tmp.outputStream().use { out -> input.copyTo(out) }
                 }
+                if (dest.exists()) dest.delete()
+                tmp.renameTo(dest)
+                dest.isFile && dest.length() > 0L
             }
-            conn.disconnect()
-            if (dest.exists()) dest.delete()
-            tmp.renameTo(dest)
-            true
         } catch (e: Exception) {
             Log.w(TAG, "download failed $url", e)
             false
         }
-    }
-
-    private fun open(url: String): HttpURLConnection {
-        val conn = URL(url).openConnection() as HttpURLConnection
-        conn.setRequestProperty(
-            "User-Agent",
-            "YuriPlayer/1.0 (https://github.com/LizAinslie/yuriplayer)"
-        )
-        conn.setRequestProperty("Accept", "application/json")
-        return conn
     }
 
     private suspend fun throttle() {
