@@ -127,7 +127,8 @@ fun AlbumDetailScreen(
     onEditAlbum: () -> Unit = {},
     onEditSong: (Song) -> Unit = {},
     onAddSongToQueue: (Song) -> Unit,
-    onAddAlbumToQueue: (List<Song>) -> Unit
+    onAddAlbumToQueue: (List<Song>) -> Unit,
+    onStartRadio: () -> Unit = {}
 ) {
     val context = LocalContext.current
     val themeService: ThemeService = koinInject()
@@ -361,6 +362,18 @@ fun AlbumDetailScreen(
                         song = album.songs.firstOrNull(),
                         title = album.displayName,
                         subtitle = album.displayArtist
+                    )
+                    MediaSheetItem(
+                        label = "Start radio",
+                        onClick = {
+                            onStartRadio()
+                            Toast.makeText(
+                                context,
+                                "Radio · ${album.displayName}",
+                                Toast.LENGTH_SHORT
+                            ).show()
+                            showMenu = false
+                        }
                     )
                     MediaSheetItem(
                         label = "Add to queue",
