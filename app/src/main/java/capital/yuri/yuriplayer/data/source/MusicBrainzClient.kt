@@ -31,6 +31,14 @@ class MusicBrainzClient {
         val hasFrontCover: Boolean
     )
 
+    data class ArtistHit(
+        val mbid: String,
+        val name: String,
+        val imageUrl: String? = null,
+        val website: String? = null,
+        val links: List<ArtistLink> = emptyList()
+    )
+
     private val rateLock = Mutex()
     private var lastRequestAt = 0L
 
@@ -54,13 +62,27 @@ class MusicBrainzClient {
             parseReleaseSearch(body)
         }
 
+    suspend fun searchArtist(name: String): ArtistHit? =
+        withContext(Dispatchers.IO) {
+            if (name.isBlank()) return@withContext null
+            val q = "artist:\"${escapeLucene(name.trim())}\""
+            val searchUrl = "https://musicbrainz.org/ws/2/artist?query=" +
+                URLEncoder.encode(q, "UTF-8") +
+                "&fmt=json&limit=3"
+            val body = getText(searchUrl) ?: return@withContext null
+            val mbid = parseArtistSearchMbid(body) ?: return@withContext null
+            val detailUrl =
+                "https://musicbrainz.org/ws/2/artist/$mbid?inc=url-rels&fmt=json"
+            val detail = getText(detailUrl) ?: return@withContext ArtistHit(mbid, name.trim())
+            parseArtistDetail(detail, mbid)
+        }
+
     /**
      * Download front cover (500px when available) into [destFile].
      * Returns true on success.
      */
     suspend fun downloadFrontCover(mbid: String, destFile: File): Boolean =
         withContext(Dispatchers.IO) {
-            // Prefer 500px; fall back to full front.
             val urls = listOf(
                 "https://coverartarchive.org/release/$mbid/front-500",
                 "https://coverartarchive.org/release/$mbid/front"
@@ -71,12 +93,70 @@ class MusicBrainzClient {
             false
         }
 
+    suspend fun downloadUrl(url: String, destFile: File): Boolean =
+        withContext(Dispatchers.IO) { downloadToFile(url, destFile) }
+
+    private fun parseArtistSearchMbid(json: String): String? {
+        return try {
+            val root = JSONObject(json)
+            val artists = root.optJSONArray("artists") ?: return null
+            if (artists.length() == 0) return null
+            artists.optJSONObject(0)?.optString("id")?.takeIf { it.isNotBlank() }
+        } catch (e: Exception) {
+            Log.w(TAG, "parse artist search failed", e)
+            null
+        }
+    }
+
+    private fun parseArtistDetail(json: String, mbid: String): ArtistHit {
+        return try {
+            val root = JSONObject(json)
+            val name = root.optString("name").ifBlank { "" }
+            val relations = root.optJSONArray("relations")
+            var imageUrl: String? = null
+            var website: String? = null
+            val links = mutableListOf<ArtistLink>()
+            if (relations != null) {
+                for (i in 0 until relations.length()) {
+                    val rel = relations.optJSONObject(i) ?: continue
+                    val type = rel.optString("type").lowercase()
+                    val urlObj = rel.optJSONObject("url") ?: continue
+                    val resource = urlObj.optString("resource").takeIf { it.isNotBlank() } ?: continue
+                    when {
+                        type.contains("image") || type == "picture" -> {
+                            if (imageUrl == null) imageUrl = resource
+                        }
+                        type == "official homepage" || type == "website" -> {
+                            if (website == null) website = resource
+                            links += ArtistLink("Website", resource)
+                        }
+                        type.contains("wikipedia") -> links += ArtistLink("Wikipedia", resource)
+                        type.contains("discogs") -> links += ArtistLink("Discogs", resource)
+                        type.contains("bandcamp") -> links += ArtistLink("Bandcamp", resource)
+                        type.contains("youtube") -> links += ArtistLink("YouTube", resource)
+                        type.contains("spotify") -> links += ArtistLink("Spotify", resource)
+                    }
+                }
+            }
+            // Commons / direct image URLs sometimes need a thumb rewrite — keep as-is
+            ArtistHit(
+                mbid = mbid,
+                name = name,
+                imageUrl = imageUrl,
+                website = website,
+                links = links.distinctBy { it.url }.take(6)
+            )
+        } catch (e: Exception) {
+            Log.w(TAG, "parse artist detail failed", e)
+            ArtistHit(mbid, "")
+        }
+    }
+
     private fun parseReleaseSearch(json: String): ReleaseHit? {
         return try {
             val root = JSONObject(json)
             val releases = root.optJSONArray("releases") ?: return null
             if (releases.length() == 0) return null
-            // Prefer official releases with a date.
             var best: ReleaseHit? = null
             for (i in 0 until releases.length()) {
                 val r = releases.optJSONObject(i) ?: continue
@@ -146,14 +226,13 @@ class MusicBrainzClient {
             tmp.renameTo(dest)
             true
         } catch (e: Exception) {
-            Log.w(TAG, "cover download failed $url", e)
+            Log.w(TAG, "download failed $url", e)
             false
         }
     }
 
     private fun open(url: String): HttpURLConnection {
         val conn = URL(url).openConnection() as HttpURLConnection
-        // MusicBrainz requires a descriptive User-Agent.
         conn.setRequestProperty(
             "User-Agent",
             "YuriPlayer/1.0 (https://github.com/LizAinslie/yuriplayer)"
