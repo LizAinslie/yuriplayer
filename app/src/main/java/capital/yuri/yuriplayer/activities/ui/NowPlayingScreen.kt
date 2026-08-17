@@ -106,7 +106,6 @@ fun NowPlayingScreen(
     val nextTheme by themeStore.peekNext.collectAsState()
     val prevTheme by themeStore.peekPrev.collectAsState()
 
-    // When a network cover lands, rebuild palette from the new bitmap.
     CoverThemeRefresh(
         song = song,
         baseScheme = baseScheme,
@@ -170,13 +169,16 @@ fun NowPlayingScreen(
         lerpPlayerColors(playerColors, blendTarget, blendT)
     } else playerColors
 
-    val scheme = playerColorScheme(shownColors, baseScheme)
-    ThemedStatusBar(color = scheme.background, enabled = true)
+    // Accents from art; page background stays the app default (no purple wash).
+    val scheme = playerColorScheme(shownColors, baseScheme, useArtBackground = false)
+    ThemedStatusBar(color = baseScheme.background, enabled = true)
 
     MaterialTheme(colorScheme = scheme) {
         Surface(
             modifier = Modifier.fillMaxSize(),
-            color = scheme.background.copy(alpha = 1f - maxOf(dismissFrac, topPull / dismissThreshold) * 0.2f)
+            color = baseScheme.background.copy(
+                alpha = 1f - maxOf(dismissFrac, topPull / dismissThreshold) * 0.2f
+            )
         ) {
             if (showQueue) {
                 Column(
@@ -310,12 +312,12 @@ fun NowPlayingScreen(
                     MarqueeText(
                         text = song?.displayArtist ?: "",
                         style = MaterialTheme.typography.titleMedium,
-                        color = shownColors.muted
+                        color = scheme.onBackground.copy(alpha = 0.65f)
                     )
                     MarqueeText(
                         text = song?.displayAlbum ?: "",
                         style = MaterialTheme.typography.bodyMedium,
-                        color = shownColors.muted.copy(alpha = 0.75f)
+                        color = scheme.onBackground.copy(alpha = 0.5f)
                     )
 
                     Spacer(modifier = Modifier.height(16.dp))
@@ -340,15 +342,23 @@ fun NowPlayingScreen(
                             sliding = false
                         },
                         activeColor = scheme.primary,
-                        inactiveColor = Color.White.copy(alpha = 0.28f)
+                        inactiveColor = scheme.onBackground.copy(alpha = 0.28f)
                     )
 
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.SpaceBetween
                     ) {
-                        Text(formatTime(positionMs), style = MaterialTheme.typography.labelSmall, color = shownColors.muted)
-                        Text(formatTime(durationMs), style = MaterialTheme.typography.labelSmall, color = shownColors.muted)
+                        Text(
+                            formatTime(positionMs),
+                            style = MaterialTheme.typography.labelSmall,
+                            color = scheme.onBackground.copy(alpha = 0.55f)
+                        )
+                        Text(
+                            formatTime(durationMs),
+                            style = MaterialTheme.typography.labelSmall,
+                            color = scheme.onBackground.copy(alpha = 0.55f)
+                        )
                     }
 
                     Spacer(modifier = Modifier.height(8.dp))
@@ -430,7 +440,7 @@ fun NowPlayingScreen(
                                 if (snapshot.shuffleEnabled) append(" · Shuffle")
                             },
                             style = MaterialTheme.typography.labelSmall,
-                            color = shownColors.muted,
+                            color = scheme.onBackground.copy(alpha = 0.55f),
                             modifier = Modifier.weight(1f),
                             textAlign = androidx.compose.ui.text.style.TextAlign.Center
                         )
