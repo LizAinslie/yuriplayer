@@ -120,6 +120,7 @@ fun ArtistDetailScreen(
     onBack: () -> Unit,
     onOpenAlbum: (AlbumItem) -> Unit,
     onPlaySongs: (List<Song>, Int) -> Unit,
+    onStartRadio: () -> Unit = {},
     onAddToQueue: (Song) -> Unit = {}
 ) {
     val themeService: ThemeService = koinInject()
@@ -222,9 +223,7 @@ fun ArtistDetailScreen(
                                 links = profile?.links.orEmpty(),
                                 titleColor = onBg,
                                 mutedColor = muted,
-                                onPlayAll = {
-                                    if (artist.songs.isNotEmpty()) onPlaySongs(artist.songs, 0)
-                                },
+                                onPlayAll = onStartRadio,
                                 onOpenLink = { url -> runCatching { uriHandler.openUri(url) } }
                             )
                         }
@@ -588,7 +587,7 @@ private fun ArtistHero(
             ) {
                 Icon(
                     Icons.Default.PlayArrow,
-                    contentDescription = "Play all",
+                    contentDescription = "Start radio",
                     tint = scheme.onPrimary
                 )
             }
