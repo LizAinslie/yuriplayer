@@ -5,18 +5,11 @@ import android.util.Log
 import capital.yuri.yuriplayer.data.artistKey
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
-import org.json.JSONObject
-import java.io.BufferedInputStream
 import java.io.File
-import java.io.FileOutputStream
-import java.net.HttpURLConnection
-import java.net.URL
-import java.net.URLEncoder
-import java.nio.charset.StandardCharsets
 
 /**
- * Fetches artist display name + image via MusicBrainz (artist search + url-rels).
- * Prefers Wikimedia Commons / image relations when present; otherwise no image.
+ * Fetches artist display name + image via MusicBrainz url-rels,
+ * then Wikidata P18 / Wikipedia when MB has no direct image relation.
  */
 class MusicBrainzArtistProfileProvider(
     private val context: Context,
@@ -39,8 +32,12 @@ class MusicBrainzArtistProfileProvider(
             val dir = File(context.filesDir, "artist_art")
             dir.mkdirs()
             val dest = File(dir, "${key.hashCode()}.jpg")
-            if (dest.exists() || mb.downloadUrl(imageUrl, dest)) {
+            // Re-download if missing or empty (allows fixing after image pipeline upgrade)
+            val ok = dest.isFile && dest.length() > 0L || mb.downloadUrl(imageUrl, dest)
+            if (ok && dest.isFile && dest.length() > 0L) {
                 imagePath = dest.absolutePath
+            } else {
+                Log.w(TAG, "Failed to download artist image for $artistName from $imageUrl")
             }
         }
 

@@ -17,10 +17,13 @@ import java.nio.charset.StandardCharsets
 import kotlin.time.Duration.Companion.milliseconds
 
 /**
- * Minimal MusicBrainz + Cover Art Archive client.
+ * Minimal MusicBrainz + Cover Art Archive + Wikidata image client.
  *
- * Respects MB's ~1 req/s guideline via a shared mutex + delay.
- * User-Agent is required by MusicBrainz policy.
+ * MB search is case-insensitive. We still rank results so short / all-caps
+ * names (e.g. "TOP") prefer an exact name match over a weak first hit.
+ *
+ * Artist images almost never live on MB directly — we resolve Wikidata P18
+ * or Wikipedia page image when url-rels include those.
  */
 class MusicBrainzClient {
 
@@ -65,22 +68,140 @@ class MusicBrainzClient {
     suspend fun searchArtist(name: String): ArtistHit? =
         withContext(Dispatchers.IO) {
             if (name.isBlank()) return@withContext null
-            val q = "artist:\"${escapeLucene(name.trim())}\""
-            val searchUrl = "https://musicbrainz.org/ws/2/artist?query=" +
-                URLEncoder.encode(q, "UTF-8") +
-                "&fmt=json&limit=3"
-            val body = getText(searchUrl) ?: return@withContext null
-            val mbid = parseArtistSearchMbid(body) ?: return@withContext null
+            val trimmed = name.trim()
+
+            // 1) Phrase search, then 2) loose token search — MB Lucene is case-insensitive
+            val mbid = findBestArtistMbid(trimmed) ?: return@withContext null
+
             val detailUrl =
                 "https://musicbrainz.org/ws/2/artist/$mbid?inc=url-rels&fmt=json"
-            val detail = getText(detailUrl) ?: return@withContext ArtistHit(mbid, name.trim())
-            parseArtistDetail(detail, mbid)
+            val detail = getText(detailUrl) ?: return@withContext ArtistHit(mbid, trimmed)
+            val hit = parseArtistDetail(detail, mbid)
+
+            // Prefer direct image rel; else Wikidata P18; else Wikipedia summary image
+            val image = hit.imageUrl
+                ?: resolveWikidataImage(hit)
+                ?: resolveWikipediaImage(hit)
+
+            hit.copy(imageUrl = image)
         }
 
-    /**
-     * Download front cover (500px when available) into [destFile].
-     * Returns true on success.
-     */
+    private suspend fun findBestArtistMbid(name: String): String? {
+        val queries = listOf(
+            "artist:\"${escapeLucene(name)}\"",
+            escapeLucene(name) // loose: helps short names like TOP
+        )
+        for (q in queries) {
+            val url = "https://musicbrainz.org/ws/2/artist?query=" +
+                URLEncoder.encode(q, "UTF-8") +
+                "&fmt=json&limit=10"
+            val body = getText(url) ?: continue
+            val mbid = pickBestArtistMbid(body, name)
+            if (mbid != null) return mbid
+        }
+        return null
+    }
+
+    /** Prefer exact name (ignore case), then highest score. */
+    private fun pickBestArtistMbid(json: String, wanted: String): String? {
+        return try {
+            val root = JSONObject(json)
+            val artists = root.optJSONArray("artists") ?: return null
+            if (artists.length() == 0) return null
+
+            val target = wanted.trim().lowercase()
+            var exactId: String? = null
+            var exactScore = -1
+            var bestId: String? = null
+            var bestScore = -1
+
+            for (i in 0 until artists.length()) {
+                val a = artists.optJSONObject(i) ?: continue
+                val id = a.optString("id").takeIf { it.isNotBlank() } ?: continue
+                val n = a.optString("name").trim()
+                val score = a.optInt("score", 0)
+                val aliases = a.optJSONArray("aliases")
+
+                val nameMatch = n.equals(wanted, ignoreCase = true)
+                val aliasMatch = aliases != null && (0 until aliases.length()).any { ai ->
+                    aliases.optJSONObject(ai)?.optString("name")
+                        ?.equals(wanted, ignoreCase = true) == true
+                }
+
+                if (nameMatch || aliasMatch) {
+                    if (score >= exactScore) {
+                        exactScore = score
+                        exactId = id
+                    }
+                }
+                if (score > bestScore) {
+                    bestScore = score
+                    bestId = id
+                }
+            }
+
+            // Require a reasonable score for non-exact matches (avoid garbage for "TOP")
+            when {
+                exactId != null -> exactId
+                bestScore >= 80 -> bestId
+                else -> exactId ?: bestId?.takeIf { bestScore >= 50 }
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "pickBestArtistMbid failed", e)
+            null
+        }
+    }
+
+    private suspend fun resolveWikidataImage(hit: ArtistHit): String? {
+        val wdUrl = hit.links.firstOrNull {
+            it.url.contains("wikidata.org", ignoreCase = true)
+        }?.url ?: return null
+        val qid = Regex("Q\\d+").find(wdUrl)?.value ?: return null
+        val api =
+            "https://www.wikidata.org/w/api.php?action=wbgetentities&ids=$qid&props=claims&format=json"
+        val body = getText(api) ?: return null
+        return try {
+            val claims = JSONObject(body)
+                .optJSONObject("entities")
+                ?.optJSONObject(qid)
+                ?.optJSONObject("claims")
+                ?: return null
+            val p18 = claims.optJSONArray("P18") ?: return null
+            val fileName = p18.optJSONObject(0)
+                ?.optJSONObject("mainsnak")
+                ?.optJSONObject("datavalue")
+                ?.optString("value")
+                ?.takeIf { it.isNotBlank() }
+                ?: return null
+            // Special:FilePath redirects to a usable image URL
+            "https://commons.wikimedia.org/wiki/Special:FilePath/" +
+                URLEncoder.encode(fileName.replace(' ', '_'), "UTF-8") +
+                "?width=800"
+        } catch (e: Exception) {
+            Log.w(TAG, "Wikidata image failed for $qid", e)
+            null
+        }
+    }
+
+    private suspend fun resolveWikipediaImage(hit: ArtistHit): String? {
+        val wikiUrl = hit.links.firstOrNull {
+            it.url.contains("wikipedia.org", ignoreCase = true)
+        }?.url ?: return null
+        // https://en.wikipedia.org/wiki/Artist_Name
+        val path = wikiUrl.substringAfter("/wiki/").takeIf { it.isNotBlank() } ?: return null
+        val lang = Regex("https?://([a-z]{2,3})\\.wikipedia").find(wikiUrl)?.groupValues?.getOrNull(1) ?: "en"
+        val api = "https://$lang.wikipedia.org/api/rest_v1/page/summary/$path"
+        val body = getText(api) ?: return null
+        return try {
+            val root = JSONObject(body)
+            root.optJSONObject("originalimage")?.optString("source")?.takeIf { it.isNotBlank() }
+                ?: root.optJSONObject("thumbnail")?.optString("source")?.takeIf { it.isNotBlank() }
+        } catch (e: Exception) {
+            Log.w(TAG, "Wikipedia image failed", e)
+            null
+        }
+    }
+
     suspend fun downloadFrontCover(mbid: String, destFile: File): Boolean =
         withContext(Dispatchers.IO) {
             val urls = listOf(
@@ -95,18 +216,6 @@ class MusicBrainzClient {
 
     suspend fun downloadUrl(url: String, destFile: File): Boolean =
         withContext(Dispatchers.IO) { downloadToFile(url, destFile) }
-
-    private fun parseArtistSearchMbid(json: String): String? {
-        return try {
-            val root = JSONObject(json)
-            val artists = root.optJSONArray("artists") ?: return null
-            if (artists.length() == 0) return null
-            artists.optJSONObject(0)?.optString("id")?.takeIf { it.isNotBlank() }
-        } catch (e: Exception) {
-            Log.w(TAG, "parse artist search failed", e)
-            null
-        }
-    }
 
     private fun parseArtistDetail(json: String, mbid: String): ArtistHit {
         return try {
@@ -126,25 +235,30 @@ class MusicBrainzClient {
                         type.contains("image") || type == "picture" -> {
                             if (imageUrl == null) imageUrl = resource
                         }
+                        type == "wikidata" || resource.contains("wikidata.org") ->
+                            links += ArtistLink("Wikidata", resource)
+                        type.contains("wikipedia") || resource.contains("wikipedia.org") ->
+                            links += ArtistLink("Wikipedia", resource)
                         type == "official homepage" || type == "website" -> {
                             if (website == null) website = resource
                             links += ArtistLink("Website", resource)
                         }
-                        type.contains("wikipedia") -> links += ArtistLink("Wikipedia", resource)
                         type.contains("discogs") -> links += ArtistLink("Discogs", resource)
                         type.contains("bandcamp") -> links += ArtistLink("Bandcamp", resource)
                         type.contains("youtube") -> links += ArtistLink("YouTube", resource)
                         type.contains("spotify") -> links += ArtistLink("Spotify", resource)
+                        type.contains("soundcloud") -> links += ArtistLink("SoundCloud", resource)
+                        type.contains("itunes") || type.contains("apple") ->
+                            links += ArtistLink("Apple Music", resource)
                     }
                 }
             }
-            // Commons / direct image URLs sometimes need a thumb rewrite — keep as-is
             ArtistHit(
                 mbid = mbid,
                 name = name,
                 imageUrl = imageUrl,
                 website = website,
-                links = links.distinctBy { it.url }.take(6)
+                links = links.distinctBy { it.url }.take(12)
             )
         } catch (e: Exception) {
             Log.w(TAG, "parse artist detail failed", e)
