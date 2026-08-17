@@ -1,6 +1,7 @@
 package capital.yuri.yuriplayer.player
 
 import capital.yuri.yuriplayer.data.Song
+import capital.yuri.yuriplayer.player.radio.RadioSession
 import kotlinx.serialization.Serializable
 
 @Serializable
@@ -23,13 +24,11 @@ enum class ColdSourceType {
     PLAYLIST,
     ARTIST,
     SONGS,
+    /** Named radio session segment (still backs onto an album/release). */
+    RADIO,
     UNKNOWN
 }
 
-/**
- * Where the cold queue was initialized from.
- * [id] is stable: albumKey, playlist id, artist key, etc.
- */
 @Serializable
 data class ColdSource(
     val type: ColdSourceType,
@@ -43,11 +42,11 @@ data class ColdSource(
 /**
  * Snapshot of the dual-queue system for UI + persistence.
  *
- * Playback order: [hotQueue] (manual, never shuffled) then [coldQueue]
- * (album/playlist; may be shuffled while [coldOriginal] keeps source order).
+ * [radioSession] names the station when radio is active.
+ * [radioUpcoming] is the prefetched next radio release (not yet in cold).
  *
- * [playedStack] is the history of consumed tracks (oldest → newest) used by
- * Previous. Persisted so skip-previous still works after process death.
+ * Shuffle in radio mode only reorders the **current** cold segment; the next
+ * radio release is still algorithm-picked (see [RadioSession] KDoc).
  */
 @Serializable
 data class QueueSnapshot(
@@ -59,8 +58,9 @@ data class QueueSnapshot(
     val indexInLane: Int = -1,
     val shuffleEnabled: Boolean = false,
     val repeatMode: RepeatMode = RepeatMode.OFF,
-    /** Consumed tracks, oldest first. Last element is the most recent previous. */
-    val playedStack: List<Song> = emptyList()
+    val playedStack: List<Song> = emptyList(),
+    val radioSession: RadioSession? = null,
+    val radioUpcoming: List<Song> = emptyList()
 ) {
     val currentSong: Song?
         get() = when (lane) {
@@ -71,8 +71,13 @@ data class QueueSnapshot(
     val flatQueue: List<Song>
         get() = hotQueue + coldQueue
 
+    val isRadio: Boolean
+        get() = radioSession?.active == true
+
     fun isPlayingFromAlbum(albumKey: String): Boolean =
-        coldSource?.matches(ColdSourceType.ALBUM, albumKey) == true
+        coldSource?.matches(ColdSourceType.ALBUM, albumKey) == true ||
+            (coldSource?.type == ColdSourceType.RADIO &&
+                coldSource.id.equals(albumKey, ignoreCase = true))
 
     fun isPlayingFromPlaylist(playlistId: String): Boolean =
         coldSource?.matches(ColdSourceType.PLAYLIST, playlistId) == true
