@@ -64,8 +64,10 @@ import androidx.compose.ui.unit.dp
 import capital.yuri.yuriplayer.data.AlbumItem
 import capital.yuri.yuriplayer.data.ArtistItem
 import capital.yuri.yuriplayer.data.LibraryIndex
+import capital.yuri.yuriplayer.data.MyStuffPinStore
 import capital.yuri.yuriplayer.data.Song
 import capital.yuri.yuriplayer.data.SortMode
+import capital.yuri.yuriplayer.data.StuffPinKind
 import capital.yuri.yuriplayer.data.label
 import capital.yuri.yuriplayer.player.PlayerController
 import capital.yuri.yuriplayer.ui.formatAlbumCount
@@ -380,6 +382,7 @@ private fun SongList(
                     showTrackNumber = false,
                     isPlaying = song.isSameAs(nowPlaying),
                     isPlaybackActive = isPlaybackActive,
+                    showHeart = true,
                     onGoToAlbum = { onGoToAlbum(song) },
                     onGoToArtist = { onGoToArtist(song) },
                     onEditMetadata = { onEditSong(song) },
@@ -401,6 +404,7 @@ fun SwipeAddSongRow(
     isPlaybackActive: Boolean = false,
     transparentSurface: Boolean = false,
     surfaceColor: Color? = null,
+    showHeart: Boolean = true,
     onGoToAlbum: (() -> Unit)? = null,
     onGoToArtist: (() -> Unit)? = null,
     onEditMetadata: (() -> Unit)? = null,
@@ -412,6 +416,11 @@ fun SwipeAddSongRow(
     val threshold = with(density) { 96.dp.toPx() }
     val accent = MaterialTheme.colorScheme.primary
     val onSurface = MaterialTheme.colorScheme.onSurface
+    val pinStore: MyStuffPinStore = koinInject()
+    val entries by pinStore.entries.collectAsState()
+    val saved = remember(entries, song.songKey) {
+        pinStore.contains(StuffPinKind.SONG, song.songKey)
+    }
     val hasContext = onGoToAlbum != null || onGoToArtist != null || onEditMetadata != null || onStartRadio != null
 
     val revealAlpha = (offsetX / (threshold * 0.35f)).coerceIn(0f, 1f)
@@ -424,6 +433,7 @@ fun SwipeAddSongRow(
     }
     val titleColor = if (isPlaying) accent else onSurface
     val titleWeight = if (isPlaying) FontWeight.SemiBold else FontWeight.Normal
+    val context = LocalContext.current
 
     Box(modifier = Modifier.fillMaxWidth()) {
         if (revealAlpha > 0.01f) {
@@ -465,7 +475,7 @@ fun SwipeAddSongRow(
                 )
                 .padding(
                     start = if (showTrackNumber) 8.dp else 16.dp,
-                    end = 16.dp,
+                    end = 4.dp,
                     top = 10.dp,
                     bottom = 10.dp
                 ),
@@ -508,6 +518,21 @@ fun SwipeAddSongRow(
                     style = MaterialTheme.typography.bodySmall,
                     color = if (isPlaying) accent.copy(alpha = 0.75f)
                     else onSurface.copy(alpha = 0.6f)
+                )
+            }
+            if (showHeart) {
+                MyStuffHeart(
+                    saved = saved,
+                    onToggle = {
+                        val now = pinStore.toggleSong(song)
+                        Toast.makeText(
+                            context,
+                            if (now) "Added to My Stuff" else "Removed from My Stuff",
+                            Toast.LENGTH_SHORT
+                        ).show()
+                    },
+                    tint = onSurface.copy(alpha = 0.45f),
+                    savedTint = accent
                 )
             }
         }
