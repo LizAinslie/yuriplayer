@@ -21,6 +21,17 @@ data class RadioPick(
     val reason: String = ""
 )
 
+/**
+ * A planned radio segment: the songs RadioEngine wants in the cold queue.
+ * Queue UI shows this list as the radio cold queue.
+ */
+data class RadioBatch(
+    val songs: List<Song>,
+    val source: ColdSource,
+    val session: RadioSession,
+    val reason: String = ""
+)
+
 data class RadioContext(
     val seedSong: Song?,
     val finishedSource: ColdSource?,
@@ -50,10 +61,24 @@ data class ReleasePoolConfig(
     val includeLps: Boolean = true,
     val includeEps: Boolean = true,
     val includeSingles: Boolean = true,
-    /** Privacy gate — external fetch stub stays off until user opts in. */
     val allowExternalFetch: Boolean = false,
     val avoidRecentPerKind: Int = 1
 )
+
+/** Per radio-source preferences (artist / album / playlist station). */
+@Serializable
+data class RadioSourcePrefs(
+    /**
+     * true  → random songs; restock cold to [maxRadioQueue] as tracks finish.
+     * false → whole LP/EP/Single blocks until the last block reaches ≥ maxRadioQueue.
+     */
+    val shuffle: Boolean = false,
+    val maxRadioQueue: Int = DEFAULT_MAX_RADIO_QUEUE
+) {
+    companion object {
+        const val DEFAULT_MAX_RADIO_QUEUE = 50
+    }
+}
 
 @Serializable
 enum class RadioAlgorithmId {
@@ -69,14 +94,6 @@ enum class RadioSessionKind {
     CUSTOM
 }
 
-/**
- * Active radio identity for queue UI + exhaust path.
- *
- * Shuffle policy: shuffle only reorders tracks **inside the current segment**
- * (the release loaded into cold queue). The next radio pick is always chosen by
- * the algorithm; turning shuffle on/off does not re-roll that pick. When a new
- * segment loads and shuffle is on, that segment starts shuffled.
- */
 @Serializable
 data class RadioSession(
     val kind: RadioSessionKind,
@@ -84,5 +101,6 @@ data class RadioSession(
     val algorithmId: RadioAlgorithmId,
     val seedId: String? = null,
     val seedTitle: String? = null,
-    val active: Boolean = true
+    val active: Boolean = true,
+    val prefs: RadioSourcePrefs = RadioSourcePrefs()
 )
