@@ -583,12 +583,11 @@ private fun ArtistHero(
             .padding(bottom = 12.dp),
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
-        // Prefer artist profile image; fall back to album art seed
         ArtistArt(
             artistName = name,
+            seedSong = seedSong,
             size = 160.dp,
-            circular = true,
-            fallbackSong = seedSong
+            circular = true
         )
 
         Spacer(modifier = Modifier.height(16.dp))
