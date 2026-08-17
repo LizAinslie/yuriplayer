@@ -45,7 +45,6 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
@@ -169,14 +168,14 @@ fun NowPlayingScreen(
         lerpPlayerColors(playerColors, blendTarget, blendT)
     } else playerColors
 
-    // Accents from art; page background stays the app default (no purple wash).
-    val scheme = playerColorScheme(shownColors, baseScheme, useArtBackground = false)
-    ThemedStatusBar(color = baseScheme.background, enabled = true)
+    // Full NP: page background from album art. Mini-player uses app default instead.
+    val scheme = playerColorScheme(shownColors, baseScheme, useArtBackground = true)
+    ThemedStatusBar(color = scheme.background, enabled = true)
 
     MaterialTheme(colorScheme = scheme) {
         Surface(
             modifier = Modifier.fillMaxSize(),
-            color = baseScheme.background.copy(
+            color = scheme.background.copy(
                 alpha = 1f - maxOf(dismissFrac, topPull / dismissThreshold) * 0.2f
             )
         ) {
