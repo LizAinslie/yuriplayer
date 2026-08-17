@@ -79,30 +79,19 @@ class ArtistProfileRepository(
     }
 
     /**
-     * Optional wide banner image for artist pages (separate from circular profile pic).
-     * Stored under artist_banners/ and recorded as imageUri when bannerMode is used,
-     * or as a dedicated field if schema has bannerUri — for now we reuse imageUri
-     * as the primary display art and keep banner in its own file namespace for ThemeService.
+     * Wide banner for artist page theming. Returns persisted file:// URI or null.
+     * Banner is independent of the circular profile image.
      */
     suspend fun setBannerImage(artistName: String, imageUri: String?): String? =
         withContext(Dispatchers.IO) {
             val key = artistKey(artistName) ?: return@withContext null
             if (imageUri.isNullOrBlank()) {
                 images.delete(UserImageStore.NS_ARTIST_BANNERS, key)
-                return@withContext null
+                null
+            } else {
+                images.persist(imageUri, UserImageStore.NS_ARTIST_BANNERS, key)
             }
-            images.persist(imageUri, UserImageStore.NS_ARTIST_BANNERS, key)
         }
-
-    fun bannerFileUri(artistName: String): String? {
-        val key = artistKey(artistName) ?: return null
-        val dir = java.io.File(
-            // resolved via context in store; read path convention
-            // Callers should prefer ThemeService after setBannerImage returns the path.
-            ""
-        )
-        return null // use returned value from setBannerImage / ThemeService
-    }
 
     private fun merge(base: ArtistProfile, incoming: ArtistProfile): ArtistProfile =
         base.copy(
