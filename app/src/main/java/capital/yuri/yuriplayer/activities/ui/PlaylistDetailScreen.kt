@@ -1,5 +1,6 @@
 package capital.yuri.yuriplayer.activities.ui
 
+import android.net.Uri
 import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -107,18 +108,14 @@ fun PlaylistDetailScreen(
     var showMenu by remember { mutableStateOf(false) }
     var editName by remember { mutableStateOf("") }
     var themeColors by remember { mutableStateOf(fallbackPlayerColors(base)) }
+    var cropUri by remember { mutableStateOf<Uri?>(null) }
 
     val pickCover = rememberLauncherForActivityResult(
         ActivityResultContracts.GetContent()
     ) { uri ->
-        if (uri == null) return@rememberLauncherForActivityResult
-        scope.launch {
-            repo.setCustomImage(playlistId, uri.toString())
-            Toast.makeText(context, "Cover updated", Toast.LENGTH_SHORT).show()
-        }
+        if (uri != null) cropUri = uri
     }
 
-    // Theme from first track / cover art — same pipeline as album pages
     LaunchedEffect(playlist?.id, playlist?.customImageUri, playlist?.songs?.firstOrNull()?.songKey) {
         val seed = playlist?.songs?.firstOrNull()
         themeColors = themeService.themeFromSong(context, seed, base).colors
@@ -148,6 +145,23 @@ fun PlaylistDetailScreen(
             }
         }
         editMode = false
+    }
+
+    if (cropUri != null) {
+        ImageCropScreen(
+            sourceUri = cropUri!!,
+            title = "Crop cover",
+            aspect = 1f,
+            onCancel = { cropUri = null },
+            onCropped = { cropped ->
+                cropUri = null
+                scope.launch {
+                    repo.setCustomImage(playlistId, cropped.toString())
+                    Toast.makeText(context, "Cover updated", Toast.LENGTH_SHORT).show()
+                }
+            }
+        )
+        return
     }
 
     val pl = playlist

@@ -41,7 +41,7 @@ val appModule = module {
     single { MusicRepository(androidContext(), get()) }
     single { MyStuffPinStore(androidContext()) }
     single { UserImageStore(androidContext()) }
-    single { FfmpegService() }
+    single { FfmpegService(androidContext()) }
 
     single { YuriDatabase.create(androidContext()) }
     single { get<YuriDatabase>().albumPrefs() }

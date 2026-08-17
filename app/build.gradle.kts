@@ -80,22 +80,23 @@ android {
 }
 
 // ---------------------------------------------------------------------------
-// NDK FFmpeg: build once, cache on script + constraints hash.
-// Outputs land in app/src/main/assets/ffmpeg/<abi>/ffmpeg
-// First run is long; later assemble* is a no-op unless native/ffmpeg changes.
+// NDK FFmpeg (optional, cached).
+//   ./gradlew :app:buildFfmpeg
+// First run is long; later runs are UP-TO-DATE unless native/ffmpeg/constraints.env
+// or build.sh changes. Does NOT block assembleDebug if you skip it — GIF crop
+// just falls back until binaries exist under assets/ffmpeg/<abi>/.
 // ---------------------------------------------------------------------------
 val ffmpegAbis = listOf("arm64-v8a", "armeabi-v7a", "x86_64")
 val ffmpegRoot = rootProject.file("native/ffmpeg")
 val ffmpegAssetsDir = file("src/main/assets/ffmpeg")
 val ffmpegConstraints = ffmpegRoot.resolve("constraints.env")
 
-val buildFfmpeg by tasks.registering(Exec::class) {
+tasks.register<Exec>("buildFfmpeg") {
     group = "native"
-    description = "Cross-compile FFmpeg for Android ABIs via NDK (cached)"
+    description = "Cross-compile slim FFmpeg for Android ABIs via NDK (Gradle-cached)"
 
     inputs.file(ffmpegRoot.resolve("build.sh"))
     inputs.file(ffmpegConstraints)
-    inputs.dir(ffmpegRoot.resolve("patches")).optional = true
     ffmpegAbis.forEach { abi ->
         outputs.file(ffmpegAssetsDir.resolve("$abi/ffmpeg"))
     }
@@ -104,28 +105,6 @@ val buildFfmpeg by tasks.registering(Exec::class) {
     commandLine("bash", "build.sh")
     environment("FFMPEG_ASSETS_DIR", ffmpegAssetsDir.absolutePath)
     environment("FFMPEG_ABIS", ffmpegAbis.joinToString(","))
-
-    onlyIf {
-        val script = ffmpegRoot.resolve("build.sh")
-        script.isFile && ffmpegConstraints.isFile
-    }
-
-    doFirst {
-        if (System.getenv("ANDROID_NDK_HOME").isNullOrBlank() &&
-            System.getenv("ANDROID_NDK").isNullOrBlank()
-        ) {
-            logger.warn(
-                "ANDROID_NDK_HOME not set — skipping FFmpeg native build. " +
-                    "GIF crop will fall back to still-image path until you build."
-            )
-            // soft skip: don't fail the whole assemble
-        }
-    }
-}
-
-// Optional: wire into preBuild when binaries missing (does not re-run if outputs present)
-tasks.named("preBuild").configure {
-    dependsOn(buildFfmpeg)
 }
 
 dependencies {
