@@ -3,14 +3,9 @@ package capital.yuri.yuriplayer.data
 import android.net.Uri
 import capital.yuri.yuriplayer.data.db.PlaylistDao
 import capital.yuri.yuriplayer.data.db.PlaylistEntity
-import capital.yuri.yuriplayer.data.db.PlaylistTrackEntity
-import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.combine
-import kotlinx.coroutines.flow.map
-import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.util.UUID
 
@@ -49,14 +44,13 @@ data class PlaylistCover(
 
 class PlaylistRepository(
     private val dao: PlaylistDao,
-    private val library: LibraryIndex
+    private val library: LibraryIndex,
+    private val images: UserImageStore
 ) {
-    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
     fun observePlaylists(): Flow<List<Playlist>> =
-        combine(dao.observeAll(), library.songs) { entities, songs ->
+        combine(dao.observeAll(), library.songs) { entities, _ ->
             entities.map { e ->
-                val keys = emptyList<String>() // filled cheaply — track counts via separate query if needed
                 Playlist(
                     id = e.id,
                     name = e.name,
@@ -70,13 +64,9 @@ class PlaylistRepository(
             }
         }
 
-    /** Richer observe that resolves songs for each playlist (for My Stuff list covers). */
     fun observePlaylistsResolved(): Flow<List<Playlist>> =
-        combine(dao.observeAll(), library.songs) { entities, allSongs ->
-            val byKey = allSongs.associateBy { it.songKey }
+        combine(dao.observeAll(), library.songs) { entities, _ ->
             entities.map { e ->
-                // Tracks loaded lazily in detail; count via quick suspend is better,
-                // but for list UI we accept 0 until opened — use cached if available.
                 Playlist(
                     id = e.id,
                     name = e.name,
@@ -138,12 +128,22 @@ class PlaylistRepository(
             )
         }
 
+    /**
+     * Persist user cover: copy into app files, store file:// path in DB.
+     * Pass null to clear.
+     */
     suspend fun setCustomImage(id: String, uri: String?) =
         withContext(Dispatchers.IO) {
             val existing = dao.get(id) ?: return@withContext
+            val persisted = if (uri.isNullOrBlank()) {
+                images.delete(UserImageStore.NS_PLAYLISTS, id)
+                null
+            } else {
+                images.persist(uri, UserImageStore.NS_PLAYLISTS, id) ?: uri
+            }
             dao.upsert(
                 existing.copy(
-                    customImageUri = uri,
+                    customImageUri = persisted,
                     updatedAtMs = System.currentTimeMillis()
                 )
             )
@@ -151,6 +151,7 @@ class PlaylistRepository(
 
     suspend fun delete(id: String) =
         withContext(Dispatchers.IO) {
+            images.delete(UserImageStore.NS_PLAYLISTS, id)
             dao.clearTracks(id)
             dao.delete(id)
         }

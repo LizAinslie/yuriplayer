@@ -12,6 +12,7 @@ import capital.yuri.yuriplayer.data.MusicRepository
 import capital.yuri.yuriplayer.data.MyStuffPinStore
 import capital.yuri.yuriplayer.data.PlayerThemeStore
 import capital.yuri.yuriplayer.data.PlaylistRepository
+import capital.yuri.yuriplayer.data.UserImageStore
 import capital.yuri.yuriplayer.data.db.YuriDatabase
 import capital.yuri.yuriplayer.data.source.LocalArtistProfileProvider
 import capital.yuri.yuriplayer.data.source.MusicBrainzArtistProfileProvider
@@ -35,6 +36,7 @@ val appModule = module {
     single { LibraryCache(androidContext()) }
     single { MusicRepository(androidContext(), get()) }
     single { MyStuffPinStore(androidContext()) }
+    single { UserImageStore(androidContext()) }
 
     single { YuriDatabase.create(androidContext()) }
     single { get<YuriDatabase>().albumPrefs() }
@@ -51,7 +53,7 @@ val appModule = module {
     single { CatalogRepository(get(), get()) }
     single { LibraryIndex(get(), get(), get()) }
 
-    single { PlaylistRepository(get(), get()) }
+    single { PlaylistRepository(get(), get(), get()) }
     single { MusicBrainzClient() }
     single {
         ArtistProfileRepository(
@@ -59,7 +61,8 @@ val appModule = module {
             providers = listOf(
                 LocalArtistProfileProvider(),
                 MusicBrainzArtistProfileProvider(androidContext(), get())
-            )
+            ),
+            images = get()
         )
     }
     single { SourceResolver(get()) }

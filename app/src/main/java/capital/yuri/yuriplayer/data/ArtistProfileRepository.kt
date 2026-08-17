@@ -15,7 +15,8 @@ import org.json.JSONObject
 
 class ArtistProfileRepository(
     private val dao: ArtistProfileDao,
-    private val providers: List<ArtistProfileProvider>
+    private val providers: List<ArtistProfileProvider>,
+    private val images: UserImageStore
 ) {
 
     fun observe(artistName: String): Flow<ArtistProfile?> {
@@ -25,10 +26,6 @@ class ArtistProfileRepository(
         }
     }
 
-    /**
-     * Fetch from providers (local first, then remotes when registered),
-     * merge non-null fields, persist, return.
-     */
     suspend fun resolve(artistName: String): ArtistProfile? = withContext(Dispatchers.IO) {
         val key = artistKey(artistName) ?: return@withContext null
         val cached = dao.get(key)?.toProfile(parseLinks(dao.get(key)?.linksJson))
@@ -54,29 +51,63 @@ class ArtistProfileRepository(
         merged
     }
 
-    /** User-picked image (content:// or file://). Overrides provider art. */
+    /**
+     * User-picked profile image. Copies into app storage so it persists.
+     * Pass null to clear (falls back to provider art on next resolve).
+     */
     suspend fun setCustomImage(artistName: String, imageUri: String?) = withContext(Dispatchers.IO) {
         val key = artistKey(artistName) ?: return@withContext
         val existing = dao.get(key)
+        val persisted = if (imageUri.isNullOrBlank()) {
+            images.delete(UserImageStore.NS_ARTISTS, key)
+            null
+        } else {
+            images.persist(imageUri, UserImageStore.NS_ARTISTS, key) ?: imageUri
+        }
         dao.upsert(
             ArtistProfileEntity(
                 artistKey = key,
                 displayName = existing?.displayName ?: artistName.trim(),
                 bio = existing?.bio,
-                imageUri = imageUri,
+                imageUri = persisted,
                 websiteUrl = existing?.websiteUrl,
                 linksJson = existing?.linksJson,
-                source = if (imageUri != null) "user" else (existing?.source ?: "local"),
+                source = if (persisted != null) "user" else (existing?.source ?: "local"),
                 updatedAtMs = System.currentTimeMillis()
             )
         )
+    }
+
+    /**
+     * Optional wide banner image for artist pages (separate from circular profile pic).
+     * Stored under artist_banners/ and recorded as imageUri when bannerMode is used,
+     * or as a dedicated field if schema has bannerUri — for now we reuse imageUri
+     * as the primary display art and keep banner in its own file namespace for ThemeService.
+     */
+    suspend fun setBannerImage(artistName: String, imageUri: String?): String? =
+        withContext(Dispatchers.IO) {
+            val key = artistKey(artistName) ?: return@withContext null
+            if (imageUri.isNullOrBlank()) {
+                images.delete(UserImageStore.NS_ARTIST_BANNERS, key)
+                return@withContext null
+            }
+            images.persist(imageUri, UserImageStore.NS_ARTIST_BANNERS, key)
+        }
+
+    fun bannerFileUri(artistName: String): String? {
+        val key = artistKey(artistName) ?: return null
+        val dir = java.io.File(
+            // resolved via context in store; read path convention
+            // Callers should prefer ThemeService after setBannerImage returns the path.
+            ""
+        )
+        return null // use returned value from setBannerImage / ThemeService
     }
 
     private fun merge(base: ArtistProfile, incoming: ArtistProfile): ArtistProfile =
         base.copy(
             displayName = incoming.displayName.ifBlank { base.displayName },
             bio = incoming.bio ?: base.bio,
-            // Keep user-set image when source is user
             imageUri = if (base.source == "user" && base.imageUri != null) base.imageUri
             else incoming.imageUri ?: base.imageUri,
             websiteUrl = incoming.websiteUrl ?: base.websiteUrl,
