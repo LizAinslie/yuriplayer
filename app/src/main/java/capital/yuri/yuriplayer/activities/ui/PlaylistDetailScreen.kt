@@ -6,6 +6,7 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -22,6 +23,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Check
@@ -40,6 +42,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
@@ -50,6 +53,12 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
@@ -61,11 +70,15 @@ import capital.yuri.yuriplayer.data.PlaylistRepository
 import capital.yuri.yuriplayer.data.Song
 import capital.yuri.yuriplayer.data.StuffPin
 import capital.yuri.yuriplayer.data.StuffPinKind
+import capital.yuri.yuriplayer.data.theme.ThemeService
 import capital.yuri.yuriplayer.player.PlayerController
 import capital.yuri.yuriplayer.ui.formatTrackCount
 import kotlinx.coroutines.launch
 import org.koin.compose.koinInject
 import kotlin.math.roundToInt
+
+private val PlaylistHeaderHeight = 280.dp
+private val PlaylistGradientFade = 180.dp
 
 @Composable
 fun PlaylistDetailScreen(
@@ -83,12 +96,17 @@ fun PlaylistDetailScreen(
     val repo: PlaylistRepository = koinInject()
     val pinStore: MyStuffPinStore = koinInject()
     val player: PlayerController = koinInject()
+    val themeService: ThemeService = koinInject()
     val playlist by repo.observePlaylist(playlistId).collectAsState(initial = null)
     val scope = rememberCoroutineScope()
     val context = LocalContext.current
+    val base = MaterialTheme.colorScheme
+    val density = LocalDensity.current
 
     var editMode by remember { mutableStateOf(false) }
     var showMenu by remember { mutableStateOf(false) }
+    var editName by remember { mutableStateOf("") }
+    var themeColors by remember { mutableStateOf(fallbackPlayerColors(base)) }
 
     val pickCover = rememberLauncherForActivityResult(
         ActivityResultContracts.GetContent()
@@ -100,6 +118,16 @@ fun PlaylistDetailScreen(
         }
     }
 
+    // Theme from first track / cover art — same pipeline as album pages
+    LaunchedEffect(playlist?.id, playlist?.customImageUri, playlist?.songs?.firstOrNull()?.songKey) {
+        val seed = playlist?.songs?.firstOrNull()
+        themeColors = themeService.themeFromSong(context, seed, base).colors
+    }
+
+    LaunchedEffect(playlist?.name, editMode) {
+        if (editMode) editName = playlist?.name.orEmpty()
+    }
+
     fun startRadio() {
         val songs = playlist?.songs.orEmpty()
         if (songs.isEmpty()) {
@@ -109,6 +137,17 @@ fun PlaylistDetailScreen(
         if (onStartRadio != null) onStartRadio()
         else player.startPlaylistRadio(songs, playlist?.name)
         Toast.makeText(context, "Radio · ${playlist?.name ?: "Playlist"}", Toast.LENGTH_SHORT).show()
+    }
+
+    fun saveNameAndExitEdit() {
+        val trimmed = editName.trim()
+        if (trimmed.isNotEmpty() && trimmed != playlist?.name) {
+            scope.launch {
+                repo.rename(playlistId, trimmed)
+                Toast.makeText(context, "Renamed", Toast.LENGTH_SHORT).show()
+            }
+        }
+        editMode = false
     }
 
     val pl = playlist
@@ -133,144 +172,246 @@ fun PlaylistDetailScreen(
         else if (pl.songs.isNotEmpty()) onPlay(pl.songs, 0)
     }
 
-    Column(
+    val artBg = themeColors.container
+    val defaultBg = base.background
+    val fadePx = with(density) { PlaylistGradientFade.toPx() }
+    val headerPx = with(density) { PlaylistHeaderHeight.toPx() }
+
+    ThemedStatusBar(color = artBg, enabled = true)
+
+    BoxWithConstraints(
         modifier = Modifier
             .fillMaxSize()
-            .statusBarsPadding()
+            .background(defaultBg)
+            .drawBehind {
+                val solidEnd = headerPx
+                val fadeEnd = solidEnd + fadePx
+                drawRect(
+                    color = artBg,
+                    topLeft = Offset.Zero,
+                    size = Size(size.width, solidEnd.coerceAtMost(size.height))
+                )
+                if (fadeEnd > solidEnd) {
+                    drawRect(
+                        brush = Brush.verticalGradient(
+                            colors = listOf(
+                                artBg,
+                                artBg.copy(alpha = 0.75f),
+                                artBg.copy(alpha = 0.35f),
+                                Color.Transparent
+                            ),
+                            startY = solidEnd,
+                            endY = fadeEnd
+                        ),
+                        topLeft = Offset(0f, solidEnd),
+                        size = Size(
+                            size.width,
+                            (fadeEnd - solidEnd).coerceAtMost(size.height - solidEnd)
+                        )
+                    )
+                }
+            }
     ) {
-        Row(
-            verticalAlignment = Alignment.CenterVertically,
-            modifier = Modifier.fillMaxWidth()
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .statusBarsPadding()
         ) {
-            IconButton(onClick = onBack) {
-                Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
-            }
-            Text(
-                if (editMode) "Editing" else "Playlist",
-                style = MaterialTheme.typography.titleMedium,
-                modifier = Modifier.weight(1f)
-            )
-            if (editMode) {
-                TextButton(onClick = { editMode = false }) {
-                    Icon(Icons.Default.Check, contentDescription = null, modifier = Modifier.size(18.dp))
-                    Spacer(modifier = Modifier.width(4.dp))
-                    Text("Done")
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                IconButton(onClick = onBack) {
+                    Icon(
+                        Icons.AutoMirrored.Filled.ArrowBack,
+                        contentDescription = "Back",
+                        tint = themeColors.onContainer
+                    )
                 }
-            } else {
-                IconButton(onClick = { editMode = true }) {
-                    Icon(Icons.Default.Edit, contentDescription = "Edit")
-                }
-                IconButton(onClick = { showMenu = true }) {
-                    Icon(Icons.Default.MoreVert, contentDescription = "More")
-                }
-            }
-        }
-
-        Column(modifier = Modifier.padding(horizontal = 20.dp)) {
-            Box {
-                PlaylistCoverArt(pl, size = 160.dp)
+                Text(
+                    if (editMode) "Editing" else "Playlist",
+                    style = MaterialTheme.typography.titleMedium,
+                    color = themeColors.onContainer,
+                    modifier = Modifier.weight(1f)
+                )
                 if (editMode) {
-                    IconButton(
-                        onClick = { pickCover.launch("image/*") },
-                        modifier = Modifier
-                            .align(Alignment.BottomEnd)
-                            .background(
-                                MaterialTheme.colorScheme.surface.copy(alpha = 0.9f),
-                                RoundedCornerShape(8.dp)
-                            )
-                    ) {
-                        Icon(Icons.Default.Image, contentDescription = "Change cover")
+                    TextButton(onClick = { saveNameAndExitEdit() }) {
+                        Icon(
+                            Icons.Default.Check,
+                            contentDescription = null,
+                            modifier = Modifier.size(18.dp),
+                            tint = themeColors.onContainer
+                        )
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Text("Done", color = themeColors.onContainer)
+                    }
+                } else {
+                    IconButton(onClick = {
+                        editName = pl.name
+                        editMode = true
+                    }) {
+                        Icon(
+                            Icons.Default.Edit,
+                            contentDescription = "Edit",
+                            tint = themeColors.onContainer
+                        )
+                    }
+                    IconButton(onClick = { showMenu = true }) {
+                        Icon(
+                            Icons.Default.MoreVert,
+                            contentDescription = "More",
+                            tint = themeColors.onContainer
+                        )
                     }
                 }
             }
-            Spacer(modifier = Modifier.height(16.dp))
-            MarqueeText(
-                text = pl.name,
-                style = MaterialTheme.typography.headlineSmall.copy(fontWeight = FontWeight.Bold),
-                modifier = Modifier.fillMaxWidth()
-            )
-            if (!pl.description.isNullOrBlank()) {
-                Text(
-                    pl.description,
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f),
-                    modifier = Modifier.padding(top = 4.dp)
-                )
-            }
-            Text(
-                formatTrackCount(pl.songs.size),
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.55f),
-                modifier = Modifier.padding(top = 4.dp)
-            )
-            Spacer(modifier = Modifier.height(12.dp))
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                IconButton(
-                    onClick = onPrimary,
-                    modifier = Modifier
-                        .size(52.dp)
-                        .clip(CircleShape)
-                        .background(MaterialTheme.colorScheme.primary)
-                ) {
-                    Icon(
-                        if (showPause) Icons.Default.Pause else Icons.Default.PlayArrow,
-                        contentDescription = if (showPause) "Pause" else "Play",
-                        tint = MaterialTheme.colorScheme.onPrimary,
-                        modifier = Modifier.size(32.dp)
-                    )
+
+            Column(modifier = Modifier.padding(horizontal = 20.dp)) {
+                Box {
+                    PlaylistCoverArt(pl, size = 160.dp)
+                    if (editMode) {
+                        IconButton(
+                            onClick = { pickCover.launch("image/*") },
+                            modifier = Modifier
+                                .align(Alignment.BottomEnd)
+                                .background(
+                                    base.surface.copy(alpha = 0.9f),
+                                    RoundedCornerShape(8.dp)
+                                )
+                        ) {
+                            Icon(Icons.Default.Image, contentDescription = "Change cover")
+                        }
+                    }
                 }
-                Spacer(modifier = Modifier.width(8.dp))
-                IconButton(onClick = { startRadio() }) {
-                    Icon(Icons.Default.Radio, contentDescription = "Start radio")
-                }
-            }
-        }
+                Spacer(modifier = Modifier.height(16.dp))
 
-        Spacer(modifier = Modifier.height(8.dp))
-
-        if (editMode) {
-            Text(
-                "Use arrows to reorder · swipe left to remove",
-                style = MaterialTheme.typography.labelMedium,
-                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f),
-                modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp)
-            )
-        }
-
-        LazyColumn(
-            modifier = Modifier.fillMaxSize(),
-            contentPadding = PaddingValues(bottom = 96.dp)
-        ) {
-            itemsIndexed(pl.songs, key = { i, s -> "$i-${s.songKey}" }) { index, song ->
                 if (editMode) {
-                    EditPlaylistTrackRow(
-                        song = song,
-                        canMoveUp = index > 0,
-                        canMoveDown = index < pl.songs.lastIndex,
-                        onMoveUp = {
-                            scope.launch { repo.move(pl.id, index, index - 1) }
-                        },
-                        onMoveDown = {
-                            scope.launch { repo.move(pl.id, index, index + 1) }
-                        },
-                        onRemove = {
-                            scope.launch {
-                                repo.removeAt(pl.id, index)
-                                Toast.makeText(context, "Removed", Toast.LENGTH_SHORT).show()
+                    BasicTextField(
+                        value = editName,
+                        onValueChange = { editName = it },
+                        singleLine = true,
+                        textStyle = MaterialTheme.typography.headlineSmall.copy(
+                            fontWeight = FontWeight.Bold,
+                            color = themeColors.onContainer
+                        ),
+                        cursorBrush = SolidColor(themeColors.accent),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .background(
+                                themeColors.onContainer.copy(alpha = 0.08f),
+                                RoundedCornerShape(8.dp)
+                            )
+                            .padding(horizontal = 12.dp, vertical = 10.dp),
+                        decorationBox = { inner ->
+                            Box {
+                                if (editName.isEmpty()) {
+                                    Text(
+                                        "Playlist name",
+                                        style = MaterialTheme.typography.headlineSmall,
+                                        color = themeColors.onContainer.copy(alpha = 0.4f)
+                                    )
+                                }
+                                inner()
                             }
                         }
                     )
                 } else {
-                    SwipeAddSongRow(
-                        song = song,
-                        onClick = { onPlay(pl.songs, index) },
-                        onSwipeAdd = {
-                            onAddToQueue(song)
-                            Toast.makeText(context, "Added to queue", Toast.LENGTH_SHORT).show()
-                        },
-                        isPlaying = song.isSameAs(nowPlaying),
-                        isPlaybackActive = isPlaybackActive || isPlaying
+                    MarqueeText(
+                        text = pl.name,
+                        style = MaterialTheme.typography.headlineSmall.copy(fontWeight = FontWeight.Bold),
+                        color = themeColors.onContainer,
+                        modifier = Modifier.fillMaxWidth()
                     )
+                }
+
+                if (!pl.description.isNullOrBlank() && !editMode) {
+                    Text(
+                        pl.description,
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = themeColors.onContainer.copy(alpha = 0.7f),
+                        modifier = Modifier.padding(top = 4.dp)
+                    )
+                }
+                Text(
+                    formatTrackCount(pl.songs.size),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = themeColors.onContainer.copy(alpha = 0.55f),
+                    modifier = Modifier.padding(top = 4.dp)
+                )
+                Spacer(modifier = Modifier.height(12.dp))
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    IconButton(
+                        onClick = onPrimary,
+                        modifier = Modifier
+                            .size(52.dp)
+                            .clip(CircleShape)
+                            .background(themeColors.accent)
+                    ) {
+                        Icon(
+                            if (showPause) Icons.Default.Pause else Icons.Default.PlayArrow,
+                            contentDescription = if (showPause) "Pause" else "Play",
+                            tint = themeColors.onAccent,
+                            modifier = Modifier.size(32.dp)
+                        )
+                    }
+                    Spacer(modifier = Modifier.width(8.dp))
+                    IconButton(onClick = { startRadio() }) {
+                        Icon(
+                            Icons.Default.Radio,
+                            contentDescription = "Start radio",
+                            tint = themeColors.onContainer
+                        )
+                    }
+                }
+            }
+
+            Spacer(modifier = Modifier.height(8.dp))
+
+            if (editMode) {
+                Text(
+                    "Tap name to rename · use arrows to reorder · swipe left to remove",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = base.onSurface.copy(alpha = 0.5f),
+                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp)
+                )
+            }
+
+            LazyColumn(
+                modifier = Modifier.fillMaxSize(),
+                contentPadding = PaddingValues(bottom = 96.dp)
+            ) {
+                itemsIndexed(pl.songs, key = { i, s -> "$i-${s.songKey}" }) { index, song ->
+                    if (editMode) {
+                        EditPlaylistTrackRow(
+                            song = song,
+                            canMoveUp = index > 0,
+                            canMoveDown = index < pl.songs.lastIndex,
+                            onMoveUp = {
+                                scope.launch { repo.move(pl.id, index, index - 1) }
+                            },
+                            onMoveDown = {
+                                scope.launch { repo.move(pl.id, index, index + 1) }
+                            },
+                            onRemove = {
+                                scope.launch {
+                                    repo.removeAt(pl.id, index)
+                                    Toast.makeText(context, "Removed", Toast.LENGTH_SHORT).show()
+                                }
+                            }
+                        )
+                    } else {
+                        SwipeAddSongRow(
+                            song = song,
+                            onClick = { onPlay(pl.songs, index) },
+                            onSwipeAdd = {
+                                onAddToQueue(song)
+                                Toast.makeText(context, "Added to queue", Toast.LENGTH_SHORT).show()
+                            },
+                            isPlaying = song.isSameAs(nowPlaying),
+                            isPlaybackActive = isPlaybackActive || isPlaying,
+                            transparentSurface = true
+                        )
+                    }
                 }
             }
         }
@@ -282,7 +423,10 @@ fun PlaylistDetailScreen(
             onDismiss = { showMenu = false },
             onStartRadio = { startRadio() },
             onChangeCover = { pickCover.launch("image/*") },
-            onEdit = { editMode = true },
+            onEdit = {
+                editName = pl.name
+                editMode = true
+            },
             onDelete = {
                 scope.launch {
                     repo.delete(pl.id)
