@@ -30,16 +30,20 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.ArrowDropDown
 import androidx.compose.material.icons.filled.Language
+import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -123,6 +127,7 @@ private fun sortedReleaseTracks(album: AlbumItem): List<Song> =
 private val ArtistHeaderHeight = 300.dp
 private val ArtistGradientFade = 200.dp
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun ArtistDetailScreen(
     artist: ArtistItem,
@@ -144,6 +149,8 @@ fun ArtistDetailScreen(
     var filter by remember { mutableStateOf(ArtistReleaseFilter.All) }
     var showAll by remember { mutableStateOf(false) }
     var discographyFilters by remember { mutableStateOf(DiscographyFilters()) }
+    var showDataSources by remember { mutableStateOf(false) }
+    var dataLinks by remember { mutableStateOf<List<ArtistLink>>(emptyList()) }
     val uriHandler = LocalUriHandler.current
 
     val profile by profileRepo.observe(artist.displayName).collectAsState(initial = null)
@@ -153,19 +160,46 @@ fun ArtistDetailScreen(
         pinStore.contains(StuffPinKind.ARTIST, artistKeyStr)
     }
 
-    LaunchedEffect(artist.name, albums.size, profile?.imageUri) {
-        profileRepo.resolve(artist.displayName)
-        val bannerUri = profile?.imageUri?.takeIf { it.isNotBlank() }?.let { runCatching { Uri.parse(it) }.getOrNull() }
-        themeColors = if (bannerUri != null) {
+    // Await resolve so we theme from the *fresh* profile image when MB has one,
+    // otherwise extract from the first release cover (same path as album pages).
+    LaunchedEffect(artist.name, albums.size) {
+        val resolved = runCatching { profileRepo.resolve(artist.displayName) }.getOrNull()
+        val profileUri = resolved?.imageUri?.takeIf { it.isNotBlank() }
+            ?.let { raw ->
+                runCatching {
+                    when {
+                        raw.startsWith("/") -> Uri.fromFile(java.io.File(raw))
+                        else -> Uri.parse(raw)
+                    }
+                }.getOrNull()
+            }
+
+        dataLinks = buildList {
+            resolved?.websiteUrl?.takeIf { it.isNotBlank() }?.let {
+                add(ArtistLink("Website", it))
+            }
+            addAll(resolved?.links.orEmpty())
+            // Always offer MusicBrainz search as a data source
+            val q = java.net.URLEncoder.encode(artist.displayName, "UTF-8")
+            add(ArtistLink("MusicBrainz", "https://musicbrainz.org/search?query=$q&type=artist"))
+        }.distinctBy { it.url }
+
+        themeColors = if (profileUri != null) {
             themeService.themeFromUri(
                 context = context,
-                key = "artist-banner:${artist.displayName}:${profile?.imageUri}",
-                uri = bannerUri,
+                key = "artist:${artistKeyStr}:${resolved?.imageUri}",
+                uri = profileUri,
                 base = base
             ).colors
         } else {
-            val seed = albums.firstOrNull()?.songs?.firstOrNull() ?: artist.songs.firstOrNull()
-            themeService.themeFromSong(context, seed, base).colors
+            val seed = albums.firstOrNull()?.songs?.firstOrNull()
+                ?: artist.songs.firstOrNull()
+            themeService.themeFromSong(
+                context = context,
+                song = seed,
+                base = base,
+                forceRefresh = true
+            ).colors
         }
     }
 
@@ -197,6 +231,49 @@ fun ArtistDetailScreen(
     }
 
     ThemedStatusBar(color = artBg, enabled = true)
+
+    if (showDataSources) {
+        ModalBottomSheet(
+            onDismissRequest = { showDataSources = false },
+            sheetState = rememberModalBottomSheetState()
+        ) {
+            Text(
+                "Data sources",
+                style = MaterialTheme.typography.titleLarge,
+                fontWeight = FontWeight.Bold,
+                modifier = Modifier.padding(horizontal = 20.dp, vertical = 8.dp)
+            )
+            Text(
+                "Links from MusicBrainz and related catalogs for ${artist.displayName}. " +
+                    "Not every artist has external links in the database.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
+                modifier = Modifier.padding(horizontal = 20.dp, bottom = 12.dp)
+            )
+            if (dataLinks.isEmpty()) {
+                Text(
+                    "No external links found yet.",
+                    modifier = Modifier.padding(20.dp),
+                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.55f)
+                )
+            } else {
+                dataLinks.forEach { link ->
+                    Text(
+                        link.label,
+                        style = MaterialTheme.typography.bodyLarge,
+                        color = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable {
+                                runCatching { uriHandler.openUri(link.url) }
+                            }
+                            .padding(horizontal = 20.dp, vertical = 14.dp)
+                    )
+                }
+            }
+            Spacer(modifier = Modifier.height(32.dp))
+        }
+    }
 
     if (showAll) {
         DiscographyAllScreen(
@@ -248,12 +325,25 @@ fun ArtistDetailScreen(
             }
     ) {
         Column(modifier = Modifier.fillMaxSize().statusBarsPadding()) {
-            IconButton(onClick = onBack) {
-                Icon(
-                    Icons.AutoMirrored.Filled.ArrowBack,
-                    contentDescription = "Back",
-                    tint = onArt
-                )
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                IconButton(onClick = onBack) {
+                    Icon(
+                        Icons.AutoMirrored.Filled.ArrowBack,
+                        contentDescription = "Back",
+                        tint = onArt
+                    )
+                }
+                Spacer(modifier = Modifier.weight(1f))
+                IconButton(onClick = { showDataSources = true }) {
+                    Icon(
+                        Icons.Default.MoreVert,
+                        contentDescription = "More",
+                        tint = onArt
+                    )
+                }
             }
 
             LazyColumn(
@@ -267,8 +357,6 @@ fun ArtistDetailScreen(
                             ?: artist.songs.firstOrNull(),
                         stats = "${formatAlbumCount(artist.albumCount)} · ${formatTrackCount(artist.trackCount)}",
                         bio = profile?.bio,
-                        website = profile?.websiteUrl,
-                        links = profile?.links.orEmpty(),
                         titleColor = onArt,
                         mutedColor = mutedOnArt,
                         accent = accent,
@@ -282,8 +370,7 @@ fun ArtistDetailScreen(
                                 Toast.LENGTH_SHORT
                             ).show()
                         },
-                        onPlayAll = onStartRadio,
-                        onOpenLink = { url -> runCatching { uriHandler.openUri(url) } }
+                        onPlayAll = onStartRadio
                     )
                 }
 
@@ -586,16 +673,13 @@ private fun ArtistHero(
     seedSong: Song?,
     stats: String,
     bio: String?,
-    website: String?,
-    links: List<ArtistLink>,
     titleColor: Color,
     mutedColor: Color,
     accent: Color,
     onAccent: Color,
     artistSaved: Boolean,
     onToggleFavorite: () -> Unit,
-    onPlayAll: () -> Unit,
-    onOpenLink: (String) -> Unit
+    onPlayAll: () -> Unit
 ) {
     Column(
         modifier = Modifier
@@ -656,27 +740,6 @@ private fun ArtistHero(
                 tint = titleColor.copy(alpha = 0.85f),
                 savedTint = accent
             )
-            if (!website.isNullOrBlank()) {
-                IconButton(onClick = { onOpenLink(website) }) {
-                    Icon(
-                        Icons.Default.Language,
-                        contentDescription = "Website",
-                        tint = titleColor.copy(alpha = 0.85f)
-                    )
-                }
-            }
-            links.take(3).forEach { link ->
-                Spacer(modifier = Modifier.width(4.dp))
-                Text(
-                    link.label,
-                    style = MaterialTheme.typography.labelLarge,
-                    color = accent,
-                    modifier = Modifier
-                        .clip(RoundedCornerShape(8.dp))
-                        .clickable { onOpenLink(link.url) }
-                        .padding(horizontal = 8.dp, vertical = 6.dp)
-                )
-            }
         }
 
         if (!bio.isNullOrBlank()) {
