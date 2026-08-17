@@ -4,6 +4,7 @@ import android.app.Application
 import capital.yuri.yuriplayer.data.LibraryIndex
 import capital.yuri.yuriplayer.data.LibrarySettings
 import capital.yuri.yuriplayer.di.appModule
+import capital.yuri.yuriplayer.network.httpModule
 import org.koin.android.ext.android.get
 import org.koin.android.ext.koin.androidContext
 import org.koin.android.ext.koin.androidLogger
@@ -17,13 +18,12 @@ class YuriPlayerApp : Application() {
         startKoin {
             androidLogger(Level.ERROR)
             androidContext(this@YuriPlayerApp)
-            modules(appModule)
+            modules(httpModule, appModule)
         }
 
         get<LibrarySettings>().migrateLegacyNetworkConsentIfNeeded()
 
         // Load disk cache immediately; refresh in background if stale.
-        // Online metadata is manual by default (album/artist "Fetch additional metadata").
         get<LibraryIndex>().bootstrap()
     }
 }

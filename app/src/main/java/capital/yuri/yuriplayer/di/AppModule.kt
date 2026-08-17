@@ -14,11 +14,14 @@ import capital.yuri.yuriplayer.data.PlayerThemeStore
 import capital.yuri.yuriplayer.data.PlaylistRepository
 import capital.yuri.yuriplayer.data.UserImageStore
 import capital.yuri.yuriplayer.data.db.YuriDatabase
+import capital.yuri.yuriplayer.data.source.ArtistInfoService
+import capital.yuri.yuriplayer.data.source.ArtistInfoSource
 import capital.yuri.yuriplayer.data.source.LocalArtistProfileProvider
 import capital.yuri.yuriplayer.data.source.MusicBrainzArtistProfileProvider
 import capital.yuri.yuriplayer.data.source.MusicBrainzClient
 import capital.yuri.yuriplayer.data.source.SourceResolver
 import capital.yuri.yuriplayer.data.theme.ThemeService
+import capital.yuri.yuriplayer.media.FfmpegService
 import capital.yuri.yuriplayer.player.MusicServiceAutoPlay
 import capital.yuri.yuriplayer.player.PlaybackHistoryStore
 import capital.yuri.yuriplayer.player.PlaybackStateStore
@@ -37,6 +40,7 @@ val appModule = module {
     single { MusicRepository(androidContext(), get()) }
     single { MyStuffPinStore(androidContext()) }
     single { UserImageStore(androidContext()) }
+    single { FfmpegService() }
 
     single { YuriDatabase.create(androidContext()) }
     single { get<YuriDatabase>().albumPrefs() }
@@ -55,6 +59,15 @@ val appModule = module {
 
     single { PlaylistRepository(get(), get(), get()) }
     single { MusicBrainzClient() }
+
+    // Plugin-style artist info sources (JAR plugins will add more of these)
+    single<List<ArtistInfoSource>> {
+        listOf(
+            MusicBrainzArtistProfileProvider(androidContext(), get())
+        )
+    }
+    single { ArtistInfoService(get()) }
+
     single {
         ArtistProfileRepository(
             dao = get(),
