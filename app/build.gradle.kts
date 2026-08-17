@@ -82,14 +82,47 @@ android {
 // ---------------------------------------------------------------------------
 // NDK FFmpeg (optional, cached).
 //   ./gradlew :app:buildFfmpeg
-// First run is long; later runs are UP-TO-DATE unless native/ffmpeg/constraints.env
-// or build.sh changes. Does NOT block assembleDebug if you skip it — GIF crop
-// just falls back until binaries exist under assets/ffmpeg/<abi>/.
+// Resolves NDK from (first hit wins):
+//   1) ANDROID_NDK_HOME / ANDROID_NDK env (if Gradle actually sees it)
+//   2) ANDROID_HOME/ndk/<newest>
+//   3) local.properties sdk.dir/ndk/<newest>  ← usual Android Studio path
+// Then *forwards* ANDROID_NDK_HOME into the Exec process (daemon-safe).
 // ---------------------------------------------------------------------------
 val ffmpegAbis = listOf("arm64-v8a", "armeabi-v7a", "x86_64")
 val ffmpegRoot = rootProject.file("native/ffmpeg")
 val ffmpegAssetsDir = file("src/main/assets/ffmpeg")
 val ffmpegConstraints = ffmpegRoot.resolve("constraints.env")
+
+fun newestNdkUnder(sdkRoot: File): File? {
+    val ndkRoot = File(sdkRoot, "ndk")
+    if (!ndkRoot.isDirectory) return null
+    return ndkRoot.listFiles()
+        ?.filter { it.isDirectory && File(it, "toolchains/llvm/prebuilt").isDirectory }
+        ?.maxByOrNull { it.name }
+}
+
+fun resolveNdkHome(): File? {
+    listOf("ANDROID_NDK_HOME", "ANDROID_NDK")
+        .mapNotNull { System.getenv(it)?.takeIf { p -> p.isNotBlank() } }
+        .map { File(it) }
+        .firstOrNull { it.isDirectory }
+        ?.let { return it }
+
+    System.getenv("ANDROID_HOME")?.takeIf { it.isNotBlank() }?.let { home ->
+        newestNdkUnder(File(home))?.let { return it }
+    }
+
+    val localProps = rootProject.file("local.properties")
+    if (localProps.isFile) {
+        val props = Properties()
+        localProps.inputStream().use { props.load(it) }
+        val sdkDir = props.getProperty("sdk.dir")?.takeIf { it.isNotBlank() }
+        if (sdkDir != null) {
+            newestNdkUnder(File(sdkDir))?.let { return it }
+        }
+    }
+    return null
+}
 
 tasks.register<Exec>("buildFfmpeg") {
     group = "native"
@@ -103,8 +136,22 @@ tasks.register<Exec>("buildFfmpeg") {
 
     workingDir = ffmpegRoot
     commandLine("bash", "build.sh")
+
+    // Always set process env explicitly — Gradle daemon does not reliably
+    // inherit IDEA run-config environment variables.
+    val ndk = resolveNdkHome()
     environment("FFMPEG_ASSETS_DIR", ffmpegAssetsDir.absolutePath)
     environment("FFMPEG_ABIS", ffmpegAbis.joinToString(","))
+    if (ndk != null) {
+        environment("ANDROID_NDK_HOME", ndk.absolutePath)
+        environment("ANDROID_NDK", ndk.absolutePath)
+        logger.lifecycle("buildFfmpeg: ANDROID_NDK_HOME=${ndk.absolutePath}")
+    } else {
+        logger.warn(
+            "buildFfmpeg: no NDK found (env + local.properties sdk.dir/ndk). " +
+                "Install an NDK under the Android SDK or set ANDROID_NDK_HOME."
+        )
+    }
 }
 
 dependencies {
