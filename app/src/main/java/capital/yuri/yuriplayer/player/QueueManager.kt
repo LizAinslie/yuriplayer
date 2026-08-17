@@ -462,10 +462,10 @@ class QueueManager {
     }
 
     fun setShuffle(enabled: Boolean) {
-        // Radio shuffle is a source preference — flip via autoPlayHelper engine when active.
+        // Radio shuffle is a source preference — absolute set via engine (no-op if already correct).
         if (radioSession?.active == true) {
             val helper = autoPlayHelper
-            val next = helper?.radioEngine?.toggleShufflePrefs()
+            val next = helper?.radioEngine?.setShufflePrefs(enabled)
             if (next != null) {
                 radioSession = radioSession?.copy(prefs = next)
                 shuffleEnabled = next.shuffle

@@ -97,11 +97,23 @@ class RadioEngine(
         Log.i(TAG, "prefs shuffle=${prefs.shuffle} max=${prefs.maxRadioQueue}")
     }
 
+    /**
+     * Absolute shuffle preference for the active session.
+     * Returns null when already at [enabled] (no-op — prevents double planBatch
+     * when PlayerController calls queueManager then service→queueManager).
+     */
+    fun setShufflePrefs(enabled: Boolean): RadioSourcePrefs? {
+        val s = session ?: return null
+        if (s.prefs.shuffle == enabled) return null
+        val next = s.prefs.copy(shuffle = enabled)
+        session = s.copy(prefs = next)
+        Log.i(TAG, "prefs shuffle=${next.shuffle} max=${next.maxRadioQueue}")
+        return next
+    }
+
     fun toggleShufflePrefs(): RadioSourcePrefs? {
         val s = session ?: return null
-        val next = s.prefs.copy(shuffle = !s.prefs.shuffle)
-        session = s.copy(prefs = next)
-        return next
+        return setShufflePrefs(!s.prefs.shuffle)
     }
 
     fun stopRadio() {
