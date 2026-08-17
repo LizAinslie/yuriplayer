@@ -9,11 +9,13 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")" && pwd)"
 # shellcheck disable=SC1091
+set -a
+# shellcheck source=constraints.env
 source "$ROOT/constraints.env"
+set +a
 
 NDK="${ANDROID_NDK_HOME:-${ANDROID_NDK:-}}"
 if [[ -z "${NDK}" ]]; then
-  # Fall back to common SDK layout
   if [[ -n "${ANDROID_HOME:-}" && -d "$ANDROID_HOME/ndk" ]]; then
     NDK="$(ls -d "$ANDROID_HOME/ndk"/* 2>/dev/null | sort -V | tail -1 || true)"
   fi
@@ -30,7 +32,6 @@ IFS=',' read -r -a ABIS <<< "$ABIS_CSV"
 SRC="$ROOT/src/ffmpeg-${FFMPEG_VERSION}"
 BUILD_ROOT="$ROOT/build"
 HOST_TAG="$(uname -s | tr '[:upper:]' '[:lower:]')-$(uname -m)"
-# NDK host tags use x86_64 even on some arm macs via rosetta; prefer actual dir
 if [[ ! -d "$NDK/toolchains/llvm/prebuilt/$HOST_TAG" ]]; then
   if [[ -d "$NDK/toolchains/llvm/prebuilt/linux-x86_64" ]]; then
     HOST_TAG="linux-x86_64"
