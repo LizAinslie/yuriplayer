@@ -64,8 +64,11 @@ import androidx.compose.ui.unit.dp
 import capital.yuri.yuriplayer.data.AlbumItem
 import capital.yuri.yuriplayer.data.ArtistItem
 import capital.yuri.yuriplayer.data.ArtistProfileRepository
+import capital.yuri.yuriplayer.data.MyStuffPinStore
 import capital.yuri.yuriplayer.data.ReleaseType
 import capital.yuri.yuriplayer.data.Song
+import capital.yuri.yuriplayer.data.StuffPinKind
+import capital.yuri.yuriplayer.data.artistKey
 import capital.yuri.yuriplayer.data.releaseType
 import capital.yuri.yuriplayer.data.releaseYear
 import capital.yuri.yuriplayer.data.source.ArtistLink
@@ -132,6 +135,8 @@ fun ArtistDetailScreen(
 ) {
     val themeService: ThemeService = koinInject()
     val profileRepo: ArtistProfileRepository = koinInject()
+    val pinStore: MyStuffPinStore = koinInject()
+    val entries by pinStore.entries.collectAsState()
     val base = MaterialTheme.colorScheme
     val context = LocalContext.current
     val density = LocalDensity.current
@@ -143,7 +148,11 @@ fun ArtistDetailScreen(
 
     val profile by profileRepo.observe(artist.displayName).collectAsState(initial = null)
 
-    // Prefer banner / profile image for theme; fall back to first release art.
+    val artistKeyStr = artistKey(artist.name) ?: artist.displayName.lowercase()
+    val artistSaved = remember(entries, artistKeyStr) {
+        pinStore.contains(StuffPinKind.ARTIST, artistKeyStr)
+    }
+
     LaunchedEffect(artist.name, albums.size, profile?.imageUri) {
         profileRepo.resolve(artist.displayName)
         val bannerUri = profile?.imageUri?.takeIf { it.isNotBlank() }?.let { runCatching { Uri.parse(it) }.getOrNull() }
@@ -264,6 +273,15 @@ fun ArtistDetailScreen(
                         mutedColor = mutedOnArt,
                         accent = accent,
                         onAccent = onAccent,
+                        artistSaved = artistSaved,
+                        onToggleFavorite = {
+                            val now = pinStore.toggleArtist(artist)
+                            Toast.makeText(
+                                context,
+                                if (now) "Added to My Stuff" else "Removed from My Stuff",
+                                Toast.LENGTH_SHORT
+                            ).show()
+                        },
                         onPlayAll = onStartRadio,
                         onOpenLink = { url -> runCatching { uriHandler.openUri(url) } }
                     )
@@ -512,7 +530,8 @@ private fun DiscographyAllScreen(
                             Toast.makeText(context, "Added to queue", Toast.LENGTH_SHORT).show()
                         },
                         showTrackNumber = true,
-                        transparentSurface = true
+                        transparentSurface = true,
+                        showHeart = true
                     )
                 }
 
@@ -573,6 +592,8 @@ private fun ArtistHero(
     mutedColor: Color,
     accent: Color,
     onAccent: Color,
+    artistSaved: Boolean,
+    onToggleFavorite: () -> Unit,
     onPlayAll: () -> Unit,
     onOpenLink: (String) -> Unit
 ) {
@@ -628,8 +649,14 @@ private fun ArtistHero(
                     tint = onAccent
                 )
             }
+            Spacer(modifier = Modifier.width(4.dp))
+            MyStuffHeart(
+                saved = artistSaved,
+                onToggle = onToggleFavorite,
+                tint = titleColor.copy(alpha = 0.85f),
+                savedTint = accent
+            )
             if (!website.isNullOrBlank()) {
-                Spacer(modifier = Modifier.width(8.dp))
                 IconButton(onClick = { onOpenLink(website) }) {
                     Icon(
                         Icons.Default.Language,
