@@ -13,6 +13,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material3.Button
 import androidx.compose.material3.Checkbox
@@ -21,6 +22,7 @@ import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.rememberModalBottomSheetState
@@ -35,6 +37,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import capital.yuri.yuriplayer.data.AlbumItem
 import capital.yuri.yuriplayer.data.ArtistItem
@@ -169,7 +172,7 @@ fun SongContextSheet(
             onDismiss()
             if (onAddToMyStuff != null) onAddToMyStuff()
             else {
-                pinStore.add(
+                pinStore.addEntry(
                     StuffPin(
                         kind = StuffPinKind.SONG,
                         id = song.songKey,
@@ -254,7 +257,7 @@ fun AlbumContextSheet(
             onDismiss()
             if (onAddToMyStuff != null) onAddToMyStuff()
             else {
-                pinStore.add(
+                pinStore.addEntry(
                     StuffPin(
                         kind = StuffPinKind.ALBUM,
                         id = albumKey(album.name, album.artist),
@@ -319,7 +322,7 @@ fun ArtistContextSheet(
             if (onAddToMyStuff != null) onAddToMyStuff()
             else {
                 val key = artistKey(artist.name) ?: return@MediaSheetItem
-                pinStore.add(
+                pinStore.addEntry(
                     StuffPin(
                         kind = StuffPinKind.ARTIST,
                         id = key,
@@ -373,7 +376,7 @@ fun PlaylistContextSheet(
             onDismiss()
             if (onAddToMyStuff != null) onAddToMyStuff()
             else {
-                pinStore.add(
+                pinStore.addEntry(
                     StuffPin(
                         kind = StuffPinKind.PLAYLIST,
                         id = playlist.id,
@@ -406,7 +409,7 @@ fun PlaylistContextSheet(
     }
 }
 
-/** Multi-select playlists, confirm with Done. */
+/** Multi-select playlists + New playlist, confirm with Done. */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun AddToPlaylistSheet(
@@ -418,6 +421,19 @@ fun AddToPlaylistSheet(
     val scope = rememberCoroutineScope()
     val context = LocalContext.current
     var selected by remember { mutableStateOf(setOf<String>()) }
+    var showCreate by remember { mutableStateOf(false) }
+
+    if (showCreate) {
+        CreatePlaylistSheet(
+            onDismiss = { showCreate = false },
+            onCreated = { pl ->
+                // Auto-select the new playlist so user can Done immediately
+                selected = selected + pl.id
+                showCreate = false
+            }
+        )
+        return
+    }
 
     ModalBottomSheet(
         onDismissRequest = onDismiss,
@@ -433,19 +449,30 @@ fun AddToPlaylistSheet(
                 "Add to playlist",
                 style = MaterialTheme.typography.titleLarge,
                 fontWeight = FontWeight.Bold,
-                modifier = Modifier.padding(bottom = 8.dp)
+                modifier = Modifier.padding(bottom = 4.dp)
             )
             Text(
                 if (songs.size == 1) songs.first().displayTitle
                 else "${songs.size} tracks",
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
-                modifier = Modifier.padding(bottom = 12.dp)
+                modifier = Modifier.padding(bottom = 8.dp)
             )
+
+            OutlinedButton(
+                onClick = { showCreate = true },
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(bottom = 8.dp)
+            ) {
+                Icon(Icons.Default.Add, contentDescription = null, modifier = Modifier.size(18.dp))
+                Spacer(modifier = Modifier.width(8.dp))
+                Text("New playlist")
+            }
 
             if (playlists.isEmpty()) {
                 Text(
-                    "No playlists yet. Create one from My Stuff.",
+                    "No playlists yet — create one above.",
                     modifier = Modifier.padding(vertical = 24.dp),
                     color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.55f)
                 )
@@ -453,7 +480,7 @@ fun AddToPlaylistSheet(
                 LazyColumn(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .height(320.dp)
+                        .height(300.dp)
                 ) {
                     items(playlists, key = { it.id }) { pl ->
                         val checked = pl.id in selected
@@ -472,8 +499,16 @@ fun AddToPlaylistSheet(
                                     selected = if (it) selected + pl.id else selected - pl.id
                                 }
                             )
-                            Spacer(modifier = Modifier.width(8.dp))
-                            Text(pl.name, style = MaterialTheme.typography.bodyLarge)
+                            Spacer(modifier = Modifier.width(4.dp))
+                            PlaylistCoverArt(pl, size = 40.dp)
+                            Spacer(modifier = Modifier.width(12.dp))
+                            Text(
+                                pl.name,
+                                style = MaterialTheme.typography.bodyLarge,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                                modifier = Modifier.weight(1f)
+                            )
                         }
                     }
                 }
