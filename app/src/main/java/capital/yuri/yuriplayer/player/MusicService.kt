@@ -851,10 +851,16 @@ class MusicService : MediaSessionService() {
         override fun onPlayerError(error: PlaybackException) {
             Log.e(TAG, "player error code=${error.errorCode} ${error.message}", error)
             val cause = error.cause
-            if (cause is AudioSink.UnexpectedDiscontinuityException ||
-                error.errorCode == PlaybackException.ERROR_CODE_AUDIO_TRACK_INIT_FAILED ||
-                error.errorCode == PlaybackException.ERROR_CODE_AUDIO_TRACK_WRITE_FAILED
-            ) {
+            // 1004 FAILED_RUNTIME_CHECK often wraps IllegalArgumentException from
+            // DefaultAudioSink.handleBuffer (bad PTS / discontinuity). Treat like
+            // the other audio-track recoveries so playback does not stay paused.
+            val shouldRecover =
+                cause is AudioSink.UnexpectedDiscontinuityException ||
+                    cause is IllegalArgumentException ||
+                    error.errorCode == PlaybackException.ERROR_CODE_FAILED_RUNTIME_CHECK ||
+                    error.errorCode == PlaybackException.ERROR_CODE_AUDIO_TRACK_INIT_FAILED ||
+                    error.errorCode == PlaybackException.ERROR_CODE_AUDIO_TRACK_WRITE_FAILED
+            if (shouldRecover) {
                 recoverFromAudioGlitch()
             }
         }
