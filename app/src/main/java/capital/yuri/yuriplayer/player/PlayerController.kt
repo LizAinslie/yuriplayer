@@ -95,8 +95,7 @@ class PlayerController(
         runOrQueue { it.playSource(songs, startIndex, autoPlay = true, source = source) }
     }
 
-    fun startAlbumRadio(album: AlbumItem) {
-        val session = radioEngine.startAlbumRadio(album)
+    private fun launchRadioSession(session: capital.yuri.yuriplayer.player.radio.RadioSession) {
         queueManager.setRepeatMode(RepeatMode.OFF)
         queueManager.setRadioSession(session)
         val batch = radioEngine.planBatch() ?: return
@@ -113,22 +112,23 @@ class PlayerController(
         }
     }
 
+    fun startAlbumRadio(album: AlbumItem) {
+        launchRadioSession(radioEngine.startAlbumRadio(album))
+    }
+
     fun startArtistRadio(artistName: String) {
-        val session = radioEngine.startArtistRadio(artistName)
-        queueManager.setRepeatMode(RepeatMode.OFF)
-        queueManager.setRadioSession(session)
-        val batch = radioEngine.planBatch() ?: return
-        runOrQueue {
-            it.setRepeatMode(RepeatMode.OFF)
-            it.playSource(
-                songs = batch.songs,
-                startIndex = 0,
-                autoPlay = true,
-                source = batch.source
-            )
-            queueManager.setRadioSession(session)
-            queueManager.setRadioUpcoming(emptyList())
-        }
+        launchRadioSession(radioEngine.startArtistRadio(artistName))
+    }
+
+    fun startPlaylistRadio(songs: List<Song>, playlistName: String?) {
+        if (songs.isEmpty()) return
+        launchRadioSession(radioEngine.startPlaylistRadio(songs, playlistName))
+    }
+
+    /** Song radio = artist radio seeded from the track's primary artist. */
+    fun startSongRadio(song: Song) {
+        val name = song.effectiveAlbumArtist ?: song.artist ?: song.displayArtist
+        startArtistRadio(name)
     }
 
     fun stopRadio() {
@@ -163,7 +163,6 @@ class PlayerController(
     }
 
     fun setShuffle(enabled: Boolean) {
-        // Prefer QueueManager so radio prefs replan works even before bind settles
         queueManager.setShuffle(enabled)
         service?.setShuffle(enabled)
     }
@@ -174,7 +173,6 @@ class PlayerController(
     }
 
     fun cycleRepeatMode() {
-        // Single owner: service if bound (it drives queueManager), else queueManager
         if (service != null) service?.cycleRepeatMode()
         else queueManager.cycleRepeatMode()
     }

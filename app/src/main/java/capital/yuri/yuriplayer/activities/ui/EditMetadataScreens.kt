@@ -15,7 +15,6 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
@@ -41,7 +40,6 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
@@ -64,10 +62,64 @@ fun EditSongMetadataScreen(
 
     var title by remember(song.songKey) { mutableStateOf(song.title.orEmpty()) }
     var artist by remember(song.songKey) { mutableStateOf(song.artist.orEmpty()) }
+    var coverBytes by remember { mutableStateOf<ByteArray?>(null) }
+    var coverMime by remember { mutableStateOf<String?>(null) }
     var saving by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf<String?>(null) }
 
     val canEdit = remember(song) { editor.isLocalFile(song) }
+
+    val pickImage = rememberLauncherForActivityResult(
+        ActivityResultContracts.GetContent()
+    ) { uri ->
+        if (uri == null) return@rememberLauncherForActivityResult
+        scope.launch {
+            val pair = editor.readImageBytes(uri)
+            coverBytes = pair?.first
+            coverMime = pair?.second
+        }
+    }
+
+    fun doSave() {
+        saving = true
+        error = null
+        scope.launch {
+            // Song path: write title/artist; if cover set, reuse album writer for one track
+            val tagResult = editor.saveSong(
+                song,
+                MetadataEditService.SongEdit(
+                    title = title.ifBlank { null },
+                    artist = artist.ifBlank { null }
+                )
+            )
+            if (coverBytes != null && tagResult.failed == 0) {
+                val oneTrackAlbum = AlbumItem(
+                    name = song.album,
+                    artist = song.effectiveAlbumArtist,
+                    trackCount = 1,
+                    songs = listOf(song)
+                )
+                editor.saveAlbum(
+                    oneTrackAlbum,
+                    MetadataEditService.AlbumEdit(
+                        albumName = song.album,
+                        albumArtist = song.effectiveAlbumArtist,
+                        year = song.year,
+                        coverBytes = coverBytes,
+                        coverMime = coverMime
+                    )
+                )
+            }
+            saving = false
+            if (tagResult.failed == 0) {
+                Toast.makeText(context, tagResult.message, Toast.LENGTH_SHORT).show()
+                onSaved()
+                onBack()
+            } else {
+                error = tagResult.message
+            }
+        }
+    }
 
     Scaffold(
         topBar = {
@@ -81,27 +133,7 @@ fun EditSongMetadataScreen(
                 actions = {
                     IconButton(
                         enabled = canEdit && !saving,
-                        onClick = {
-                            saving = true
-                            error = null
-                            scope.launch {
-                                val result = editor.saveSong(
-                                    song,
-                                    MetadataEditService.SongEdit(
-                                        title = title.ifBlank { null },
-                                        artist = artist.ifBlank { null }
-                                    )
-                                )
-                                saving = false
-                                if (result.failed == 0) {
-                                    Toast.makeText(context, result.message, Toast.LENGTH_SHORT).show()
-                                    onSaved()
-                                    onBack()
-                                } else {
-                                    error = result.message
-                                }
-                            }
-                        }
+                        onClick = { doSave() }
                     ) {
                         if (saving) {
                             CircularProgressIndicator(modifier = Modifier.size(22.dp), strokeWidth = 2.dp)
@@ -129,6 +161,19 @@ fun EditSongMetadataScreen(
                 )
             }
 
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                AlbumArt(song = song, size = 96.dp, corner = 8.dp)
+                Spacer(modifier = Modifier.width(16.dp))
+                OutlinedButton(
+                    onClick = { pickImage.launch("image/*") },
+                    enabled = canEdit && !saving
+                ) {
+                    Icon(Icons.Default.Image, contentDescription = null, modifier = Modifier.size(18.dp))
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text(if (coverBytes != null) "Cover selected" else "Change cover")
+                }
+            }
+
             OutlinedTextField(
                 value = title,
                 onValueChange = { title = it },
@@ -154,27 +199,7 @@ fun EditSongMetadataScreen(
             }
 
             Button(
-                onClick = {
-                    saving = true
-                    error = null
-                    scope.launch {
-                        val result = editor.saveSong(
-                            song,
-                            MetadataEditService.SongEdit(
-                                title = title.ifBlank { null },
-                                artist = artist.ifBlank { null }
-                            )
-                        )
-                        saving = false
-                        if (result.failed == 0) {
-                            Toast.makeText(context, result.message, Toast.LENGTH_SHORT).show()
-                            onSaved()
-                            onBack()
-                        } else {
-                            error = result.message
-                        }
-                    }
-                },
+                onClick = { doSave() },
                 enabled = canEdit && !saving,
                 modifier = Modifier.fillMaxWidth()
             ) {
@@ -206,7 +231,6 @@ fun EditAlbumMetadataScreen(
             album.songs.mapNotNull { it.year }.maxOrNull()?.toString().orEmpty()
         )
     }
-    var coverUri by remember { mutableStateOf<Uri?>(null) }
     var coverBytes by remember { mutableStateOf<ByteArray?>(null) }
     var coverMime by remember { mutableStateOf<String?>(null) }
     var saving by remember { mutableStateOf(false) }
@@ -218,7 +242,6 @@ fun EditAlbumMetadataScreen(
         ActivityResultContracts.GetContent()
     ) { uri ->
         if (uri == null) return@rememberLauncherForActivityResult
-        coverUri = uri
         scope.launch {
             val pair = editor.readImageBytes(uri)
             coverBytes = pair?.first

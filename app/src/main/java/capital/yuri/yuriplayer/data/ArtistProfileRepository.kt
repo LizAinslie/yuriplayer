@@ -54,14 +54,38 @@ class ArtistProfileRepository(
         merged
     }
 
+    /** User-picked image (content:// or file://). Overrides provider art. */
+    suspend fun setCustomImage(artistName: String, imageUri: String?) = withContext(Dispatchers.IO) {
+        val key = artistKey(artistName) ?: return@withContext
+        val existing = dao.get(key)
+        dao.upsert(
+            ArtistProfileEntity(
+                artistKey = key,
+                displayName = existing?.displayName ?: artistName.trim(),
+                bio = existing?.bio,
+                imageUri = imageUri,
+                websiteUrl = existing?.websiteUrl,
+                linksJson = existing?.linksJson,
+                source = if (imageUri != null) "user" else (existing?.source ?: "local"),
+                updatedAtMs = System.currentTimeMillis()
+            )
+        )
+    }
+
     private fun merge(base: ArtistProfile, incoming: ArtistProfile): ArtistProfile =
         base.copy(
             displayName = incoming.displayName.ifBlank { base.displayName },
             bio = incoming.bio ?: base.bio,
-            imageUri = incoming.imageUri ?: base.imageUri,
+            // Keep user-set image when source is user
+            imageUri = if (base.source == "user" && base.imageUri != null) base.imageUri
+            else incoming.imageUri ?: base.imageUri,
             websiteUrl = incoming.websiteUrl ?: base.websiteUrl,
             links = if (incoming.links.isNotEmpty()) incoming.links else base.links,
-            source = if (incoming.imageUri != null || incoming.bio != null) incoming.source else base.source
+            source = when {
+                base.source == "user" -> "user"
+                incoming.imageUri != null || incoming.bio != null -> incoming.source
+                else -> base.source
+            }
         )
 
     companion object {
