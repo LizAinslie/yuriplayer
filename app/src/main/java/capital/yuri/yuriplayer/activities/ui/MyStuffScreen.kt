@@ -109,6 +109,9 @@ fun MyStuffScreen(
     when (page) {
         MyStuffPage.Home -> MyStuffHome(
             pins = pins,
+            library = library,
+            playlists = playlists,
+            allSongs = allSongs,
             onBrowseAll = { page = MyStuffPage.BrowseAll },
             onOpenPin = { pin -> openPin(pin, library, playlists, allSongs, onOpenAlbum, onOpenArtist, onOpenPlaylist, onPlay, context) },
             onUnpin = { pinStore.unpin(it) },
@@ -142,6 +145,9 @@ fun MyStuffScreen(
         AddPinFromCollectionSheet(
             entries = entries,
             alreadyPinned = pins.map { it.key }.toSet(),
+            library = library,
+            playlists = playlists,
+            allSongs = allSongs,
             onDismiss = { showAddPin = false },
             onPick = { pin ->
                 pinStore.pin(pin)
@@ -155,6 +161,9 @@ fun MyStuffScreen(
 @Composable
 private fun MyStuffHome(
     pins: List<StuffPin>,
+    library: LibraryIndex,
+    playlists: List<Playlist>,
+    allSongs: List<Song>,
     onBrowseAll: () -> Unit,
     onOpenPin: (StuffPin) -> Unit,
     onUnpin: (StuffPin) -> Unit,
@@ -162,7 +171,6 @@ private fun MyStuffHome(
     onPlayAll: () -> Unit
 ) {
     val emptyCount = (MyStuffPinStore.PIN_SLOTS - pins.size).coerceAtLeast(0)
-    // Build 10 slots: pins then empties, render as rows of 2
     val slots: List<StuffPin?> = pins + List(emptyCount) { null }
 
     Column(
@@ -209,7 +217,6 @@ private fun MyStuffHome(
             )
         }
 
-        // Rows of 2
         slots.chunked(2).forEach { row ->
             Row(
                 modifier = Modifier
@@ -222,6 +229,9 @@ private fun MyStuffHome(
                         if (pin != null) {
                             UserPinCard(
                                 pin = pin,
+                                library = library,
+                                playlists = playlists,
+                                allSongs = allSongs,
                                 onClick = { onOpenPin(pin) },
                                 onUnpin = { onUnpin(pin) }
                             )
@@ -241,23 +251,86 @@ private fun MyStuffHome(
 }
 
 @Composable
-private fun UserPinCard(
+private fun PinLeadingArt(
     pin: StuffPin,
-    onClick: () -> Unit,
-    onUnpin: () -> Unit
+    library: LibraryIndex,
+    playlists: List<Playlist>,
+    allSongs: List<Song>,
+    size: androidx.compose.ui.unit.Dp = 32.dp
 ) {
     val shape: Shape = when (pin.kind) {
         StuffPinKind.ARTIST -> CircleShape
         StuffPinKind.PLAYLIST -> RoundedCornerShape(10.dp)
         StuffPinKind.ALBUM, StuffPinKind.SONG -> RoundedCornerShape(6.dp)
     }
-    val icon: ImageVector = when (pin.kind) {
+    val fallback: ImageVector = when (pin.kind) {
         StuffPinKind.ALBUM -> Icons.Default.Album
         StuffPinKind.ARTIST -> Icons.Default.Person
         StuffPinKind.PLAYLIST -> Icons.Default.QueueMusic
         StuffPinKind.SONG -> Icons.Default.MusicNote
     }
 
+    Box(
+        modifier = Modifier
+            .size(size)
+            .clip(shape)
+            .background(MaterialTheme.colorScheme.surfaceVariant),
+        contentAlignment = Alignment.Center
+    ) {
+        when (pin.kind) {
+            StuffPinKind.ALBUM -> {
+                val album = remember(pin.id, library) {
+                    library.albums(taggedOnly = false)
+                        .firstOrNull { albumKey(it.name, it.artist) == pin.id }
+                }
+                if (album != null) {
+                    AlbumArt(song = album.songs.firstOrNull(), size = size, corner = 6.dp)
+                } else {
+                    Icon(fallback, null, Modifier.size(size * 0.55f))
+                }
+            }
+            StuffPinKind.ARTIST -> {
+                val seed = remember(pin.id, library) {
+                    library.artists(taggedOnly = false)
+                        .firstOrNull { artistKey(it.name) == pin.id }
+                        ?.songs?.firstOrNull()
+                }
+                ArtistArt(
+                    artistName = pin.title,
+                    seedSong = seed,
+                    size = size,
+                    circular = true
+                )
+            }
+            StuffPinKind.PLAYLIST -> {
+                val pl = playlists.firstOrNull { it.id == pin.id }
+                if (pl != null) {
+                    PlaylistCoverArt(pl, size = size)
+                } else {
+                    Icon(fallback, null, Modifier.size(size * 0.55f))
+                }
+            }
+            StuffPinKind.SONG -> {
+                val song = allSongs.firstOrNull { it.songKey == pin.id }
+                if (song != null) {
+                    AlbumArt(song = song, size = size, corner = 6.dp)
+                } else {
+                    Icon(fallback, null, Modifier.size(size * 0.55f))
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun UserPinCard(
+    pin: StuffPin,
+    library: LibraryIndex,
+    playlists: List<Playlist>,
+    allSongs: List<Song>,
+    onClick: () -> Unit,
+    onUnpin: () -> Unit
+) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -268,18 +341,7 @@ private fun UserPinCard(
             .padding(horizontal = 10.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
-        Box(
-            modifier = Modifier
-                .size(32.dp)
-                .clip(shape)
-                .background(MaterialTheme.colorScheme.surfaceVariant),
-            contentAlignment = Alignment.Center
-        ) {
-            when (pin.kind) {
-                StuffPinKind.ARTIST -> Icon(icon, null, Modifier.size(18.dp))
-                else -> Icon(icon, null, Modifier.size(18.dp))
-            }
-        }
+        PinLeadingArt(pin, library, playlists, allSongs, size = 32.dp)
         Spacer(modifier = Modifier.width(10.dp))
         Column(modifier = Modifier.weight(1f)) {
             Text(
@@ -495,6 +557,9 @@ private fun BrowseEntryRow(
 private fun AddPinFromCollectionSheet(
     entries: List<StuffPin>,
     alreadyPinned: Set<String>,
+    library: LibraryIndex,
+    playlists: List<Playlist>,
+    allSongs: List<Song>,
     onDismiss: () -> Unit,
     onPick: (StuffPin) -> Unit
 ) {
@@ -556,12 +621,6 @@ private fun AddPinFromCollectionSheet(
                         .height(420.dp)
                 ) {
                     items(candidates, key = { it.key }) { pin ->
-                        val icon = when (pin.kind) {
-                            StuffPinKind.ALBUM -> Icons.Default.Album
-                            StuffPinKind.ARTIST -> Icons.Default.Person
-                            StuffPinKind.PLAYLIST -> Icons.Default.QueueMusic
-                            StuffPinKind.SONG -> Icons.Default.MusicNote
-                        }
                         Row(
                             modifier = Modifier
                                 .fillMaxWidth()
@@ -569,21 +628,7 @@ private fun AddPinFromCollectionSheet(
                                 .padding(vertical = 10.dp, horizontal = 4.dp),
                             verticalAlignment = Alignment.CenterVertically
                         ) {
-                            Box(
-                                modifier = Modifier
-                                    .size(40.dp)
-                                    .clip(
-                                        when (pin.kind) {
-                                            StuffPinKind.ARTIST -> CircleShape
-                                            StuffPinKind.PLAYLIST -> RoundedCornerShape(10.dp)
-                                            else -> RoundedCornerShape(6.dp)
-                                        }
-                                    )
-                                    .background(MaterialTheme.colorScheme.surfaceVariant),
-                                contentAlignment = Alignment.Center
-                            ) {
-                                Icon(icon, contentDescription = null)
-                            }
+                            PinLeadingArt(pin, library, playlists, allSongs, size = 40.dp)
                             Spacer(modifier = Modifier.width(12.dp))
                             Column(modifier = Modifier.weight(1f)) {
                                 Text(pin.title, style = MaterialTheme.typography.bodyLarge, maxLines = 1, overflow = TextOverflow.Ellipsis)
