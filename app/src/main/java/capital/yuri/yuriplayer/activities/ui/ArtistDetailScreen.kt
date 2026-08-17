@@ -1,5 +1,6 @@
 package capital.yuri.yuriplayer.activities.ui
 
+import android.net.Uri
 import android.widget.Toast
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -37,7 +38,6 @@ import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -50,9 +50,13 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -113,6 +117,9 @@ private fun sortedReleaseTracks(album: AlbumItem): List<Song> =
             .thenBy(String.CASE_INSENSITIVE_ORDER) { it.displayTitle }
     )
 
+private val ArtistHeaderHeight = 300.dp
+private val ArtistGradientFade = 200.dp
+
 @Composable
 fun ArtistDetailScreen(
     artist: ArtistItem,
@@ -127,6 +134,7 @@ fun ArtistDetailScreen(
     val profileRepo: ArtistProfileRepository = koinInject()
     val base = MaterialTheme.colorScheme
     val context = LocalContext.current
+    val density = LocalDensity.current
     var themeColors by remember { mutableStateOf(fallbackPlayerColors(base)) }
     var filter by remember { mutableStateOf(ArtistReleaseFilter.All) }
     var showAll by remember { mutableStateOf(false) }
@@ -135,16 +143,32 @@ fun ArtistDetailScreen(
 
     val profile by profileRepo.observe(artist.displayName).collectAsState(initial = null)
 
-    LaunchedEffect(artist.name, albums.size) {
+    // Prefer banner / profile image for theme; fall back to first release art.
+    LaunchedEffect(artist.name, albums.size, profile?.imageUri) {
         profileRepo.resolve(artist.displayName)
-        val seed = albums.firstOrNull()?.songs?.firstOrNull() ?: artist.songs.firstOrNull()
-        themeColors = themeService.themeFromSong(context, seed, base).colors
+        val bannerUri = profile?.imageUri?.takeIf { it.isNotBlank() }?.let { runCatching { Uri.parse(it) }.getOrNull() }
+        themeColors = if (bannerUri != null) {
+            themeService.themeFromUri(
+                context = context,
+                key = "artist-banner:${artist.displayName}:${profile?.imageUri}",
+                uri = bannerUri,
+                base = base
+            ).colors
+        } else {
+            val seed = albums.firstOrNull()?.songs?.firstOrNull() ?: artist.songs.firstOrNull()
+            themeService.themeFromSong(context, seed, base).colors
+        }
     }
 
-    val scheme = playerColorScheme(themeColors, base)
-    val artistBg = scheme.background
-    val onBg = scheme.onBackground
-    val muted = onBg.copy(alpha = 0.6f)
+    val artBg = themeColors.container
+    val defaultBg = base.background
+    val onArt = themeColors.onContainer
+    val mutedOnArt = onArt.copy(alpha = 0.6f)
+    val accent = themeColors.accent
+    val onAccent = themeColors.onAccent
+
+    val fadePx = with(density) { ArtistGradientFade.toPx() }
+    val headerPx = with(density) { ArtistHeaderHeight.toPx() }
 
     val sortedAlbums = remember(albums) {
         albums.sortedWith(
@@ -163,147 +187,162 @@ fun ArtistDetailScreen(
         }
     }
 
-    ThemedStatusBar(color = artistBg, enabled = true)
+    ThemedStatusBar(color = artBg, enabled = true)
 
-    MaterialTheme(colorScheme = scheme) {
-        Surface(
-            modifier = Modifier.fillMaxSize(),
-            color = scheme.background,
-            contentColor = onBg
-        ) {
-            if (showAll) {
-                DiscographyAllScreen(
-                    artistName = artist.displayName,
-                    albums = sortedAlbums,
-                    filters = discographyFilters,
-                    onFiltersChange = { discographyFilters = it },
-                    titleColor = onBg,
-                    mutedColor = muted,
-                    onBack = { showAll = false },
-                    onOpenAlbum = onOpenAlbum,
-                    onPlaySongs = onPlaySongs,
-                    onAddToQueue = onAddToQueue
+    if (showAll) {
+        DiscographyAllScreen(
+            artistName = artist.displayName,
+            albums = sortedAlbums,
+            filters = discographyFilters,
+            onFiltersChange = { discographyFilters = it },
+            titleColor = base.onBackground,
+            mutedColor = base.onBackground.copy(alpha = 0.6f),
+            onBack = { showAll = false },
+            onOpenAlbum = onOpenAlbum,
+            onPlaySongs = onPlaySongs,
+            onAddToQueue = onAddToQueue
+        )
+        return
+    }
+
+    BoxWithConstraints(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(defaultBg)
+            .drawBehind {
+                val solidEnd = headerPx
+                val fadeEnd = solidEnd + fadePx
+                drawRect(
+                    color = artBg,
+                    topLeft = Offset.Zero,
+                    size = Size(size.width, solidEnd.coerceAtMost(size.height))
                 )
-                return@Surface
+                if (fadeEnd > solidEnd) {
+                    drawRect(
+                        brush = Brush.verticalGradient(
+                            colors = listOf(
+                                artBg,
+                                artBg.copy(alpha = 0.75f),
+                                artBg.copy(alpha = 0.35f),
+                                Color.Transparent
+                            ),
+                            startY = solidEnd,
+                            endY = fadeEnd
+                        ),
+                        topLeft = Offset(0f, solidEnd),
+                        size = Size(
+                            size.width,
+                            (fadeEnd - solidEnd).coerceAtMost(size.height - solidEnd)
+                        )
+                    )
+                }
+            }
+    ) {
+        Column(modifier = Modifier.fillMaxSize().statusBarsPadding()) {
+            IconButton(onClick = onBack) {
+                Icon(
+                    Icons.AutoMirrored.Filled.ArrowBack,
+                    contentDescription = "Back",
+                    tint = onArt
+                )
             }
 
-            BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
-                Box(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(280.dp)
-                        .background(
-                            Brush.verticalGradient(
-                                listOf(artistBg, artistBg.copy(alpha = 0.55f), Color.Transparent)
-                            )
-                        )
-                )
+            LazyColumn(
+                modifier = Modifier.fillMaxSize(),
+                contentPadding = PaddingValues(bottom = 96.dp)
+            ) {
+                item {
+                    ArtistHero(
+                        name = artist.displayName,
+                        seedSong = albums.firstOrNull()?.songs?.firstOrNull()
+                            ?: artist.songs.firstOrNull(),
+                        stats = "${formatAlbumCount(artist.albumCount)} · ${formatTrackCount(artist.trackCount)}",
+                        bio = profile?.bio,
+                        website = profile?.websiteUrl,
+                        links = profile?.links.orEmpty(),
+                        titleColor = onArt,
+                        mutedColor = mutedOnArt,
+                        accent = accent,
+                        onAccent = onAccent,
+                        onPlayAll = onStartRadio,
+                        onOpenLink = { url -> runCatching { uriHandler.openUri(url) } }
+                    )
+                }
 
-                Column(modifier = Modifier.fillMaxSize().statusBarsPadding()) {
-                    IconButton(onClick = onBack) {
-                        Icon(
-                            Icons.AutoMirrored.Filled.ArrowBack,
-                            contentDescription = "Back",
-                            tint = onBg
-                        )
-                    }
-
-                    LazyColumn(
-                        modifier = Modifier.fillMaxSize(),
-                        contentPadding = PaddingValues(bottom = 96.dp)
+                item {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 16.dp, vertical = 4.dp),
+                        verticalAlignment = Alignment.CenterVertically
                     ) {
-                        item {
-                            ArtistHero(
-                                name = artist.displayName,
-                                seedSong = albums.firstOrNull()?.songs?.firstOrNull()
-                                    ?: artist.songs.firstOrNull(),
-                                stats = "${formatAlbumCount(artist.albumCount)} · ${formatTrackCount(artist.trackCount)}",
-                                bio = profile?.bio,
-                                website = profile?.websiteUrl,
-                                links = profile?.links.orEmpty(),
-                                titleColor = onBg,
-                                mutedColor = muted,
-                                onPlayAll = onStartRadio,
-                                onOpenLink = { url -> runCatching { uriHandler.openUri(url) } }
-                            )
-                        }
-
-                        item {
-                            Row(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .padding(horizontal = 16.dp, vertical = 4.dp),
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                Text(
-                                    "Discography",
-                                    style = MaterialTheme.typography.titleMedium,
-                                    fontWeight = FontWeight.Bold,
-                                    color = onBg,
-                                    modifier = Modifier.weight(1f)
-                                )
-                                if (sortedAlbums.isNotEmpty()) {
-                                    TextButton(
-                                        onClick = {
-                                            discographyFilters =
-                                                DiscographyFilters.fromPageFilter(filter)
-                                            showAll = true
-                                        }
-                                    ) {
-                                        Text("Show all", color = scheme.primary)
-                                    }
+                        Text(
+                            "Discography",
+                            style = MaterialTheme.typography.titleMedium,
+                            fontWeight = FontWeight.Bold,
+                            color = base.onBackground,
+                            modifier = Modifier.weight(1f)
+                        )
+                        if (sortedAlbums.isNotEmpty()) {
+                            TextButton(
+                                onClick = {
+                                    discographyFilters =
+                                        DiscographyFilters.fromPageFilter(filter)
+                                    showAll = true
                                 }
+                            ) {
+                                Text("Show all", color = accent)
                             }
                         }
+                    }
+                }
 
-                        item {
-                            Row(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .horizontalScroll(rememberScrollState())
-                                    .padding(horizontal = 16.dp, vertical = 4.dp),
-                                horizontalArrangement = Arrangement.spacedBy(8.dp)
-                            ) {
-                                ArtistReleaseFilter.entries.forEach { f ->
-                                    FilterChip(
-                                        selected = filter == f,
-                                        onClick = { filter = f },
-                                        label = {
-                                            Text(
-                                                f.name,
-                                                color = if (filter == f) scheme.onSecondaryContainer
-                                                else onBg
-                                            )
-                                        }
+                item {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .horizontalScroll(rememberScrollState())
+                            .padding(horizontal = 16.dp, vertical = 4.dp),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        ArtistReleaseFilter.entries.forEach { f ->
+                            FilterChip(
+                                selected = filter == f,
+                                onClick = { filter = f },
+                                label = {
+                                    Text(
+                                        f.name,
+                                        color = if (filter == f) base.onSecondaryContainer
+                                        else base.onBackground
                                     )
                                 }
-                            }
+                            )
                         }
+                    }
+                }
 
-                        item {
-                            if (filtered.isEmpty()) {
-                                Text(
-                                    "No releases in this filter.",
-                                    modifier = Modifier.padding(16.dp),
-                                    color = muted
+                item {
+                    if (filtered.isEmpty()) {
+                        Text(
+                            "No releases in this filter.",
+                            modifier = Modifier.padding(16.dp),
+                            color = base.onBackground.copy(alpha = 0.55f)
+                        )
+                    } else {
+                        LazyRow(
+                            contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
+                            horizontalArrangement = Arrangement.spacedBy(14.dp)
+                        ) {
+                            items(
+                                filtered,
+                                key = { "${it.name}|${it.artist}|${it.releaseYear()}" }
+                            ) { album ->
+                                ArtistReleaseCard(
+                                    album = album,
+                                    titleColor = base.onBackground,
+                                    mutedColor = base.onBackground.copy(alpha = 0.55f),
+                                    onClick = { onOpenAlbum(album) }
                                 )
-                            } else {
-                                LazyRow(
-                                    contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
-                                    horizontalArrangement = Arrangement.spacedBy(14.dp)
-                                ) {
-                                    items(
-                                        filtered,
-                                        key = { "${it.name}|${it.artist}|${it.releaseYear()}" }
-                                    ) { album ->
-                                        ArtistReleaseCard(
-                                            album = album,
-                                            titleColor = onBg,
-                                            mutedColor = muted,
-                                            onClick = { onOpenAlbum(album) }
-                                        )
-                                    }
-                                }
                             }
                         }
                     }
@@ -372,7 +411,7 @@ private fun DiscographyAllScreen(
                 .fillMaxWidth()
                 .padding(horizontal = 16.dp, vertical = 4.dp)
         ) {
-            Surface(
+            androidx.compose.material3.Surface(
                 shape = RoundedCornerShape(8.dp),
                 color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
                 modifier = Modifier
@@ -532,10 +571,11 @@ private fun ArtistHero(
     links: List<ArtistLink>,
     titleColor: Color,
     mutedColor: Color,
+    accent: Color,
+    onAccent: Color,
     onPlayAll: () -> Unit,
     onOpenLink: (String) -> Unit
 ) {
-    val scheme = MaterialTheme.colorScheme
     Column(
         modifier = Modifier
             .fillMaxWidth()
@@ -543,15 +583,13 @@ private fun ArtistHero(
             .padding(bottom = 12.dp),
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
-        Box(
-            modifier = Modifier
-                .size(160.dp)
-                .clip(CircleShape)
-                .background(scheme.surfaceVariant),
-            contentAlignment = Alignment.Center
-        ) {
-            AlbumArt(song = seedSong, size = 160.dp, corner = 80.dp)
-        }
+        // Prefer artist profile image; fall back to album art seed
+        ArtistArt(
+            artistName = name,
+            size = 160.dp,
+            circular = true,
+            fallbackSong = seedSong
+        )
 
         Spacer(modifier = Modifier.height(16.dp))
 
@@ -583,12 +621,12 @@ private fun ArtistHero(
                 modifier = Modifier
                     .size(48.dp)
                     .clip(CircleShape)
-                    .background(scheme.primary)
+                    .background(accent)
             ) {
                 Icon(
                     Icons.Default.PlayArrow,
                     contentDescription = "Start radio",
-                    tint = scheme.onPrimary
+                    tint = onAccent
                 )
             }
             if (!website.isNullOrBlank()) {
@@ -606,7 +644,7 @@ private fun ArtistHero(
                 Text(
                     link.label,
                     style = MaterialTheme.typography.labelLarge,
-                    color = scheme.primary,
+                    color = accent,
                     modifier = Modifier
                         .clip(RoundedCornerShape(8.dp))
                         .clickable { onOpenLink(link.url) }
