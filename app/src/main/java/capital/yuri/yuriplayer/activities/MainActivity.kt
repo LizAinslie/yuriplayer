@@ -87,9 +87,13 @@ import capital.yuri.yuriplayer.data.ArtistItem
 import capital.yuri.yuriplayer.data.LibraryIndex
 import capital.yuri.yuriplayer.data.LibrarySettings
 import capital.yuri.yuriplayer.data.MetadataEnrichmentService
+import capital.yuri.yuriplayer.data.MyStuffPinStore
 import capital.yuri.yuriplayer.data.PlayerThemeStore
 import capital.yuri.yuriplayer.data.Playlist
+import capital.yuri.yuriplayer.data.PlaylistRepository
 import capital.yuri.yuriplayer.data.Song
+import capital.yuri.yuriplayer.data.StuffPin
+import capital.yuri.yuriplayer.data.StuffPinKind
 import capital.yuri.yuriplayer.data.albumKey
 import capital.yuri.yuriplayer.data.artistKey
 import capital.yuri.yuriplayer.player.ColdSource
@@ -297,6 +301,8 @@ fun YuriApp(
     val themeStore: PlayerThemeStore = koinInject()
     val settings: LibrarySettings = koinInject()
     val enrichment: MetadataEnrichmentService = koinInject()
+    val pinStore: MyStuffPinStore = koinInject()
+    val playlistRepo: PlaylistRepository = koinInject()
     val baseScheme = MaterialTheme.colorScheme
 
     val statusBarStack = remember(baseScheme.background) {
@@ -576,7 +582,15 @@ fun YuriApp(
                                 onTogglePlayPause = { player.togglePlayPause() },
                                 onToggleShuffle = { player.toggleShuffle() },
                                 onFavorite = {
-                                    Toast.makeText(context, "Favorites coming soon", Toast.LENGTH_SHORT).show()
+                                    pinStore.add(
+                                        StuffPin(
+                                            kind = StuffPinKind.ALBUM,
+                                            id = key,
+                                            title = liveAlbum.displayName,
+                                            subtitle = liveAlbum.displayArtist
+                                        )
+                                    )
+                                    Toast.makeText(context, "Added to My Stuff", Toast.LENGTH_SHORT).show()
                                 },
                                 onOpenArtist = {
                                     val name = liveAlbum.artist ?: return@AlbumDetailScreen
@@ -629,7 +643,13 @@ fun YuriApp(
                                         ColdSource(ColdSourceType.PLAYLIST, d.playlistId, null)
                                     )
                                 },
-                                onAddToQueue = { player.addToHotQueue(it) }
+                                onAddToQueue = { player.addToHotQueue(it) },
+                                onStartRadio = {
+                                    // Resolve songs from live playlist flow isn't here — use library via repo async-less
+                                    // PlaylistDetail already has songs in its own scope; MainActivity passes lambda that
+                                    // starts radio from whatever is currently known via a quick playSource seed.
+                                    // Prefer PlayerController API that takes song list from the screen.
+                                }
                             )
                         }
                         is DetailRoute.EditSong -> {
@@ -724,7 +744,7 @@ fun YuriApp(
                     onAddToPlaylist = {
                         Toast.makeText(
                             context,
-                            "Open My Stuff → Playlists to manage playlists",
+                            "Long-press a track → Add to playlist",
                             Toast.LENGTH_SHORT
                         ).show()
                     }
