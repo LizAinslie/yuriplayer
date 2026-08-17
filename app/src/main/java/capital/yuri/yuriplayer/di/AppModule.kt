@@ -99,5 +99,12 @@ val appModule = module {
 
     single { PlaybackStateStore(androidContext()) }
     single { PlaybackHistoryStore(androidContext()) }
-    single { PlayerController(androidContext(), get()) }
+    single {
+        PlayerController(
+            context = androidContext(),
+            historyStore = get(),
+            radioEngine = get(),
+            queueManager = get()
+        )
+    }
 }
