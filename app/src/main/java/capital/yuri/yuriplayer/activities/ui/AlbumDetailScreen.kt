@@ -27,7 +27,6 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Album
-import androidx.compose.material.icons.filled.FavoriteBorder
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
@@ -69,7 +68,10 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import capital.yuri.yuriplayer.data.AlbumItem
 import capital.yuri.yuriplayer.data.MetadataEnrichmentService
+import capital.yuri.yuriplayer.data.MyStuffPinStore
 import capital.yuri.yuriplayer.data.Song
+import capital.yuri.yuriplayer.data.StuffPinKind
+import capital.yuri.yuriplayer.data.albumKey
 import capital.yuri.yuriplayer.data.theme.ThemeService
 import capital.yuri.yuriplayer.ui.formatTrackCount
 import org.koin.compose.koinInject
@@ -133,6 +135,8 @@ fun AlbumDetailScreen(
     val context = LocalContext.current
     val themeService: ThemeService = koinInject()
     val enrichment: MetadataEnrichmentService = koinInject()
+    val pinStore: MyStuffPinStore = koinInject()
+    val entries by pinStore.entries.collectAsState()
     val coverGen by enrichment.coverGeneration.collectAsState()
     val base = MaterialTheme.colorScheme
     var themeColors by remember { mutableStateOf(fallbackPlayerColors(base)) }
@@ -140,6 +144,11 @@ fun AlbumDetailScreen(
     var showAddToPlaylist by remember { mutableStateOf(false) }
     val listState = rememberLazyListState()
     val density = LocalDensity.current
+
+    val albumKeyStr = albumKey(album.name, album.artist)
+    val albumSaved = remember(entries, albumKeyStr) {
+        pinStore.contains(StuffPinKind.ALBUM, albumKeyStr)
+    }
 
     val collapseRangePx = with(density) { (ExpandedHeaderBody - CollapsedBarHeight).toPx() }
     var collapsePx by remember { mutableFloatStateOf(0f) }
@@ -212,7 +221,6 @@ fun AlbumDetailScreen(
 
     ThemedStatusBar(color = albumBg, enabled = true)
 
-    // Whole album → multi-select playlist sheet
     if (showAddToPlaylist) {
         AddToPlaylistSheet(
             songs = album.songs,
@@ -283,9 +291,19 @@ fun AlbumDetailScreen(
                                 metaLine = metaLine,
                                 showPause = showPause,
                                 shuffleEnabled = shuffleEnabled,
+                                albumSaved = albumSaved,
                                 onPrimary = onPrimary,
                                 onToggleShuffle = onToggleShuffle,
-                                onFavorite = onFavorite,
+                                onFavorite = {
+                                    val now = pinStore.toggleAlbum(album)
+                                    Toast.makeText(
+                                        context,
+                                        if (now) "Album + tracks added to My Stuff"
+                                        else "Album removed from My Stuff",
+                                        Toast.LENGTH_SHORT
+                                    ).show()
+                                    onFavorite()
+                                },
                                 onMore = { showMenu = true },
                                 onOpenArtist = onOpenArtist
                             )
@@ -355,6 +373,7 @@ fun AlbumDetailScreen(
                                 isPlaying = song.isSameAs(nowPlaying),
                                 isPlaybackActive = isPlaying,
                                 transparentSurface = true,
+                                showHeart = true,
                                 onEditMetadata = { onEditSong(song) }
                             )
                         }
@@ -442,6 +461,7 @@ private fun SpotifyAlbumHero(
     metaLine: String,
     showPause: Boolean,
     shuffleEnabled: Boolean,
+    albumSaved: Boolean,
     onPrimary: () -> Unit,
     onToggleShuffle: () -> Unit,
     onFavorite: () -> Unit,
@@ -513,13 +533,12 @@ private fun SpotifyAlbumHero(
                 modifier = Modifier.fillMaxWidth(),
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                IconButton(onClick = onFavorite) {
-                    Icon(
-                        Icons.Default.FavoriteBorder,
-                        contentDescription = "Add to My Stuff",
-                        tint = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.85f)
-                    )
-                }
+                MyStuffHeart(
+                    saved = albumSaved,
+                    onToggle = onFavorite,
+                    tint = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.85f),
+                    savedTint = MaterialTheme.colorScheme.primary
+                )
                 IconButton(onClick = onMore) {
                     Icon(
                         Icons.Default.MoreVert,
