@@ -239,7 +239,7 @@ fun SongContextSheet(
                 Toast.makeText(context, "Added to My Stuff", Toast.LENGTH_SHORT).show()
             }
         }
-        if (!hideGoToAlbum && onGoToAlbum != null) {
+        if (!hideGoToAlbum && onGoToAlbum != null && !song.album.isNullOrBlank()) {
             MediaSheetItem("Go to album") {
                 onDismiss()
                 onGoToAlbum()
@@ -459,7 +459,6 @@ fun PlaylistContextSheet(
                 onEdit()
             }
         }
-        // Danger zone — last item, visually separated
         if (onDelete != null) {
             HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
             MediaSheetItem("Delete playlist", danger = true) {
@@ -471,10 +470,6 @@ fun PlaylistContextSheet(
     }
 }
 
-/**
- * Multi-select playlists + New playlist.
- * Playlists that already contain the song are pre-checked; unchecking removes.
- */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun AddToPlaylistSheet(
