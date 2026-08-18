@@ -1,6 +1,7 @@
 package capital.yuri.yuriplayer.data.source
 
 import android.util.Log
+import capital.yuri.yuriplayer.data.artistKey
 import io.ktor.client.HttpClient
 import io.ktor.client.request.get
 import io.ktor.client.statement.bodyAsText
@@ -11,9 +12,7 @@ import org.json.JSONArray
 import org.json.JSONObject
 import java.net.URLEncoder
 
-/**
- * Direct Wikipedia / Commons image hunt (does not require a MusicBrainz hit).
- */
+/** Direct Wikipedia / Commons image + summary bio. */
 class WikipediaArtistImageSource(
     private val http: HttpClient
 ) : ArtistInfoSource {
@@ -21,7 +20,32 @@ class WikipediaArtistImageSource(
     override val id: String = "wikipedia"
     override val displayName: String = "Wikipedia"
 
-    override suspend fun fetchProfile(artistName: String): ArtistProfile? = null
+    override suspend fun fetchProfile(artistName: String): ArtistProfile? =
+        withContext(Dispatchers.IO) {
+            val key = artistKey(artistName) ?: return@withContext null
+            val titles = searchTitles(artistName).ifEmpty {
+                listOf(artistName.trim())
+            }
+            for (title in titles.take(3)) {
+                val summary = pageSummary(title) ?: continue
+                val extract = summary.optString("extract").takeIf {
+                    it.isNotBlank() && summary.optString("type") != "disambiguation"
+                } ?: continue
+                val pageUrl = summary.optJSONObject("content_urls")
+                    ?.optJSONObject("desktop")
+                    ?.optString("page")
+                return@withContext ArtistProfile(
+                    artistKey = key,
+                    displayName = summary.optString("title").ifBlank { artistName.trim() },
+                    bio = extract,
+                    links = listOfNotNull(
+                        pageUrl?.takeIf { it.isNotBlank() }?.let { categorizeLink(it, "Wikipedia") }
+                    ),
+                    source = id
+                )
+            }
+            null
+        }
 
     override suspend fun fetchImageCandidates(
         artistName: String,
@@ -32,11 +56,9 @@ class WikipediaArtistImageSource(
         }
         val out = LinkedHashMap<String, ArtistImageCandidate>()
         for (title in titles.take(4)) {
-            // REST summary (thumb + original)
             summaryImages(title).forEach { (url, label) ->
                 if (url !in out) out[url] = ArtistImageCandidate(url, id, label)
             }
-            // Media list on the page (more options)
             pageImages(title).forEach { url ->
                 if (url !in out) out[url] = ArtistImageCandidate(url, id, "Wikipedia · $title")
             }
@@ -64,21 +86,25 @@ class WikipediaArtistImageSource(
         }
     }
 
-    private suspend fun summaryImages(title: String): List<Pair<String, String>> {
+    private suspend fun pageSummary(title: String): JSONObject? {
         val path = URLEncoder.encode(title.replace(' ', '_'), "UTF-8")
-        val body = get("https://en.wikipedia.org/api/rest_v1/page/summary/$path") ?: return emptyList()
+        val body = get("https://en.wikipedia.org/api/rest_v1/page/summary/$path") ?: return null
         return try {
-            val root = JSONObject(body)
-            buildList {
-                root.optJSONObject("originalimage")?.optString("source")
-                    ?.takeIf { it.isNotBlank() }
-                    ?.let { add(it to "Wikipedia original · $title") }
-                root.optJSONObject("thumbnail")?.optString("source")
-                    ?.takeIf { it.isNotBlank() }
-                    ?.let { add(it to "Wikipedia thumb · $title") }
-            }
+            JSONObject(body)
         } catch (_: Exception) {
-            emptyList()
+            null
+        }
+    }
+
+    private suspend fun summaryImages(title: String): List<Pair<String, String>> {
+        val root = pageSummary(title) ?: return emptyList()
+        return buildList {
+            root.optJSONObject("originalimage")?.optString("source")
+                ?.takeIf { it.isNotBlank() }
+                ?.let { add(it to "Wikipedia original · $title") }
+            root.optJSONObject("thumbnail")?.optString("source")
+                ?.takeIf { it.isNotBlank() }
+                ?.let { add(it to "Wikipedia thumb · $title") }
         }
     }
 

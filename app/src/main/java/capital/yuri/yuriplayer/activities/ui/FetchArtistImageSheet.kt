@@ -32,7 +32,6 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.layout.ContentScale
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import capital.yuri.yuriplayer.data.source.ArtistImageCandidate
 import capital.yuri.yuriplayer.data.source.ArtistImageKind
@@ -40,10 +39,6 @@ import capital.yuri.yuriplayer.data.source.ArtistInfoService
 import coil3.compose.AsyncImage
 import org.koin.compose.koinInject
 
-/**
- * Pulls candidate images from every registered [ArtistInfoSource], lets the user
- * pick one, then hands the URI to the caller for cropping.
- */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun FetchArtistImageSheet(
@@ -80,8 +75,7 @@ fun FetchArtistImageSheet(
                 modifier = Modifier.padding(bottom = 8.dp)
             )
             Text(
-                "Candidates from MusicBrainz-linked sources (Wikidata, Wikipedia, …). " +
-                    "Pick one to crop.",
+                "MusicBrainz · Wikipedia · Wikidata · Deezer · TheAudioDB — pick one to crop.",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
                 modifier = Modifier.padding(bottom = 12.dp)
@@ -106,7 +100,7 @@ fun FetchArtistImageSheet(
                     contentPadding = PaddingValues(bottom = 16.dp),
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
                     verticalArrangement = Arrangement.spacedBy(8.dp),
-                    modifier = Modifier.height(360.dp)
+                    modifier = Modifier.height(420.dp)
                 ) {
                     items(candidates, key = { it.url }) { c ->
                         Box(
