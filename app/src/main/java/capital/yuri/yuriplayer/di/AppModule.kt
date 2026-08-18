@@ -16,12 +16,17 @@ import capital.yuri.yuriplayer.data.UserImageStore
 import capital.yuri.yuriplayer.data.db.YuriDatabase
 import capital.yuri.yuriplayer.data.source.ArtistInfoService
 import capital.yuri.yuriplayer.data.source.ArtistInfoSource
+import capital.yuri.yuriplayer.data.source.AudioDbArtistImageSource
+import capital.yuri.yuriplayer.data.source.BandsintownClient
+import capital.yuri.yuriplayer.data.source.DeezerArtistImageSource
 import capital.yuri.yuriplayer.data.source.LibrarySource
 import capital.yuri.yuriplayer.data.source.LibrarySourceRegistry
 import capital.yuri.yuriplayer.data.source.LocalArtistProfileProvider
 import capital.yuri.yuriplayer.data.source.MusicBrainzArtistProfileProvider
 import capital.yuri.yuriplayer.data.source.MusicBrainzClient
 import capital.yuri.yuriplayer.data.source.SourceResolver
+import capital.yuri.yuriplayer.data.source.WikipediaArtistImageSource
+import capital.yuri.yuriplayer.data.source.WikidataArtistImageSource
 import capital.yuri.yuriplayer.data.theme.ThemeService
 import capital.yuri.yuriplayer.media.FfmpegService
 import capital.yuri.yuriplayer.player.MusicServiceAutoPlay
@@ -60,28 +65,34 @@ val appModule = module {
     single { CatalogRepository(get(), get()) }
     single { LibraryIndex(get(), get(), get()) }
 
-    // Plugin SPI registries (JAR plugins will contribute more list entries later)
     single<List<LibrarySource>> { emptyList() }
     single { LibrarySourceRegistry(get()) }
 
     single { PlaylistRepository(get(), get(), get()) }
     single { MusicBrainzClient(get<HttpClient>()) }
+    single { BandsintownClient(get<HttpClient>()) }
 
     single<List<ArtistInfoSource>> {
         listOf(
-            MusicBrainzArtistProfileProvider(androidContext(), get())
+            MusicBrainzArtistProfileProvider(androidContext(), get()),
+            WikipediaArtistImageSource(get()),
+            WikidataArtistImageSource(get()),
+            DeezerArtistImageSource(get()),
+            AudioDbArtistImageSource(get())
         )
     }
-    single { ArtistInfoService(get()) }
+    single { ArtistInfoService(get(), get()) }
 
     single {
         ArtistProfileRepository(
             dao = get(),
             providers = listOf(
                 LocalArtistProfileProvider(),
-                MusicBrainzArtistProfileProvider(androidContext(), get())
+                MusicBrainzArtistProfileProvider(androidContext(), get()),
+                AudioDbArtistImageSource(get())
             ),
-            images = get()
+            images = get(),
+            artistInfo = get()
         )
     }
     single { SourceResolver(get()) }
