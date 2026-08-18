@@ -27,6 +27,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -409,7 +410,10 @@ fun PlaylistContextSheet(
     }
 }
 
-/** Multi-select playlists + New playlist, confirm with Done. */
+/**
+ * Multi-select playlists + New playlist.
+ * Playlists that already contain the song are pre-checked; unchecking removes.
+ */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun AddToPlaylistSheet(
@@ -420,14 +424,22 @@ fun AddToPlaylistSheet(
     val playlists by repo.observePlaylistsResolved().collectAsState(initial = emptyList())
     val scope = rememberCoroutineScope()
     val context = LocalContext.current
+    var initiallyIn by remember { mutableStateOf(setOf<String>()) }
     var selected by remember { mutableStateOf(setOf<String>()) }
     var showCreate by remember { mutableStateOf(false) }
+    var ready by remember { mutableStateOf(false) }
+
+    LaunchedEffect(songs.map { it.songKey }) {
+        val containing = repo.playlistsContaining(songs)
+        initiallyIn = containing
+        selected = containing
+        ready = true
+    }
 
     if (showCreate) {
         CreatePlaylistSheet(
             onDismiss = { showCreate = false },
             onCreated = { pl ->
-                // Auto-select the new playlist so user can Done immediately
                 selected = selected + pl.id
                 showCreate = false
             }
@@ -517,21 +529,26 @@ fun AddToPlaylistSheet(
             Spacer(modifier = Modifier.height(12.dp))
             Button(
                 onClick = {
-                    if (selected.isEmpty()) {
-                        Toast.makeText(context, "Pick at least one playlist", Toast.LENGTH_SHORT).show()
-                        return@Button
-                    }
                     scope.launch {
-                        selected.forEach { id -> repo.addSongs(id, songs) }
-                        Toast.makeText(
-                            context,
-                            "Added to ${selected.size} playlist${if (selected.size == 1) "" else "s"}",
-                            Toast.LENGTH_SHORT
-                        ).show()
+                        val toAdd = selected - initiallyIn
+                        val toRemove = initiallyIn - selected
+                        toAdd.forEach { id -> repo.addSongs(id, songs) }
+                        toRemove.forEach { id -> repo.removeSongs(id, songs) }
+                        val parts = buildList {
+                            if (toAdd.isNotEmpty()) {
+                                add("added to ${toAdd.size} playlist${if (toAdd.size == 1) "" else "s"}")
+                            }
+                            if (toRemove.isNotEmpty()) {
+                                add("removed from ${toRemove.size}")
+                            }
+                        }
+                        val msg = parts.joinToString(", ").ifEmpty { "No changes" }
+                            .replaceFirstChar { it.uppercase() }
+                        Toast.makeText(context, msg, Toast.LENGTH_SHORT).show()
                         onDismiss()
                     }
                 },
-                enabled = selected.isNotEmpty(),
+                enabled = ready,
                 modifier = Modifier.fillMaxWidth()
             ) {
                 Icon(Icons.Default.Check, contentDescription = null, modifier = Modifier.size(18.dp))

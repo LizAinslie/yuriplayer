@@ -32,10 +32,12 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import capital.yuri.yuriplayer.media.FfmpegService
@@ -50,10 +52,12 @@ import kotlinx.coroutines.withContext
 import org.koin.compose.koinInject
 import java.io.File
 import java.io.FileOutputStream
+import kotlin.math.max
+import kotlin.math.min
 
 /**
- * Simple pan/zoom crop. Still images → JPEG via Bitmap; animated → [FfmpegService].
- * Remote http(s) sources are downloaded to cache first.
+ * Pan/zoom crop with edge snapping: the image always fully covers the crop frame.
+ * Still images apply the live transform on save; animated uses center crop via FFmpeg.
  */
 @Composable
 fun ImageCropScreen(
@@ -71,6 +75,7 @@ fun ImageCropScreen(
     var bitmap by remember { mutableStateOf<Bitmap?>(null) }
     var scale by remember { mutableFloatStateOf(1f) }
     var offset by remember { mutableStateOf(Offset.Zero) }
+    var viewportSize by remember { mutableStateOf(Size.Zero) }
     var busy by remember { mutableStateOf(false) }
     var isAnimated by remember { mutableStateOf(false) }
     var loadError by remember { mutableStateOf<String?>(null) }
@@ -93,6 +98,31 @@ fun ImageCropScreen(
                 }
             }
         }
+    }
+
+    fun clampOffset(s: Float, o: Offset, vp: Size, bmp: Bitmap?): Offset {
+        if (vp.width <= 0f || vp.height <= 0f || bmp == null) return o
+        // Image is drawn with ContentScale.Crop into [vp], then scaled by [s] around center.
+        val imgAspect = bmp.width.toFloat() / bmp.height.toFloat()
+        val vpAspect = vp.width / vp.height
+        val baseW: Float
+        val baseH: Float
+        if (imgAspect > vpAspect) {
+            // image wider → height matches viewport, width overflows
+            baseH = vp.height
+            baseW = baseH * imgAspect
+        } else {
+            baseW = vp.width
+            baseH = baseW / imgAspect
+        }
+        val scaledW = baseW * s
+        val scaledH = baseH * s
+        val maxX = max(0f, (scaledW - vp.width) / 2f)
+        val maxY = max(0f, (scaledH - vp.height) / 2f)
+        return Offset(
+            o.x.coerceIn(-maxX, maxX),
+            o.y.coerceIn(-maxY, maxY)
+        )
     }
 
     Column(
@@ -122,6 +152,9 @@ fun ImageCropScreen(
                                 bitmap = bitmap,
                                 isAnimated = isAnimated,
                                 aspect = aspect,
+                                scale = scale,
+                                offset = offset,
+                                viewport = viewportSize,
                                 ffmpeg = ffmpeg
                             )
                         }
@@ -145,10 +178,17 @@ fun ImageCropScreen(
                     .fillMaxWidth()
                     .aspectRatio(aspect)
                     .background(MaterialTheme.colorScheme.surfaceVariant)
-                    .pointerInput(Unit) {
+                    .onSizeChanged {
+                        viewportSize = Size(it.width.toFloat(), it.height.toFloat())
+                        // re-clamp after layout
+                        offset = clampOffset(scale, offset, viewportSize, bitmap)
+                    }
+                    .pointerInput(bitmap, viewportSize) {
                         detectTransformGestures { _, pan, zoom, _ ->
-                            scale = (scale * zoom).coerceIn(1f, 6f)
-                            offset += pan
+                            val newScale = (scale * zoom).coerceIn(1f, 6f)
+                            val provisional = offset + pan
+                            scale = newScale
+                            offset = clampOffset(newScale, provisional, viewportSize, bitmap)
                         }
                     },
                 contentAlignment = Alignment.Center
@@ -184,7 +224,7 @@ fun ImageCropScreen(
         }
 
         Text(
-            "Pinch to zoom · drag to pan · output is ${if (aspect == 1f) "1:1" else aspect}",
+            "Pinch to zoom · drag to pan · snaps to edges · output is ${if (aspect == 1f) "1:1" else aspect}",
             style = MaterialTheme.typography.labelMedium,
             color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.55f),
             modifier = Modifier.padding(16.dp)
@@ -221,12 +261,19 @@ private suspend fun resolveToLocal(
     return uri
 }
 
+/**
+ * Map the live pan/zoom transform back onto the source bitmap and write a JPEG.
+ * Animated sources still use center crop via FFmpeg.
+ */
 private fun cropToFile(
     context: android.content.Context,
     sourceUri: Uri,
     bitmap: Bitmap?,
     isAnimated: Boolean,
     aspect: Float,
+    scale: Float,
+    offset: Offset,
+    viewport: Size,
     ffmpeg: FfmpegService
 ): File? {
     val dir = File(context.cacheDir, "crops").also { it.mkdirs() }
@@ -247,10 +294,8 @@ private fun cropToFile(
         }
         tmp.delete()
         return if (ok) target else {
-            // Fallback: first frame as JPEG if ffmpeg binary missing
-            val frame = BitmapFactory.decodeFile(tmp.absolutePath)
-                ?: return null
-            val side = minOf(frame.width, frame.height)
+            val frame = BitmapFactory.decodeFile(tmp.absolutePath) ?: return null
+            val side = min(frame.width, frame.height)
             val x = ((frame.width - side) / 2f).toInt().coerceAtLeast(0)
             val y = ((frame.height - side) / 2f).toInt().coerceAtLeast(0)
             val cropped = Bitmap.createBitmap(frame, x, y, side, side)
@@ -260,10 +305,59 @@ private fun cropToFile(
     }
 
     val src = bitmap ?: return null
-    val side = minOf(src.width, src.height)
-    val x = ((src.width - side) / 2f).toInt().coerceAtLeast(0)
-    val y = ((src.height - side) / 2f).toInt().coerceAtLeast(0)
-    val cropped = Bitmap.createBitmap(src, x, y, side, side)
+    if (viewport.width <= 0f || viewport.height <= 0f) {
+        // Fallback center crop matching aspect
+        return centerCropBitmap(src, aspect, out)
+    }
+
+    val imgAspect = src.width.toFloat() / src.height.toFloat()
+    val vpAspect = viewport.width / viewport.height
+    val baseW: Float
+    val baseH: Float
+    if (imgAspect > vpAspect) {
+        baseH = viewport.height
+        baseW = baseH * imgAspect
+    } else {
+        baseW = viewport.width
+        baseH = baseW / imgAspect
+    }
+    val scaledW = baseW * scale
+    val scaledH = baseH * scale
+
+    // Top-left of scaled image relative to viewport center
+    val left = (viewport.width - scaledW) / 2f + offset.x
+    val top = (viewport.height - scaledH) / 2f + offset.y
+
+    // Viewport rect in scaled-image coordinates → source bitmap pixels
+    val srcLeft = ((0f - left) / scaledW * src.width).coerceIn(0f, src.width.toFloat())
+    val srcTop = ((0f - top) / scaledH * src.height).coerceIn(0f, src.height.toFloat())
+    val srcRight = ((viewport.width - left) / scaledW * src.width).coerceIn(0f, src.width.toFloat())
+    val srcBottom = ((viewport.height - top) / scaledH * src.height).coerceIn(0f, src.height.toFloat())
+
+    val x = srcLeft.toInt().coerceIn(0, src.width - 1)
+    val y = srcTop.toInt().coerceIn(0, src.height - 1)
+    val w = (srcRight - srcLeft).toInt().coerceAtLeast(1).coerceAtMost(src.width - x)
+    val h = (srcBottom - srcTop).toInt().coerceAtLeast(1).coerceAtMost(src.height - y)
+
+    val cropped = Bitmap.createBitmap(src, x, y, w, h)
+    FileOutputStream(out).use { cropped.compress(Bitmap.CompressFormat.JPEG, 92, it) }
+    return out
+}
+
+private fun centerCropBitmap(src: Bitmap, aspect: Float, out: File): File {
+    val srcAspect = src.width.toFloat() / src.height.toFloat()
+    val cropW: Int
+    val cropH: Int
+    if (srcAspect > aspect) {
+        cropH = src.height
+        cropW = (cropH * aspect).toInt().coerceAtLeast(1)
+    } else {
+        cropW = src.width
+        cropH = (cropW / aspect).toInt().coerceAtLeast(1)
+    }
+    val x = ((src.width - cropW) / 2f).toInt().coerceAtLeast(0)
+    val y = ((src.height - cropH) / 2f).toInt().coerceAtLeast(0)
+    val cropped = Bitmap.createBitmap(src, x, y, cropW.coerceAtMost(src.width - x), cropH.coerceAtMost(src.height - y))
     FileOutputStream(out).use { cropped.compress(Bitmap.CompressFormat.JPEG, 92, it) }
     return out
 }
