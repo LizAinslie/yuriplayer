@@ -7,11 +7,6 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.io.File
 
-/**
- * MusicBrainz-backed [ArtistInfoSource] + legacy [ArtistProfileProvider].
- * Candidates: MB image rel, every Wikidata P18 via MB links, Wikipedia summary
- * via MB wikipedia rel (other sources also search those catalogs directly).
- */
 class MusicBrainzArtistProfileProvider(
     private val context: Context,
     private val mb: MusicBrainzClient
@@ -51,6 +46,7 @@ class MusicBrainzArtistProfileProvider(
             imageUri = imagePath?.let { "file://$it" },
             websiteUrl = hit.website,
             links = hit.links,
+            genres = hit.genres,
             source = id
         )
     }
@@ -61,16 +57,12 @@ class MusicBrainzArtistProfileProvider(
     ): List<ArtistImageCandidate> = withContext(Dispatchers.IO) {
         val hit = mb.searchArtist(artistName) ?: return@withContext emptyList()
         val out = LinkedHashMap<String, ArtistImageCandidate>()
-
         hit.imageUrl?.takeIf { it.isNotBlank() }?.let {
             out[it] = ArtistImageCandidate(it, id, "MusicBrainz resolved")
         }
-
-        // Extra candidates resolved from MB url-rels (may overlap other sources — deduped upstream)
         mb.expandImageCandidates(hit).forEach { (url, label) ->
             if (url !in out) out[url] = ArtistImageCandidate(url, id, label)
         }
-
         out.values.toList()
     }
 

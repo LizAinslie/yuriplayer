@@ -18,9 +18,7 @@ import java.io.File
 import java.net.URLEncoder
 import kotlin.time.Duration.Companion.milliseconds
 
-/**
- * MusicBrainz + Cover Art Archive + Wikidata via shared Ktor [HttpClient].
- */
+/** MusicBrainz + Wikidata helpers via shared Ktor [HttpClient]. */
 class MusicBrainzClient(
     private val http: HttpClient
 ) {
@@ -37,7 +35,8 @@ class MusicBrainzClient(
         val name: String,
         val imageUrl: String? = null,
         val website: String? = null,
-        val links: List<ArtistLink> = emptyList()
+        val links: List<ArtistLink> = emptyList(),
+        val genres: List<String> = emptyList()
     )
 
     private val rateLock = Mutex()
@@ -69,7 +68,7 @@ class MusicBrainzClient(
             val trimmed = name.trim()
             val mbid = findBestArtistMbid(trimmed) ?: return@withContext null
             val detailUrl =
-                "https://musicbrainz.org/ws/2/artist/$mbid?inc=url-rels&fmt=json"
+                "https://musicbrainz.org/ws/2/artist/$mbid?inc=url-rels+tags&fmt=json"
             val detail = getText(detailUrl) ?: return@withContext ArtistHit(mbid, trimmed)
             val hit = parseArtistDetail(detail, mbid)
             val image = hit.imageUrl
@@ -77,6 +76,61 @@ class MusicBrainzClient(
                 ?: resolveWikipediaImage(hit)
             hit.copy(imageUrl = image)
         }
+
+    /** Extra image URLs derived from MB url-rels (Wikidata P18 list, Wikipedia, direct image). */
+    suspend fun expandImageCandidates(hit: ArtistHit): List<Pair<String, String>> =
+        withContext(Dispatchers.IO) {
+            val out = LinkedHashMap<String, String>()
+            hit.imageUrl?.let { out[it] = "MusicBrainz image" }
+            // All Wikidata P18 claims
+            val wdUrl = hit.links.firstOrNull { it.url.contains("wikidata.org", true) }?.url
+            if (wdUrl != null) {
+                val qid = Regex("Q\\d+").find(wdUrl)?.value
+                if (qid != null) {
+                    allWikidataP18(qid).forEachIndexed { i, url ->
+                        if (url !in out) out[url] = "Wikidata P18${if (i > 0) " #${i + 1}" else ""}"
+                    }
+                }
+            }
+            resolveWikipediaImage(hit)?.let { if (it !in out) out[it] = "Wikipedia (via MB)" }
+            hit.links.filter {
+                it.url.contains("upload.wikimedia.org", true) ||
+                    it.url.contains("commons.wikimedia.org", true)
+            }.forEach { if (it.url !in out) out[it.url] = it.label }
+            out.entries.map { it.key to it.value }
+        }
+
+    private suspend fun allWikidataP18(qid: String): List<String> {
+        val api =
+            "https://www.wikidata.org/w/api.php?action=wbgetentities&ids=$qid&props=claims&format=json"
+        val body = getText(api) ?: return emptyList()
+        return try {
+            val p18 = JSONObject(body)
+                .optJSONObject("entities")
+                ?.optJSONObject(qid)
+                ?.optJSONObject("claims")
+                ?.optJSONArray("P18")
+                ?: return emptyList()
+            buildList {
+                for (i in 0 until p18.length()) {
+                    val fileName = p18.optJSONObject(i)
+                        ?.optJSONObject("mainsnak")
+                        ?.optJSONObject("datavalue")
+                        ?.optString("value")
+                        ?.takeIf { it.isNotBlank() }
+                        ?: continue
+                    add(
+                        "https://commons.wikimedia.org/wiki/Special:FilePath/" +
+                            URLEncoder.encode(fileName.replace(' ', '_'), "UTF-8") +
+                            "?width=1000"
+                    )
+                }
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "allWikidataP18 $qid", e)
+            emptyList()
+        }
+    }
 
     private suspend fun findBestArtistMbid(name: String): String? {
         val queries = listOf(
@@ -136,42 +190,20 @@ class MusicBrainzClient(
         }
     }
 
-    private suspend fun resolveWikidataImage(hit: ArtistHit): String? {
-        val wdUrl = hit.links.firstOrNull {
-            it.url.contains("wikidata.org", ignoreCase = true)
-        }?.url ?: return null
-        val qid = Regex("Q\\d+").find(wdUrl)?.value ?: return null
-        val api =
-            "https://www.wikidata.org/w/api.php?action=wbgetentities&ids=$qid&props=claims&format=json"
-        val body = getText(api) ?: return null
-        return try {
-            val claims = JSONObject(body)
-                .optJSONObject("entities")
-                ?.optJSONObject(qid)
-                ?.optJSONObject("claims")
-                ?: return null
-            val p18 = claims.optJSONArray("P18") ?: return null
-            val fileName = p18.optJSONObject(0)
-                ?.optJSONObject("mainsnak")
-                ?.optJSONObject("datavalue")
-                ?.optString("value")
-                ?.takeIf { it.isNotBlank() }
-                ?: return null
-            "https://commons.wikimedia.org/wiki/Special:FilePath/" +
-                URLEncoder.encode(fileName.replace(' ', '_'), "UTF-8") +
-                "?width=800"
-        } catch (e: Exception) {
-            Log.w(TAG, "Wikidata image failed for $qid", e)
-            null
-        }
-    }
+    private suspend fun resolveWikidataImage(hit: ArtistHit): String? =
+        allWikidataP18(
+            Regex("Q\\d+").find(
+                hit.links.firstOrNull { it.url.contains("wikidata.org", true) }?.url.orEmpty()
+            )?.value ?: return null
+        ).firstOrNull()
 
     private suspend fun resolveWikipediaImage(hit: ArtistHit): String? {
         val wikiUrl = hit.links.firstOrNull {
             it.url.contains("wikipedia.org", ignoreCase = true)
         }?.url ?: return null
         val path = wikiUrl.substringAfter("/wiki/").takeIf { it.isNotBlank() } ?: return null
-        val lang = Regex("https?://([a-z]{2,3})\\.wikipedia").find(wikiUrl)?.groupValues?.getOrNull(1) ?: "en"
+        val lang = Regex("https?://([a-z]{2,3})\\.wikipedia").find(wikiUrl)?.groupValues?.getOrNull(1)
+            ?: "en"
         val api = "https://$lang.wikipedia.org/api/rest_v1/page/summary/$path"
         val body = getText(api) ?: return null
         return try {
@@ -207,40 +239,99 @@ class MusicBrainzClient(
             var imageUrl: String? = null
             var website: String? = null
             val links = mutableListOf<ArtistLink>()
+
             if (relations != null) {
                 for (i in 0 until relations.length()) {
                     val rel = relations.optJSONObject(i) ?: continue
                     val type = rel.optString("type").lowercase()
                     val urlObj = rel.optJSONObject("url") ?: continue
                     val resource = urlObj.optString("resource").takeIf { it.isNotBlank() } ?: continue
+
                     when {
                         type.contains("image") || type == "picture" -> {
                             if (imageUrl == null) imageUrl = resource
                         }
-                        type == "wikidata" || resource.contains("wikidata.org") ->
-                            links += ArtistLink("Wikidata", resource)
-                        type.contains("wikipedia") || resource.contains("wikipedia.org") ->
-                            links += ArtistLink("Wikipedia", resource)
-                        type == "official homepage" || type == "website" -> {
+                        type == "official homepage" || type == "homepage" || type == "website" -> {
                             if (website == null) website = resource
-                            links += ArtistLink("Website", resource)
+                            links += categorizeLink(resource, "Website")
                         }
-                        type.contains("discogs") -> links += ArtistLink("Discogs", resource)
-                        type.contains("bandcamp") -> links += ArtistLink("Bandcamp", resource)
-                        type.contains("youtube") -> links += ArtistLink("YouTube", resource)
-                        type.contains("spotify") -> links += ArtistLink("Spotify", resource)
-                        type.contains("soundcloud") -> links += ArtistLink("SoundCloud", resource)
-                        type.contains("itunes") || type.contains("apple") ->
-                            links += ArtistLink("Apple Music", resource)
+                        // Social
+                        type.contains("twitter") || resource.contains("twitter.com") ||
+                            resource.contains("x.com/") ->
+                            links += categorizeLink(resource, "X / Twitter")
+                        type.contains("instagram") || resource.contains("instagram.com") ->
+                            links += categorizeLink(resource, "Instagram")
+                        type.contains("facebook") || resource.contains("facebook.com") ->
+                            links += categorizeLink(resource, "Facebook")
+                        type.contains("tiktok") || resource.contains("tiktok.com") ->
+                            links += categorizeLink(resource, "TikTok")
+                        // Streaming / platforms
+                        type.contains("bandcamp") || resource.contains("bandcamp.com") ->
+                            links += categorizeLink(resource, "Bandcamp")
+                        type.contains("soundcloud") || resource.contains("soundcloud.com") ->
+                            links += categorizeLink(resource, "SoundCloud")
+                        type.contains("spotify") || resource.contains("spotify.com") ->
+                            links += categorizeLink(resource, "Spotify")
+                        type.contains("youtube") || resource.contains("youtube.com") ||
+                            resource.contains("youtu.be") ->
+                            links += categorizeLink(resource, "YouTube")
+                        type.contains("itunes") || type.contains("apple") ||
+                            resource.contains("music.apple.com") ->
+                            links += categorizeLink(resource, "Apple Music")
+                        type.contains("deezer") || resource.contains("deezer.com") ->
+                            links += categorizeLink(resource, "Deezer")
+                        type.contains("tidal") || resource.contains("tidal.com") ->
+                            links += categorizeLink(resource, "Tidal")
+                        // Databases
+                        type == "wikidata" || resource.contains("wikidata.org") ->
+                            links += categorizeLink(resource, "Wikidata")
+                        type.contains("wikipedia") || resource.contains("wikipedia.org") ->
+                            links += categorizeLink(resource, "Wikipedia")
+                        type.contains("discogs") || resource.contains("discogs.com") ->
+                            links += categorizeLink(resource, "Discogs")
+                        type.contains("last.fm") || type.contains("lastfm") ||
+                            resource.contains("last.fm") ->
+                            links += categorizeLink(resource, "Last.fm")
+                        type.contains("allmusic") ->
+                            links += categorizeLink(resource, "AllMusic")
+                        type.contains("songkick") ->
+                            links += categorizeLink(resource, "Songkick")
+                        type.contains("bandsintown") ->
+                            links += categorizeLink(resource, "Bandsintown")
+                        else -> {
+                            // Still keep unknown url-rels if useful
+                            if (resource.startsWith("http")) {
+                                links += categorizeLink(resource, type.replaceFirstChar { it.uppercase() })
+                            }
+                        }
                     }
                 }
             }
+
+            // MusicBrainz tags → genres (score-ordered)
+            val genres = mutableListOf<Pair<String, Int>>()
+            val tags = root.optJSONArray("tags")
+            if (tags != null) {
+                for (i in 0 until tags.length()) {
+                    val t = tags.optJSONObject(i) ?: continue
+                    val tagName = t.optString("name").trim()
+                    if (tagName.isEmpty()) continue
+                    val count = t.optInt("count", 0)
+                    genres += tagName to count
+                }
+            }
+            val genreNames = genres.sortedByDescending { it.second }
+                .map { it.first }
+                .distinctBy { it.lowercase() }
+                .take(12)
+
             ArtistHit(
                 mbid = mbid,
                 name = name,
                 imageUrl = imageUrl,
                 website = website,
-                links = links.distinctBy { it.url }.take(12)
+                links = links.distinctBy { it.url.lowercase() }.take(24),
+                genres = genreNames
             )
         } catch (e: Exception) {
             Log.w(TAG, "parse artist detail failed", e)
