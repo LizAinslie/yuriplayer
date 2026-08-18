@@ -3,8 +3,10 @@ package capital.yuri.yuriplayer.activities.ui
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.net.Uri
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.gestures.detectTransformGestures
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -33,6 +35,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
@@ -56,7 +59,7 @@ import kotlin.math.max
 import kotlin.math.min
 
 /**
- * Pan/zoom crop with edge snapping: the image always fully covers the crop frame.
+ * Pan/zoom crop with edge snapping and a visible crop frame overlay.
  * Still images apply the live transform on save; animated uses center crop via FFmpeg.
  */
 @Composable
@@ -80,6 +83,13 @@ fun ImageCropScreen(
     var isAnimated by remember { mutableStateOf(false) }
     var loadError by remember { mutableStateOf<String?>(null) }
 
+    val chrome = Color(0xFF121212)
+    val onChrome = Color(0xFFF5F5F5)
+    val onChromeMuted = Color(0xFFB0B0B0)
+    val frameStroke = Color.White.copy(alpha = 0.95f)
+    val gridStroke = Color.White.copy(alpha = 0.35f)
+    val dimOutside = Color.Black.copy(alpha = 0.55f)
+
     LaunchedEffect(sourceUri) {
         withContext(Dispatchers.IO) {
             val resolved = resolveToLocal(context, http, sourceUri)
@@ -102,13 +112,11 @@ fun ImageCropScreen(
 
     fun clampOffset(s: Float, o: Offset, vp: Size, bmp: Bitmap?): Offset {
         if (vp.width <= 0f || vp.height <= 0f || bmp == null) return o
-        // Image is drawn with ContentScale.Crop into [vp], then scaled by [s] around center.
         val imgAspect = bmp.width.toFloat() / bmp.height.toFloat()
         val vpAspect = vp.width / vp.height
         val baseW: Float
         val baseH: Float
         if (imgAspect > vpAspect) {
-            // image wider → height matches viewport, width overflows
             baseH = vp.height
             baseW = baseH * imgAspect
         } else {
@@ -128,7 +136,7 @@ fun ImageCropScreen(
     Column(
         modifier = Modifier
             .fillMaxSize()
-            .background(MaterialTheme.colorScheme.background)
+            .background(chrome)
             .statusBarsPadding()
     ) {
         Row(
@@ -136,9 +144,18 @@ fun ImageCropScreen(
             verticalAlignment = Alignment.CenterVertically
         ) {
             IconButton(onClick = onCancel) {
-                Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Cancel")
+                Icon(
+                    Icons.AutoMirrored.Filled.ArrowBack,
+                    contentDescription = "Cancel",
+                    tint = onChrome
+                )
             }
-            Text(title, style = MaterialTheme.typography.titleMedium, modifier = Modifier.weight(1f))
+            Text(
+                title,
+                style = MaterialTheme.typography.titleMedium,
+                color = onChrome,
+                modifier = Modifier.weight(1f)
+            )
             TextButton(
                 onClick = {
                     if (busy) return@TextButton
@@ -163,24 +180,37 @@ fun ImageCropScreen(
                     }
                 },
                 enabled = !busy && localUri != null
-            ) { Text(if (busy) "Working…" else "Done") }
+            ) {
+                Text(
+                    if (busy) "Working…" else "Done",
+                    color = onChrome
+                )
+            }
         }
 
         Box(
             modifier = Modifier
                 .fillMaxWidth()
                 .weight(1f)
-                .padding(24.dp),
+                .background(chrome),
             contentAlignment = Alignment.Center
         ) {
+            // Dimmed stage behind the crop window
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .background(dimOutside)
+            )
+
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
+                    .padding(24.dp)
                     .aspectRatio(aspect)
-                    .background(MaterialTheme.colorScheme.surfaceVariant)
+                    .background(Color(0xFF2A2A2A))
+                    .border(2.dp, frameStroke)
                     .onSizeChanged {
                         viewportSize = Size(it.width.toFloat(), it.height.toFloat())
-                        // re-clamp after layout
                         offset = clampOffset(scale, offset, viewportSize, bitmap)
                     }
                     .pointerInput(bitmap, viewportSize) {
@@ -194,10 +224,7 @@ fun ImageCropScreen(
                 contentAlignment = Alignment.Center
             ) {
                 when {
-                    loadError != null -> Text(
-                        loadError!!,
-                        color = MaterialTheme.colorScheme.error
-                    )
+                    loadError != null -> Text(loadError!!, color = Color(0xFFFF8A80))
                     bitmap != null -> Image(
                         bitmap = bitmap!!.asImageBitmap(),
                         contentDescription = null,
@@ -213,12 +240,36 @@ fun ImageCropScreen(
                     )
                     isAnimated && localUri != null -> Text(
                         "Animated image — center crop on save",
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                        color = onChromeMuted
                     )
-                    else -> Text(
-                        "Loading…",
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
+                    else -> Text("Loading…", color = onChromeMuted)
+                }
+
+                // Rule-of-thirds grid + inner frame so the output region is obvious
+                Canvas(modifier = Modifier.fillMaxSize()) {
+                    val w = size.width
+                    val h = size.height
+                    val stroke = 1.5.dp.toPx()
+                    // thirds
+                    drawLine(gridStroke, Offset(w / 3f, 0f), Offset(w / 3f, h), stroke)
+                    drawLine(gridStroke, Offset(2f * w / 3f, 0f), Offset(2f * w / 3f, h), stroke)
+                    drawLine(gridStroke, Offset(0f, h / 3f), Offset(w, h / 3f), stroke)
+                    drawLine(gridStroke, Offset(0f, 2f * h / 3f), Offset(w, 2f * h / 3f), stroke)
+                    // corner brackets
+                    val arm = min(w, h) * 0.08f
+                    val thick = 3.dp.toPx()
+                    // TL
+                    drawLine(frameStroke, Offset(0f, 0f), Offset(arm, 0f), thick)
+                    drawLine(frameStroke, Offset(0f, 0f), Offset(0f, arm), thick)
+                    // TR
+                    drawLine(frameStroke, Offset(w, 0f), Offset(w - arm, 0f), thick)
+                    drawLine(frameStroke, Offset(w, 0f), Offset(w, arm), thick)
+                    // BL
+                    drawLine(frameStroke, Offset(0f, h), Offset(arm, h), thick)
+                    drawLine(frameStroke, Offset(0f, h), Offset(0f, h - arm), thick)
+                    // BR
+                    drawLine(frameStroke, Offset(w, h), Offset(w - arm, h), thick)
+                    drawLine(frameStroke, Offset(w, h), Offset(w, h - arm), thick)
                 }
             }
         }
@@ -226,7 +277,7 @@ fun ImageCropScreen(
         Text(
             "Pinch to zoom · drag to pan · snaps to edges · output is ${if (aspect == 1f) "1:1" else aspect}",
             style = MaterialTheme.typography.labelMedium,
-            color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.55f),
+            color = onChromeMuted,
             modifier = Modifier.padding(16.dp)
         )
     }
@@ -261,10 +312,6 @@ private suspend fun resolveToLocal(
     return uri
 }
 
-/**
- * Map the live pan/zoom transform back onto the source bitmap and write a JPEG.
- * Animated sources still use center crop via FFmpeg.
- */
 private fun cropToFile(
     context: android.content.Context,
     sourceUri: Uri,
@@ -306,7 +353,6 @@ private fun cropToFile(
 
     val src = bitmap ?: return null
     if (viewport.width <= 0f || viewport.height <= 0f) {
-        // Fallback center crop matching aspect
         return centerCropBitmap(src, aspect, out)
     }
 
@@ -324,11 +370,9 @@ private fun cropToFile(
     val scaledW = baseW * scale
     val scaledH = baseH * scale
 
-    // Top-left of scaled image relative to viewport center
     val left = (viewport.width - scaledW) / 2f + offset.x
     val top = (viewport.height - scaledH) / 2f + offset.y
 
-    // Viewport rect in scaled-image coordinates → source bitmap pixels
     val srcLeft = ((0f - left) / scaledW * src.width).coerceIn(0f, src.width.toFloat())
     val srcTop = ((0f - top) / scaledH * src.height).coerceIn(0f, src.height.toFloat())
     val srcRight = ((viewport.width - left) / scaledW * src.width).coerceIn(0f, src.width.toFloat())
@@ -357,7 +401,11 @@ private fun centerCropBitmap(src: Bitmap, aspect: Float, out: File): File {
     }
     val x = ((src.width - cropW) / 2f).toInt().coerceAtLeast(0)
     val y = ((src.height - cropH) / 2f).toInt().coerceAtLeast(0)
-    val cropped = Bitmap.createBitmap(src, x, y, cropW.coerceAtMost(src.width - x), cropH.coerceAtMost(src.height - y))
+    val cropped = Bitmap.createBitmap(
+        src, x, y,
+        cropW.coerceAtMost(src.width - x),
+        cropH.coerceAtMost(src.height - y)
+    )
     FileOutputStream(out).use { cropped.compress(Bitmap.CompressFormat.JPEG, 92, it) }
     return out
 }

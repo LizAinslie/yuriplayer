@@ -11,8 +11,9 @@ import kotlinx.coroutines.withContext
 import org.json.JSONArray
 import org.json.JSONObject
 import java.net.URLEncoder
+import kotlin.math.min
 
-/** Direct Wikipedia / Commons image + summary bio. */
+/** Direct Wikipedia / Commons image + summary bio. Music artists only. */
 class WikipediaArtistImageSource(
     private val http: HttpClient
 ) : ArtistInfoSource {
@@ -26,11 +27,15 @@ class WikipediaArtistImageSource(
             val titles = searchTitles(artistName).ifEmpty {
                 listOf(artistName.trim())
             }
-            for (title in titles.take(3)) {
+            for (title in titles.take(5)) {
+                if (!titleLooksLikeMusicCandidate(artistName, title)) continue
                 val summary = pageSummary(title) ?: continue
-                val extract = summary.optString("extract").takeIf {
-                    it.isNotBlank() && summary.optString("type") != "disambiguation"
-                } ?: continue
+                if (summary.optString("type") == "disambiguation") continue
+                val description = summary.optString("description")
+                if (!isMusicDescription(description) && !isMusicExtract(summary.optString("extract"))) {
+                    continue
+                }
+                val extract = summary.optString("extract").takeIf { it.isNotBlank() } ?: continue
                 val pageUrl = summary.optJSONObject("content_urls")
                     ?.optJSONObject("desktop")
                     ?.optString("page")
@@ -55,7 +60,17 @@ class WikipediaArtistImageSource(
             listOf(artistName.trim().replace(' ', '_'))
         }
         val out = LinkedHashMap<String, ArtistImageCandidate>()
-        for (title in titles.take(4)) {
+        for (title in titles.take(5)) {
+            if (!titleLooksLikeMusicCandidate(artistName, title)) continue
+            val summary = pageSummary(title)
+            val desc = summary?.optString("description").orEmpty()
+            if (summary != null &&
+                summary.optString("type") != "disambiguation" &&
+                !isMusicDescription(desc) &&
+                !isMusicExtract(summary.optString("extract"))
+            ) {
+                continue
+            }
             summaryImages(title).forEach { (url, label) ->
                 if (url !in out) out[url] = ArtistImageCandidate(url, id, label)
             }
@@ -66,10 +81,56 @@ class WikipediaArtistImageSource(
         out.values.toList()
     }
 
+    private fun titleLooksLikeMusicCandidate(wanted: String, title: String): Boolean {
+        val a = normalizeName(wanted)
+        val b = normalizeName(title.substringBefore("(").trim())
+        if (a == b) return true
+        if (a in b || b in a) return true
+        val dist = levenshtein(a, b)
+        val maxLen = maxOf(a.length, b.length).coerceAtLeast(1)
+        return dist <= 2 || dist.toFloat() / maxLen <= 0.25f
+    }
+
+    private fun isMusicDescription(description: String): Boolean {
+        if (description.isBlank()) return false
+        val d = description.lowercase()
+        // Reject obvious non-music
+        if (NON_MUSIC_HINTS.any { d.contains(it) }) return false
+        return MUSIC_HINTS.any { d.contains(it) }
+    }
+
+    private fun isMusicExtract(extract: String): Boolean {
+        if (extract.isBlank()) return false
+        val head = extract.take(400).lowercase()
+        return MUSIC_HINTS.any { head.contains(it) }
+    }
+
+    private fun normalizeName(s: String): String =
+        s.trim().lowercase()
+            .replace(Regex("[^a-z0-9\\s]"), "")
+            .replace(Regex("\\s+"), " ")
+
+    private fun levenshtein(a: String, b: String): Int {
+        if (a == b) return 0
+        if (a.isEmpty()) return b.length
+        if (b.isEmpty()) return a.length
+        val prev = IntArray(b.length + 1) { it }
+        val cur = IntArray(b.length + 1)
+        for (i in 1..a.length) {
+            cur[0] = i
+            for (j in 1..b.length) {
+                val cost = if (a[i - 1] == b[j - 1]) 0 else 1
+                cur[j] = min(min(cur[j - 1] + 1, prev[j] + 1), prev[j - 1] + cost)
+            }
+            for (j in prev.indices) prev[j] = cur[j]
+        }
+        return prev[b.length]
+    }
+
     private suspend fun searchTitles(name: String): List<String> {
         val q = URLEncoder.encode(name.trim(), "UTF-8")
         val url =
-            "https://en.wikipedia.org/w/api.php?action=opensearch&search=$q&limit=5&namespace=0&format=json"
+            "https://en.wikipedia.org/w/api.php?action=opensearch&search=$q&limit=8&namespace=0&format=json"
         val body = get(url) ?: return emptyList()
         return try {
             val arr = JSONArray(body)
@@ -162,5 +223,19 @@ class WikipediaArtistImageSource(
 
     companion object {
         private const val TAG = "WikiArtistImg"
+
+        private val MUSIC_HINTS = listOf(
+            "musician", "singer", "rapper", "band", "musical group", "songwriter",
+            "composer", "dj", "disc jockey", "vocalist", "guitarist", "drummer",
+            "record producer", "hip hop", "pop group", "rock band", "ensemble",
+            "duo", "trio", "boy band", "girl group", "music artist", "recording artist"
+        )
+
+        private val NON_MUSIC_HINTS = listOf(
+            "politician", "footballer", "soccer", "actor", "actress", "author",
+            "novelist", "scientist", "physicist", "chemist", "mathematician",
+            "businessman", "entrepreneur", "athlete", "olympic", "basketball",
+            "cricketer", "tennis", "philosopher", "historian"
+        )
     }
 }
