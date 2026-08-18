@@ -76,6 +76,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.zIndex
 import capital.yuri.yuriplayer.data.MyStuffPinStore
 import capital.yuri.yuriplayer.data.Playlist
+import capital.yuri.yuriplayer.data.PlaylistCover
 import capital.yuri.yuriplayer.data.PlaylistRepository
 import capital.yuri.yuriplayer.data.Song
 import capital.yuri.yuriplayer.data.StuffPin
@@ -136,9 +137,27 @@ fun PlaylistDetailScreen(
         if (uri != null) cropUri = uri
     }
 
-    LaunchedEffect(playlist?.id, playlist?.customImageUri, playlist?.songs?.firstOrNull()?.songKey) {
-        val seed = playlist?.songs?.firstOrNull()
-        themeColors = themeService.themeFromSong(context, seed, base).colors
+    // Theme from playlist cover (custom → first unique art), not the first song’s album.
+    LaunchedEffect(playlist?.id, playlist?.customImageUri, playlist?.songs?.size) {
+        val pl = playlist ?: return@LaunchedEffect
+        val cover = PlaylistRepository.coverFor(pl)
+        val uri: Uri? = when (cover.mode) {
+            PlaylistCover.CoverMode.CUSTOM -> cover.customUri
+            PlaylistCover.CoverMode.SINGLE,
+            PlaylistCover.CoverMode.COLLAGE ->
+                cover.artUris.firstOrNull() ?: pl.songs.firstOrNull()?.albumArtUri
+            PlaylistCover.CoverMode.EMPTY -> null
+        }
+        themeColors = if (uri != null) {
+            themeService.themeFromUri(
+                context = context,
+                key = "playlist:${pl.id}:${uri}",
+                uri = uri,
+                base = base
+            ).colors
+        } else {
+            themeService.themeFromSong(context, pl.songs.firstOrNull(), base).colors
+        }
     }
 
     LaunchedEffect(playlist?.name, playlist?.description, mode) {
