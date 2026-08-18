@@ -12,7 +12,7 @@ import capital.yuri.yuriplayer.data.Song
  * Provided once from [capital.yuri.yuriplayer.activities.YuriApp].
  * Context sheets and rows default to these so call sites only override
  * when they need different behavior (e.g. hide Go to album on the album page,
- * or add image/metadata options on the artist page).
+ * or add image/metadata options on the artist page via a nested provider).
  */
 
 data class SongNavActions(
@@ -34,18 +34,21 @@ data class ArtistNavActions(
     val openArtistByName: (String) -> Unit = {},
     val startRadio: (String) -> Unit = {},
     val addToMyStuff: (ArtistItem) -> Unit = {},
-    /** Optional — only provided on screens that can handle image pick/crop. */
+    /** Optional — filled by nested provider on ArtistDetailScreen. */
     val changeImage: ((artistName: String) -> Unit)? = null,
     val fetchImage: ((artistName: String) -> Unit)? = null,
     val changeBanner: ((artistName: String) -> Unit)? = null,
-    val fetchBanner: ((artistName: String) -> Unit)? = null
+    val fetchBanner: ((artistName: String) -> Unit)? = null,
+    val clearImage: ((artistName: String) -> Unit)? = null,
+    val clearBanner: ((artistName: String) -> Unit)? = null,
+    val openLinks: ((artistName: String) -> Unit)? = null
 )
 
 data class PlaylistNavActions(
     val openPlaylist: (playlistId: String) -> Unit = {},
     val startRadio: (Playlist) -> Unit = {},
     val addToMyStuff: (Playlist) -> Unit = {},
-    /** Optional — only provided on playlist detail / host that can edit. */
+    /** Optional — filled by nested provider on PlaylistDetailScreen. */
     val changeCover: ((playlistId: String) -> Unit)? = null,
     val edit: ((playlistId: String) -> Unit)? = null,
     val delete: ((playlistId: String) -> Unit)? = null
