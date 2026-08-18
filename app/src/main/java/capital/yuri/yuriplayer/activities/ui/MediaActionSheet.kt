@@ -128,21 +128,15 @@ private fun songArtistNames(song: Song): List<String> {
 
 /**
  * Shared song sheet — keep every entry point in sync.
- *
- * Go to album / Go to artist default to [LocalSongNav] so call sites
- * (playlist rows, queue, library, etc.) get navigation for free.
- * Pass explicit callbacks only to override; use [hideGoToAlbum] on the
- * album detail page.
+ * Defaults Go to album / artist from [LocalSongNav].
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun SongContextSheet(
     song: Song,
     onDismiss: () -> Unit,
-    /** Hide when already viewing this song's album. */
     hideGoToAlbum: Boolean = false,
     onGoToAlbum: (() -> Unit)? = null,
-    /** Called with the chosen artist name (picker when multiple credits). */
     onGoToArtist: ((String) -> Unit)? = null,
     onEditMetadata: (() -> Unit)? = null,
     onAddToQueue: (() -> Unit)? = null,
@@ -158,7 +152,6 @@ fun SongContextSheet(
     var showArtistPicker by remember { mutableStateOf(false) }
     val artists = remember(song) { songArtistNames(song) }
 
-    // Default to app-wide navigation; explicit params override.
     val goToAlbum = onGoToAlbum ?: { songNav.openAlbumForSong(song) }
     val goToArtist = onGoToArtist ?: { name -> songNav.openArtistByName(name) }
 
@@ -277,6 +270,7 @@ fun SongContextSheet(
     }
 }
 
+/** Shared album sheet — defaults from [LocalAlbumNav]. */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun AlbumContextSheet(
@@ -291,7 +285,14 @@ fun AlbumContextSheet(
 ) {
     val pinStore: MyStuffPinStore = koinInject()
     val context = LocalContext.current
+    val albumNav = LocalAlbumNav.current
     var showPlaylistPicker by remember { mutableStateOf(false) }
+
+    val goToArtist = onGoToArtist ?: { albumNav.openArtist(album) }
+    val editMeta = onEditMetadata ?: { albumNav.editMetadata(album) }
+    val addQueue = onAddToQueue ?: { albumNav.addToQueue(album) }
+    val startRadio = onStartRadio ?: { albumNav.startRadio(album) }
+    val addMyStuff = onAddToMyStuff ?: { albumNav.addToMyStuff(album) }
 
     if (showPlaylistPicker) {
         AddToPlaylistSheet(
@@ -310,47 +311,30 @@ fun AlbumContextSheet(
             title = album.displayName,
             subtitle = album.displayArtist
         )
-        if (onStartRadio != null) {
-            MediaSheetItem("Start radio") {
-                onDismiss()
-                onStartRadio()
-            }
+        MediaSheetItem("Start radio") {
+            onDismiss()
+            startRadio()
         }
-        if (onAddToQueue != null) {
-            MediaSheetItem("Add to queue") {
-                onDismiss()
-                onAddToQueue()
-            }
+        MediaSheetItem("Add to queue") {
+            onDismiss()
+            addQueue()
         }
         MediaSheetItem("Add to playlist") {
             showPlaylistPicker = true
         }
         MediaSheetItem("Add to My Stuff") {
             onDismiss()
-            if (onAddToMyStuff != null) onAddToMyStuff()
-            else {
-                pinStore.addEntry(
-                    StuffPin(
-                        kind = StuffPinKind.ALBUM,
-                        id = albumKey(album.name, album.artist),
-                        title = album.displayName,
-                        subtitle = album.displayArtist
-                    )
-                )
-                Toast.makeText(context, "Added to My Stuff", Toast.LENGTH_SHORT).show()
-            }
+            addMyStuff()
         }
-        if (onGoToArtist != null) {
+        if (album.artist?.isNotBlank() == true) {
             MediaSheetItem("Go to artist") {
                 onDismiss()
-                onGoToArtist()
+                goToArtist()
             }
         }
-        if (onEditMetadata != null) {
-            MediaSheetItem("Edit album metadata") {
-                onDismiss()
-                onEditMetadata()
-            }
+        MediaSheetItem("Edit album metadata") {
+            onDismiss()
+            editMeta()
         }
         if (onFetchMetadata != null) {
             MediaSheetItem("Fetch additional metadata") {
@@ -362,6 +346,7 @@ fun AlbumContextSheet(
     }
 }
 
+/** Shared artist sheet — defaults from [LocalArtistNav], including optional image actions. */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun ArtistContextSheet(
@@ -369,10 +354,22 @@ fun ArtistContextSheet(
     onDismiss: () -> Unit,
     onStartRadio: (() -> Unit)? = null,
     onChangeImage: (() -> Unit)? = null,
+    onFetchImage: (() -> Unit)? = null,
+    onChangeBanner: (() -> Unit)? = null,
+    onFetchBanner: (() -> Unit)? = null,
     onAddToMyStuff: (() -> Unit)? = null
 ) {
     val pinStore: MyStuffPinStore = koinInject()
     val context = LocalContext.current
+    val artistNav = LocalArtistNav.current
+    val name = artist.displayName
+
+    val startRadio = onStartRadio ?: { artistNav.startRadio(name) }
+    val addMyStuff = onAddToMyStuff ?: { artistNav.addToMyStuff(artist) }
+    val changeImage = onChangeImage ?: artistNav.changeImage?.let { fn -> { fn(name) } }
+    val fetchImage = onFetchImage ?: artistNav.fetchImage?.let { fn -> { fn(name) } }
+    val changeBanner = onChangeBanner ?: artistNav.changeBanner?.let { fn -> { fn(name) } }
+    val fetchBanner = onFetchBanner ?: artistNav.fetchBanner?.let { fn -> { fn(name) } }
 
     ModalBottomSheet(
         onDismissRequest = onDismiss,
@@ -383,38 +380,43 @@ fun ArtistContextSheet(
             title = artist.displayName,
             subtitle = "Artist"
         )
-        if (onStartRadio != null) {
-            MediaSheetItem("Start radio") {
-                onDismiss()
-                onStartRadio()
-            }
+        MediaSheetItem("Start radio") {
+            onDismiss()
+            startRadio()
         }
         MediaSheetItem("Add to My Stuff") {
             onDismiss()
-            if (onAddToMyStuff != null) onAddToMyStuff()
-            else {
-                val key = artistKey(artist.name) ?: return@MediaSheetItem
-                pinStore.addEntry(
-                    StuffPin(
-                        kind = StuffPinKind.ARTIST,
-                        id = key,
-                        title = artist.displayName,
-                        subtitle = "Artist"
-                    )
-                )
-                Toast.makeText(context, "Added to My Stuff", Toast.LENGTH_SHORT).show()
+            addMyStuff()
+        }
+        if (fetchImage != null) {
+            MediaSheetItem("Fetch artist image") {
+                onDismiss()
+                fetchImage()
             }
         }
-        if (onChangeImage != null) {
-            MediaSheetItem("Change image") {
+        if (changeImage != null) {
+            MediaSheetItem("Change artist image") {
                 onDismiss()
-                onChangeImage()
+                changeImage()
+            }
+        }
+        if (fetchBanner != null) {
+            MediaSheetItem("Fetch banner") {
+                onDismiss()
+                fetchBanner()
+            }
+        }
+        if (changeBanner != null) {
+            MediaSheetItem("Change banner") {
+                onDismiss()
+                changeBanner()
             }
         }
         MediaSheetBottomPad()
     }
 }
 
+/** Shared playlist sheet — defaults from [LocalPlaylistNav]. */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun PlaylistContextSheet(
@@ -426,8 +428,14 @@ fun PlaylistContextSheet(
     onDelete: (() -> Unit)? = null,
     onAddToMyStuff: (() -> Unit)? = null
 ) {
-    val pinStore: MyStuffPinStore = koinInject()
     val context = LocalContext.current
+    val playlistNav = LocalPlaylistNav.current
+
+    val startRadio = onStartRadio ?: { playlistNav.startRadio(playlist) }
+    val addMyStuff = onAddToMyStuff ?: { playlistNav.addToMyStuff(playlist) }
+    val changeCover = onChangeCover ?: playlistNav.changeCover?.let { fn -> { fn(playlist.id) } }
+    val edit = onEdit ?: playlistNav.edit?.let { fn -> { fn(playlist.id) } }
+    val delete = onDelete ?: playlistNav.delete?.let { fn -> { fn(playlist.id) } }
 
     ModalBottomSheet(
         onDismissRequest = onDismiss,
@@ -438,44 +446,31 @@ fun PlaylistContextSheet(
             title = playlist.name,
             subtitle = "Playlist"
         )
-        if (onStartRadio != null) {
-            MediaSheetItem("Start radio") {
-                onDismiss()
-                onStartRadio()
-            }
+        MediaSheetItem("Start radio") {
+            onDismiss()
+            startRadio()
         }
         MediaSheetItem("Add to My Stuff") {
             onDismiss()
-            if (onAddToMyStuff != null) onAddToMyStuff()
-            else {
-                pinStore.addEntry(
-                    StuffPin(
-                        kind = StuffPinKind.PLAYLIST,
-                        id = playlist.id,
-                        title = playlist.name,
-                        subtitle = "Playlist"
-                    )
-                )
-                Toast.makeText(context, "Added to My Stuff", Toast.LENGTH_SHORT).show()
-            }
+            addMyStuff()
         }
-        if (onChangeCover != null) {
+        if (changeCover != null) {
             MediaSheetItem("Change cover") {
                 onDismiss()
-                onChangeCover()
+                changeCover()
             }
         }
-        if (onEdit != null) {
+        if (edit != null) {
             MediaSheetItem("Edit playlist") {
                 onDismiss()
-                onEdit()
+                edit()
             }
         }
-        if (onDelete != null) {
+        if (delete != null) {
             HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
             MediaSheetItem("Delete playlist", danger = true) {
                 onDismiss()
-                onDelete()
+                delete()
             }
         }
         MediaSheetBottomPad()
