@@ -290,7 +290,7 @@ fun LibraryScreen(
                 onEditSong = onEditSong,
                 onStartRadio = { song ->
                     player.startSongRadio(song)
-                    Toast.makeText(context, "Radio · ${song.displayArtist}", Toast.LENGTH_SHORT).show()
+                    Toast.makeText(context, "Radio \u00b7 ${song.displayArtist}", Toast.LENGTH_SHORT).show()
                 }
             )
             LibrarySection.Untagged -> SongList(
@@ -308,7 +308,7 @@ fun LibraryScreen(
                 onEditSong = onEditSong,
                 onStartRadio = { song ->
                     player.startSongRadio(song)
-                    Toast.makeText(context, "Radio · ${song.displayArtist}", Toast.LENGTH_SHORT).show()
+                    Toast.makeText(context, "Radio \u00b7 ${song.displayArtist}", Toast.LENGTH_SHORT).show()
                 }
             )
             LibrarySection.Albums -> {
@@ -330,7 +330,7 @@ fun LibraryScreen(
                             onEditMetadata = { onEditAlbum(album) },
                             onStartRadio = {
                                 player.startAlbumRadio(album)
-                                Toast.makeText(context, "Radio · ${album.displayName}", Toast.LENGTH_SHORT).show()
+                                Toast.makeText(context, "Radio \u00b7 ${album.displayName}", Toast.LENGTH_SHORT).show()
                             }
                         )
                     }
@@ -413,6 +413,7 @@ fun SwipeAddSongRow(
     val saved = remember(entries, song.songKey) {
         pinStore.contains(StuffPinKind.SONG, song.songKey)
     }
+    val songNav = LocalSongNav.current
 
     val revealAlpha = (offsetX / (threshold * 0.35f)).coerceIn(0f, 1f)
 
@@ -534,8 +535,8 @@ fun SwipeAddSongRow(
             song = song,
             onDismiss = { showSheet = false },
             hideGoToAlbum = hideGoToAlbum,
-            onGoToAlbum = onGoToAlbum,
-            onGoToArtist = onGoToArtist,
+            onGoToAlbum = onGoToAlbum ?: { songNav.openAlbumForSong(song) },
+            onGoToArtist = onGoToArtist ?: { name -> songNav.openArtistByName(name) },
             onEditMetadata = onEditMetadata,
             onAddToQueue = onSwipeAdd,
             onStartRadio = onStartRadio
