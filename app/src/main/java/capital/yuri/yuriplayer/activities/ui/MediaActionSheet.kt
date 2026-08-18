@@ -12,17 +12,22 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.Clear
+import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.Button
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.rememberModalBottomSheetState
@@ -48,8 +53,6 @@ import capital.yuri.yuriplayer.data.PlaylistRepository
 import capital.yuri.yuriplayer.data.Song
 import capital.yuri.yuriplayer.data.StuffPin
 import capital.yuri.yuriplayer.data.StuffPinKind
-import capital.yuri.yuriplayer.data.albumKey
-import capital.yuri.yuriplayer.data.artistKey
 import capital.yuri.yuriplayer.player.PlayerController
 import kotlinx.coroutines.launch
 import org.koin.compose.koinInject
@@ -542,12 +545,28 @@ fun AddToPlaylistSheet(
     var selected by remember { mutableStateOf(setOf<String>()) }
     var showCreate by remember { mutableStateOf(false) }
     var ready by remember { mutableStateOf(false) }
+    var query by remember { mutableStateOf("") }
 
     LaunchedEffect(songs.map { it.songKey }) {
         val containing = repo.playlistsContaining(songs)
         initiallyIn = containing
         selected = containing
         ready = true
+    }
+
+    // Filter by name; selection is independent of visibility so filtered-out
+    // checked playlists stay selected. Checked rows always sort first.
+    val visiblePlaylists = remember(playlists, query, selected) {
+        val q = query.trim()
+        val filtered = if (q.isEmpty()) {
+            playlists
+        } else {
+            playlists.filter { it.name.contains(q, ignoreCase = true) }
+        }
+        filtered.sortedWith(
+            compareByDescending<Playlist> { it.id in selected }
+                .thenBy(String.CASE_INSENSITIVE_ORDER) { it.name }
+        )
     }
 
     if (showCreate) {
@@ -596,9 +615,38 @@ fun AddToPlaylistSheet(
                 Text("New playlist")
             }
 
+            if (playlists.isNotEmpty()) {
+                OutlinedTextField(
+                    value = query,
+                    onValueChange = { query = it },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(bottom = 8.dp),
+                    singleLine = true,
+                    placeholder = { Text("Search playlists") },
+                    leadingIcon = {
+                        Icon(Icons.Default.Search, contentDescription = null)
+                    },
+                    trailingIcon = {
+                        if (query.isNotEmpty()) {
+                            IconButton(onClick = { query = "" }) {
+                                Icon(Icons.Default.Clear, contentDescription = "Clear search")
+                            }
+                        }
+                    },
+                    shape = RoundedCornerShape(12.dp)
+                )
+            }
+
             if (playlists.isEmpty()) {
                 Text(
                     "No playlists yet — create one above.",
+                    modifier = Modifier.padding(vertical = 24.dp),
+                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.55f)
+                )
+            } else if (visiblePlaylists.isEmpty()) {
+                Text(
+                    "No playlists match \"$query\".",
                     modifier = Modifier.padding(vertical = 24.dp),
                     color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.55f)
                 )
@@ -608,7 +656,7 @@ fun AddToPlaylistSheet(
                         .fillMaxWidth()
                         .height(300.dp)
                 ) {
-                    items(playlists, key = { it.id }) { pl ->
+                    items(visiblePlaylists, key = { it.id }) { pl ->
                         val checked = pl.id in selected
                         Row(
                             modifier = Modifier
