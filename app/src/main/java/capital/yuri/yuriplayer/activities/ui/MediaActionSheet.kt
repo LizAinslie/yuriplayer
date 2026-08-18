@@ -93,6 +93,7 @@ fun MediaSheetHeader(
 fun MediaSheetItem(
     label: String,
     enabled: Boolean = true,
+    danger: Boolean = false,
     onClick: () -> Unit
 ) {
     TextButton(
@@ -105,7 +106,9 @@ fun MediaSheetItem(
         Text(
             label,
             modifier = Modifier.fillMaxWidth(),
-            style = MaterialTheme.typography.bodyLarge
+            style = MaterialTheme.typography.bodyLarge,
+            color = if (danger) MaterialTheme.colorScheme.error
+            else MaterialTheme.colorScheme.onSurface
         )
     }
 }
@@ -456,8 +459,10 @@ fun PlaylistContextSheet(
                 onEdit()
             }
         }
+        // Danger zone — last item, visually separated
         if (onDelete != null) {
-            MediaSheetItem("Delete playlist") {
+            HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
+            MediaSheetItem("Delete playlist", danger = true) {
                 onDismiss()
                 onDelete()
             }
