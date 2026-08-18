@@ -15,12 +15,14 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.asPaddingValues
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.statusBars
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
@@ -69,6 +71,7 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import capital.yuri.yuriplayer.data.AlbumItem
 import capital.yuri.yuriplayer.data.ArtistItem
@@ -136,14 +139,11 @@ private fun sortedReleaseTracks(album: AlbumItem): List<Song> =
             .thenBy(String.CASE_INSENSITIVE_ORDER) { it.displayTitle }
     )
 
-/** Full-bleed banner height (avatar straddles its bottom edge). */
-private val ArtistBannerHeight = 200.dp
-/** Circular profile size when a banner is present. */
+/** Visible banner body below the status bar. Total draw height = this + status inset. */
+private val ArtistBannerBodyHeight = 200.dp
 private val ArtistAvatarOnBanner = 132.dp
-/** Centered avatar when there is no banner. */
 private val ArtistAvatarPlain = 160.dp
 private val ArtistGradientFade = 200.dp
-/** Header solid region without banner (legacy). */
 private val ArtistHeaderHeightPlain = 300.dp
 
 private fun parseImageUri(raw: String?): Uri? {
@@ -250,8 +250,12 @@ fun ArtistDetailScreen(
     val onAccent = themeColors.onAccent
 
     val hasBanner = !bannerUri.isNullOrBlank()
-    // Solid theme color covers the banner strip only; gradient begins at its bottom edge.
-    val solidHeaderHeight = if (hasBanner) ArtistBannerHeight else ArtistHeaderHeightPlain
+    val statusBarTop = WindowInsets.statusBars.asPaddingValues().calculateTopPadding()
+    // Banner draws from y=0 under the status bar
+    val bannerTotalHeight: Dp = if (hasBanner) statusBarTop + ArtistBannerBodyHeight else 0.dp
+
+    // Solid theme wash ends at banner bottom (or plain header height)
+    val solidHeaderHeight = if (hasBanner) bannerTotalHeight else ArtistHeaderHeightPlain
     val fadePx = with(density) { ArtistGradientFade.toPx() }
     val headerPx = with(density) { solidHeaderHeight.toPx() }
 
@@ -298,7 +302,11 @@ fun ArtistDetailScreen(
         return
     }
 
-    ThemedStatusBar(color = artBg, enabled = true)
+    // Transparent status bar when banner sits underneath; otherwise themed solid
+    ThemedStatusBar(
+        color = if (hasBanner) Color.Transparent else artBg,
+        enabled = true
+    )
 
     if (fetchKind != null) {
         FetchArtistImageSheet(
@@ -412,7 +420,6 @@ fun ArtistDetailScreen(
             .fillMaxSize()
             .background(defaultBg)
             .drawBehind {
-                // Solid theme wash through the banner (or plain header) region.
                 val solidEnd = headerPx
                 val fadeEnd = solidEnd + fadePx
                 drawRect(
@@ -420,7 +427,6 @@ fun ArtistDetailScreen(
                     topLeft = Offset.Zero,
                     size = Size(size.width, solidEnd.coerceAtMost(size.height))
                 )
-                // Gradient starts at the bottom edge of the banner / header solid.
                 if (fadeEnd > solidEnd) {
                     drawRect(
                         brush = Brush.verticalGradient(
@@ -442,165 +448,208 @@ fun ArtistDetailScreen(
                 }
             }
     ) {
-        Column(modifier = Modifier.fillMaxSize()) {
-            // Top bar over banner / solid header
-            Row(
+        // Full-bleed banner under the status bar
+        if (hasBanner) {
+            Box(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .statusBarsPadding(),
-                verticalAlignment = Alignment.CenterVertically
+                    .height(bannerTotalHeight)
+                    .align(Alignment.TopCenter)
             ) {
-                IconButton(onClick = onBack) {
-                    Icon(
-                        Icons.AutoMirrored.Filled.ArrowBack,
-                        contentDescription = "Back",
-                        tint = onArt
-                    )
-                }
-                Spacer(modifier = Modifier.weight(1f))
-                IconButton(onClick = { showMenu = true }) {
-                    Icon(
-                        Icons.Default.MoreVert,
-                        contentDescription = "More",
-                        tint = onArt
-                    )
-                }
+                AsyncImage(
+                    model = ImageRequest.Builder(context)
+                        .data(bannerUri)
+                        .crossfade(true)
+                        .build(),
+                    contentDescription = "${artist.displayName} banner",
+                    contentScale = ContentScale.Crop,
+                    modifier = Modifier.fillMaxSize()
+                )
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(80.dp)
+                        .align(Alignment.BottomCenter)
+                        .background(
+                            Brush.verticalGradient(
+                                listOf(Color.Transparent, Color.Black.copy(alpha = 0.4f))
+                            )
+                        )
+                )
+            }
+        }
+
+        LazyColumn(
+            modifier = Modifier.fillMaxSize(),
+            contentPadding = PaddingValues(bottom = 96.dp)
+        ) {
+            item {
+                ArtistHero(
+                    name = artist.displayName,
+                    seedSong = albums.firstOrNull()?.songs?.firstOrNull()
+                        ?: artist.songs.firstOrNull(),
+                    hasBanner = hasBanner,
+                    bannerTotalHeight = bannerTotalHeight,
+                    stats = "${formatAlbumCount(artist.albumCount)} · ${formatTrackCount(artist.trackCount)}",
+                    titleColor = onArt,
+                    mutedColor = mutedOnArt,
+                    accent = accent,
+                    onAccent = onAccent,
+                    artistSaved = artistSaved,
+                    onToggleFavorite = {
+                        val now = pinStore.toggleArtist(artist)
+                        Toast.makeText(
+                            context,
+                            if (now) "Added to My Stuff" else "Removed from My Stuff",
+                            Toast.LENGTH_SHORT
+                        ).show()
+                    },
+                    onPlayAll = onStartRadio
+                )
             }
 
-            LazyColumn(
-                modifier = Modifier.fillMaxSize(),
-                contentPadding = PaddingValues(bottom = 96.dp)
-            ) {
-                item {
-                    ArtistHero(
-                        name = artist.displayName,
-                        seedSong = albums.firstOrNull()?.songs?.firstOrNull()
-                            ?: artist.songs.firstOrNull(),
-                        bannerUri = bannerUri,
-                        stats = "${formatAlbumCount(artist.albumCount)} · ${formatTrackCount(artist.trackCount)}",
-                        titleColor = onArt,
-                        mutedColor = mutedOnArt,
-                        accent = accent,
-                        onAccent = onAccent,
-                        artistSaved = artistSaved,
-                        onToggleFavorite = {
-                            val now = pinStore.toggleArtist(artist)
-                            Toast.makeText(
-                                context,
-                                if (now) "Added to My Stuff" else "Removed from My Stuff",
-                                Toast.LENGTH_SHORT
-                            ).show()
-                        },
-                        onPlayAll = onStartRadio
-                    )
-                }
+            item {
+                ArtistGenreChips(
+                    genres = profile?.genres.orEmpty(),
+                    titleColor = onArt,
+                    mutedColor = mutedOnArt
+                )
+            }
 
-                item {
-                    ArtistGenreChips(
-                        genres = profile?.genres.orEmpty(),
-                        titleColor = onArt,
-                        mutedColor = mutedOnArt
+            item {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 16.dp, vertical = 4.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        "Discography",
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.Bold,
+                        color = base.onBackground,
+                        modifier = Modifier.weight(1f)
                     )
-                }
-
-                item {
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(horizontal = 16.dp, vertical = 4.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Text(
-                            "Discography",
-                            style = MaterialTheme.typography.titleMedium,
-                            fontWeight = FontWeight.Bold,
-                            color = base.onBackground,
-                            modifier = Modifier.weight(1f)
-                        )
-                        if (sortedAlbums.isNotEmpty()) {
-                            TextButton(
-                                onClick = {
-                                    discographyFilters =
-                                        DiscographyFilters.fromPageFilter(filter)
-                                    showAll = true
-                                }
-                            ) {
-                                Text("Show all", color = accent)
+                    if (sortedAlbums.isNotEmpty()) {
+                        TextButton(
+                            onClick = {
+                                discographyFilters =
+                                    DiscographyFilters.fromPageFilter(filter)
+                                showAll = true
                             }
+                        ) {
+                            Text("Show all", color = accent)
                         }
                     }
                 }
+            }
 
-                item {
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .horizontalScroll(rememberScrollState())
-                            .padding(horizontal = 16.dp, vertical = 4.dp),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+            item {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .horizontalScroll(rememberScrollState())
+                        .padding(horizontal = 16.dp, vertical = 4.dp),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    ArtistReleaseFilter.entries.forEach { f ->
+                        FilterChip(
+                            selected = filter == f,
+                            onClick = { filter = f },
+                            label = {
+                                Text(
+                                    f.name,
+                                    color = if (filter == f) base.onSecondaryContainer
+                                    else base.onBackground
+                                )
+                            }
+                        )
+                    }
+                }
+            }
+
+            item {
+                if (filtered.isEmpty()) {
+                    Text(
+                        "No releases in this filter.",
+                        modifier = Modifier.padding(16.dp),
+                        color = base.onBackground.copy(alpha = 0.55f)
+                    )
+                } else {
+                    LazyRow(
+                        contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
+                        horizontalArrangement = Arrangement.spacedBy(14.dp)
                     ) {
-                        ArtistReleaseFilter.entries.forEach { f ->
-                            FilterChip(
-                                selected = filter == f,
-                                onClick = { filter = f },
-                                label = {
-                                    Text(
-                                        f.name,
-                                        color = if (filter == f) base.onSecondaryContainer
-                                        else base.onBackground
-                                    )
-                                }
+                        items(
+                            filtered,
+                            key = { "${it.name}|${it.artist}|${it.releaseYear()}" }
+                        ) { album ->
+                            ArtistReleaseCard(
+                                album = album,
+                                titleColor = base.onBackground,
+                                mutedColor = base.onBackground.copy(alpha = 0.55f),
+                                onClick = { onOpenAlbum(album) }
                             )
                         }
                     }
                 }
+            }
 
-                item {
-                    if (filtered.isEmpty()) {
-                        Text(
-                            "No releases in this filter.",
-                            modifier = Modifier.padding(16.dp),
-                            color = base.onBackground.copy(alpha = 0.55f)
-                        )
-                    } else {
-                        LazyRow(
-                            contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
-                            horizontalArrangement = Arrangement.spacedBy(14.dp)
-                        ) {
-                            items(
-                                filtered,
-                                key = { "${it.name}|${it.artist}|${it.releaseYear()}" }
-                            ) { album ->
-                                ArtistReleaseCard(
-                                    album = album,
-                                    titleColor = base.onBackground,
-                                    mutedColor = base.onBackground.copy(alpha = 0.55f),
-                                    onClick = { onOpenAlbum(album) }
-                                )
-                            }
-                        }
-                    }
-                }
+            item {
+                ArtistUpcomingShows(
+                    events = events,
+                    titleColor = base.onBackground,
+                    mutedColor = base.onBackground.copy(alpha = 0.6f),
+                    onOpenUrl = { url -> runCatching { uriHandler.openUri(url) } }
+                )
+            }
 
-                item {
-                    ArtistUpcomingShows(
-                        events = events,
+            item {
+                val bio = profile?.bio
+                if (!bio.isNullOrBlank()) {
+                    ArtistBioCard(
+                        bio = bio,
                         titleColor = base.onBackground,
-                        mutedColor = base.onBackground.copy(alpha = 0.6f),
-                        onOpenUrl = { url -> runCatching { uriHandler.openUri(url) } }
+                        mutedColor = base.onBackground.copy(alpha = 0.6f)
                     )
                 }
+            }
+        }
 
-                item {
-                    val bio = profile?.bio
-                    if (!bio.isNullOrBlank()) {
-                        ArtistBioCard(
-                            bio = bio,
-                            titleColor = base.onBackground,
-                            mutedColor = base.onBackground.copy(alpha = 0.6f)
-                        )
-                    }
-                }
+        // Floating top bar over banner / header
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .statusBarsPadding()
+                .align(Alignment.TopCenter),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            IconButton(
+                onClick = onBack,
+                modifier = Modifier
+                    .padding(start = 4.dp)
+                    .clip(CircleShape)
+                    .background(Color.Black.copy(alpha = if (hasBanner) 0.28f else 0f))
+            ) {
+                Icon(
+                    Icons.AutoMirrored.Filled.ArrowBack,
+                    contentDescription = "Back",
+                    tint = onArt
+                )
+            }
+            Spacer(modifier = Modifier.weight(1f))
+            IconButton(
+                onClick = { showMenu = true },
+                modifier = Modifier
+                    .padding(end = 4.dp)
+                    .clip(CircleShape)
+                    .background(Color.Black.copy(alpha = if (hasBanner) 0.28f else 0f))
+            ) {
+                Icon(
+                    Icons.Default.MoreVert,
+                    contentDescription = "More",
+                    tint = onArt
+                )
             }
         }
     }
@@ -820,7 +869,8 @@ private fun DiscographyReleaseHeader(
 private fun ArtistHero(
     name: String,
     seedSong: Song?,
-    bannerUri: String?,
+    hasBanner: Boolean,
+    bannerTotalHeight: Dp,
     stats: String,
     titleColor: Color,
     mutedColor: Color,
@@ -830,74 +880,37 @@ private fun ArtistHero(
     onToggleFavorite: () -> Unit,
     onPlayAll: () -> Unit
 ) {
-    val context = LocalContext.current
-    val hasBanner = !bannerUri.isNullOrBlank()
-
     Column(
         modifier = Modifier.fillMaxWidth(),
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
         if (hasBanner) {
-            // Banner full-bleed; avatar centered on its bottom edge (half above / half below).
+            // Banner is drawn under status bar in the parent Box.
+            // Spacer so the avatar center lands on the banner's bottom edge.
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .height(ArtistBannerHeight + ArtistAvatarOnBanner / 2)
+                    .height(bannerTotalHeight + ArtistAvatarOnBanner / 2),
+                contentAlignment = Alignment.BottomCenter
             ) {
                 Box(
                     modifier = Modifier
-                        .fillMaxWidth()
-                        .height(ArtistBannerHeight)
-                        .align(Alignment.TopCenter)
+                        .size(ArtistAvatarOnBanner)
+                        .border(3.dp, titleColor.copy(alpha = 0.9f), CircleShape)
+                        .clip(CircleShape)
                 ) {
-                    AsyncImage(
-                        model = ImageRequest.Builder(context)
-                            .data(bannerUri)
-                            .crossfade(true)
-                            .build(),
-                        contentDescription = "$name banner",
-                        contentScale = ContentScale.Crop,
-                        modifier = Modifier.fillMaxSize()
+                    ArtistArt(
+                        artistName = name,
+                        seedSong = seedSong,
+                        size = ArtistAvatarOnBanner,
+                        circular = true
                     )
-                    // Soft scrim so light banners don't wash out the avatar edge
-                    Box(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .height(72.dp)
-                            .align(Alignment.BottomCenter)
-                            .background(
-                                Brush.verticalGradient(
-                                    listOf(Color.Transparent, Color.Black.copy(alpha = 0.35f))
-                                )
-                            )
-                    )
-                }
-
-                // Center of the circle sits on the banner's bottom edge
-                Box(
-                    modifier = Modifier
-                        .align(Alignment.BottomCenter)
-                        .offset(y = 0.dp)
-                ) {
-                    Box(
-                        modifier = Modifier
-                            .size(ArtistAvatarOnBanner)
-                            .border(3.dp, titleColor.copy(alpha = 0.9f), CircleShape)
-                            .clip(CircleShape)
-                    ) {
-                        ArtistArt(
-                            artistName = name,
-                            seedSong = seedSong,
-                            size = ArtistAvatarOnBanner,
-                            circular = true
-                        )
-                    }
                 }
             }
-
             Spacer(modifier = Modifier.height(12.dp))
         } else {
-            Spacer(modifier = Modifier.height(8.dp))
+            Spacer(modifier = Modifier.statusBarsPadding())
+            Spacer(modifier = Modifier.height(48.dp)) // room for floating toolbar
             ArtistArt(
                 artistName = name,
                 seedSong = seedSong,
