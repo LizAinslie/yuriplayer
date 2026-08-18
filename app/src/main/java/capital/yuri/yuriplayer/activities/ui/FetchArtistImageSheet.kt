@@ -75,7 +75,7 @@ fun FetchArtistImageSheet(
                 modifier = Modifier.padding(bottom = 8.dp)
             )
             Text(
-                "MusicBrainz · Wikipedia · Wikidata · Deezer · TheAudioDB — pick one to crop.",
+                "Original aspect shown — crop next. MusicBrainz · Wikipedia · Wikidata · Deezer · AudioDB · Discogs",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
                 modifier = Modifier.padding(bottom = 12.dp)
@@ -103,9 +103,10 @@ fun FetchArtistImageSheet(
                     modifier = Modifier.height(420.dp)
                 ) {
                     items(candidates, key = { it.url }) { c ->
+                        // Uniform cell; Fit keeps the photo's real proportions (letterbox)
                         Box(
                             modifier = Modifier
-                                .aspectRatio(if (kind == ArtistImageKind.BANNER) 16f / 9f else 1f)
+                                .aspectRatio(1f)
                                 .clip(RoundedCornerShape(8.dp))
                                 .background(MaterialTheme.colorScheme.surfaceVariant)
                                 .border(
@@ -113,13 +114,16 @@ fun FetchArtistImageSheet(
                                     MaterialTheme.colorScheme.outline.copy(alpha = 0.4f),
                                     RoundedCornerShape(8.dp)
                                 )
-                                .clickable { onPicked(Uri.parse(c.url)) }
+                                .clickable { onPicked(Uri.parse(c.url)) },
+                            contentAlignment = Alignment.Center
                         ) {
                             AsyncImage(
                                 model = c.url,
                                 contentDescription = c.label,
-                                contentScale = ContentScale.Crop,
-                                modifier = Modifier.matchParentSize()
+                                contentScale = ContentScale.Fit,
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(4.dp)
                             )
                             Text(
                                 c.label,
