@@ -31,7 +31,6 @@ class DeezerArtistImageSource(
         try {
             val data = JSONObject(body).optJSONArray("data") ?: return@withContext emptyList()
 
-            // Collect best URL per CDN asset hash / artist id; prefer more fans
             data class Hit(
                 val name: String,
                 val url: String,
@@ -42,24 +41,24 @@ class DeezerArtistImageSource(
             val hits = ArrayList<Hit>()
             for (i in 0 until data.length()) {
                 val a = data.optJSONObject(i) ?: continue
-                val name = a.optString("name").ifBlank { continue }
+                val name = a.optString("name")
+                if (name.isBlank()) continue
                 if (!ArtistNameMatch.looksLike(artistName, name)) continue
                 val artistId = a.optLong("id", 0L)
                 val fans = a.optInt("nb_fan", 0)
-                // Prefer xl → big → medium only (skip small)
                 val ranked = listOf(
                     a.optString("picture_xl") to 1000,
                     a.optString("picture_big") to 500,
                     a.optString("picture_medium") to 250
                 )
-                val (url, size) = ranked.firstOrNull { (u, _) ->
-                    u.isNotBlank() && !u.contains("artist-default") &&
-                        !u.contains("/images/artist//") // empty hash
+                val best = ranked.firstOrNull { (u, _) ->
+                    u.isNotBlank() &&
+                        !u.contains("artist-default") &&
+                        !u.contains("/images/artist//")
                 } ?: continue
-                hits.add(Hit(name, url, size, fans, artistId))
+                hits.add(Hit(name, best.first, best.second, fans, artistId))
             }
 
-            // Dedupe by image fingerprint, keep highest res; among same res prefer more fans
             val byFp = LinkedHashMap<String, Hit>()
             for (hit in hits.sortedByDescending { it.fans }) {
                 val fp = ArtistNameMatch.imageFingerprint(hit.url)
@@ -71,8 +70,6 @@ class DeezerArtistImageSource(
                 }
             }
 
-            // Also collapse multiple Deezer artist rows that share the same name
-            // to the highest-fan entry when fingerprints differ but we'd spam the sheet
             val byName = LinkedHashMap<String, Hit>()
             for (hit in byFp.values.sortedByDescending { it.fans }) {
                 val nk = ArtistNameMatch.normalize(hit.name)
