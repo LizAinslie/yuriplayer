@@ -168,6 +168,26 @@ class PlaylistRepository(
             touch(id)
         }
 
+    /** Remove these songs from the playlist and re-index positions. */
+    suspend fun removeSongs(id: String, songs: List<Song>) =
+        withContext(Dispatchers.IO) {
+            if (songs.isEmpty()) return@withContext
+            val drop = songs.map { it.songKey }.toHashSet()
+            val remaining = dao.getTracks(id).map { it.songKey }.filterNot { it in drop }
+            dao.replaceTracks(id, remaining)
+            touch(id)
+        }
+
+    /**
+     * Playlists that already contain the first song (exact membership for the
+     * common single-song sheet; multi-song uses the same heuristic).
+     */
+    suspend fun playlistsContaining(songs: List<Song>): Set<String> =
+        withContext(Dispatchers.IO) {
+            if (songs.isEmpty()) return@withContext emptySet()
+            dao.playlistIdsContaining(songs.first().songKey).toSet()
+        }
+
     suspend fun removeAt(id: String, position: Int) =
         withContext(Dispatchers.IO) {
             val keys = dao.getTracks(id).map { it.songKey }.toMutableList()

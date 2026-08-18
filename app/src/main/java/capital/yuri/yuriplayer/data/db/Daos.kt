@@ -73,8 +73,14 @@ interface PlaylistDao {
     @Query("SELECT * FROM playlist_tracks WHERE playlistId = :playlistId ORDER BY position ASC")
     suspend fun getTracks(playlistId: String): List<PlaylistTrackEntity>
 
+    @Query("SELECT playlistId FROM playlist_tracks WHERE songKey = :songKey")
+    suspend fun playlistIdsContaining(songKey: String): List<String>
+
     @Query("DELETE FROM playlist_tracks WHERE playlistId = :playlistId")
     suspend fun clearTracks(playlistId: String)
+
+    @Query("DELETE FROM playlist_tracks WHERE playlistId = :playlistId AND songKey = :songKey")
+    suspend fun deleteTrackByKey(playlistId: String, songKey: String)
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertTracks(tracks: List<PlaylistTrackEntity>)

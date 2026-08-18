@@ -42,6 +42,10 @@ abstract class YuriDatabase : RoomDatabase() {
                 context.applicationContext,
                 YuriDatabase::class.java,
                 "yuriplayer.db"
-            ).fallbackToDestructiveMigration().build()
+            )
+                // Never wipe user data on schema change. When bumping [version],
+                // add a Migration in YuriMigrations and register it here.
+                .addMigrations(*YuriMigrations.ALL)
+                .build()
     }
 }

@@ -31,7 +31,7 @@ class ArtistProfileRepository(
             entity?.toProfile(
                 links = parseLinks(entity.linksJson),
                 genres = parseGenresJson(entity.genresJson)
-            )
+            )?.let { preferLocalImage(it, key) }
         }
     }
 
@@ -55,6 +55,9 @@ class ArtistProfileRepository(
 
         // Always include MusicBrainz entity page + search-style streaming fallbacks when missing
         merged = ensureDiscoveryLinks(merged)
+
+        // Prefer any already-persisted user image — never overwrite it with remote
+        merged = preferLocalImage(merged, key)
 
         dao.upsert(
             ArtistProfileEntity(
@@ -112,12 +115,22 @@ class ArtistProfileRepository(
         return images.resolve(UserImageStore.NS_ARTIST_BANNERS, key)
     }
 
+    /** If a local file exists for this artist, force it and mark source=user. */
+    private fun preferLocalImage(profile: ArtistProfile, key: String): ArtistProfile {
+        val local = images.resolve(UserImageStore.NS_ARTISTS, key) ?: return profile
+        if (profile.imageUri == local && profile.source == "user") return profile
+        return profile.copy(imageUri = local, source = "user")
+    }
+
     private fun merge(base: ArtistProfile, incoming: ArtistProfile): ArtistProfile =
         base.copy(
             displayName = incoming.displayName.ifBlank { base.displayName },
             bio = listOfNotNull(base.bio, incoming.bio).maxByOrNull { it.length },
-            imageUri = if (base.source == "user" && base.imageUri != null) base.imageUri
-            else base.imageUri ?: incoming.imageUri,
+            imageUri = when {
+                base.source == "user" && !base.imageUri.isNullOrBlank() -> base.imageUri
+                base.imageUri?.startsWith("file:") == true -> base.imageUri
+                else -> base.imageUri ?: incoming.imageUri
+            },
             websiteUrl = base.websiteUrl ?: incoming.websiteUrl,
             links = (base.links + incoming.links).distinctBy { it.url.lowercase() },
             genres = (base.genres + incoming.genres)
@@ -143,7 +156,6 @@ class ArtistProfileRepository(
                 "https://musicbrainz.org/search?query=$q&type=artist&method=indexed",
                 "MusicBrainz"
             )
-            // Search deep-links only when we lack an exact platform URL
             if (profile.links.none { it.label.equals("Spotify", true) }) {
                 addIfMissing("https://open.spotify.com/search/$q", "Spotify")
             }
