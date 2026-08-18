@@ -25,6 +25,8 @@ data class Song(
     /** Disc / media set number (1-based). Null = single-disc or unknown. */
     val discNumber: Int? = null,
     val year: Int? = null,
+    /** Genre tag (may be semicolon-separated). */
+    val genre: String? = null,
     val path: String? = null,
     val mimeType: String? = null
 ) {
@@ -48,11 +50,14 @@ data class Song(
     val displayAlbumArtist: String
         get() = effectiveAlbumArtist ?: "Unknown Artist"
 
-    /**
-     * Individual credited artists for linking (Spotify-style).
-     * Prefer the track `artist` tag; fall back to album artist as a single credit.
-     * Local tags only split on `;` — structured sources should pass real arrays later.
-     */
+    /** Parsed genre list from semicolon / slash / comma separated tag. */
+    val genres: List<String>
+        get() = genre.orEmpty()
+            .split(';', '/', ',', '|')
+            .map { it.trim() }
+            .filter { it.isNotEmpty() }
+            .distinctBy { it.lowercase() }
+
     val creditArtists: List<String>
         get() {
             val fromArtist = parseArtistCredits(artist)
@@ -71,11 +76,9 @@ data class Song(
     val hasArtist: Boolean get() = artist.isMeaningfulTag() || albumArtist.isMeaningfulTag()
     val hasTitle: Boolean get() = title.isMeaningfulTag()
 
-    /** Stable key for playlists / source overrides / queue identity. */
     val songKey: String
         get() = path?.lowercase() ?: contentUri.toString()
 
-    /** Stable identity for “is this the same track” checks. */
     fun isSameAs(other: Song?): Boolean {
         if (other == null) return false
         if (path != null && other.path != null) return path == other.path
@@ -108,14 +111,12 @@ fun SortMode.label(): String = when (this) {
     SortMode.TRACK -> "Track #"
 }
 
-/** Stable key for album prefs / navigation. */
 fun albumKey(name: String?, artist: String?): String {
     val a = (artist ?: "").trim().lowercase()
     val n = (name ?: "").trim().lowercase()
     return "$a|$n"
 }
 
-/** Normalized artist page key (case-insensitive, collapsed whitespace). */
 fun artistKey(name: String?): String? {
     if (name == null) return null
     val t = name.trim().replace(Regex("\\s+"), " ").lowercase()

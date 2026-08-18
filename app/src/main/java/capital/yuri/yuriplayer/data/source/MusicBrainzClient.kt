@@ -27,7 +27,8 @@ class MusicBrainzClient(
         val mbid: String,
         val title: String?,
         val year: Int?,
-        val hasFrontCover: Boolean
+        val hasFrontCover: Boolean,
+        val genres: List<String> = emptyList()
     )
 
     data class ArtistHit(
@@ -59,7 +60,13 @@ class MusicBrainzClient(
                 URLEncoder.encode(query, "UTF-8") +
                 "&fmt=json&limit=5"
             val body = getText(url) ?: return@withContext null
-            parseReleaseSearch(body)
+            val basic = parseReleaseSearch(body) ?: return@withContext null
+            // Tags on the release for genres
+            val detail = getText(
+                "https://musicbrainz.org/ws/2/release/${basic.mbid}?inc=tags&fmt=json"
+            )
+            val genres = detail?.let { parseTags(it) }.orEmpty()
+            basic.copy(genres = genres)
         }
 
     suspend fun searchArtist(name: String): ArtistHit? =
@@ -77,12 +84,10 @@ class MusicBrainzClient(
             hit.copy(imageUrl = image)
         }
 
-    /** Extra image URLs derived from MB url-rels (Wikidata P18 list, Wikipedia, direct image). */
     suspend fun expandImageCandidates(hit: ArtistHit): List<Pair<String, String>> =
         withContext(Dispatchers.IO) {
             val out = LinkedHashMap<String, String>()
             hit.imageUrl?.let { out[it] = "MusicBrainz image" }
-            // All Wikidata P18 claims
             val wdUrl = hit.links.firstOrNull { it.url.contains("wikidata.org", true) }?.url
             if (wdUrl != null) {
                 val qid = Regex("Q\\d+").find(wdUrl)?.value
@@ -190,12 +195,12 @@ class MusicBrainzClient(
         }
     }
 
-    private suspend fun resolveWikidataImage(hit: ArtistHit): String? =
-        allWikidataP18(
-            Regex("Q\\d+").find(
-                hit.links.firstOrNull { it.url.contains("wikidata.org", true) }?.url.orEmpty()
-            )?.value ?: return null
-        ).firstOrNull()
+    private suspend fun resolveWikidataImage(hit: ArtistHit): String? {
+        val wdUrl = hit.links.firstOrNull { it.url.contains("wikidata.org", true) }?.url
+            ?: return null
+        val qid = Regex("Q\\d+").find(wdUrl)?.value ?: return null
+        return allWikidataP18(qid).firstOrNull()
+    }
 
     private suspend fun resolveWikipediaImage(hit: ArtistHit): String? {
         val wikiUrl = hit.links.firstOrNull {
@@ -231,6 +236,25 @@ class MusicBrainzClient(
     suspend fun downloadUrl(url: String, destFile: File): Boolean =
         withContext(Dispatchers.IO) { downloadToFile(url, destFile) }
 
+    private fun parseTags(json: String): List<String> {
+        return try {
+            val tags = JSONObject(json).optJSONArray("tags") ?: return emptyList()
+            val scored = mutableListOf<Pair<String, Int>>()
+            for (i in 0 until tags.length()) {
+                val t = tags.optJSONObject(i) ?: continue
+                val name = t.optString("name").trim()
+                if (name.isEmpty()) continue
+                scored += name to t.optInt("count", 0)
+            }
+            scored.sortedByDescending { it.second }
+                .map { it.first }
+                .distinctBy { it.lowercase() }
+                .take(12)
+        } catch (_: Exception) {
+            emptyList()
+        }
+    }
+
     private fun parseArtistDetail(json: String, mbid: String): ArtistHit {
         return try {
             val root = JSONObject(json)
@@ -255,7 +279,6 @@ class MusicBrainzClient(
                             if (website == null) website = resource
                             links += categorizeLink(resource, "Website")
                         }
-                        // Social
                         type.contains("twitter") || resource.contains("twitter.com") ||
                             resource.contains("x.com/") ->
                             links += categorizeLink(resource, "X / Twitter")
@@ -265,7 +288,6 @@ class MusicBrainzClient(
                             links += categorizeLink(resource, "Facebook")
                         type.contains("tiktok") || resource.contains("tiktok.com") ->
                             links += categorizeLink(resource, "TikTok")
-                        // Streaming / platforms
                         type.contains("bandcamp") || resource.contains("bandcamp.com") ->
                             links += categorizeLink(resource, "Bandcamp")
                         type.contains("soundcloud") || resource.contains("soundcloud.com") ->
@@ -282,7 +304,6 @@ class MusicBrainzClient(
                             links += categorizeLink(resource, "Deezer")
                         type.contains("tidal") || resource.contains("tidal.com") ->
                             links += categorizeLink(resource, "Tidal")
-                        // Databases
                         type == "wikidata" || resource.contains("wikidata.org") ->
                             links += categorizeLink(resource, "Wikidata")
                         type.contains("wikipedia") || resource.contains("wikipedia.org") ->
@@ -299,7 +320,6 @@ class MusicBrainzClient(
                         type.contains("bandsintown") ->
                             links += categorizeLink(resource, "Bandsintown")
                         else -> {
-                            // Still keep unknown url-rels if useful
                             if (resource.startsWith("http")) {
                                 links += categorizeLink(resource, type.replaceFirstChar { it.uppercase() })
                             }
@@ -308,30 +328,13 @@ class MusicBrainzClient(
                 }
             }
 
-            // MusicBrainz tags → genres (score-ordered)
-            val genres = mutableListOf<Pair<String, Int>>()
-            val tags = root.optJSONArray("tags")
-            if (tags != null) {
-                for (i in 0 until tags.length()) {
-                    val t = tags.optJSONObject(i) ?: continue
-                    val tagName = t.optString("name").trim()
-                    if (tagName.isEmpty()) continue
-                    val count = t.optInt("count", 0)
-                    genres += tagName to count
-                }
-            }
-            val genreNames = genres.sortedByDescending { it.second }
-                .map { it.first }
-                .distinctBy { it.lowercase() }
-                .take(12)
-
             ArtistHit(
                 mbid = mbid,
                 name = name,
                 imageUrl = imageUrl,
                 website = website,
                 links = links.distinctBy { it.url.lowercase() }.take(24),
-                genres = genreNames
+                genres = parseTags(json)
             )
         } catch (e: Exception) {
             Log.w(TAG, "parse artist detail failed", e)
