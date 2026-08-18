@@ -139,12 +139,12 @@ private fun sortedReleaseTracks(album: AlbumItem): List<Song> =
             .thenBy(String.CASE_INSENSITIVE_ORDER) { it.displayTitle }
     )
 
-/** Visible banner body below the status bar. Total draw height = this + status inset. */
+/** Banner body below status bar; total height = status inset + this. */
 private val ArtistBannerBodyHeight = 200.dp
 private val ArtistAvatarOnBanner = 132.dp
 private val ArtistAvatarPlain = 160.dp
-private val ArtistGradientFade = 200.dp
-private val ArtistHeaderHeightPlain = 300.dp
+private val ArtistGradientFade = 180.dp
+private val ArtistHeaderHeightPlain = 280.dp
 
 private fun parseImageUri(raw: String?): Uri? {
     if (raw.isNullOrBlank()) return null
@@ -251,11 +251,10 @@ fun ArtistDetailScreen(
 
     val hasBanner = !bannerUri.isNullOrBlank()
     val statusBarTop = WindowInsets.statusBars.asPaddingValues().calculateTopPadding()
-    // Banner draws from y=0 under the status bar
     val bannerTotalHeight: Dp = if (hasBanner) statusBarTop + ArtistBannerBodyHeight else 0.dp
 
-    // Solid theme wash ends at banner bottom (or plain header height)
-    val solidHeaderHeight = if (hasBanner) bannerTotalHeight else ArtistHeaderHeightPlain
+    // Initial themed wash (no banner: solid header; with banner: light under-status tint only)
+    val solidHeaderHeight = if (hasBanner) statusBarTop + ArtistBannerBodyHeight else ArtistHeaderHeightPlain
     val fadePx = with(density) { ArtistGradientFade.toPx() }
     val headerPx = with(density) { solidHeaderHeight.toPx() }
 
@@ -302,7 +301,7 @@ fun ArtistDetailScreen(
         return
     }
 
-    // Transparent status bar when banner sits underneath; otherwise themed solid
+    // Transparent status bar so the scrolling banner shows through
     ThemedStatusBar(
         color = if (hasBanner) Color.Transparent else artBg,
         enabled = true
@@ -420,65 +419,37 @@ fun ArtistDetailScreen(
             .fillMaxSize()
             .background(defaultBg)
             .drawBehind {
-                val solidEnd = headerPx
-                val fadeEnd = solidEnd + fadePx
-                drawRect(
-                    color = artBg,
-                    topLeft = Offset.Zero,
-                    size = Size(size.width, solidEnd.coerceAtMost(size.height))
-                )
-                if (fadeEnd > solidEnd) {
+                // Soft themed wash behind the initial hero (scrolls away visually with content)
+                if (!hasBanner) {
+                    val solidEnd = headerPx
+                    val fadeEnd = solidEnd + fadePx
                     drawRect(
-                        brush = Brush.verticalGradient(
-                            colors = listOf(
-                                artBg,
-                                artBg.copy(alpha = 0.75f),
-                                artBg.copy(alpha = 0.35f),
-                                Color.Transparent
-                            ),
-                            startY = solidEnd,
-                            endY = fadeEnd
-                        ),
-                        topLeft = Offset(0f, solidEnd),
-                        size = Size(
-                            size.width,
-                            (fadeEnd - solidEnd).coerceAtMost(size.height - solidEnd)
-                        )
+                        color = artBg,
+                        topLeft = Offset.Zero,
+                        size = Size(size.width, solidEnd.coerceAtMost(size.height))
                     )
+                    if (fadeEnd > solidEnd) {
+                        drawRect(
+                            brush = Brush.verticalGradient(
+                                colors = listOf(
+                                    artBg,
+                                    artBg.copy(alpha = 0.75f),
+                                    artBg.copy(alpha = 0.35f),
+                                    Color.Transparent
+                                ),
+                                startY = solidEnd,
+                                endY = fadeEnd
+                            ),
+                            topLeft = Offset(0f, solidEnd),
+                            size = Size(
+                                size.width,
+                                (fadeEnd - solidEnd).coerceAtMost(size.height - solidEnd)
+                            )
+                        )
+                    }
                 }
             }
     ) {
-        // Full-bleed banner under the status bar
-        if (hasBanner) {
-            Box(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(bannerTotalHeight)
-                    .align(Alignment.TopCenter)
-            ) {
-                AsyncImage(
-                    model = ImageRequest.Builder(context)
-                        .data(bannerUri)
-                        .crossfade(true)
-                        .build(),
-                    contentDescription = "${artist.displayName} banner",
-                    contentScale = ContentScale.Crop,
-                    modifier = Modifier.fillMaxSize()
-                )
-                Box(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(80.dp)
-                        .align(Alignment.BottomCenter)
-                        .background(
-                            Brush.verticalGradient(
-                                listOf(Color.Transparent, Color.Black.copy(alpha = 0.4f))
-                            )
-                        )
-                )
-            }
-        }
-
         LazyColumn(
             modifier = Modifier.fillMaxSize(),
             contentPadding = PaddingValues(bottom = 96.dp)
@@ -488,8 +459,9 @@ fun ArtistDetailScreen(
                     name = artist.displayName,
                     seedSong = albums.firstOrNull()?.songs?.firstOrNull()
                         ?: artist.songs.firstOrNull(),
-                    hasBanner = hasBanner,
+                    bannerUri = bannerUri,
                     bannerTotalHeight = bannerTotalHeight,
+                    artBg = artBg,
                     stats = "${formatAlbumCount(artist.albumCount)} · ${formatTrackCount(artist.trackCount)}",
                     titleColor = onArt,
                     mutedColor = mutedOnArt,
@@ -616,7 +588,7 @@ fun ArtistDetailScreen(
             }
         }
 
-        // Floating top bar over banner / header
+        // Floating chrome stays put while the banner scrolls away underneath
         Row(
             modifier = Modifier
                 .fillMaxWidth()
@@ -869,8 +841,9 @@ private fun DiscographyReleaseHeader(
 private fun ArtistHero(
     name: String,
     seedSong: Song?,
-    hasBanner: Boolean,
+    bannerUri: String?,
     bannerTotalHeight: Dp,
+    artBg: Color,
     stats: String,
     titleColor: Color,
     mutedColor: Color,
@@ -880,22 +853,57 @@ private fun ArtistHero(
     onToggleFavorite: () -> Unit,
     onPlayAll: () -> Unit
 ) {
+    val context = LocalContext.current
+    val hasBanner = !bannerUri.isNullOrBlank()
+
     Column(
         modifier = Modifier.fillMaxWidth(),
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
         if (hasBanner) {
-            // Banner is drawn under status bar in the parent Box.
-            // Spacer so the avatar center lands on the banner's bottom edge.
+            // Banner + avatar scroll together; banner starts at y=0 under status bar
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .height(bannerTotalHeight + ArtistAvatarOnBanner / 2),
-                contentAlignment = Alignment.BottomCenter
+                    .height(bannerTotalHeight + ArtistAvatarOnBanner / 2)
             ) {
                 Box(
                     modifier = Modifier
+                        .fillMaxWidth()
+                        .height(bannerTotalHeight)
+                        .align(Alignment.TopCenter)
+                ) {
+                    AsyncImage(
+                        model = ImageRequest.Builder(context)
+                            .data(bannerUri)
+                            .crossfade(true)
+                            .build(),
+                        contentDescription = "$name banner",
+                        contentScale = ContentScale.Crop,
+                        modifier = Modifier.fillMaxSize()
+                    )
+                    // Fade from banner into page — starts at banner bottom edge
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(96.dp)
+                            .align(Alignment.BottomCenter)
+                            .background(
+                                Brush.verticalGradient(
+                                    listOf(
+                                        Color.Transparent,
+                                        artBg.copy(alpha = 0.55f),
+                                        artBg.copy(alpha = 0.9f)
+                                    )
+                                )
+                            )
+                    )
+                }
+
+                Box(
+                    modifier = Modifier
                         .size(ArtistAvatarOnBanner)
+                        .align(Alignment.BottomCenter)
                         .border(3.dp, titleColor.copy(alpha = 0.9f), CircleShape)
                         .clip(CircleShape)
                 ) {
@@ -910,7 +918,7 @@ private fun ArtistHero(
             Spacer(modifier = Modifier.height(12.dp))
         } else {
             Spacer(modifier = Modifier.statusBarsPadding())
-            Spacer(modifier = Modifier.height(48.dp)) // room for floating toolbar
+            Spacer(modifier = Modifier.height(48.dp))
             ArtistArt(
                 artistName = name,
                 seedSong = seedSong,
