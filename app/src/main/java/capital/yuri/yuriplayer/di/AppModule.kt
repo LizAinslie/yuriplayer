@@ -19,6 +19,7 @@ import capital.yuri.yuriplayer.data.source.ArtistInfoSource
 import capital.yuri.yuriplayer.data.source.AudioDbArtistImageSource
 import capital.yuri.yuriplayer.data.source.BandsintownClient
 import capital.yuri.yuriplayer.data.source.DeezerArtistImageSource
+import capital.yuri.yuriplayer.data.source.DiscogsArtistImageSource
 import capital.yuri.yuriplayer.data.source.LibrarySource
 import capital.yuri.yuriplayer.data.source.LibrarySourceRegistry
 import capital.yuri.yuriplayer.data.source.LocalArtistProfileProvider
@@ -78,7 +79,8 @@ val appModule = module {
             WikipediaArtistImageSource(get()),
             WikidataArtistImageSource(get()),
             DeezerArtistImageSource(get()),
-            AudioDbArtistImageSource(get())
+            AudioDbArtistImageSource(get()),
+            DiscogsArtistImageSource(get())
         )
     }
     single { ArtistInfoService(get(), get()) }
