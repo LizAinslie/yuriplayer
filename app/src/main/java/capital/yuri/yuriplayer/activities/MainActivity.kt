@@ -72,6 +72,7 @@ import capital.yuri.yuriplayer.activities.ui.ArtistDetailScreen
 import capital.yuri.yuriplayer.activities.ui.EditAlbumMetadataScreen
 import capital.yuri.yuriplayer.activities.ui.EditSongMetadataScreen
 import capital.yuri.yuriplayer.activities.ui.LibraryScreen
+import capital.yuri.yuriplayer.activities.ui.LocalSongNav
 import capital.yuri.yuriplayer.activities.ui.LocalStatusBarStack
 import capital.yuri.yuriplayer.activities.ui.MiniPlayerBar
 import capital.yuri.yuriplayer.activities.ui.MyStuffScreen
@@ -79,6 +80,7 @@ import capital.yuri.yuriplayer.activities.ui.NowPlayingScreen
 import capital.yuri.yuriplayer.activities.ui.PlaceholderScreen
 import capital.yuri.yuriplayer.activities.ui.PlaylistDetailScreen
 import capital.yuri.yuriplayer.activities.ui.SettingsScreen
+import capital.yuri.yuriplayer.activities.ui.SongNavActions
 import capital.yuri.yuriplayer.activities.ui.StatusBarColorStack
 import capital.yuri.yuriplayer.activities.ui.theme.YuriPlayerTheme
 import capital.yuri.yuriplayer.data.ActivityTitleFormat
@@ -481,7 +483,22 @@ fun YuriApp(
         pushDetail(DetailRoute.Artist(resolveArtist(name)))
     }
 
-    CompositionLocalProvider(LocalStatusBarStack provides statusBarStack) {
+    fun openArtistByName(name: String) {
+        if (name.isBlank()) {
+            Toast.makeText(context, "No artist tag", Toast.LENGTH_SHORT).show()
+            return
+        }
+        playerExpanded = false
+        pushDetail(DetailRoute.Artist(resolveArtist(name)))
+    }
+
+    CompositionLocalProvider(
+        LocalStatusBarStack provides statusBarStack,
+        LocalSongNav provides SongNavActions(
+            openAlbumForSong = { openAlbumForSong(it) },
+            openArtistByName = { openArtistByName(it) }
+        )
+    ) {
         ApplyStatusBarStack(statusBarStack)
 
         Box(modifier = Modifier.fillMaxSize()) {
