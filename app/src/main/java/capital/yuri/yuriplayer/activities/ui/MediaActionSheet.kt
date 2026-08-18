@@ -126,10 +126,7 @@ private fun songArtistNames(song: Song): List<String> {
     return listOfNotNull(single)
 }
 
-/**
- * Shared song sheet — keep every entry point in sync.
- * Defaults Go to album / artist from [LocalSongNav].
- */
+/** Shared song sheet — defaults Go to album / artist from [LocalSongNav]. */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun SongContextSheet(
@@ -283,8 +280,6 @@ fun AlbumContextSheet(
     onFetchMetadata: (() -> Unit)? = null,
     onAddToMyStuff: (() -> Unit)? = null
 ) {
-    val pinStore: MyStuffPinStore = koinInject()
-    val context = LocalContext.current
     val albumNav = LocalAlbumNav.current
     var showPlaylistPicker by remember { mutableStateOf(false) }
 
@@ -346,7 +341,7 @@ fun AlbumContextSheet(
     }
 }
 
-/** Shared artist sheet — defaults from [LocalArtistNav], including optional image actions. */
+/** Shared artist sheet — defaults from [LocalArtistNav], including optional image/links. */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun ArtistContextSheet(
@@ -357,10 +352,11 @@ fun ArtistContextSheet(
     onFetchImage: (() -> Unit)? = null,
     onChangeBanner: (() -> Unit)? = null,
     onFetchBanner: (() -> Unit)? = null,
+    onClearImage: (() -> Unit)? = null,
+    onClearBanner: (() -> Unit)? = null,
+    onOpenLinks: (() -> Unit)? = null,
     onAddToMyStuff: (() -> Unit)? = null
 ) {
-    val pinStore: MyStuffPinStore = koinInject()
-    val context = LocalContext.current
     val artistNav = LocalArtistNav.current
     val name = artist.displayName
 
@@ -370,6 +366,9 @@ fun ArtistContextSheet(
     val fetchImage = onFetchImage ?: artistNav.fetchImage?.let { fn -> { fn(name) } }
     val changeBanner = onChangeBanner ?: artistNav.changeBanner?.let { fn -> { fn(name) } }
     val fetchBanner = onFetchBanner ?: artistNav.fetchBanner?.let { fn -> { fn(name) } }
+    val clearImage = onClearImage ?: artistNav.clearImage?.let { fn -> { fn(name) } }
+    val clearBanner = onClearBanner ?: artistNav.clearBanner?.let { fn -> { fn(name) } }
+    val openLinks = onOpenLinks ?: artistNav.openLinks?.let { fn -> { fn(name) } }
 
     ModalBottomSheet(
         onDismissRequest = onDismiss,
@@ -400,6 +399,12 @@ fun ArtistContextSheet(
                 changeImage()
             }
         }
+        if (clearImage != null) {
+            MediaSheetItem("Clear artist image") {
+                onDismiss()
+                clearImage()
+            }
+        }
         if (fetchBanner != null) {
             MediaSheetItem("Fetch banner") {
                 onDismiss()
@@ -410,6 +415,18 @@ fun ArtistContextSheet(
             MediaSheetItem("Change banner") {
                 onDismiss()
                 changeBanner()
+            }
+        }
+        if (clearBanner != null) {
+            MediaSheetItem("Clear banner") {
+                onDismiss()
+                clearBanner()
+            }
+        }
+        if (openLinks != null) {
+            MediaSheetItem("Links") {
+                onDismiss()
+                openLinks()
             }
         }
         MediaSheetBottomPad()
@@ -428,7 +445,6 @@ fun PlaylistContextSheet(
     onDelete: (() -> Unit)? = null,
     onAddToMyStuff: (() -> Unit)? = null
 ) {
-    val context = LocalContext.current
     val playlistNav = LocalPlaylistNav.current
 
     val startRadio = onStartRadio ?: { playlistNav.startRadio(playlist) }
