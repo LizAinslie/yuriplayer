@@ -33,7 +33,6 @@ class MusicRepository(
             "/ringtones/", "/notifications/", "/alarms/",
             "/ui/", "/system/media/"
         )
-        // NOTE: in a raw """ string use \d once — "\\d" matches a literal backslash+d
         private val YEAR_REGEX = Regex("""(19|20)\d{2}""")
     }
 
@@ -180,6 +179,7 @@ class MusicRepository(
                     n.takeIf { it > 0 }
                 }
                 var year = it.getInt(yearCol).takeIf { y -> y in 1000..2100 }
+                var genre: String? = null
                 val albumId = it.getLong(albumIdCol)
 
                 if (path != null) {
@@ -190,8 +190,8 @@ class MusicRepository(
                     if (albumArtist == null) albumArtist = tags.albumArtist
                     if (duration == null && tags.durationMs != null) duration = tags.durationMs
                     if (track == null && tags.trackNumber != null) track = tags.trackNumber
-                    // File tags win — MediaStore YEAR is often 0 for FLAC
                     if (tags.year != null) year = tags.year
+                    if (tags.genre != null) genre = tags.genre
                     if (title == fileNameTitle(path)) {
                         title = tags.title
                     }
@@ -217,6 +217,7 @@ class MusicRepository(
                     albumArtUri = albumArtUri,
                     trackNumber = track,
                     year = year,
+                    genre = genre,
                     path = path,
                     mimeType = mime
                 )
@@ -255,6 +256,7 @@ class MusicRepository(
                             contentUri = Uri.fromFile(file),
                             trackNumber = tags.trackNumber,
                             year = tags.year,
+                            genre = tags.genre,
                             path = path,
                             mimeType = mimeFromPath(path)
                         )
@@ -275,12 +277,10 @@ class MusicRepository(
         val album: String? = null,
         val durationMs: Long? = null,
         val trackNumber: Int? = null,
-        val year: Int? = null
+        val year: Int? = null,
+        val genre: String? = null
     )
 
-    /**
-     * Always try jaudiotagger for year — MMR is unreliable for FLAC YEAR on many devices.
-     */
     private fun readTagsFromFile(path: String): FileTags {
         val fromMmr = readTagsWithRetriever(path)
         val fromJaudio = readTagsWithJaudio(path)
@@ -291,8 +291,8 @@ class MusicRepository(
             album = fromMmr.album ?: fromJaudio.album,
             durationMs = fromMmr.durationMs ?: fromJaudio.durationMs,
             trackNumber = fromMmr.trackNumber ?: fromJaudio.trackNumber,
-            // Prefer jaudio year (real file tags) over MMR
-            year = fromJaudio.year ?: fromMmr.year
+            year = fromJaudio.year ?: fromMmr.year,
+            genre = fromJaudio.genre ?: fromMmr.genre
         )
     }
 
@@ -311,7 +311,8 @@ class MusicRepository(
                     ?.toLongOrNull()?.takeIf { it > 0 },
                 trackNumber = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_CD_TRACK_NUMBER)
                     ?.let { parseTrackNumber(it) },
-                year = parseYear(yearRaw) ?: parseYear(dateRaw)
+                year = parseYear(yearRaw) ?: parseYear(dateRaw),
+                genre = cleanTag(retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_GENRE))
             )
         } catch (_: Exception) {
             FileTags()
@@ -330,7 +331,6 @@ class MusicRepository(
             fun field(key: FieldKey): String? =
                 cleanTag(runCatching { tag.getFirst(key) }.getOrNull())
 
-            // FLAC/Vorbis often store release year as DATE rather than YEAR
             val year = parseYear(field(FieldKey.YEAR))
                 ?: parseYear(field(FieldKey.ORIGINAL_YEAR))
                 ?: parseYear(runCatching { tag.getFirst("DATE") }.getOrNull())
@@ -346,7 +346,8 @@ class MusicRepository(
                     audio.audioHeader?.trackLength?.toLong()?.times(1000)?.takeIf { it > 0 }
                 }.getOrNull(),
                 trackNumber = field(FieldKey.TRACK)?.let { parseTrackNumber(it) },
-                year = year
+                year = year,
+                genre = field(FieldKey.GENRE)
             )
         } catch (e: Exception) {
             Log.d(TAG, "jaudio tags failed for $path: ${e.message}")
