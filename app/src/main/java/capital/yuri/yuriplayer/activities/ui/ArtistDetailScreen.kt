@@ -35,6 +35,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.ArrowDropDown
+import androidx.compose.material.icons.filled.Link
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material3.Checkbox
@@ -212,7 +213,6 @@ fun ArtistDetailScreen(
 
     LaunchedEffect(artist.name, albums.size, profile?.imageUri, profile?.bio, profile?.genres, themeTick) {
         val resolved = runCatching { profileRepo.resolve(artist.displayName) }.getOrNull()
-        // Prefer live bannerUri if already set this session; still refresh from disk
         val diskBanner = profileRepo.bannerUri(artist.displayName)
         if (diskBanner != bannerUri) bannerUri = diskBanner
         val themeUri = parseImageUri(bannerUri)
@@ -294,7 +294,6 @@ fun ArtistDetailScreen(
                                 artist.displayName,
                                 cropped.toString()
                             )
-                            // Same-frame update — new timestamped file URI busts Coil cache
                             bannerUri = saved
                             Toast.makeText(context, "Banner updated", Toast.LENGTH_SHORT).show()
                         }
@@ -368,7 +367,7 @@ fun ArtistDetailScreen(
                     Toast.makeText(context, "Banner cleared", Toast.LENGTH_SHORT).show()
                 }
             }
-            MediaSheetItem("Data sources") {
+            MediaSheetItem("Links") {
                 showMenu = false
                 showDataSources = true
             }
@@ -382,7 +381,7 @@ fun ArtistDetailScreen(
             sheetState = rememberModalBottomSheetState()
         ) {
             Text(
-                "Data sources",
+                "Links",
                 style = MaterialTheme.typography.titleLarge,
                 fontWeight = FontWeight.Bold,
                 modifier = Modifier.padding(horizontal = 20.dp, vertical = 8.dp)
@@ -418,6 +417,8 @@ fun ArtistDetailScreen(
         )
         return
     }
+
+    val hasLinks = dataLinks.isNotEmpty() || !profile?.links.isNullOrEmpty()
 
     BoxWithConstraints(
         modifier = Modifier
@@ -472,6 +473,7 @@ fun ArtistDetailScreen(
                     accent = accent,
                     onAccent = onAccent,
                     artistSaved = artistSaved,
+                    hasLinks = hasLinks,
                     onToggleFavorite = {
                         val now = pinStore.toggleArtist(artist)
                         Toast.makeText(
@@ -480,6 +482,7 @@ fun ArtistDetailScreen(
                             Toast.LENGTH_SHORT
                         ).show()
                     },
+                    onOpenLinks = { showDataSources = true },
                     onPlayAll = onStartRadio
                 )
             }
@@ -853,7 +856,9 @@ private fun ArtistHero(
     accent: Color,
     onAccent: Color,
     artistSaved: Boolean,
+    hasLinks: Boolean = false,
     onToggleFavorite: () -> Unit,
+    onOpenLinks: () -> Unit = {},
     onPlayAll: () -> Unit
 ) {
     val context = LocalContext.current
@@ -981,6 +986,15 @@ private fun ArtistHero(
                     tint = titleColor.copy(alpha = 0.85f),
                     savedTint = accent
                 )
+                if (hasLinks) {
+                    IconButton(onClick = onOpenLinks) {
+                        Icon(
+                            Icons.Default.Link,
+                            contentDescription = "Links",
+                            tint = titleColor.copy(alpha = 0.85f)
+                        )
+                    }
+                }
             }
         }
     }
