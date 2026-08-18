@@ -71,22 +71,17 @@ class DiscogsArtistImageSource(
         artistName: String,
         kind: ArtistImageKind
     ): List<ArtistImageCandidate> = withContext(Dispatchers.IO) {
-        // Discogs artist images are portrait-ish; still useful for banners as fallbacks
         val hits = searchArtists(artistName).take(3)
         if (hits.isEmpty()) return@withContext emptyList()
 
         val out = LinkedHashMap<String, ArtistImageCandidate>()
         for (hit in hits) {
-            // Prefer full image list from artist detail
             val detail = artistDetail(hit.id)
             val images = detail?.optJSONArray("images")
             if (images != null && images.length() > 0) {
                 for (i in 0 until images.length()) {
                     val img = images.optJSONObject(i) ?: continue
-                    val type = img.optString("type") // primary / secondary
-                    if (kind == ArtistImageKind.BANNER && type == "primary") {
-                        // still include primary for banner picker if no others
-                    }
+                    val type = img.optString("type")
                     val url = img.optString("uri").takeIf { it.startsWith("http") }
                         ?: img.optString("resource_url").takeIf { it.startsWith("http") }
                         ?: continue
@@ -108,9 +103,8 @@ class DiscogsArtistImageSource(
                 }
             }
 
-            // Fallback: search payload thumbs (often empty, but cheap)
-            listOf(hit.coverImage, hit.thumb).forEach { url ->
-                if (!url.isNullOrBlank() && url.startsWith("http") && url !in out) {
+            listOfNotNull(hit.coverImage, hit.thumb).forEach { url ->
+                if (url.startsWith("http") && url !in out) {
                     out[url] = ArtistImageCandidate(
                         url = url,
                         sourceId = id,
@@ -143,7 +137,8 @@ class DiscogsArtistImageSource(
                 if (o.optString("type") != "artist") continue
                 val id = o.optLong("id", -1L)
                 if (id <= 0L) continue
-                val title = o.optString("title").ifBlank { continue }
+                val title = o.optString("title")
+                if (title.isBlank()) continue
                 if (!nameLooksClose(wanted, title)) continue
                 hits.add(
                     ArtistSearchHit(
@@ -154,7 +149,6 @@ class DiscogsArtistImageSource(
                     )
                 )
             }
-            // Exact / closest first
             hits.sortedByDescending { nameScore(wanted, it.title) }
         } catch (e: Exception) {
             Log.w(TAG, "search parse failed", e)
@@ -235,7 +229,6 @@ class DiscogsArtistImageSource(
 
     companion object {
         private const val TAG = "DiscogsArtistImg"
-        /** Stay under Discogs unauthenticated rate limit. */
         private const val MIN_INTERVAL_MS = 1_100L
     }
 }
