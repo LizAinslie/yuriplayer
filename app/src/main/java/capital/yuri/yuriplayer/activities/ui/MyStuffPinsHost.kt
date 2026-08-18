@@ -119,7 +119,7 @@ fun MyStuffPinsHost(
         LazyVerticalGrid(
             columns = GridCells.Fixed(2),
             modifier = Modifier.fillMaxSize(),
-            contentPadding = PaddingValues(horizontal = 20.dp, vertical = 4.dp, bottom = 8.dp),
+            contentPadding = PaddingValues(start = 20.dp, end = 20.dp, bottom = 8.dp, top = 4.dp),
             horizontalArrangement = Arrangement.spacedBy(12.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
