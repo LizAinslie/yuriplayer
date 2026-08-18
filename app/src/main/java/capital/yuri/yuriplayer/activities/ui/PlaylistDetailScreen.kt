@@ -91,6 +91,10 @@ import kotlin.math.sqrt
 private val ExpandedHeaderBody = 360.dp
 private val CollapsedBarHeight = 56.dp
 private val GradientFadeLength = 200.dp
+/** Compact header used while reordering (top bar + hint only). */
+private val ReorderHeaderBody = 110.dp
+/** Fixed height for edit mode so cover + name/description fields fit. */
+private val EditHeaderBody = 380.dp
 
 private enum class PlaylistMode { Browse, EditDetails, Reorder }
 
@@ -210,7 +214,7 @@ fun PlaylistDetailScreen(
     val defaultBg = base.background
     val fadePx = with(density) { GradientFadeLength.toPx() }
 
-    // Collapse only in Browse; Edit/Reorder stay fully expanded.
+    // Collapse only in Browse; Edit/Reorder use fixed heights that match their content.
     val collapseRangePx = with(density) { (ExpandedHeaderBody - CollapsedBarHeight).toPx() }
     var collapsePx by remember { mutableFloatStateOf(0f) }
     val f = if (mode == PlaylistMode.Browse) {
@@ -219,7 +223,11 @@ fun PlaylistDetailScreen(
         0f
     }
     val heightF = sqrt(f.toDouble()).toFloat()
-    val headerBodyH = ExpandedHeaderBody * (1f - heightF) + CollapsedBarHeight * heightF
+    val headerBodyH = when (mode) {
+        PlaylistMode.Browse -> ExpandedHeaderBody * (1f - heightF) + CollapsedBarHeight * heightF
+        PlaylistMode.EditDetails -> EditHeaderBody
+        PlaylistMode.Reorder -> ReorderHeaderBody
+    }
 
     val nestedScroll = remember(collapseRangePx, mode) {
         object : NestedScrollConnection {
