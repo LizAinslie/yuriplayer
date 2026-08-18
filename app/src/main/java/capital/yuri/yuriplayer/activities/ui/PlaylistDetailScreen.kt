@@ -5,6 +5,7 @@ import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
+import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -29,14 +30,14 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.DragHandle
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Image
-import androidx.compose.material.icons.filled.KeyboardArrowDown
-import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Radio
+import androidx.compose.material.icons.filled.Reorder
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -47,6 +48,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -60,12 +62,14 @@ import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.zIndex
 import capital.yuri.yuriplayer.data.MyStuffPinStore
 import capital.yuri.yuriplayer.data.PlaylistRepository
 import capital.yuri.yuriplayer.data.Song
@@ -80,6 +84,8 @@ import kotlin.math.roundToInt
 
 private val PlaylistHeaderHeight = 280.dp
 private val PlaylistGradientFade = 180.dp
+
+private enum class PlaylistMode { Browse, EditDetails, Reorder }
 
 @Composable
 fun PlaylistDetailScreen(
@@ -104,9 +110,10 @@ fun PlaylistDetailScreen(
     val base = MaterialTheme.colorScheme
     val density = LocalDensity.current
 
-    var editMode by remember { mutableStateOf(false) }
+    var mode by remember { mutableStateOf(PlaylistMode.Browse) }
     var showMenu by remember { mutableStateOf(false) }
     var editName by remember { mutableStateOf("") }
+    var editDescription by remember { mutableStateOf("") }
     var themeColors by remember { mutableStateOf(fallbackPlayerColors(base)) }
     var cropUri by remember { mutableStateOf<Uri?>(null) }
 
@@ -121,8 +128,11 @@ fun PlaylistDetailScreen(
         themeColors = themeService.themeFromSong(context, seed, base).colors
     }
 
-    LaunchedEffect(playlist?.name, editMode) {
-        if (editMode) editName = playlist?.name.orEmpty()
+    LaunchedEffect(playlist?.name, playlist?.description, mode) {
+        if (mode == PlaylistMode.EditDetails) {
+            editName = playlist?.name.orEmpty()
+            editDescription = playlist?.description.orEmpty()
+        }
     }
 
     fun startRadio() {
@@ -136,15 +146,15 @@ fun PlaylistDetailScreen(
         Toast.makeText(context, "Radio · ${playlist?.name ?: "Playlist"}", Toast.LENGTH_SHORT).show()
     }
 
-    fun saveNameAndExitEdit() {
+    fun saveDetailsAndExit() {
         val trimmed = editName.trim()
-        if (trimmed.isNotEmpty() && trimmed != playlist?.name) {
+        if (trimmed.isNotEmpty()) {
             scope.launch {
-                repo.rename(playlistId, trimmed)
-                Toast.makeText(context, "Renamed", Toast.LENGTH_SHORT).show()
+                repo.rename(playlistId, trimmed, editDescription.trim().ifEmpty { null })
+                Toast.makeText(context, "Saved", Toast.LENGTH_SHORT).show()
             }
         }
-        editMode = false
+        mode = PlaylistMode.Browse
     }
 
     if (cropUri != null) {
@@ -187,6 +197,7 @@ fun PlaylistDetailScreen(
     }
 
     val artBg = themeColors.container
+    val onArt = themeColors.onContainer
     val defaultBg = base.background
     val fadePx = with(density) { PlaylistGradientFade.toPx() }
     val headerPx = with(density) { PlaylistHeaderHeight.toPx() }
@@ -235,185 +246,325 @@ fun PlaylistDetailScreen(
                 verticalAlignment = Alignment.CenterVertically,
                 modifier = Modifier.fillMaxWidth()
             ) {
-                IconButton(onClick = onBack) {
+                IconButton(onClick = {
+                    when (mode) {
+                        PlaylistMode.Browse -> onBack()
+                        else -> mode = PlaylistMode.Browse
+                    }
+                }) {
                     Icon(
                         Icons.AutoMirrored.Filled.ArrowBack,
                         contentDescription = "Back",
-                        tint = themeColors.onContainer
+                        tint = onArt
                     )
                 }
                 Text(
-                    if (editMode) "Editing" else "Playlist",
+                    when (mode) {
+                        PlaylistMode.EditDetails -> "Edit details"
+                        PlaylistMode.Reorder -> "Reorder"
+                        PlaylistMode.Browse -> "Playlist"
+                    },
                     style = MaterialTheme.typography.titleMedium,
-                    color = themeColors.onContainer,
+                    color = onArt,
                     modifier = Modifier.weight(1f)
                 )
-                if (editMode) {
-                    TextButton(onClick = { saveNameAndExitEdit() }) {
-                        Icon(
-                            Icons.Default.Check,
-                            contentDescription = null,
-                            modifier = Modifier.size(18.dp),
-                            tint = themeColors.onContainer
-                        )
-                        Spacer(modifier = Modifier.width(4.dp))
-                        Text("Done", color = themeColors.onContainer)
+                when (mode) {
+                    PlaylistMode.EditDetails -> {
+                        TextButton(onClick = { saveDetailsAndExit() }) {
+                            Icon(
+                                Icons.Default.Check,
+                                contentDescription = null,
+                                modifier = Modifier.size(18.dp),
+                                tint = onArt
+                            )
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Text("Done", color = onArt)
+                        }
                     }
-                } else {
-                    IconButton(onClick = {
-                        editName = pl.name
-                        editMode = true
-                    }) {
-                        Icon(
-                            Icons.Default.Edit,
-                            contentDescription = "Edit",
-                            tint = themeColors.onContainer
-                        )
+                    PlaylistMode.Reorder -> {
+                        TextButton(onClick = { mode = PlaylistMode.Browse }) {
+                            Text("Done", color = onArt)
+                        }
                     }
-                    IconButton(onClick = { showMenu = true }) {
-                        Icon(
-                            Icons.Default.MoreVert,
-                            contentDescription = "More",
-                            tint = themeColors.onContainer
-                        )
+                    PlaylistMode.Browse -> {
+                        IconButton(onClick = {
+                            editName = pl.name
+                            editDescription = pl.description.orEmpty()
+                            mode = PlaylistMode.EditDetails
+                        }) {
+                            Icon(Icons.Default.Edit, contentDescription = "Edit details", tint = onArt)
+                        }
+                        IconButton(onClick = { mode = PlaylistMode.Reorder }) {
+                            Icon(Icons.Default.Reorder, contentDescription = "Reorder tracks", tint = onArt)
+                        }
+                        IconButton(onClick = { showMenu = true }) {
+                            Icon(Icons.Default.MoreVert, contentDescription = "More", tint = onArt)
+                        }
                     }
                 }
             }
 
-            Column(modifier = Modifier.padding(horizontal = 20.dp)) {
-                Box {
-                    PlaylistCoverArt(pl, size = 160.dp)
-                    if (editMode) {
-                        IconButton(
-                            onClick = { pickCover.launch("image/*") },
-                            modifier = Modifier
-                                .align(Alignment.BottomEnd)
-                                .background(
-                                    base.surface.copy(alpha = 0.9f),
-                                    RoundedCornerShape(8.dp)
-                                )
-                        ) {
-                            Icon(Icons.Default.Image, contentDescription = "Change cover")
-                        }
-                    }
-                }
-                Spacer(modifier = Modifier.height(16.dp))
-
-                if (editMode) {
-                    BasicTextField(
-                        value = editName,
-                        onValueChange = { editName = it },
-                        singleLine = true,
-                        textStyle = MaterialTheme.typography.headlineSmall.copy(
-                            fontWeight = FontWeight.Bold,
-                            color = themeColors.onContainer
-                        ),
-                        cursorBrush = SolidColor(themeColors.accent),
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .background(
-                                themeColors.onContainer.copy(alpha = 0.08f),
-                                RoundedCornerShape(8.dp)
-                            )
-                            .padding(horizontal = 12.dp, vertical = 10.dp),
-                        decorationBox = { inner ->
-                            Box {
-                                if (editName.isEmpty()) {
-                                    Text(
-                                        "Playlist name",
-                                        style = MaterialTheme.typography.headlineSmall,
-                                        color = themeColors.onContainer.copy(alpha = 0.4f)
+            if (mode != PlaylistMode.Reorder) {
+                Column(modifier = Modifier.padding(horizontal = 20.dp)) {
+                    Box {
+                        PlaylistCoverArt(pl, size = 160.dp)
+                        if (mode == PlaylistMode.EditDetails) {
+                            IconButton(
+                                onClick = { pickCover.launch("image/*") },
+                                modifier = Modifier
+                                    .align(Alignment.BottomEnd)
+                                    .background(
+                                        base.surface.copy(alpha = 0.9f),
+                                        RoundedCornerShape(8.dp)
                                     )
-                                }
-                                inner()
+                            ) {
+                                Icon(Icons.Default.Image, contentDescription = "Change cover")
                             }
                         }
-                    )
-                } else {
-                    MarqueeText(
-                        text = pl.name,
-                        style = MaterialTheme.typography.headlineSmall.copy(fontWeight = FontWeight.Bold),
-                        color = themeColors.onContainer,
-                        modifier = Modifier.fillMaxWidth()
-                    )
-                }
+                    }
+                    Spacer(modifier = Modifier.height(16.dp))
 
-                if (!pl.description.isNullOrBlank() && !editMode) {
+                    if (mode == PlaylistMode.EditDetails) {
+                        BasicTextField(
+                            value = editName,
+                            onValueChange = { editName = it },
+                            singleLine = true,
+                            textStyle = MaterialTheme.typography.headlineSmall.copy(
+                                fontWeight = FontWeight.Bold,
+                                color = onArt
+                            ),
+                            cursorBrush = SolidColor(themeColors.accent),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .background(onArt.copy(alpha = 0.08f), RoundedCornerShape(8.dp))
+                                .padding(horizontal = 12.dp, vertical = 10.dp),
+                            decorationBox = { inner ->
+                                Box {
+                                    if (editName.isEmpty()) {
+                                        Text(
+                                            "Playlist name",
+                                            style = MaterialTheme.typography.headlineSmall,
+                                            color = onArt.copy(alpha = 0.4f)
+                                        )
+                                    }
+                                    inner()
+                                }
+                            }
+                        )
+                        Spacer(modifier = Modifier.height(8.dp))
+                        BasicTextField(
+                            value = editDescription,
+                            onValueChange = { editDescription = it },
+                            textStyle = MaterialTheme.typography.bodyMedium.copy(color = onArt),
+                            cursorBrush = SolidColor(themeColors.accent),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(88.dp)
+                                .background(onArt.copy(alpha = 0.08f), RoundedCornerShape(8.dp))
+                                .padding(horizontal = 12.dp, vertical = 10.dp),
+                            decorationBox = { inner ->
+                                Box {
+                                    if (editDescription.isEmpty()) {
+                                        Text(
+                                            "Description (optional)",
+                                            style = MaterialTheme.typography.bodyMedium,
+                                            color = onArt.copy(alpha = 0.4f)
+                                        )
+                                    }
+                                    inner()
+                                }
+                            }
+                        )
+                    } else {
+                        MarqueeText(
+                            text = pl.name,
+                            style = MaterialTheme.typography.headlineSmall.copy(fontWeight = FontWeight.Bold),
+                            color = onArt,
+                            modifier = Modifier.fillMaxWidth()
+                        )
+                        if (!pl.description.isNullOrBlank()) {
+                            Text(
+                                pl.description,
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = onArt.copy(alpha = 0.7f),
+                                modifier = Modifier.padding(top = 4.dp)
+                            )
+                        }
+                    }
+
                     Text(
-                        pl.description,
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = themeColors.onContainer.copy(alpha = 0.7f),
+                        formatTrackCount(pl.songs.size),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = onArt.copy(alpha = 0.55f),
                         modifier = Modifier.padding(top = 4.dp)
                     )
-                }
-                Text(
-                    formatTrackCount(pl.songs.size),
-                    style = MaterialTheme.typography.bodySmall,
-                    color = themeColors.onContainer.copy(alpha = 0.55f),
-                    modifier = Modifier.padding(top = 4.dp)
-                )
-                Spacer(modifier = Modifier.height(12.dp))
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    IconButton(
-                        onClick = onPrimary,
-                        modifier = Modifier
-                            .size(52.dp)
-                            .clip(CircleShape)
-                            .background(themeColors.accent)
-                    ) {
-                        Icon(
-                            if (showPause) Icons.Default.Pause else Icons.Default.PlayArrow,
-                            contentDescription = if (showPause) "Pause" else "Play",
-                            tint = themeColors.onAccent,
-                            modifier = Modifier.size(32.dp)
-                        )
-                    }
-                    Spacer(modifier = Modifier.width(8.dp))
-                    IconButton(onClick = { startRadio() }) {
-                        Icon(
-                            Icons.Default.Radio,
-                            contentDescription = "Start radio",
-                            tint = themeColors.onContainer
-                        )
+                    if (mode == PlaylistMode.Browse) {
+                        Spacer(modifier = Modifier.height(12.dp))
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            IconButton(
+                                onClick = onPrimary,
+                                modifier = Modifier
+                                    .size(52.dp)
+                                    .clip(CircleShape)
+                                    .background(themeColors.accent)
+                            ) {
+                                Icon(
+                                    if (showPause) Icons.Default.Pause else Icons.Default.PlayArrow,
+                                    contentDescription = if (showPause) "Pause" else "Play",
+                                    tint = themeColors.onAccent,
+                                    modifier = Modifier.size(32.dp)
+                                )
+                            }
+                            Spacer(modifier = Modifier.width(8.dp))
+                            IconButton(onClick = { startRadio() }) {
+                                Icon(Icons.Default.Radio, contentDescription = "Start radio", tint = onArt)
+                            }
+                        }
                     }
                 }
-            }
-
-            Spacer(modifier = Modifier.height(8.dp))
-
-            if (editMode) {
+                Spacer(modifier = Modifier.height(8.dp))
+            } else {
                 Text(
-                    "Tap name to rename · use arrows to reorder · swipe left to remove",
+                    "Long-press and drag to reorder · swipe left to remove",
                     style = MaterialTheme.typography.labelMedium,
-                    color = base.onSurface.copy(alpha = 0.5f),
-                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp)
+                    color = onArt.copy(alpha = 0.65f),
+                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)
                 )
             }
+
+            val rowH = with(density) { 64.dp.toPx() }
+            var dragFrom by remember { mutableIntStateOf(-1) }
+            var dragHover by remember { mutableIntStateOf(-1) }
+            var dragOffset by remember { mutableFloatStateOf(0f) }
 
             LazyColumn(
                 modifier = Modifier.fillMaxSize(),
                 contentPadding = PaddingValues(bottom = 96.dp)
             ) {
                 itemsIndexed(pl.songs, key = { i, s -> "$i-${s.songKey}" }) { index, song ->
-                    if (editMode) {
-                        EditPlaylistTrackRow(
-                            song = song,
-                            canMoveUp = index > 0,
-                            canMoveDown = index < pl.songs.lastIndex,
-                            onMoveUp = {
-                                scope.launch { repo.move(pl.id, index, index - 1) }
-                            },
-                            onMoveDown = {
-                                scope.launch { repo.move(pl.id, index, index + 1) }
-                            },
-                            onRemove = {
-                                scope.launch {
-                                    repo.removeAt(pl.id, index)
-                                    Toast.makeText(context, "Removed", Toast.LENGTH_SHORT).show()
+                    if (mode == PlaylistMode.Reorder) {
+                        val isDragged = dragFrom == index
+                        val shift = when {
+                            !isDragged && dragFrom >= 0 && dragFrom < dragHover &&
+                                index in (dragFrom + 1)..dragHover -> -rowH
+                            !isDragged && dragFrom >= 0 && dragFrom > dragHover &&
+                                index in dragHover until dragFrom -> rowH
+                            isDragged -> dragOffset
+                            else -> 0f
+                        }
+                        var swipeX by remember { mutableFloatStateOf(0f) }
+                        val threshold = with(density) { 96.dp.toPx() }
+
+                        Box(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .zIndex(if (isDragged) 5f else 0f)
+                        ) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                modifier = Modifier
+                                    .graphicsLayer {
+                                        translationY = shift
+                                        translationX = swipeX
+                                    }
+                                    .fillMaxWidth()
+                                    .background(Color.Transparent)
+                                    .pointerInput(index, pl.songs.size) {
+                                        detectDragGesturesAfterLongPress(
+                                            onDragStart = {
+                                                swipeX = 0f
+                                                dragFrom = index
+                                                dragHover = index
+                                                dragOffset = 0f
+                                            },
+                                            onDragEnd = {
+                                                val f = dragFrom
+                                                val t = dragHover
+                                                dragFrom = -1
+                                                dragHover = -1
+                                                dragOffset = 0f
+                                                if (f >= 0 && t >= 0 && f != t) {
+                                                    scope.launch { repo.move(pl.id, f, t) }
+                                                }
+                                            },
+                                            onDragCancel = {
+                                                dragFrom = -1
+                                                dragHover = -1
+                                                dragOffset = 0f
+                                            },
+                                            onDrag = { change, amount ->
+                                                change.consume()
+                                                dragOffset += amount.y
+                                                val raw = dragFrom +
+                                                    (dragOffset / rowH).roundToInt()
+                                                dragHover = raw.coerceIn(
+                                                    0,
+                                                    (pl.songs.size - 1).coerceAtLeast(0)
+                                                )
+                                            }
+                                        )
+                                    }
+                                    .pointerInput(index) {
+                                        detectHorizontalDragGestures(
+                                            onDragEnd = {
+                                                if (swipeX < -threshold) {
+                                                    scope.launch {
+                                                        repo.removeAt(pl.id, index)
+                                                        Toast.makeText(
+                                                            context,
+                                                            "Removed",
+                                                            Toast.LENGTH_SHORT
+                                                        ).show()
+                                                    }
+                                                }
+                                                swipeX = 0f
+                                            },
+                                            onDragCancel = { swipeX = 0f },
+                                            onHorizontalDrag = { _, d ->
+                                                swipeX = (swipeX + d).coerceIn(
+                                                    -threshold * 1.5f,
+                                                    0f
+                                                )
+                                            }
+                                        )
+                                    }
+                                    .padding(horizontal = 12.dp, vertical = 8.dp)
+                            ) {
+                                Icon(
+                                    Icons.Default.DragHandle,
+                                    contentDescription = "Drag",
+                                    tint = onArt.copy(alpha = 0.45f)
+                                )
+                                Spacer(modifier = Modifier.width(8.dp))
+                                AlbumArt(song = song, size = 44.dp, corner = 4.dp)
+                                Spacer(modifier = Modifier.width(12.dp))
+                                Column(modifier = Modifier.weight(1f)) {
+                                    MarqueeText(
+                                        text = song.displayTitle,
+                                        style = MaterialTheme.typography.bodyLarge,
+                                        color = onArt
+                                    )
+                                    MarqueeText(
+                                        text = song.displayArtist,
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = onArt.copy(alpha = 0.6f)
+                                    )
+                                }
+                                IconButton(onClick = {
+                                    scope.launch {
+                                        repo.removeAt(pl.id, index)
+                                        Toast.makeText(context, "Removed", Toast.LENGTH_SHORT).show()
+                                    }
+                                }) {
+                                    Icon(
+                                        Icons.Default.Delete,
+                                        contentDescription = "Remove",
+                                        tint = MaterialTheme.colorScheme.error.copy(alpha = 0.85f)
+                                    )
                                 }
                             }
-                        )
-                    } else {
+                        }
+                    } else if (mode == PlaylistMode.Browse) {
                         SwipeAddSongRow(
                             song = song,
                             onClick = { onPlay(pl.songs, index) },
@@ -439,7 +590,8 @@ fun PlaylistDetailScreen(
             onChangeCover = { pickCover.launch("image/*") },
             onEdit = {
                 editName = pl.name
-                editMode = true
+                editDescription = pl.description.orEmpty()
+                mode = PlaylistMode.EditDetails
             },
             onDelete = {
                 scope.launch {
@@ -459,89 +611,5 @@ fun PlaylistDetailScreen(
                 Toast.makeText(context, "Added to My Stuff", Toast.LENGTH_SHORT).show()
             }
         )
-    }
-}
-
-@Composable
-private fun EditPlaylistTrackRow(
-    song: Song,
-    canMoveUp: Boolean,
-    canMoveDown: Boolean,
-    onMoveUp: () -> Unit,
-    onMoveDown: () -> Unit,
-    onRemove: () -> Unit
-) {
-    var offsetX by remember { mutableFloatStateOf(0f) }
-    val density = LocalDensity.current
-    val threshold = with(density) { 96.dp.toPx() }
-    val error = MaterialTheme.colorScheme.error
-    val revealAlpha = ((-offsetX) / (threshold * 0.35f)).coerceIn(0f, 1f)
-
-    Box(modifier = Modifier.fillMaxWidth()) {
-        if (revealAlpha > 0.01f) {
-            Box(
-                modifier = Modifier
-                    .matchParentSize()
-                    .background(error.copy(alpha = 0.2f * revealAlpha))
-            ) {
-                Text(
-                    "Remove",
-                    style = MaterialTheme.typography.labelLarge,
-                    color = error.copy(alpha = revealAlpha),
-                    modifier = Modifier
-                        .align(Alignment.CenterEnd)
-                        .padding(end = 16.dp)
-                )
-            }
-        }
-        Row(
-            verticalAlignment = Alignment.CenterVertically,
-            modifier = Modifier
-                .offset { IntOffset(offsetX.roundToInt(), 0) }
-                .fillMaxWidth()
-                .background(MaterialTheme.colorScheme.surface)
-                .pointerInput(song.songKey) {
-                    detectHorizontalDragGestures(
-                        onDragEnd = {
-                            if (offsetX < -threshold) onRemove()
-                            offsetX = 0f
-                        },
-                        onDragCancel = { offsetX = 0f },
-                        onHorizontalDrag = { _, dragAmount ->
-                            offsetX = (offsetX + dragAmount).coerceIn(-threshold * 1.5f, 0f)
-                        }
-                    )
-                }
-                .padding(end = 8.dp)
-        ) {
-            Column {
-                IconButton(onClick = onMoveUp, enabled = canMoveUp, modifier = Modifier.size(36.dp)) {
-                    Icon(Icons.Default.KeyboardArrowUp, contentDescription = "Move up")
-                }
-                IconButton(onClick = onMoveDown, enabled = canMoveDown, modifier = Modifier.size(36.dp)) {
-                    Icon(Icons.Default.KeyboardArrowDown, contentDescription = "Move down")
-                }
-            }
-            AlbumArt(song = song, size = 40.dp, corner = 4.dp)
-            Spacer(modifier = Modifier.width(12.dp))
-            Column(modifier = Modifier.weight(1f).padding(vertical = 10.dp)) {
-                MarqueeText(
-                    text = song.displayTitle,
-                    style = MaterialTheme.typography.bodyLarge
-                )
-                MarqueeText(
-                    text = song.displayArtist,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
-                )
-            }
-            IconButton(onClick = onRemove) {
-                Icon(
-                    Icons.Default.Delete,
-                    contentDescription = "Remove",
-                    tint = MaterialTheme.colorScheme.error.copy(alpha = 0.8f)
-                )
-            }
-        }
     }
 }
