@@ -90,6 +90,41 @@ fun MediaSheetHeader(
 }
 
 @Composable
+fun PlaylistSheetHeader(
+    playlist: Playlist,
+    title: String,
+    subtitle: String,
+    artSize: androidx.compose.ui.unit.Dp = 56.dp
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 20.dp, vertical = 8.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        PlaylistCoverArt(playlist, size = artSize)
+        Spacer(modifier = Modifier.width(14.dp))
+        Column(modifier = Modifier.weight(1f)) {
+            Text(
+                text = title,
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.SemiBold,
+                maxLines = 2
+            )
+            if (subtitle.isNotBlank()) {
+                Text(
+                    text = subtitle,
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.65f),
+                    maxLines = 1
+                )
+            }
+        }
+    }
+    HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
+}
+
+@Composable
 fun MediaSheetItem(
     label: String,
     enabled: Boolean = true,
@@ -433,7 +468,7 @@ fun ArtistContextSheet(
     }
 }
 
-/** Shared playlist sheet — defaults from [LocalPlaylistNav]. */
+/** Shared playlist sheet — defaults from [LocalPlaylistNav]. Uses playlist cover art. */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun PlaylistContextSheet(
@@ -457,8 +492,8 @@ fun PlaylistContextSheet(
         onDismissRequest = onDismiss,
         sheetState = rememberModalBottomSheetState()
     ) {
-        MediaSheetHeader(
-            song = playlist.songs.firstOrNull(),
+        PlaylistSheetHeader(
+            playlist = playlist,
             title = playlist.name,
             subtitle = "Playlist"
         )
