@@ -8,6 +8,7 @@ import io.ktor.client.statement.bodyAsText
 import io.ktor.http.isSuccess
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import org.json.JSONArray
 import org.json.JSONObject
 import java.net.URLEncoder
 import kotlin.math.min
@@ -49,6 +50,12 @@ class WikidataArtistImageSource(
         out.values.toList()
     }
 
+    private data class SearchHit(
+        val id: String,
+        val label: String,
+        val description: String
+    )
+
     /**
      * Search, then keep only entities that look like musicians and whose label
      * is close to the query (avoids random Levenshtein-adjacent people).
@@ -59,56 +66,63 @@ class WikidataArtistImageSource(
             "https://www.wikidata.org/w/api.php?action=wbsearchentities" +
                 "&search=$q&language=en&type=item&limit=10&format=json"
         val body = get(url) ?: return emptyList()
-        val candidates = try {
-            val arr = JSONObject(body).optJSONArray("search") ?: return emptyList()
-            buildList {
+
+        val candidates: List<SearchHit> = try {
+            val arr: JSONArray? = JSONObject(body).optJSONArray("search")
+            if (arr == null) {
+                emptyList()
+            } else {
+                val hits = ArrayList<SearchHit>(arr.length())
                 for (i in 0 until arr.length()) {
-                    val o = arr.optJSONObject(i) ?: continue
-                    val id = o.optString("id").takeIf { it.startsWith("Q") } ?: continue
-                    val label = o.optString("label")
-                    val desc = o.optString("description")
-                    add(Triple(id, label, desc))
+                    val o: JSONObject = arr.optJSONObject(i) ?: continue
+                    val entityId = o.optString("id")
+                    if (!entityId.startsWith("Q")) continue
+                    hits.add(
+                        SearchHit(
+                            id = entityId,
+                            label = o.optString("label"),
+                            description = o.optString("description")
+                        )
+                    )
                 }
+                hits
             }
         } catch (e: Exception) {
             Log.w(TAG, "search failed", e)
-            return emptyList()
+            emptyList()
         }
 
+        if (candidates.isEmpty()) return emptyList()
+
         val wanted = name.trim()
-        val scored = mutableListOf<Pair<String, Int>>()
-        for ((qid, label, desc) in candidates) {
-            if (!nameLooksClose(wanted, label)) continue
-            val claims = entityClaims(qid) ?: continue
-            if (!isMusicEntity(claims, desc)) continue
-            val score = nameScore(wanted, label)
-            scored += qid to score
+        val scored = ArrayList<Pair<String, Int>>()
+        for (hit in candidates) {
+            if (!nameLooksClose(wanted, hit.label)) continue
+            val claims = entityClaims(hit.id) ?: continue
+            if (!isMusicEntity(claims, hit.description)) continue
+            scored.add(hit.id to nameScore(wanted, hit.label))
         }
         return scored.sortedByDescending { it.second }.map { it.first }
     }
 
     private fun isMusicEntity(claims: JSONObject, searchDescription: String): Boolean {
-        // Fast path: search snippet already says musician/band/…
         if (MUSIC_DESC_HINTS.any { searchDescription.contains(it, ignoreCase = true) }) {
             return true
         }
-        // P136 genre present → almost always a musical work/person/group
         if (claims.optJSONArray("P136") != null) return true
 
         fun idsIn(prop: String): Set<String> {
             val arr = claims.optJSONArray(prop) ?: return emptySet()
-            return buildSet {
-                for (i in 0 until arr.length()) {
-                    val id = arr.optJSONObject(i)
-                        ?.optJSONObject("mainsnak")
-                        ?.optJSONObject("datavalue")
-                        ?.optJSONObject("value")
-                        ?.optString("id")
-                        ?.takeIf { it.startsWith("Q") }
-                        ?: continue
-                    add(id)
-                }
+            val ids = HashSet<String>()
+            for (i in 0 until arr.length()) {
+                val claim = arr.optJSONObject(i) ?: continue
+                val mainsnak = claim.optJSONObject("mainsnak") ?: continue
+                val datavalue = mainsnak.optJSONObject("datavalue") ?: continue
+                val value = datavalue.optJSONObject("value") ?: continue
+                val qid = value.optString("id")
+                if (qid.startsWith("Q")) ids.add(qid)
             }
+            return ids
         }
 
         val instanceOf = idsIn("P31")
@@ -123,7 +137,6 @@ class WikidataArtistImageSource(
         val b = normalizeName(label)
         if (a == b) return true
         if (a in b || b in a) return true
-        // Allow small edit distance for typos / diacritics stripped already
         val dist = levenshtein(a, b)
         val maxLen = maxOf(a.length, b.length).coerceAtLeast(1)
         return dist <= 2 || dist.toFloat() / maxLen <= 0.25f
@@ -164,38 +177,35 @@ class WikidataArtistImageSource(
     private suspend fun p18Images(qid: String): List<String> {
         val claims = entityClaims(qid) ?: return emptyList()
         val p18 = claims.optJSONArray("P18") ?: return emptyList()
-        return buildList {
-            for (i in 0 until p18.length()) {
-                val fileName = p18.optJSONObject(i)
-                    ?.optJSONObject("mainsnak")
-                    ?.optJSONObject("datavalue")
-                    ?.optString("value")
-                    ?.takeIf { it.isNotBlank() }
-                    ?: continue
-                add(
-                    "https://commons.wikimedia.org/wiki/Special:FilePath/" +
-                        URLEncoder.encode(fileName.replace(' ', '_'), "UTF-8") +
-                        "?width=1000"
-                )
-            }
+        val out = ArrayList<String>()
+        for (i in 0 until p18.length()) {
+            val claim = p18.optJSONObject(i) ?: continue
+            val mainsnak = claim.optJSONObject("mainsnak") ?: continue
+            val datavalue = mainsnak.optJSONObject("datavalue") ?: continue
+            val fileName = datavalue.optString("value")
+            if (fileName.isBlank()) continue
+            out.add(
+                "https://commons.wikimedia.org/wiki/Special:FilePath/" +
+                    URLEncoder.encode(fileName.replace(' ', '_'), "UTF-8") +
+                    "?width=1000"
+            )
         }
+        return out
     }
 
     private suspend fun genreLabels(qid: String): List<String> {
         val claims = entityClaims(qid) ?: return emptyList()
         val p136 = claims.optJSONArray("P136") ?: return emptyList()
-        val ids = buildList {
-            for (i in 0 until p136.length()) {
-                val id = p136.optJSONObject(i)
-                    ?.optJSONObject("mainsnak")
-                    ?.optJSONObject("datavalue")
-                    ?.optJSONObject("value")
-                    ?.optString("id")
-                    ?.takeIf { it.startsWith("Q") }
-                    ?: continue
-                add(id)
-            }
-        }.take(10)
+        val ids = ArrayList<String>()
+        for (i in 0 until p136.length()) {
+            if (ids.size >= 10) break
+            val claim = p136.optJSONObject(i) ?: continue
+            val mainsnak = claim.optJSONObject("mainsnak") ?: continue
+            val datavalue = mainsnak.optJSONObject("datavalue") ?: continue
+            val value = datavalue.optJSONObject("value") ?: continue
+            val genreId = value.optString("id")
+            if (genreId.startsWith("Q")) ids.add(genreId)
+        }
         if (ids.isEmpty()) return emptyList()
         return entityLabels(ids)
     }
@@ -206,11 +216,11 @@ class WikidataArtistImageSource(
 
         fun firstString(prop: String): String? {
             val arr = claims.optJSONArray(prop) ?: return null
-            return arr.optJSONObject(0)
-                ?.optJSONObject("mainsnak")
-                ?.optJSONObject("datavalue")
-                ?.optString("value")
-                ?.takeIf { it.isNotBlank() }
+            val claim = arr.optJSONObject(0) ?: return null
+            val mainsnak = claim.optJSONObject("mainsnak") ?: return null
+            val datavalue = mainsnak.optJSONObject("datavalue") ?: return null
+            val value = datavalue.optString("value")
+            return value.takeIf { it.isNotBlank() }
         }
 
         firstString("P856")?.let { url ->
@@ -283,7 +293,6 @@ class WikidataArtistImageSource(
     companion object {
         private const val TAG = "WikidataArtistImg"
 
-        /** P31 instance-of values that mean musician / band / ensemble. */
         private val MUSIC_INSTANCE_QIDS = setOf(
             "Q215380",   // musical group / band
             "Q5741069",  // rock band
@@ -292,12 +301,11 @@ class WikidataArtistImageSource(
             "Q588750",   // musical duo
             "Q13441638", // girl group
             "Q1135557",  // boy band
-            "Q253137",   // string quartet (etc.) — still music
+            "Q253137",   // string quartet
             "Q2495704",  // musical trio
             "Q641226"    // musical collective
         )
 
-        /** P106 occupation values. */
         private val MUSIC_OCCUPATION_QIDS = setOf(
             "Q639669",   // musician
             "Q177220",   // singer
@@ -308,10 +316,10 @@ class WikidataArtistImageSource(
             "Q855091",   // guitarist
             "Q2252262",  // rapper
             "Q130857",   // disc jockey
-            "Q55960555", // singer of popular music (when present)
+            "Q55960555", // singer of popular music
             "Q2494178",  // multi-instrumentalist
             "Q15981151", // jazz musician
-            "Q3282637"   // film score composer — still music
+            "Q3282637"   // film score composer
         )
 
         private val MUSIC_DESC_HINTS = listOf(
