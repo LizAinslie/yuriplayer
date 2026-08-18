@@ -60,6 +60,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
@@ -69,6 +70,9 @@ import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
 import androidx.compose.ui.input.nestedscroll.NestedScrollSource
 import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.LayoutCoordinates
+import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.layout.positionInRoot
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
@@ -130,6 +134,7 @@ fun PlaylistDetailScreen(
     var cropUri by remember { mutableStateOf<Uri?>(null) }
 
     val listState = rememberLazyListState()
+    val autoScroll = rememberListDragAutoScroll(listState)
 
     val pickCover = rememberLauncherForActivityResult(
         ActivityResultContracts.GetContent()
@@ -366,7 +371,6 @@ fun PlaylistDetailScreen(
                             .height(headerBodyH)
                             .clipToBounds()
                     ) {
-                        // Expanded content (fades out as we collapse)
                         Box(
                             modifier = Modifier
                                 .fillMaxWidth()
@@ -416,7 +420,6 @@ fun PlaylistDetailScreen(
                             }
                         }
 
-                        // Collapsed bar (only relevant in Browse)
                         if (mode == PlaylistMode.Browse && heightF > 0.2f) {
                             CollapsedPlaylistBar(
                                 playlist = pl,
@@ -433,7 +436,6 @@ fun PlaylistDetailScreen(
                             )
                         }
 
-                        // Fading back button over expanded (Browse only)
                         if (mode == PlaylistMode.Browse && heightF < 0.5f) {
                             IconButton(
                                 onClick = onBack,
@@ -459,9 +461,28 @@ fun PlaylistDetailScreen(
                 var dragHover by remember { mutableIntStateOf(-1) }
                 var dragOffset by remember { mutableFloatStateOf(0f) }
 
+                // Keep dragged row under the finger when edge-scrolling.
+                autoScroll.onScrolled = { delta ->
+                    if (dragFrom >= 0) {
+                        dragOffset += delta
+                        val raw = dragFrom + (dragOffset / rowH).roundToInt()
+                        dragHover = raw.coerceIn(0, (pl.songs.size - 1).coerceAtLeast(0))
+                    }
+                }
+
                 LazyColumn(
                     state = listState,
-                    modifier = Modifier.fillMaxSize(),
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .onGloballyPositioned { coords ->
+                            val p = coords.positionInRoot()
+                            autoScroll.viewportInRoot = Rect(
+                                p.x,
+                                p.y,
+                                p.x + coords.size.width,
+                                p.y + coords.size.height
+                            )
+                        },
                     contentPadding = PaddingValues(
                         top = if (mode == PlaylistMode.Browse) 8.dp else 0.dp,
                         bottom = 96.dp
@@ -480,11 +501,13 @@ fun PlaylistDetailScreen(
                             }
                             var swipeX by remember { mutableFloatStateOf(0f) }
                             val threshold = with(density) { 96.dp.toPx() }
+                            var rowCoords by remember { mutableStateOf<LayoutCoordinates?>(null) }
 
                             Box(
                                 modifier = Modifier
                                     .fillMaxWidth()
                                     .zIndex(if (isDragged) 5f else 0f)
+                                    .onGloballyPositioned { rowCoords = it }
                             ) {
                                 Row(
                                     verticalAlignment = Alignment.CenterVertically,
@@ -497,23 +520,28 @@ fun PlaylistDetailScreen(
                                         .background(Color.Transparent)
                                         .pointerInput(index, pl.songs.size) {
                                             detectDragGesturesAfterLongPress(
-                                                onDragStart = {
+                                                onDragStart = { start ->
                                                     swipeX = 0f
                                                     dragFrom = index
                                                     dragHover = index
                                                     dragOffset = 0f
+                                                    rowCoords?.localToRoot(start)?.let {
+                                                        autoScroll.onDragStart(it)
+                                                    }
                                                 },
                                                 onDragEnd = {
-                                                    val f = dragFrom
-                                                    val t = dragHover
+                                                    autoScroll.onDragEnd()
+                                                    val from = dragFrom
+                                                    val to = dragHover
                                                     dragFrom = -1
                                                     dragHover = -1
                                                     dragOffset = 0f
-                                                    if (f >= 0 && t >= 0 && f != t) {
-                                                        scope.launch { repo.move(pl.id, f, t) }
+                                                    if (from >= 0 && to >= 0 && from != to) {
+                                                        scope.launch { repo.move(pl.id, from, to) }
                                                     }
                                                 },
                                                 onDragCancel = {
+                                                    autoScroll.onDragEnd()
                                                     dragFrom = -1
                                                     dragHover = -1
                                                     dragOffset = 0f
@@ -521,6 +549,9 @@ fun PlaylistDetailScreen(
                                                 onDrag = { change, amount ->
                                                     change.consume()
                                                     dragOffset += amount.y
+                                                    rowCoords?.localToRoot(change.position)?.let {
+                                                        autoScroll.updateFingerRoot(it)
+                                                    }
                                                     val raw = dragFrom +
                                                         (dragOffset / rowH).roundToInt()
                                                     dragHover = raw.coerceIn(
