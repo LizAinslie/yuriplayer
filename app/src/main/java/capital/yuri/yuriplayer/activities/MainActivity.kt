@@ -87,7 +87,6 @@ import capital.yuri.yuriplayer.data.ArtistItem
 import capital.yuri.yuriplayer.data.LibraryIndex
 import capital.yuri.yuriplayer.data.LibrarySettings
 import capital.yuri.yuriplayer.data.MetadataEnrichmentService
-import capital.yuri.yuriplayer.data.MyStuffPinStore
 import capital.yuri.yuriplayer.data.PlayerThemeStore
 import capital.yuri.yuriplayer.data.Playlist
 import capital.yuri.yuriplayer.data.PlaylistRepository
@@ -375,7 +374,11 @@ fun YuriApp(
     }
 
     val detail = detailStack.lastOrNull()
-    val edgeToEdgeDetail = detail is DetailRoute.Album || detail is DetailRoute.Artist
+    // Album, artist, playlist draw their own themed header under the status bar.
+    // Scaffold must not also inset Top or the back row sits with a double gap.
+    val edgeToEdgeDetail = detail is DetailRoute.Album ||
+        detail is DetailRoute.Artist ||
+        detail is DetailRoute.Playlist
 
     LaunchedEffect(openPlayerInitially) {
         if (openPlayerInitially) {
@@ -579,7 +582,6 @@ fun YuriApp(
                                 onPlayAlbum = { songs, index -> playAlbumFrom(liveAlbum, songs, index) },
                                 onTogglePlayPause = { player.togglePlayPause() },
                                 onToggleShuffle = { player.toggleShuffle() },
-                                // Heart is owned by AlbumDetailScreen (toggleAlbum once).
                                 onFavorite = {},
                                 onOpenArtist = {
                                     val name = liveAlbum.artist ?: return@AlbumDetailScreen
