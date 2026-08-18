@@ -126,7 +126,14 @@ private fun songArtistNames(song: Song): List<String> {
     return listOfNotNull(single)
 }
 
-/** Shared song sheet — keep every entry point in sync. */
+/**
+ * Shared song sheet — keep every entry point in sync.
+ *
+ * Go to album / Go to artist default to [LocalSongNav] so call sites
+ * (playlist rows, queue, library, etc.) get navigation for free.
+ * Pass explicit callbacks only to override; use [hideGoToAlbum] on the
+ * album detail page.
+ */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun SongContextSheet(
@@ -146,9 +153,14 @@ fun SongContextSheet(
     val pinStore: MyStuffPinStore = koinInject()
     val player: PlayerController = koinInject()
     val context = LocalContext.current
+    val songNav = LocalSongNav.current
     var showPlaylistPicker by remember { mutableStateOf(false) }
     var showArtistPicker by remember { mutableStateOf(false) }
     val artists = remember(song) { songArtistNames(song) }
+
+    // Default to app-wide navigation; explicit params override.
+    val goToAlbum = onGoToAlbum ?: { songNav.openAlbumForSong(song) }
+    val goToArtist = onGoToArtist ?: { name -> songNav.openArtistByName(name) }
 
     if (showPlaylistPicker) {
         AddToPlaylistSheet(
@@ -186,7 +198,7 @@ fun SongContextSheet(
                 MediaSheetItem(name) {
                     showArtistPicker = false
                     onDismiss()
-                    onGoToArtist?.invoke(name)
+                    goToArtist(name)
                 }
             }
             MediaSheetBottomPad()
@@ -239,17 +251,17 @@ fun SongContextSheet(
                 Toast.makeText(context, "Added to My Stuff", Toast.LENGTH_SHORT).show()
             }
         }
-        if (!hideGoToAlbum && onGoToAlbum != null && !song.album.isNullOrBlank()) {
+        if (!hideGoToAlbum && !song.album.isNullOrBlank()) {
             MediaSheetItem("Go to album") {
                 onDismiss()
-                onGoToAlbum()
+                goToAlbum()
             }
         }
-        if (onGoToArtist != null && artists.isNotEmpty()) {
+        if (artists.isNotEmpty()) {
             MediaSheetItem("Go to artist") {
                 if (artists.size == 1) {
                     onDismiss()
-                    onGoToArtist(artists.first())
+                    goToArtist(artists.first())
                 } else {
                     showArtistPicker = true
                 }
