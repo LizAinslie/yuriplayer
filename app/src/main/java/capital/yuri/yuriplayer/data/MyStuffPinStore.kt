@@ -30,12 +30,8 @@ data class StuffPin(
 /**
  * My Stuff collection + home pins.
  *
- * Playlists do **not** live here — they live in [PlaylistRepository] and are
- * shown on the My Stuff → Playlists tab. A PLAYLIST [StuffPin] is only used
- * when the user pins a playlist onto the home Pins grid.
- *
- * - [entries]: hearted albums / artists / songs (+ optional pinned playlist refs)
- * - [pins]: ordered subset on the home grid (max [PIN_SLOTS])
+ * Playlists live in [PlaylistRepository] and the My Stuff → Playlists tab.
+ * A PLAYLIST [StuffPin] is only for pinning onto the home Pins list.
  */
 class MyStuffPinStore(context: Context) {
 
@@ -53,7 +49,6 @@ class MyStuffPinStore(context: Context) {
 
     private val _pinsResolved = MutableStateFlow(resolvePins())
 
-    /** albumKey → songKeys auto-added with that album (not independently hearted). */
     private val cascadeByAlbum = loadCascade().toMutableMap()
 
     fun contains(kind: StuffPinKind, id: String): Boolean =
@@ -68,9 +63,7 @@ class MyStuffPinStore(context: Context) {
         if (pin.kind == StuffPinKind.SONG) {
             cascadeByAlbum.keys.toList().forEach { ak ->
                 val set = cascadeByAlbum[ak] ?: return@forEach
-                if (pin.id in set) {
-                    cascadeByAlbum[ak] = set - pin.id
-                }
+                if (pin.id in set) cascadeByAlbum[ak] = set - pin.id
             }
             persistCascade()
         }
@@ -218,10 +211,9 @@ class MyStuffPinStore(context: Context) {
     fun isPinned(pin: StuffPin): Boolean = isPinned(pin.kind, pin.id)
 
     fun pin(pin: StuffPin) {
-        // Playlist pins may not be in entries — allow pin-only refs for home grid
         if (pin.kind != StuffPinKind.PLAYLIST && !contains(pin)) return
         if (pin.kind == StuffPinKind.PLAYLIST && !contains(pin)) {
-            addEntry(pin) // keep resolvePins working
+            addEntry(pin)
         }
         val keys = _pinKeys.value.toMutableList()
         if (pin.key in keys) return
@@ -250,10 +242,7 @@ class MyStuffPinStore(context: Context) {
         persistPinKeys(keys)
     }
 
-    /**
-     * Drop PLAYLIST entries/pins whose id is not in [validPlaylistIds].
-     * Call when playlists are loaded so wiped/deleted playlists leave the grid.
-     */
+    /** Drop PLAYLIST pin entries whose id is not in [validPlaylistIds]. */
     fun pruneMissingPlaylists(validPlaylistIds: Set<String>) {
         val next = _entries.value.filterNot {
             it.kind == StuffPinKind.PLAYLIST && it.id !in validPlaylistIds
@@ -261,7 +250,6 @@ class MyStuffPinStore(context: Context) {
         if (next.size != _entries.value.size) {
             persistEntries(next)
         } else {
-            // still clean pin keys that point at missing playlists
             val validKeys = next.map { it.key }.toSet()
             val cleaned = _pinKeys.value.filter { it in validKeys }
             if (cleaned != _pinKeys.value) persistPinKeys(cleaned)
@@ -332,10 +320,11 @@ class MyStuffPinStore(context: Context) {
         private const val KEY_PIN_KEYS = "pin_keys"
         private const val KEY_LEGACY_PINS = "pins"
         private const val KEY_CASCADE = "album_cascade_songs"
-        const val PIN_SLOTS = 10
+        /** Home pin list capacity (full-width rows). */
+        const val PIN_SLOTS = 8
 
         @Deprecated("Use PIN_SLOTS")
-        const val GRID_MIN_CELLS = 10
+        const val GRID_MIN_CELLS = 8
         @Deprecated("No fixed browse cards")
         const val FIXED_BROWSE_COUNT = 0
     }
