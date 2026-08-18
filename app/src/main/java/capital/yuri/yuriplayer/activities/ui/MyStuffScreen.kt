@@ -1,15 +1,17 @@
 package capital.yuri.yuriplayer.activities.ui
 
 import android.widget.Toast
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -35,6 +37,7 @@ import androidx.compose.material.icons.outlined.FavoriteBorder
 import androidx.compose.material.icons.outlined.PushPin
 import androidx.compose.material.icons.outlined.QueueMusic
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -44,12 +47,12 @@ import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -108,7 +111,6 @@ fun MyStuffScreen(
     var showAddPin by remember { mutableStateOf(false) }
     var showCreatePlaylist by remember { mutableStateOf(false) }
 
-    // Playlists live in PlaylistRepository — drop dead pin refs after DB wipe / delete
     LaunchedEffect(playlists) {
         pinStore.pruneMissingPlaylists(playlists.map { it.id }.toSet())
     }
@@ -241,6 +243,7 @@ fun MyStuffScreen(
     }
 }
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun MyStuffPinsTab(
     pins: List<StuffPin>,
@@ -253,6 +256,7 @@ private fun MyStuffPinsTab(
     onPlayAll: () -> Unit
 ) {
     val emptyCount = (MyStuffPinStore.PIN_SLOTS - pins.size).coerceAtLeast(0)
+    var pinForSheet by remember { mutableStateOf<StuffPin?>(null) }
 
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
@@ -288,98 +292,179 @@ private fun MyStuffPinsTab(
         }
 
         items(pins, key = { it.key }) { pin ->
-            UserPinRow(
+            SquarePinCard(
                 pin = pin,
                 library = library,
                 playlists = playlists,
                 allSongs = allSongs,
                 onClick = { onOpenPin(pin) },
-                onUnpin = { onUnpin(pin) },
+                onLongClick = { pinForSheet = pin },
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(bottom = 10.dp)
+                    .padding(bottom = 12.dp)
             )
         }
 
         items(emptyCount) {
-            EmptyPinRow(
+            EmptySquarePin(
                 onClick = onAddPinSlot,
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(bottom = 10.dp)
+                    .padding(bottom = 12.dp)
             )
         }
 
         item { Spacer(modifier = Modifier.height(16.dp)) }
     }
+
+    pinForSheet?.let { pin ->
+        PinActionSheet(
+            pin = pin,
+            onDismiss = { pinForSheet = null },
+            onUnpin = {
+                onUnpin(pin)
+                pinForSheet = null
+            }
+        )
+    }
 }
 
+/** Full-width square pin on [surface]; long-press opens action sheet (no always-on delete). */
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
-private fun UserPinRow(
+private fun SquarePinCard(
     pin: StuffPin,
     library: LibraryIndex,
     playlists: List<Playlist>,
     allSongs: List<Song>,
     onClick: () -> Unit,
-    onUnpin: () -> Unit,
+    onLongClick: () -> Unit,
     modifier: Modifier = Modifier
 ) {
-    Row(
+    val shape = RoundedCornerShape(12.dp)
+    Column(
         modifier = modifier
-            .height(56.dp)
-            .clip(RoundedCornerShape(28.dp))
-            .border(1.5.dp, MaterialTheme.colorScheme.onSurface.copy(alpha = 0.55f), RoundedCornerShape(28.dp))
-            .clickable(onClick = onClick)
-            .padding(horizontal = 10.dp),
-        verticalAlignment = Alignment.CenterVertically
+            .aspectRatio(1f)
+            .clip(shape)
+            .background(MaterialTheme.colorScheme.surface)
+            .combinedClickable(
+                onClick = onClick,
+                onLongClick = onLongClick
+            )
     ) {
-        PinLeadingArt(pin, library, playlists, allSongs, size = 36.dp)
-        Spacer(modifier = Modifier.width(12.dp))
-        Column(modifier = Modifier.weight(1f)) {
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .weight(1f)
+                .padding(12.dp),
+            contentAlignment = Alignment.Center
+        ) {
+            PinLeadingArt(
+                pin = pin,
+                library = library,
+                playlists = playlists,
+                allSongs = allSongs,
+                size = 160.dp,
+                fill = true
+            )
+        }
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 14.dp)
+                .padding(bottom = 14.dp)
+        ) {
             MarqueeText(
                 text = pin.title,
-                style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.SemiBold)
+                style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.SemiBold)
             )
             if (pin.subtitle.isNotBlank()) {
                 Text(
                     text = pin.subtitle,
-                    style = MaterialTheme.typography.labelSmall,
+                    style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.55f),
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis
                 )
             }
         }
-        IconButton(onClick = onUnpin, modifier = Modifier.size(32.dp)) {
-            Icon(
-                Icons.Default.Close,
-                contentDescription = "Unpin",
-                modifier = Modifier.size(16.dp),
-                tint = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.45f)
-            )
-        }
     }
 }
 
 @Composable
-private fun EmptyPinRow(
+private fun EmptySquarePin(
     onClick: () -> Unit,
     modifier: Modifier = Modifier
 ) {
+    val shape = RoundedCornerShape(12.dp)
     Box(
         modifier = modifier
-            .height(56.dp)
-            .clip(RoundedCornerShape(28.dp))
-            .border(1.5.dp, MaterialTheme.colorScheme.onSurface.copy(alpha = 0.35f), RoundedCornerShape(28.dp))
+            .aspectRatio(1f)
+            .clip(shape)
+            .background(MaterialTheme.colorScheme.surface)
+            .border(
+                1.dp,
+                MaterialTheme.colorScheme.onSurface.copy(alpha = 0.2f),
+                shape
+            )
             .clickable(onClick = onClick),
         contentAlignment = Alignment.Center
     ) {
         Icon(
             Icons.Default.Add,
             contentDescription = "Add pin",
-            modifier = Modifier.size(28.dp),
-            tint = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.55f)
+            modifier = Modifier.size(40.dp),
+            tint = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.45f)
         )
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun PinActionSheet(
+    pin: StuffPin,
+    onDismiss: () -> Unit,
+    onUnpin: () -> Unit
+) {
+    ModalBottomSheet(
+        onDismissRequest = onDismiss,
+        sheetState = rememberModalBottomSheetState()
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 8.dp)
+                .padding(bottom = 28.dp)
+        ) {
+            Text(
+                pin.title,
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.SemiBold,
+                modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis
+            )
+            if (pin.subtitle.isNotBlank()) {
+                Text(
+                    pin.subtitle,
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
+                    modifier = Modifier.padding(horizontal = 16.dp)
+                )
+            }
+            HorizontalDivider(modifier = Modifier.padding(vertical = 12.dp))
+            TextButton(
+                onClick = onUnpin,
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Text(
+                    "Remove pin",
+                    modifier = Modifier.fillMaxWidth(),
+                    style = MaterialTheme.typography.bodyLarge,
+                    color = MaterialTheme.colorScheme.error
+                )
+            }
+        }
     }
 }
 
@@ -554,12 +639,13 @@ private fun PinLeadingArt(
     library: LibraryIndex,
     playlists: List<Playlist>,
     allSongs: List<Song>,
-    size: androidx.compose.ui.unit.Dp = 32.dp
+    size: androidx.compose.ui.unit.Dp = 32.dp,
+    fill: Boolean = false
 ) {
     val shape: Shape = when (pin.kind) {
         StuffPinKind.ARTIST -> CircleShape
-        StuffPinKind.PLAYLIST -> RoundedCornerShape(10.dp)
-        StuffPinKind.ALBUM, StuffPinKind.SONG -> RoundedCornerShape(6.dp)
+        StuffPinKind.PLAYLIST -> RoundedCornerShape(12.dp)
+        StuffPinKind.ALBUM, StuffPinKind.SONG -> RoundedCornerShape(8.dp)
     }
     val fallback: ImageVector = when (pin.kind) {
         StuffPinKind.ALBUM -> Icons.Default.Album
@@ -568,13 +654,23 @@ private fun PinLeadingArt(
         StuffPinKind.SONG -> Icons.Default.MusicNote
     }
 
-    Box(
-        modifier = Modifier
+    val boxMod = if (fill) {
+        Modifier
+            .fillMaxSize()
+            .clip(shape)
+            .background(MaterialTheme.colorScheme.surfaceVariant)
+    } else {
+        Modifier
             .size(size)
             .clip(shape)
-            .background(MaterialTheme.colorScheme.surfaceVariant),
+            .background(MaterialTheme.colorScheme.surfaceVariant)
+    }
+
+    Box(
+        modifier = boxMod,
         contentAlignment = Alignment.Center
     ) {
+        val artSize = if (fill) size else size
         when (pin.kind) {
             StuffPinKind.ALBUM -> {
                 val album = remember(pin.id, library) {
@@ -582,9 +678,13 @@ private fun PinLeadingArt(
                         .firstOrNull { albumKey(it.name, it.artist) == pin.id }
                 }
                 if (album != null) {
-                    AlbumArt(song = album.songs.firstOrNull(), size = size, corner = 6.dp)
+                    AlbumArt(
+                        song = album.songs.firstOrNull(),
+                        size = if (fill) 200.dp else artSize,
+                        corner = 8.dp
+                    )
                 } else {
-                    Icon(fallback, null, Modifier.size(size * 0.55f))
+                    Icon(fallback, null, Modifier.size((if (fill) 64.dp else artSize) * 0.55f))
                 }
             }
             StuffPinKind.ARTIST -> {
@@ -596,24 +696,28 @@ private fun PinLeadingArt(
                 ArtistArt(
                     artistName = pin.title,
                     seedSong = seed,
-                    size = size,
+                    size = if (fill) 200.dp else artSize,
                     circular = true
                 )
             }
             StuffPinKind.PLAYLIST -> {
                 val pl = playlists.firstOrNull { it.id == pin.id }
                 if (pl != null) {
-                    PlaylistCoverArt(pl, size = size)
+                    PlaylistCoverArt(pl, size = if (fill) 200.dp else artSize)
                 } else {
-                    Icon(fallback, null, Modifier.size(size * 0.55f))
+                    Icon(fallback, null, Modifier.size((if (fill) 64.dp else artSize) * 0.55f))
                 }
             }
             StuffPinKind.SONG -> {
                 val song = allSongs.firstOrNull { it.songKey == pin.id }
                 if (song != null) {
-                    AlbumArt(song = song, size = size, corner = 6.dp)
+                    AlbumArt(
+                        song = song,
+                        size = if (fill) 200.dp else artSize,
+                        corner = 8.dp
+                    )
                 } else {
-                    Icon(fallback, null, Modifier.size(size * 0.55f))
+                    Icon(fallback, null, Modifier.size((if (fill) 64.dp else artSize) * 0.55f))
                 }
             }
         }
@@ -686,7 +790,6 @@ private fun AddPinFromCollectionSheet(
     var query by remember { mutableStateOf("") }
     val q = query.trim()
 
-    // Collection hearts + all live playlists as pin candidates
     val candidates = remember(entries, playlists, alreadyPinned, q) {
         val fromEntries = entries.filter { it.key !in alreadyPinned }
         val fromPlaylists = playlists
