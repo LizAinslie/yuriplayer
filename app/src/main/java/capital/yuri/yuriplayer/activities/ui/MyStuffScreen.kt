@@ -81,6 +81,7 @@ import capital.yuri.yuriplayer.data.StuffPinKind
 import capital.yuri.yuriplayer.data.albumKey
 import capital.yuri.yuriplayer.data.artistKey
 import capital.yuri.yuriplayer.player.PlayerController
+import capital.yuri.yuriplayer.ui.formatTrackCount
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import org.koin.compose.koinInject
@@ -168,7 +169,6 @@ fun MyStuffScreen(
             }
         }
 
-        // Zero bottom inset — parent Scaffold already pads for mini-player / system bars
         NavigationBar(windowInsets = WindowInsets(0, 0, 0, 0)) {
             NavigationBarItem(
                 selected = tab == MyStuffTab.Pins,
@@ -568,15 +568,9 @@ private fun PinLeadingArt(
     }
 
     val boxMod = if (fill) {
-        Modifier
-            .fillMaxSize()
-            .clip(shape)
-            .background(MaterialTheme.colorScheme.surfaceVariant)
+        Modifier.fillMaxSize().clip(shape).background(MaterialTheme.colorScheme.surfaceVariant)
     } else {
-        Modifier
-            .size(size)
-            .clip(shape)
-            .background(MaterialTheme.colorScheme.surfaceVariant)
+        Modifier.size(size).clip(shape).background(MaterialTheme.colorScheme.surfaceVariant)
     }
 
     Box(modifier = boxMod, contentAlignment = Alignment.Center) {
@@ -588,11 +582,7 @@ private fun PinLeadingArt(
                         .firstOrNull { albumKey(it.name, it.artist) == pin.id }
                 }
                 if (album != null) {
-                    AlbumArt(
-                        song = album.songs.firstOrNull(),
-                        size = if (fill) 120.dp else artSize,
-                        corner = 8.dp
-                    )
+                    AlbumArt(song = album.songs.firstOrNull(), size = if (fill) 120.dp else artSize, corner = 8.dp)
                 } else {
                     Icon(fallback, null, Modifier.size((if (fill) 48.dp else artSize) * 0.55f))
                 }
@@ -603,12 +593,7 @@ private fun PinLeadingArt(
                         .firstOrNull { artistKey(it.name) == pin.id }
                         ?.songs?.firstOrNull()
                 }
-                ArtistArt(
-                    artistName = pin.title,
-                    seedSong = seed,
-                    size = if (fill) 120.dp else artSize,
-                    circular = true
-                )
+                ArtistArt(artistName = pin.title, seedSong = seed, size = if (fill) 120.dp else artSize, circular = true)
             }
             StuffPinKind.PLAYLIST -> {
                 val pl = playlists.firstOrNull { it.id == pin.id }
@@ -621,11 +606,7 @@ private fun PinLeadingArt(
             StuffPinKind.SONG -> {
                 val song = allSongs.firstOrNull { it.songKey == pin.id }
                 if (song != null) {
-                    AlbumArt(
-                        song = song,
-                        size = if (fill) 120.dp else artSize,
-                        corner = 8.dp
-                    )
+                    AlbumArt(song = song, size = if (fill) 120.dp else artSize, corner = 8.dp)
                 } else {
                     Icon(fallback, null, Modifier.size((if (fill) 48.dp else artSize) * 0.55f))
                 }
