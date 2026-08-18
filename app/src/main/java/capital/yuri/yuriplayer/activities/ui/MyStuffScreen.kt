@@ -22,7 +22,6 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
-import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -120,8 +119,11 @@ fun MyStuffScreen(
     var showAddPin by remember { mutableStateOf(false) }
     var showCreatePlaylist by remember { mutableStateOf(false) }
 
-    LaunchedEffect(playlists) {
-        pinStore.pruneMissingPlaylists(playlists.map { it.id }.toSet())
+    // Collect from Room Flow directly — never prune against collectAsState's empty initial.
+    LaunchedEffect(playlistsRepo) {
+        playlistsRepo.observePlaylistsResolved().collect { list ->
+            pinStore.pruneMissingPlaylists(list.map { it.id }.toSet())
+        }
     }
 
     Column(modifier = Modifier.fillMaxSize()) {
@@ -167,6 +169,7 @@ fun MyStuffScreen(
                     onDelete = { pl ->
                         scope.launch {
                             playlistsRepo.delete(pl.id)
+                            // Prefer next Flow emission for prune; also pass remaining ids now
                             pinStore.pruneMissingPlaylists(
                                 playlists.filter { it.id != pl.id }.map { it.id }.toSet()
                             )
@@ -299,7 +302,6 @@ private fun MyStuffPinsTab(
             }
         }
 
-        // 2×3 grid — same card shape as discography album tiles
         LazyVerticalGrid(
             columns = GridCells.Fixed(2),
             modifier = Modifier.fillMaxSize(),
@@ -343,10 +345,6 @@ private fun MyStuffPinsTab(
     }
 }
 
-/**
- * Discography-style pin: square cover + title / subtitle under.
- * Long-press opens the unpin sheet (no always-visible X).
- */
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun GridPinCard(
