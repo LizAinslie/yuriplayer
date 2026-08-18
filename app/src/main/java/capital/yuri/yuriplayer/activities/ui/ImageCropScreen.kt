@@ -2,6 +2,9 @@ package capital.yuri.yuriplayer.activities.ui
 
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
+import android.graphics.Canvas as AndroidCanvas
+import android.graphics.Paint
+import android.graphics.Rect as AndroidRect
 import android.net.Uri
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.Image
@@ -41,7 +44,6 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import capital.yuri.yuriplayer.media.FfmpegService
 import io.ktor.client.HttpClient
@@ -58,9 +60,14 @@ import java.io.FileOutputStream
 import kotlin.math.max
 import kotlin.math.min
 
+/** Minimum pinch scale relative to ContentScale.Fit base (1f = fit to stage). */
+private const val MinZoomOut = 0.35f
+private const val MaxZoomIn = 8f
+
 /**
  * Pan/zoom crop: source image is shown at its **natural aspect** (fit), with a fixed
  * target-aspect frame overlaid. Outside the frame is dimmed. Save samples only the frame.
+ * Zoom may go below cover so the image can sit smaller inside the frame (letterboxed on save).
  */
 @Composable
 fun ImageCropScreen(
@@ -133,16 +140,31 @@ fun ImageCropScreen(
         if (base.width <= 0f) return o
         val scaledW = base.width * s
         val scaledH = base.height * s
-        // Image must cover the crop frame at all times
-        val minLeft = frame.right - scaledW
-        val maxLeft = frame.left
-        val minTop = frame.bottom - scaledH
-        val maxTop = frame.top
-        // offset is translation from centered base position
         val centerX = stage.width / 2f
         val centerY = stage.height / 2f
         val baseLeft = centerX - scaledW / 2f
         val baseTop = centerY - scaledH / 2f
+
+        // Cover: image must fill the frame. Undersized: keep the image fully inside the frame.
+        val minLeft: Float
+        val maxLeft: Float
+        if (scaledW >= frame.width) {
+            minLeft = frame.right - scaledW
+            maxLeft = frame.left
+        } else {
+            minLeft = frame.left
+            maxLeft = frame.right - scaledW
+        }
+        val minTop: Float
+        val maxTop: Float
+        if (scaledH >= frame.height) {
+            minTop = frame.bottom - scaledH
+            maxTop = frame.top
+        } else {
+            minTop = frame.top
+            maxTop = frame.bottom - scaledH
+        }
+
         val minOx = minLeft - baseLeft
         val maxOx = maxLeft - baseLeft
         val minOy = minTop - baseTop
@@ -153,19 +175,10 @@ fun ImageCropScreen(
         )
     }
 
-    fun minScaleToCover(bmp: Bitmap, stage: Size, frame: Rect): Float {
-        val base = baseFitSize(bmp, stage)
-        if (base.width <= 0f || base.height <= 0f) return 1f
-        val needW = frame.width / base.width
-        val needH = frame.height / base.height
-        return max(1f, max(needW, needH))
-    }
-
     LaunchedEffect(bitmap, stageSize, aspect) {
         val bmp = bitmap ?: return@LaunchedEffect
         if (stageSize.width <= 0f || cropFrame.width <= 0f) return@LaunchedEffect
-        val minS = minScaleToCover(bmp, stageSize, cropFrame)
-        if (scale < minS) scale = minS
+        scale = scale.coerceIn(MinZoomOut, MaxZoomIn)
         offset = clampOffset(scale, offset, stageSize, cropFrame, bmp)
     }
 
@@ -236,8 +249,7 @@ fun ImageCropScreen(
                 .pointerInput(bitmap, stageSize, cropFrame) {
                     detectTransformGestures { _, pan, zoom, _ ->
                         val bmp = bitmap ?: return@detectTransformGestures
-                        val minS = minScaleToCover(bmp, stageSize, cropFrame)
-                        val newScale = (scale * zoom).coerceIn(minS, 8f)
+                        val newScale = (scale * zoom).coerceIn(MinZoomOut, MaxZoomIn)
                         scale = newScale
                         offset = clampOffset(newScale, offset + pan, stageSize, cropFrame, bmp)
                     }
@@ -248,7 +260,6 @@ fun ImageCropScreen(
                 loadError != null -> Text(loadError!!, color = Color(0xFFFF8A80))
                 bitmap != null -> {
                     val bmp = bitmap!!
-                    // Natural aspect — Fit into the stage, then user scale/pan
                     Image(
                         bitmap = bmp.asImageBitmap(),
                         contentDescription = null,
@@ -270,11 +281,9 @@ fun ImageCropScreen(
                 else -> Text("Loading…", color = onChromeMuted)
             }
 
-            // Dim outside crop frame + frame chrome
             if (cropFrame.width > 0f) {
                 Canvas(modifier = Modifier.fillMaxSize()) {
                     val f = cropFrame
-                    // four dim strips
                     drawRect(dimOutside, Offset.Zero, Size(size.width, f.top))
                     drawRect(
                         dimOutside,
@@ -296,7 +305,6 @@ fun ImageCropScreen(
                     val h = f.height
                     val origin = Offset(f.left, f.top)
                     val stroke = 1.5.dp.toPx()
-                    // thirds inside frame
                     drawLine(
                         gridStroke,
                         origin + Offset(w / 3f, 0f),
@@ -321,7 +329,6 @@ fun ImageCropScreen(
                         origin + Offset(w, 2f * h / 3f),
                         stroke
                     )
-                    // corner brackets
                     val arm = min(w, h) * 0.08f
                     val thick = 3.dp.toPx()
                     val l = f.left
@@ -341,7 +348,7 @@ fun ImageCropScreen(
         }
 
         Text(
-            "Full image shown · pinch/drag · frame is ${if (aspect == 1f) "1:1" else "${aspect}"} output",
+            "Pinch to zoom in or out · drag to pan · frame is ${if (aspect == 1f) "1:1" else aspect.toString()} output",
             style = MaterialTheme.typography.labelMedium,
             color = onChromeMuted,
             modifier = Modifier.padding(16.dp)
@@ -438,7 +445,6 @@ private fun cropToFile(
         return centerCropBitmap(src, aspect, out)
     }
 
-    // Mirror ContentScale.Fit base size used in the UI
     val imgAspect = src.width.toFloat() / src.height.toFloat()
     val stageAspect = stage.width / stage.height
     val baseW: Float
@@ -456,19 +462,50 @@ private fun cropToFile(
     val centerY = stage.height / 2f
     val imgLeft = centerX - scaledW / 2f + offset.x
     val imgTop = centerY - scaledH / 2f + offset.y
+    val imgRight = imgLeft + scaledW
+    val imgBottom = imgTop + scaledH
 
-    val srcLeft = ((frame.left - imgLeft) / scaledW * src.width).coerceIn(0f, src.width.toFloat())
-    val srcTop = ((frame.top - imgTop) / scaledH * src.height).coerceIn(0f, src.height.toFloat())
-    val srcRight = ((frame.right - imgLeft) / scaledW * src.width).coerceIn(0f, src.width.toFloat())
-    val srcBottom = ((frame.bottom - imgTop) / scaledH * src.height).coerceIn(0f, src.height.toFloat())
+    // Output at a solid working size, preserving frame aspect
+    val outW = 1024
+    val outH = (outW / aspect).toInt().coerceAtLeast(1)
+    val result = Bitmap.createBitmap(outW, outH, Bitmap.Config.ARGB_8888)
+    val canvas = AndroidCanvas(result)
+    canvas.drawColor(android.graphics.Color.BLACK)
 
-    val x = srcLeft.toInt().coerceIn(0, src.width - 1)
-    val y = srcTop.toInt().coerceIn(0, src.height - 1)
-    val w = (srcRight - srcLeft).toInt().coerceAtLeast(1).coerceAtMost(src.width - x)
-    val h = (srcBottom - srcTop).toInt().coerceAtLeast(1).coerceAtMost(src.height - y)
+    // Intersection of the image with the crop frame in stage space
+    val interLeft = max(frame.left, imgLeft)
+    val interTop = max(frame.top, imgTop)
+    val interRight = min(frame.right, imgRight)
+    val interBottom = min(frame.bottom, imgBottom)
+    if (interRight > interLeft && interBottom > interTop && scaledW > 0f && scaledH > 0f) {
+        val srcLeft = ((interLeft - imgLeft) / scaledW * src.width).toInt()
+            .coerceIn(0, src.width - 1)
+        val srcTop = ((interTop - imgTop) / scaledH * src.height).toInt()
+            .coerceIn(0, src.height - 1)
+        val srcRight = ((interRight - imgLeft) / scaledW * src.width).toInt()
+            .coerceIn(srcLeft + 1, src.width)
+        val srcBottom = ((interBottom - imgTop) / scaledH * src.height).toInt()
+            .coerceIn(srcTop + 1, src.height)
 
-    val cropped = Bitmap.createBitmap(src, x, y, w, h)
-    FileOutputStream(out).use { cropped.compress(Bitmap.CompressFormat.JPEG, 92, it) }
+        val dstLeft = ((interLeft - frame.left) / frame.width * outW).toInt()
+            .coerceIn(0, outW - 1)
+        val dstTop = ((interTop - frame.top) / frame.height * outH).toInt()
+            .coerceIn(0, outH - 1)
+        val dstRight = ((interRight - frame.left) / frame.width * outW).toInt()
+            .coerceIn(dstLeft + 1, outW)
+        val dstBottom = ((interBottom - frame.top) / frame.height * outH).toInt()
+            .coerceIn(dstTop + 1, outH)
+
+        val paint = Paint(Paint.FILTER_BITMAP_FLAG)
+        canvas.drawBitmap(
+            src,
+            AndroidRect(srcLeft, srcTop, srcRight, srcBottom),
+            AndroidRect(dstLeft, dstTop, dstRight, dstBottom),
+            paint
+        )
+    }
+
+    FileOutputStream(out).use { result.compress(Bitmap.CompressFormat.JPEG, 92, it) }
     return out
 }
 
