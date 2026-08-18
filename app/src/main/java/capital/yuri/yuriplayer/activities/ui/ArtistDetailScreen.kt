@@ -139,7 +139,6 @@ private fun sortedReleaseTracks(album: AlbumItem): List<Song> =
             .thenBy(String.CASE_INSENSITIVE_ORDER) { it.displayTitle }
     )
 
-/** Banner body below status bar; total height = status inset + this. */
 private val ArtistBannerBodyHeight = 200.dp
 private val ArtistAvatarOnBanner = 132.dp
 private val ArtistAvatarPlain = 160.dp
@@ -213,7 +212,9 @@ fun ArtistDetailScreen(
 
     LaunchedEffect(artist.name, albums.size, profile?.imageUri, profile?.bio, profile?.genres, themeTick) {
         val resolved = runCatching { profileRepo.resolve(artist.displayName) }.getOrNull()
-        bannerUri = profileRepo.bannerUri(artist.displayName)
+        // Prefer live bannerUri if already set this session; still refresh from disk
+        val diskBanner = profileRepo.bannerUri(artist.displayName)
+        if (diskBanner != bannerUri) bannerUri = diskBanner
         val themeUri = parseImageUri(bannerUri)
             ?: parseImageUri(profile?.imageUri ?: resolved?.imageUri)
 
@@ -253,7 +254,6 @@ fun ArtistDetailScreen(
     val statusBarTop = WindowInsets.statusBars.asPaddingValues().calculateTopPadding()
     val bannerTotalHeight: Dp = if (hasBanner) statusBarTop + ArtistBannerBodyHeight else 0.dp
 
-    // Initial themed wash (no banner: solid header; with banner: light under-status tint only)
     val solidHeaderHeight = if (hasBanner) statusBarTop + ArtistBannerBodyHeight else ArtistHeaderHeightPlain
     val fadePx = with(density) { ArtistGradientFade.toPx() }
     val headerPx = with(density) { solidHeaderHeight.toPx() }
@@ -290,7 +290,12 @@ fun ArtistDetailScreen(
                             Toast.makeText(context, "Artist image updated", Toast.LENGTH_SHORT).show()
                         }
                         ArtistImageKind.BANNER -> {
-                            profileRepo.setBannerImage(artist.displayName, cropped.toString())
+                            val saved = profileRepo.setBannerImage(
+                                artist.displayName,
+                                cropped.toString()
+                            )
+                            // Same-frame update — new timestamped file URI busts Coil cache
+                            bannerUri = saved
                             Toast.makeText(context, "Banner updated", Toast.LENGTH_SHORT).show()
                         }
                     }
@@ -301,7 +306,6 @@ fun ArtistDetailScreen(
         return
     }
 
-    // Transparent status bar so the scrolling banner shows through
     ThemedStatusBar(
         color = if (hasBanner) Color.Transparent else artBg,
         enabled = true
@@ -359,6 +363,7 @@ fun ArtistDetailScreen(
                 showMenu = false
                 scope.launch {
                     profileRepo.setBannerImage(artist.displayName, null)
+                    bannerUri = null
                     themeTick++
                     Toast.makeText(context, "Banner cleared", Toast.LENGTH_SHORT).show()
                 }
@@ -419,7 +424,6 @@ fun ArtistDetailScreen(
             .fillMaxSize()
             .background(defaultBg)
             .drawBehind {
-                // Soft themed wash behind the initial hero (scrolls away visually with content)
                 if (!hasBanner) {
                     val solidEnd = headerPx
                     val fadeEnd = solidEnd + fadePx
@@ -588,7 +592,6 @@ fun ArtistDetailScreen(
             }
         }
 
-        // Floating chrome stays put while the banner scrolls away underneath
         Row(
             modifier = Modifier
                 .fillMaxWidth()
@@ -861,7 +864,6 @@ private fun ArtistHero(
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
         if (hasBanner) {
-            // Banner + avatar scroll together; banner starts at y=0 under status bar
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -876,13 +878,14 @@ private fun ArtistHero(
                     AsyncImage(
                         model = ImageRequest.Builder(context)
                             .data(bannerUri)
+                            .memoryCacheKey(bannerUri)
+                            .diskCacheKey(bannerUri)
                             .crossfade(true)
                             .build(),
                         contentDescription = "$name banner",
                         contentScale = ContentScale.Crop,
                         modifier = Modifier.fillMaxSize()
                     )
-                    // Fade from banner into page — starts at banner bottom edge
                     Box(
                         modifier = Modifier
                             .fillMaxWidth()
