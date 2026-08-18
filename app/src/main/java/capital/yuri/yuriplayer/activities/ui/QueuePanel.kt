@@ -49,8 +49,12 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.shadow
+import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.LayoutCoordinates
+import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.layout.positionInRoot
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
@@ -113,6 +117,12 @@ private class SectionDragState {
             promoteToHot = false
             hover = raw.coerceIn(0, (size - 1).coerceAtLeast(0))
         }
+    }
+
+    /** Apply list auto-scroll delta so the row stays under the finger. */
+    fun applyScrollDelta(delta: Float, rowHeight: Float, size: Int, allowPromote: Boolean) {
+        if (!active) return
+        drag(delta, rowHeight, size, allowPromote)
     }
 
     fun end(): Triple<Int, Int, Boolean>? {
@@ -233,6 +243,8 @@ private fun QueueTabContent(
     val rowHeightPx = with(density) { 56.dp.toPx() }
     val hotDrag = remember { SectionDragState() }
     val coldDrag = remember { SectionDragState() }
+    val listState = rememberLazyListState()
+    val autoScroll = rememberListDragAutoScroll(listState)
 
     val currentKey = nowPlaying?.let { it.path ?: it.contentUri.toString() }
     fun isCurrent(song: Song): Boolean {
@@ -252,6 +264,17 @@ private fun QueueTabContent(
     val showHotSection = upcomingHot.isNotEmpty()
     val isRadio = snapshot.isRadio
     val radioShuffled = isRadio && snapshot.shuffleEnabled
+
+    autoScroll.onScrolled = { delta ->
+        when {
+            hotDrag.active -> hotDrag.applyScrollDelta(
+                delta, rowHeightPx, snapshot.hotQueue.size, allowPromote = false
+            )
+            coldDrag.active -> coldDrag.applyScrollDelta(
+                delta, rowHeightPx, snapshot.coldQueue.size, allowPromote = true
+            )
+        }
+    }
 
     val placementSpec = spring<androidx.compose.ui.unit.IntOffset>(
         stiffness = Spring.StiffnessMediumLow,
@@ -279,8 +302,18 @@ private fun QueueTabContent(
         }
 
         LazyColumn(
-            modifier = Modifier.weight(1f),
-            state = rememberLazyListState()
+            modifier = Modifier
+                .weight(1f)
+                .onGloballyPositioned { coords ->
+                    val p = coords.positionInRoot()
+                    autoScroll.viewportInRoot = Rect(
+                        p.x,
+                        p.y,
+                        p.x + coords.size.width,
+                        p.y + coords.size.height
+                    )
+                },
+            state = listState
         ) {
             if (showHotSection) {
                 item(key = "hdr-hot") { SectionHeader("Queue · ${upcomingHot.size}") }
@@ -297,6 +330,7 @@ private fun QueueTabContent(
                         drag = hotDrag,
                         allowPromoteToHot = false,
                         showPromoteHint = false,
+                        autoScroll = autoScroll,
                         onClick = { onPlayItem(QueueLane.HOT, entry.index) },
                         onCommitMove = { f, t -> onMoveHot(f, t) },
                         onSwipeRemove = { onRemoveHot(entry.index) },
@@ -368,6 +402,7 @@ private fun QueueTabContent(
                     drag = coldDrag,
                     allowPromoteToHot = true,
                     showPromoteHint = coldDrag.active && coldDrag.promoteToHot && coldDrag.from == entry.index,
+                    autoScroll = autoScroll,
                     onClick = { onPlayItem(QueueLane.COLD, entry.index) },
                     onCommitMove = { f, t -> onMoveCold(f, t) },
                     onSwipeRemove = { onRemoveCold(entry.index) },
@@ -478,6 +513,7 @@ private fun SwipeableQueueRow(
     drag: SectionDragState,
     allowPromoteToHot: Boolean,
     showPromoteHint: Boolean,
+    autoScroll: DragAutoScrollController,
     onClick: () -> Unit,
     onCommitMove: (from: Int, to: Int) -> Unit,
     onSwipeRemove: () -> Unit,
@@ -489,6 +525,7 @@ private fun SwipeableQueueRow(
     val swipeThreshold = with(density) { 96.dp.toPx() }
     var swipeX by remember { mutableFloatStateOf(0f) }
     val isDragged = drag.active && drag.from == index
+    var rowCoords by remember { mutableStateOf<LayoutCoordinates?>(null) }
 
     val targetShift = when {
         !drag.active || isDragged -> 0f
@@ -508,6 +545,7 @@ private fun SwipeableQueueRow(
         modifier = modifier
             .fillMaxWidth()
             .zIndex(if (isDragged) 10f else 0f)
+            .onGloballyPositioned { rowCoords = it }
     ) {
         if (showSwipeUnderlay) {
             Row(
@@ -572,20 +610,28 @@ private fun SwipeableQueueRow(
                 .clickable(enabled = !drag.active && swipeX == 0f, onClick = onClick)
                 .pointerInput(index, listSize) {
                     detectDragGesturesAfterLongPress(
-                        onDragStart = {
+                        onDragStart = { start ->
                             swipeX = 0f
                             drag.start(index)
+                            rowCoords?.localToRoot(start)?.let { autoScroll.onDragStart(it) }
                         },
                         onDragEnd = {
+                            autoScroll.onDragEnd()
                             drag.end()?.let { (f, t, promote) ->
                                 if (promote && allowPromoteToHot) onDragPromote?.invoke(f)
                                 else if (f != t) onCommitMove(f, t)
                             }
                         },
-                        onDragCancel = { drag.cancel() },
+                        onDragCancel = {
+                            autoScroll.onDragEnd()
+                            drag.cancel()
+                        },
                         onDrag = { change, amount ->
                             change.consume()
                             drag.drag(amount.y, rowHeightPx, listSize, allowPromoteToHot)
+                            rowCoords?.localToRoot(change.position)?.let {
+                                autoScroll.updateFingerRoot(it)
+                            }
                         }
                     )
                 }
