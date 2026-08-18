@@ -35,10 +35,8 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
-import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -141,7 +139,6 @@ fun AlbumDetailScreen(
     val base = MaterialTheme.colorScheme
     var themeColors by remember { mutableStateOf(fallbackPlayerColors(base)) }
     var showMenu by remember { mutableStateOf(false) }
-    var showAddToPlaylist by remember { mutableStateOf(false) }
     val listState = rememberLazyListState()
     val density = LocalDensity.current
 
@@ -220,13 +217,6 @@ fun AlbumDetailScreen(
     val fadePx = with(density) { GradientFadeLength.toPx() }
 
     ThemedStatusBar(color = albumBg, enabled = true)
-
-    if (showAddToPlaylist) {
-        AddToPlaylistSheet(
-            songs = album.songs,
-            onDismiss = { showAddToPlaylist = false }
-        )
-    }
 
     MaterialTheme(colorScheme = scheme) {
         BoxWithConstraints(
@@ -383,74 +373,22 @@ fun AlbumDetailScreen(
             }
 
             if (showMenu) {
-                ModalBottomSheet(
-                    onDismissRequest = { showMenu = false },
-                    sheetState = rememberModalBottomSheetState()
-                ) {
-                    MediaSheetHeader(
-                        song = album.songs.firstOrNull(),
-                        title = album.displayName,
-                        subtitle = album.displayArtist
-                    )
-                    MediaSheetItem(
-                        label = "Start radio",
-                        onClick = {
-                            onStartRadio()
-                            Toast.makeText(
-                                context,
-                                "Radio · ${album.displayName}",
-                                Toast.LENGTH_SHORT
-                            ).show()
-                            showMenu = false
-                        }
-                    )
-                    MediaSheetItem(
-                        label = "Add to queue",
-                        onClick = {
-                            onAddAlbumToQueue(album.songs)
-                            Toast.makeText(
-                                context,
-                                "Queued ${formatTrackCount(album.songs.size)}",
-                                Toast.LENGTH_SHORT
-                            ).show()
-                            showMenu = false
-                        }
-                    )
-                    MediaSheetItem(
-                        label = "Add to playlist",
-                        onClick = {
-                            showMenu = false
-                            showAddToPlaylist = true
-                        }
-                    )
-                    MediaSheetItem(
-                        label = "Edit album metadata",
-                        onClick = {
-                            showMenu = false
-                            onEditAlbum()
-                        }
-                    )
-                    MediaSheetItem(
-                        label = "Fetch additional metadata",
-                        onClick = {
-                            enrichment.enrichAlbumAsync(album, force = true)
-                            Toast.makeText(
-                                context,
-                                "Looking up year & cover online…",
-                                Toast.LENGTH_SHORT
-                            ).show()
-                            showMenu = false
-                        }
-                    )
-                    MediaSheetItem(
-                        label = "Go to artist",
-                        onClick = {
-                            showMenu = false
-                            onOpenArtist()
-                        }
-                    )
-                    MediaSheetBottomPad()
-                }
+                AlbumContextSheet(
+                    album = album,
+                    onDismiss = { showMenu = false },
+                    onGoToArtist = onOpenArtist,
+                    onEditMetadata = onEditAlbum,
+                    onAddToQueue = { onAddAlbumToQueue(album.songs) },
+                    onStartRadio = onStartRadio,
+                    onFetchMetadata = {
+                        enrichment.enrichAlbumAsync(album, force = true)
+                        Toast.makeText(
+                            context,
+                            "Looking up year & cover online\u2026",
+                            Toast.LENGTH_SHORT
+                        ).show()
+                    }
+                )
             }
         }
     }
