@@ -44,6 +44,11 @@ class ArtistProfileRepository(
             genres = parseGenresJson(entity.genresJson)
         ) ?: ArtistProfile(artistKey = key, displayName = artistName.trim())
 
+        // Drop previously stored wrong-artist bio before merging so it can't win on length
+        if (!ArtistNameMatch.bioRelevant(artistName, merged.bio)) {
+            merged = merged.copy(bio = null)
+        }
+
         for (provider in providers) {
             val fetched = runCatching { provider.fetch(artistName) }.getOrNull() ?: continue
             merged = merge(artistName, merged, fetched)
@@ -57,10 +62,9 @@ class ArtistProfileRepository(
         merged = ensureDiscoveryLinks(merged)
         merged = preferLocalImage(merged, key)
 
-        // Drop links that are pure search fallbacks when a real platform link exists
         merged = merged.copy(
             links = dedupeLinksPreferCanonical(merged.links),
-            bio = cleanedBio(artistName, merged.bio)
+            bio = merged.bio?.takeIf { ArtistNameMatch.bioRelevant(artistName, it) }
         )
 
         dao.upsert(
@@ -152,22 +156,7 @@ class ArtistProfileRepository(
             }
         )
 
-    /**
-     * If a stored bio scores as unrelated to the artist name (wrong Wikipedia hit),
-     * drop it so a better source can fill in on this or a later resolve.
-     */
-    private fun cleanedBio(artistName: String, bio: String?): String? {
-        if (bio.isNullOrBlank()) return bio
-        val significant = ArtistNameMatch.tokens(artistName).filter { it.length > 2 }
-        if (significant.isEmpty()) return bio
-        val lower = bio.lowercase()
-        val hits = significant.count { lower.contains(it) }
-        // Require at least one significant token (e.g. "darkie") for multi-word names
-        return if (hits == 0 && significant.size >= 2) null else bio
-    }
-
     private fun dedupeLinksPreferCanonical(links: List<ArtistLink>): List<ArtistLink> {
-        // Prefer non-search URLs when two links share the same platform label
         fun isSearchish(url: String): Boolean {
             val u = url.lowercase()
             return u.contains("/search") || u.contains("?q=") || u.contains("?query=") ||
@@ -183,7 +172,6 @@ class ArtistProfileRepository(
                 byFp[fp] = link
             }
         }
-        // Second pass: one link per label for common platforms (keep non-search)
         val byLabel = LinkedHashMap<String, ArtistLink>()
         for (link in byFp.values) {
             val labelKey = link.label.lowercase()
