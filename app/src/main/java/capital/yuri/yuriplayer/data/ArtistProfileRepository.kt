@@ -4,6 +4,7 @@ import capital.yuri.yuriplayer.data.db.ArtistProfileDao
 import capital.yuri.yuriplayer.data.db.ArtistProfileEntity
 import capital.yuri.yuriplayer.data.source.ArtistInfoService
 import capital.yuri.yuriplayer.data.source.ArtistLink
+import capital.yuri.yuriplayer.data.source.ArtistNameMatch
 import capital.yuri.yuriplayer.data.source.ArtistProfile
 import capital.yuri.yuriplayer.data.source.ArtistProfileProvider
 import capital.yuri.yuriplayer.data.source.LinkCategory
@@ -43,21 +44,24 @@ class ArtistProfileRepository(
             genres = parseGenresJson(entity.genresJson)
         ) ?: ArtistProfile(artistKey = key, displayName = artistName.trim())
 
-        // Legacy providers
         for (provider in providers) {
             val fetched = runCatching { provider.fetch(artistName) }.getOrNull() ?: continue
-            merged = merge(merged, fetched)
+            merged = merge(artistName, merged, fetched)
         }
-        // Aggregated SPI (Wikipedia bio, Wikidata genres, AudioDB, …)
         artistInfo?.let { info ->
-            runCatching { info.resolveProfile(artistName) }.getOrNull()?.let { merged = merge(merged, it) }
+            runCatching { info.resolveProfile(artistName) }.getOrNull()?.let {
+                merged = merge(artistName, merged, it)
+            }
         }
 
-        // Always include MusicBrainz entity page + search-style streaming fallbacks when missing
         merged = ensureDiscoveryLinks(merged)
-
-        // Prefer any already-persisted user image — never overwrite it with remote
         merged = preferLocalImage(merged, key)
+
+        // Drop links that are pure search fallbacks when a real platform link exists
+        merged = merged.copy(
+            links = dedupeLinksPreferCanonical(merged.links),
+            bio = cleanedBio(artistName, merged.bio)
+        )
 
         dao.upsert(
             ArtistProfileEntity(
@@ -115,24 +119,28 @@ class ArtistProfileRepository(
         return images.resolve(UserImageStore.NS_ARTIST_BANNERS, key)
     }
 
-    /** If a local file exists for this artist, force it and mark source=user. */
     private fun preferLocalImage(profile: ArtistProfile, key: String): ArtistProfile {
         val local = images.resolve(UserImageStore.NS_ARTISTS, key) ?: return profile
         if (profile.imageUri == local && profile.source == "user") return profile
         return profile.copy(imageUri = local, source = "user")
     }
 
-    private fun merge(base: ArtistProfile, incoming: ArtistProfile): ArtistProfile =
+    private fun merge(
+        artistName: String,
+        base: ArtistProfile,
+        incoming: ArtistProfile
+    ): ArtistProfile =
         base.copy(
             displayName = incoming.displayName.ifBlank { base.displayName },
-            bio = listOfNotNull(base.bio, incoming.bio).maxByOrNull { it.length },
+            bio = ArtistNameMatch.preferBio(artistName, base.bio, incoming.bio),
             imageUri = when {
                 base.source == "user" && !base.imageUri.isNullOrBlank() -> base.imageUri
                 base.imageUri?.startsWith("file:") == true -> base.imageUri
                 else -> base.imageUri ?: incoming.imageUri
             },
             websiteUrl = base.websiteUrl ?: incoming.websiteUrl,
-            links = (base.links + incoming.links).distinctBy { it.url.lowercase() },
+            links = (base.links + incoming.links)
+                .distinctBy { ArtistNameMatch.linkFingerprint(it.url) },
             genres = (base.genres + incoming.genres)
                 .map { it.trim() }
                 .filter { it.isNotEmpty() }
@@ -144,35 +152,75 @@ class ArtistProfileRepository(
             }
         )
 
-    /** Deduped discovery links when platforms weren't found via MB/AudioDB. */
+    /**
+     * If a stored bio scores as unrelated to the artist name (wrong Wikipedia hit),
+     * drop it so a better source can fill in on this or a later resolve.
+     */
+    private fun cleanedBio(artistName: String, bio: String?): String? {
+        if (bio.isNullOrBlank()) return bio
+        val significant = ArtistNameMatch.tokens(artistName).filter { it.length > 2 }
+        if (significant.isEmpty()) return bio
+        val lower = bio.lowercase()
+        val hits = significant.count { lower.contains(it) }
+        // Require at least one significant token (e.g. "darkie") for multi-word names
+        return if (hits == 0 && significant.size >= 2) null else bio
+    }
+
+    private fun dedupeLinksPreferCanonical(links: List<ArtistLink>): List<ArtistLink> {
+        // Prefer non-search URLs when two links share the same platform label
+        fun isSearchish(url: String): Boolean {
+            val u = url.lowercase()
+            return u.contains("/search") || u.contains("?q=") || u.contains("?query=") ||
+                u.contains("?term=") || u.contains("?search_query=")
+        }
+        val byFp = LinkedHashMap<String, ArtistLink>()
+        for (link in links) {
+            val fp = ArtistNameMatch.linkFingerprint(link.url)
+            val existing = byFp[fp]
+            if (existing == null) {
+                byFp[fp] = link
+            } else if (isSearchish(existing.url) && !isSearchish(link.url)) {
+                byFp[fp] = link
+            }
+        }
+        // Second pass: one link per label for common platforms (keep non-search)
+        val byLabel = LinkedHashMap<String, ArtistLink>()
+        for (link in byFp.values) {
+            val labelKey = link.label.lowercase()
+            val existing = byLabel[labelKey]
+            if (existing == null) {
+                byLabel[labelKey] = link
+            } else if (isSearchish(existing.url) && !isSearchish(link.url)) {
+                byLabel[labelKey] = link
+            }
+        }
+        return byLabel.values.toList()
+    }
+
     private fun ensureDiscoveryLinks(profile: ArtistProfile): ArtistProfile {
         val q = java.net.URLEncoder.encode(profile.displayName, "UTF-8")
-        val existing = profile.links.map { it.url.lowercase() }.toHashSet()
+        val existingFp = profile.links.map { ArtistNameMatch.linkFingerprint(it.url) }.toHashSet()
+        val existingLabels = profile.links.map { it.label.lowercase() }.toHashSet()
         val extras = buildList {
             fun addIfMissing(url: String, label: String) {
-                if (url.lowercase() !in existing) add(categorizeLink(url, label))
+                if (label.lowercase() in existingLabels) return
+                if (ArtistNameMatch.linkFingerprint(url) in existingFp) return
+                add(categorizeLink(url, label))
             }
             addIfMissing(
                 "https://musicbrainz.org/search?query=$q&type=artist&method=indexed",
                 "MusicBrainz"
             )
-            if (profile.links.none { it.label.equals("Spotify", true) }) {
-                addIfMissing("https://open.spotify.com/search/$q", "Spotify")
-            }
-            if (profile.links.none { it.label.equals("Apple Music", true) }) {
-                addIfMissing("https://music.apple.com/search?term=$q", "Apple Music")
-            }
-            if (profile.links.none { it.label.equals("YouTube", true) }) {
-                addIfMissing("https://www.youtube.com/results?search_query=$q", "YouTube")
-            }
-            if (profile.links.none { it.label.equals("Bandcamp", true) }) {
-                addIfMissing("https://bandcamp.com/search?q=$q", "Bandcamp")
-            }
-            if (profile.links.none { it.label.equals("SoundCloud", true) }) {
-                addIfMissing("https://soundcloud.com/search?q=$q", "SoundCloud")
-            }
+            addIfMissing("https://open.spotify.com/search/$q", "Spotify")
+            addIfMissing("https://music.apple.com/search?term=$q", "Apple Music")
+            addIfMissing("https://www.youtube.com/results?search_query=$q", "YouTube")
+            addIfMissing("https://bandcamp.com/search?q=$q", "Bandcamp")
+            addIfMissing("https://soundcloud.com/search?q=$q", "SoundCloud")
         }
-        return profile.copy(links = (profile.links + extras).distinctBy { it.url.lowercase() })
+        return profile.copy(
+            links = (profile.links + extras)
+                .distinctBy { ArtistNameMatch.linkFingerprint(it.url) }
+        )
     }
 
     companion object {
@@ -195,14 +243,14 @@ class ArtistProfileRepository(
                             )
                         }
                     }
-                }.distinctBy { it.url.lowercase() }
+                }.distinctBy { ArtistNameMatch.linkFingerprint(it.url) }
             }.getOrDefault(emptyList())
         }
 
         fun linksToJson(links: List<ArtistLink>): String? {
             if (links.isEmpty()) return null
             val arr = JSONArray()
-            links.distinctBy { it.url.lowercase() }.forEach { link ->
+            links.distinctBy { ArtistNameMatch.linkFingerprint(it.url) }.forEach { link ->
                 arr.put(
                     JSONObject()
                         .put("label", link.label)

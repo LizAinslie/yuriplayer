@@ -38,7 +38,7 @@ class ArtistInfoService(
         val parts = sources.map { src ->
             async { runCatching { src.fetchProfile(artistName) }.getOrNull() }
         }.awaitAll().filterNotNull()
-        parts.fold(null as ArtistProfile?) { acc, p -> mergeProfiles(acc, p) }
+        parts.fold(null as ArtistProfile?) { acc, p -> mergeProfiles(artistName, acc, p) }
     }
 
     suspend fun gatherImageCandidates(
@@ -53,8 +53,23 @@ class ArtistInfoService(
         }.awaitAll()
         val out = LinkedHashMap<String, ArtistImageCandidate>()
         lists.flatten().forEach { c ->
-            val key = c.url.substringBefore("?") // collapse size variants of same asset
-            if (key !in out && c.url !in out) out[c.url] = c
+            if (c.url.isBlank()) return@forEach
+            val key = ArtistNameMatch.imageFingerprint(c.url)
+            val existing = out[key]
+            // Prefer larger / non-thumb when fingerprint collides
+            if (existing == null) {
+                out[key] = c
+            } else {
+                val preferNew = (c.width ?: 0) * (c.height ?: 0) >
+                    (existing.width ?: 0) * (existing.height ?: 0)
+                val existingLooksThumb = existing.label.contains("thumb", true) ||
+                    existing.url.contains("thumb", true)
+                val newLooksThumb = c.label.contains("thumb", true) ||
+                    c.url.contains("thumb", true)
+                if (preferNew || (existingLooksThumb && !newLooksThumb)) {
+                    out[key] = c
+                }
+            }
         }
         out.values.toList()
     }
@@ -62,14 +77,19 @@ class ArtistInfoService(
     suspend fun upcomingEvents(artistName: String): List<ArtistEvent> =
         runCatching { bandsintown.upcomingEvents(artistName) }.getOrDefault(emptyList())
 
-    private fun mergeProfiles(base: ArtistProfile?, incoming: ArtistProfile): ArtistProfile {
+    private fun mergeProfiles(
+        artistName: String,
+        base: ArtistProfile?,
+        incoming: ArtistProfile
+    ): ArtistProfile {
         if (base == null) return incoming
         return base.copy(
             displayName = incoming.displayName.ifBlank { base.displayName },
-            bio = listOfNotNull(base.bio, incoming.bio).maxByOrNull { it.length },
+            bio = ArtistNameMatch.preferBio(artistName, base.bio, incoming.bio),
             imageUri = base.imageUri ?: incoming.imageUri,
             websiteUrl = base.websiteUrl ?: incoming.websiteUrl,
-            links = (base.links + incoming.links).distinctBy { it.url.lowercase() },
+            links = (base.links + incoming.links)
+                .distinctBy { ArtistNameMatch.linkFingerprint(it.url) },
             genres = (base.genres + incoming.genres)
                 .map { it.trim() }
                 .filter { it.isNotEmpty() }
