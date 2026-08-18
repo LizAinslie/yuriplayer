@@ -10,6 +10,9 @@ import java.io.File
  * Copies picker content:// (or other transient) URIs into app-private storage
  * so playlist covers, artist profile pics, and banners survive restarts and
  * revoked grant permissions.
+ *
+ * Each persist uses a unique timestamped filename so Coil / UI models always
+ * see a new URI when the user replaces an image (same stable key otherwise).
  */
 class UserImageStore(private val context: Context) {
 
@@ -17,8 +20,8 @@ class UserImageStore(private val context: Context) {
         get() = File(context.filesDir, DIR).also { if (!it.exists()) it.mkdirs() }
 
     /**
-     * @param sourceUri content:// or file:// from the system picker
-     * @param namespace subdirectory under files/user_images (e.g. "playlists", "artists")
+     * @param sourceUri content:// or file:// from the system picker / crop
+     * @param namespace subdirectory under files/user_images
      * @param key stable id used in the filename (playlist id / artist key)
      * @return file:// URI string of the persisted copy, or null on failure
      */
@@ -30,10 +33,13 @@ class UserImageStore(private val context: Context) {
         val src = runCatching { Uri.parse(sourceUri) }.getOrNull() ?: return@withContext null
         val dir = File(root, namespace).also { if (!it.exists()) it.mkdirs() }
         val safeKey = key.replace(Regex("[^a-zA-Z0-9._-]"), "_")
+
+        // Drop previous versions for this key first
         dir.listFiles()?.filter { it.name.startsWith("${safeKey}.") }?.forEach { it.delete() }
 
         val ext = guessExtension(context, src)
-        val dest = File(dir, "${safeKey}.${ext}")
+        // Timestamp keeps the URI unique so image loaders bust cache on replace
+        val dest = File(dir, "${safeKey}.${System.currentTimeMillis()}.$ext")
 
         try {
             context.contentResolver.openInputStream(src)?.use { input ->
