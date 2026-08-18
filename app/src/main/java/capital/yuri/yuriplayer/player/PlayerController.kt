@@ -152,11 +152,25 @@ class PlayerController(
         runOrQueue { it.clearHotQueue() }
     }
 
-    fun removeFromHot(index: Int) = service?.removeFromHot(index)
-    fun removeFromCold(index: Int) = service?.removeFromCold(index)
-    fun moveHot(from: Int, to: Int) = service?.moveHot(from, to)
-    fun moveCold(from: Int, to: Int) = service?.moveCold(from, to)
-    fun moveColdToHot(index: Int) = service?.moveColdToHot(index)
+    fun removeFromHot(index: Int) {
+        service?.removeFromHot(index) ?: queueManager.removeFromQueue(index)
+    }
+
+    fun removeFromCold(index: Int) {
+        service?.removeFromCold(index) ?: queueManager.removeFromContext(index)
+    }
+
+    fun moveHot(from: Int, to: Int) {
+        service?.moveHot(from, to) ?: queueManager.moveInQueue(from, to)
+    }
+
+    fun moveCold(from: Int, to: Int) {
+        service?.moveCold(from, to) ?: queueManager.moveInContext(from, to)
+    }
+
+    fun moveColdToHot(index: Int) {
+        service?.moveColdToHot(index) ?: queueManager.moveColdToHot(index)
+    }
 
     fun playQueueItem(lane: QueueLane, index: Int) {
         runOrQueue { it.playQueueItem(lane, index) }
