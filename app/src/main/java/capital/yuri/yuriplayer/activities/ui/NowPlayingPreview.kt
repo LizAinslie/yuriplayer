@@ -8,6 +8,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -26,7 +27,6 @@ import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.shadow
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.unit.dp
 import capital.yuri.yuriplayer.data.PlayerThemeStore
@@ -34,11 +34,11 @@ import capital.yuri.yuriplayer.data.Song
 import org.koin.compose.koinInject
 
 /**
- * Compact now-playing strip.
+ * Compact now-playing strip (bottom of library / detail pages).
  *
- * Chrome (surface, text, structure) follows the ambient app theme.
- * Accents only — progress track + play/pause — use album-art Material colors.
- * Album art gets a soft colored drop shadow from the same palette.
+ * Uses the **app default background** — not album art colors — so it stays
+ * neutral across pages. Accents (progress + play) still come from current art.
+ * Full Now Playing screen keeps the art-derived background.
  */
 @Composable
 fun NowPlayingPreview(
@@ -50,21 +50,22 @@ fun NowPlayingPreview(
     onOpen: () -> Unit,
     modifier: Modifier = Modifier,
     enableSwipeUp: Boolean = false,
-    tonalElevation: androidx.compose.ui.unit.Dp = 3.dp,
-    shadowElevation: androidx.compose.ui.unit.Dp = 6.dp
+    edgeToEdgeBottom: Boolean = false,
+    tonalElevation: androidx.compose.ui.unit.Dp = 0.dp,
+    shadowElevation: androidx.compose.ui.unit.Dp = 4.dp
 ) {
     val themeStore: PlayerThemeStore = koinInject()
     val theme by themeStore.current.collectAsState()
     val ambient = MaterialTheme.colorScheme
     val accent = theme?.colors?.accent ?: ambient.primary
     val onAccent = theme?.colors?.onAccent ?: ambient.onPrimary
-    val trackInactive = ambient.onSurface.copy(alpha = 0.2f)
+    val trackInactive = ambient.onBackground.copy(alpha = 0.2f)
 
     Surface(
         tonalElevation = tonalElevation,
         shadowElevation = shadowElevation,
-        color = ambient.surface,
-        contentColor = ambient.onSurface,
+        color = ambient.background,
+        contentColor = ambient.onBackground,
         modifier = modifier
             .fillMaxWidth()
             .then(
@@ -77,7 +78,9 @@ fun NowPlayingPreview(
                 } else Modifier
             )
     ) {
-        Column {
+        Column(
+            modifier = if (edgeToEdgeBottom) Modifier.navigationBarsPadding() else Modifier
+        ) {
             PlaybackProgress(
                 positionMs = positionMs,
                 durationMs = durationMs,
@@ -92,7 +95,6 @@ fun NowPlayingPreview(
                     .padding(horizontal = 12.dp, vertical = 8.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                // Colored ambient shadow behind the art tile
                 Box(
                     modifier = Modifier
                         .shadow(
@@ -109,12 +111,12 @@ fun NowPlayingPreview(
                     MarqueeText(
                         text = song?.displayTitle ?: "Not playing",
                         style = MaterialTheme.typography.bodyMedium,
-                        color = ambient.onSurface
+                        color = ambient.onBackground
                     )
                     MarqueeText(
                         text = song?.displayArtist ?: "",
                         style = MaterialTheme.typography.bodySmall,
-                        color = ambient.onSurface.copy(alpha = 0.6f)
+                        color = ambient.onBackground.copy(alpha = 0.6f)
                     )
                 }
                 IconButton(onClick = onToggle) {
@@ -136,7 +138,6 @@ fun NowPlayingPreview(
     }
 }
 
-/** Alias used by the main shell bottom bar. */
 @Composable
 fun MiniPlayerBar(
     song: Song?,
@@ -153,6 +154,7 @@ fun MiniPlayerBar(
         durationMs = durationMs,
         onToggle = onToggle,
         onOpen = onExpand,
-        enableSwipeUp = true
+        enableSwipeUp = true,
+        edgeToEdgeBottom = true
     )
 }

@@ -4,15 +4,25 @@ import android.util.Log
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.channels.BufferOverflow
+import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
+/**
+ * In-memory view of the **persisted** catalog for UI.
+ *
+ * Continuous lists → StateFlows. Discrete scan moments → [events].
+ */
 class LibraryIndex(
     private val repository: MusicRepository,
-    private val cache: LibraryCache
+    private val cache: LibraryCache,
+    private val catalog: CatalogRepository
 ) {
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
@@ -29,15 +39,27 @@ class LibraryIndex(
     private val _error = MutableStateFlow<String?>(null)
     val error: StateFlow<String?> = _error.asStateFlow()
 
+    private val _events = MutableSharedFlow<LibraryEvent>(
+        extraBufferCapacity = 16,
+        onBufferOverflow = BufferOverflow.DROP_OLDEST
+    )
+    val events: SharedFlow<LibraryEvent> = _events.asSharedFlow()
+
     fun bootstrap(staleAfterMs: Long = DEFAULT_STALE_MS) {
         scope.launch {
-            val cached = withContext(Dispatchers.IO) { cache.load() }
-            if (cached != null && cached.songs.isNotEmpty()) {
-                _songs.value = cached.songs
-                _lastScannedAt.value = cached.scannedAt
+            val fromDb = withContext(Dispatchers.IO) { catalog.getAllSongs() }
+            if (fromDb.isNotEmpty()) {
+                _songs.value = fromDb
+                _lastScannedAt.value = System.currentTimeMillis()
+            } else {
+                val cached = withContext(Dispatchers.IO) { cache.load() }
+                if (cached != null && cached.songs.isNotEmpty()) {
+                    _songs.value = cached.songs
+                    _lastScannedAt.value = cached.scannedAt
+                }
             }
-            val age = System.currentTimeMillis() - (cached?.scannedAt ?: 0L)
-            if (cached == null || cached.songs.isEmpty() || age > staleAfterMs) {
+            val age = System.currentTimeMillis() - _lastScannedAt.value
+            if (_songs.value.isEmpty() || age > staleAfterMs) {
                 refresh()
             }
         }
@@ -48,20 +70,44 @@ class LibraryIndex(
         scope.launch {
             _isLoading.value = true
             _error.value = null
+            _events.tryEmit(LibraryEvent.ScanStarted())
             try {
-                val scanned = withContext(Dispatchers.IO) {
-                    repository.scanLibrary().also { cache.save(it) }
+                val songs = withContext(Dispatchers.IO) {
+                    catalog.syncLocalLibrary().also { cache.save(it) }
                 }
-                _songs.value = scanned
+                _songs.value = songs
                 _lastScannedAt.value = System.currentTimeMillis()
+                _events.tryEmit(LibraryEvent.ScanCompleted(songCount = songs.size))
             } catch (e: SecurityException) {
                 _error.value = "Storage permission required"
+                _events.tryEmit(LibraryEvent.ScanFailed("Storage permission required"))
             } catch (e: Exception) {
                 _error.value = e.message ?: "Scan failed"
                 Log.e(TAG, "Refresh failed", e)
+                _events.tryEmit(LibraryEvent.ScanFailed(e.message ?: "Scan failed"))
             } finally {
                 _isLoading.value = false
             }
+        }
+    }
+
+    fun applyAlbumYear(albumKey: String, year: Int) {
+        if (year !in 1000..2100) return
+        scope.launch(Dispatchers.IO) {
+            runCatching { catalog.applyAlbumYear(albumKey, year) }
+        }
+        val current = _songs.value
+        var changed = false
+        val next = current.map { song ->
+            val key = albumKey(song.album, song.effectiveAlbumArtist)
+            if (key == albumKey && (song.year == null || song.year <= 0)) {
+                changed = true
+                song.copy(year = year)
+            } else song
+        }
+        if (changed) {
+            _songs.value = next
+            Log.i(TAG, "applied year $year to albumKey=$albumKey")
         }
     }
 
@@ -81,11 +127,6 @@ class LibraryIndex(
         return base.filter { songMatches(it, q) }
     }
 
-    /**
-     * One row per album title (normalized), not per track-artist combo.
-     * Album artist = majority of explicit albumArtist tags, else majority of track artists.
-     * That stops MILDRED-style feature tracks from splitting the album.
-     */
     fun albums(query: String = "", taggedOnly: Boolean = true): List<AlbumItem> {
         val q = query.trim()
         val source = if (taggedOnly) {
@@ -96,10 +137,9 @@ class LibraryIndex(
 
         return source
             .groupBy { normalizeKey(it.album) }
-            .mapNotNull { (albumKey, tracks) ->
-                if (albumKey == null) return@mapNotNull null
+            .mapNotNull { (albumKeyNorm, tracks) ->
+                if (albumKeyNorm == null) return@mapNotNull null
 
-                // Prefer explicit albumArtist tags for the display artist
                 val albumArtistVotes = tracks
                     .mapNotNull { it.albumArtist?.let { a -> normalizeKey(a) to a } }
                     .groupingBy { it.first }
@@ -119,7 +159,6 @@ class LibraryIndex(
                     else -> null
                 }
 
-                // Canonical album title: most common original casing among tracks
                 val displayName = tracks
                     .mapNotNull { it.album }
                     .groupingBy { it }
@@ -128,7 +167,6 @@ class LibraryIndex(
                     ?.key
                     ?: tracks.firstOrNull()?.album
 
-                // Dedupe tracks that appear twice (MediaStore + filesystem)
                 val deduped = tracks.distinctBy {
                     it.path?.lowercase() ?: it.contentUri.toString()
                 }
@@ -163,8 +201,8 @@ class LibraryIndex(
 
         return source
             .groupBy { normalizeKey(it.effectiveAlbumArtist) }
-            .mapNotNull { (artistKey, tracks) ->
-                if (artistKey == null) return@mapNotNull null
+            .mapNotNull { (artistKeyNorm, tracks) ->
+                if (artistKeyNorm == null) return@mapNotNull null
                 val displayName = tracks
                     .mapNotNull { it.effectiveAlbumArtist }
                     .groupingBy { it }
@@ -196,7 +234,6 @@ class LibraryIndex(
         private const val TAG = "LibraryIndex"
         const val DEFAULT_STALE_MS = 12L * 60 * 60 * 1000
 
-        /** Lowercase + collapse whitespace for stable grouping keys. */
         fun normalizeKey(value: String?): String? {
             if (value == null) return null
             val t = value.trim().replace(Regex("\\s+"), " ").lowercase()

@@ -32,7 +32,7 @@ fun PlaybackProgress(
     modifier: Modifier = Modifier
 ) {
     val progress = if (durationMs > 0) {
-        (positionMs.toFloat() / durationMs.toFloat()).coerceIn(0f, 1f)
+        (positionMs.toDouble() / durationMs.toDouble()).toFloat().coerceIn(0f, 1f)
     } else 0f
 
     when (style) {
@@ -59,10 +59,14 @@ fun PlaybackProgress(
                     sliding = true
                     slider = it
                 },
-                onProgressChangeFinished = {
+                onProgressChangeFinished = { fraction ->
                     sliding = false
                     if (durationMs > 0 && onSeek != null) {
-                        onSeek((slider * durationMs).toLong())
+                        // Double avoids float mantissa error near EOF on long tracks
+                        val target = (fraction.toDouble() * durationMs.toDouble())
+                            .toLong()
+                            .coerceIn(0L, (durationMs - 1L).coerceAtLeast(0L))
+                        onSeek(target)
                     }
                 },
                 activeColor = activeColor,

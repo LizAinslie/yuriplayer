@@ -29,5 +29,24 @@
 -keep class capital.yuri.yuriplayer.data.** { *; }
 -keep class capital.yuri.yuriplayer.player.** { *; }
 
+# kotlinx.serialization
+-keepattributes *Annotation*, InnerClasses
+-dontnote kotlinx.serialization.AnnotationsKt
+-keepclassmembers class kotlinx.serialization.json.** { *** Companion; }
+-keepclasseswithmembers class kotlinx.serialization.json.** {
+    kotlinx.serialization.KSerializer serializer(...);
+}
+-keep,includedescriptorclasses class capital.yuri.yuriplayer.**$$serializer { *; }
+-keepclassmembers class capital.yuri.yuriplayer.** {
+    *** Companion;
+}
+-keepclasseswithmembers class capital.yuri.yuriplayer.** {
+    kotlinx.serialization.KSerializer serializer(...);
+}
+
+# jaudiotagger (reflection + format handlers)
+-keep class org.jaudiotagger.** { *; }
+-dontwarn org.jaudiotagger.**
+
 # Compose
 -dontwarn androidx.compose.**

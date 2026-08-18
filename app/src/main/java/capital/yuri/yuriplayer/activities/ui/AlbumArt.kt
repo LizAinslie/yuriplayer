@@ -13,6 +13,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -25,9 +26,19 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
-import capital.yuri.yuriplayer.data.AlbumArtResolver
+import capital.yuri.yuriplayer.data.AlbumArtCache
+import capital.yuri.yuriplayer.data.MetadataEnrichmentService
 import capital.yuri.yuriplayer.data.Song
+import org.koin.compose.koinInject
 
+/**
+ * Song / album cover.
+ *
+ * Display [size] drives decode tier:
+ * - row-sized (<= 80.dp) → [AlbumArtCache.THUMB_DECODE_SIZE] (128px), kept in the
+ *   large thumb LRU so queue / playlist / library scrolling stays smooth
+ * - larger → hero tier (512px)
+ */
 @Composable
 fun AlbumArt(
     song: Song?,
@@ -36,13 +47,40 @@ fun AlbumArt(
     corner: Dp = 8.dp
 ) {
     val context = LocalContext.current
-    var bitmap by remember(song?.path, song?.contentUri) { mutableStateOf<Bitmap?>(null) }
+    val artCache: AlbumArtCache = koinInject()
+    val enrichment: MetadataEnrichmentService = koinInject()
+    val coverGen by enrichment.coverGeneration.collectAsState()
 
-    LaunchedEffect(song?.path, song?.contentUri) {
-        bitmap = null
-        if (song != null) {
-            bitmap = AlbumArtResolver.load(context, song)
+    // Song rows are typically 40–56dp; treat anything <= 80dp as a list thumb.
+    val decodeSize = remember(size) {
+        when {
+            size == null -> AlbumArtCache.HERO_DECODE_SIZE
+            size <= 80.dp -> AlbumArtCache.THUMB_DECODE_SIZE
+            size <= 160.dp -> 256
+            else -> AlbumArtCache.HERO_DECODE_SIZE
         }
+    }
+
+    val baseKey = remember(song?.path, song?.contentUri, song?.album, song?.artist, coverGen) {
+        song?.let { artCache.artKey(it) }
+    }
+
+    // Seed from memory so recycled list items show art immediately.
+    var bitmap by remember(baseKey, decodeSize, coverGen) {
+        mutableStateOf(
+            if (song != null) artCache.peek(song, decodeSize) else null
+        )
+    }
+
+    LaunchedEffect(baseKey, decodeSize, coverGen) {
+        if (song == null) {
+            bitmap = null
+            return@LaunchedEffect
+        }
+        // Do not clear to null first — keeps previous frame while loading and
+        // avoids the unload flash when scrolling back over warm cache entries.
+        val loaded = artCache.get(context, song, decodeSize)
+        bitmap = loaded
     }
 
     val shape = RoundedCornerShape(corner)
@@ -53,7 +91,7 @@ fun AlbumArt(
         contentAlignment = Alignment.Center
     ) {
         val bmp = bitmap
-        if (bmp != null) {
+        if (bmp != null && !bmp.isRecycled) {
             Image(
                 bitmap = bmp.asImageBitmap(),
                 contentDescription = song?.displayAlbum,

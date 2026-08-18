@@ -1,16 +1,16 @@
 package capital.yuri.yuriplayer.player
 
 import android.content.Context
-import android.net.Uri
 import android.util.Log
 import capital.yuri.yuriplayer.data.Song
-import org.json.JSONArray
-import org.json.JSONObject
+import capital.yuri.yuriplayer.data.json.AppJson
+import kotlinx.serialization.Serializable
 import java.io.File
 
 class PlaybackStateStore(context: Context) {
 
     private val file = File(context.filesDir, FILE_NAME)
+    private val json = AppJson.json
 
     fun save(
         snapshot: QueueSnapshot,
@@ -22,21 +22,23 @@ class PlaybackStateStore(context: Context) {
             return
         }
         try {
-            val root = JSONObject()
-                .put("version", VERSION)
-                .put("positionMs", positionMs.coerceAtLeast(0L))
-                .put("playWhenReady", playWhenReady)
-                .put("lane", snapshot.lane.name)
-                .put("indexInLane", snapshot.indexInLane)
-                .put("shuffleEnabled", snapshot.shuffleEnabled)
-                .put("repeatMode", snapshot.repeatMode.name)
-                .put("savedAt", System.currentTimeMillis())
-                .put("hotQueue", songsToJson(snapshot.hotQueue))
-                .put("coldQueue", songsToJson(snapshot.coldQueue))
-                .put("coldOriginal", songsToJson(snapshot.coldOriginal))
-
+            val dto = PlaybackStateDto(
+                version = VERSION,
+                positionMs = positionMs.coerceAtLeast(0L),
+                playWhenReady = playWhenReady,
+                lane = snapshot.lane,
+                indexInLane = snapshot.indexInLane,
+                shuffleEnabled = snapshot.shuffleEnabled,
+                repeatMode = snapshot.repeatMode,
+                savedAt = System.currentTimeMillis(),
+                hotQueue = snapshot.hotQueue,
+                coldQueue = snapshot.coldQueue,
+                coldOriginal = snapshot.coldOriginal,
+                playedStack = snapshot.playedStack,
+                coldSource = snapshot.coldSource
+            )
             val tmp = File(file.parentFile, "$FILE_NAME.tmp")
-            tmp.writeText(root.toString())
+            tmp.writeText(json.encodeToString(PlaybackStateDto.serializer(), dto))
             if (!tmp.renameTo(file)) {
                 tmp.copyTo(file, overwrite = true)
                 tmp.delete()
@@ -49,40 +51,34 @@ class PlaybackStateStore(context: Context) {
     fun load(): SavedPlayback? {
         if (!file.exists()) return null
         return try {
-            val root = JSONObject(file.readText())
-            // Legacy v1: single "queue" array
-            if (root.has("queue") && !root.has("coldQueue")) {
-                return loadLegacy(root)
+            val text = file.readText()
+            val dto = json.decodeFromString(PlaybackStateDto.serializer(), text)
+
+            // Legacy: single "queue" array before hot/cold split
+            if (dto.coldQueue.isEmpty() && dto.hotQueue.isEmpty() && !dto.queue.isNullOrEmpty()) {
+                return loadLegacy(dto)
             }
 
-            val hot = jsonToSongs(root.optJSONArray("hotQueue"))
-            val cold = jsonToSongs(root.optJSONArray("coldQueue"))
-            val coldOriginal = jsonToSongs(root.optJSONArray("coldOriginal")).ifEmpty { cold }
+            val hot = dto.hotQueue
+            val cold = dto.coldQueue
             if (hot.isEmpty() && cold.isEmpty()) return null
 
-            val lane = try {
-                QueueLane.valueOf(root.optString("lane", QueueLane.COLD.name))
-            } catch (_: Exception) {
-                QueueLane.COLD
-            }
-            val repeat = try {
-                RepeatMode.valueOf(root.optString("repeatMode", RepeatMode.OFF.name))
-            } catch (_: Exception) {
-                RepeatMode.OFF
-            }
+            val coldOriginal = dto.coldOriginal.ifEmpty { cold }
 
             SavedPlayback(
                 snapshot = QueueSnapshot(
                     hotQueue = hot,
                     coldQueue = cold,
                     coldOriginal = coldOriginal,
-                    lane = lane,
-                    indexInLane = root.optInt("indexInLane", 0),
-                    shuffleEnabled = root.optBoolean("shuffleEnabled", false),
-                    repeatMode = repeat
+                    coldSource = dto.coldSource?.takeIf { it.id.isNotBlank() },
+                    lane = dto.lane,
+                    indexInLane = dto.indexInLane,
+                    shuffleEnabled = dto.shuffleEnabled,
+                    repeatMode = dto.repeatMode,
+                    playedStack = dto.playedStack
                 ),
-                positionMs = root.optLong("positionMs", 0L),
-                playWhenReady = root.optBoolean("playWhenReady", false)
+                positionMs = dto.positionMs,
+                playWhenReady = dto.playWhenReady
             )
         } catch (e: Exception) {
             Log.w(TAG, "Failed to load playback state", e)
@@ -90,10 +86,10 @@ class PlaybackStateStore(context: Context) {
         }
     }
 
-    private fun loadLegacy(root: JSONObject): SavedPlayback? {
-        val queue = jsonToSongs(root.optJSONArray("queue"))
+    private fun loadLegacy(dto: PlaybackStateDto): SavedPlayback? {
+        val queue = dto.queue ?: return null
         if (queue.isEmpty()) return null
-        val index = root.optInt("index", 0).coerceIn(0, queue.lastIndex)
+        val index = (dto.index ?: 0).coerceIn(0, queue.lastIndex)
         return SavedPlayback(
             snapshot = QueueSnapshot(
                 hotQueue = emptyList(),
@@ -102,10 +98,11 @@ class PlaybackStateStore(context: Context) {
                 lane = QueueLane.COLD,
                 indexInLane = index,
                 shuffleEnabled = false,
-                repeatMode = RepeatMode.OFF
+                repeatMode = RepeatMode.OFF,
+                playedStack = emptyList()
             ),
-            positionMs = root.optLong("positionMs", 0L),
-            playWhenReady = root.optBoolean("playWhenReady", false)
+            positionMs = dto.positionMs,
+            playWhenReady = dto.playWhenReady
         )
     }
 
@@ -116,67 +113,7 @@ class PlaybackStateStore(context: Context) {
         }
     }
 
-    private fun songsToJson(songs: List<Song>): JSONArray {
-        val arr = JSONArray()
-        songs.forEach { arr.put(songToJson(it)) }
-        return arr
-    }
-
-    private fun jsonToSongs(arr: JSONArray?): List<Song> {
-        if (arr == null) return emptyList()
-        val list = ArrayList<Song>(arr.length())
-        for (i in 0 until arr.length()) {
-            list += songFromJson(arr.getJSONObject(i))
-        }
-        return list
-    }
-
-    private fun songToJson(song: Song): JSONObject {
-        return JSONObject()
-            .put("id", song.id)
-            .put("title", song.title ?: JSONObject.NULL)
-            .put("artist", song.artist ?: JSONObject.NULL)
-            .put("albumArtist", song.albumArtist ?: JSONObject.NULL)
-            .put("album", song.album ?: JSONObject.NULL)
-            .put("durationMs", song.durationMs ?: JSONObject.NULL)
-            .put("contentUri", song.contentUri.toString())
-            .put("albumArtUri", song.albumArtUri?.toString() ?: JSONObject.NULL)
-            .put("trackNumber", song.trackNumber ?: JSONObject.NULL)
-            .put("year", song.year ?: JSONObject.NULL)
-            .put("path", song.path ?: JSONObject.NULL)
-            .put("mimeType", song.mimeType ?: JSONObject.NULL)
-    }
-
-    private fun songFromJson(obj: JSONObject): Song {
-        fun optStr(key: String): String? {
-            if (!obj.has(key) || obj.isNull(key)) return null
-            return obj.optString(key, null)?.takeIf { it.isNotBlank() && it != "null" }
-        }
-        fun optLong(key: String): Long? {
-            if (!obj.has(key) || obj.isNull(key)) return null
-            return obj.optLong(key)
-        }
-        fun optInt(key: String): Int? {
-            if (!obj.has(key) || obj.isNull(key)) return null
-            return obj.optInt(key)
-        }
-        val art = optStr("albumArtUri")
-        return Song(
-            id = obj.getLong("id"),
-            title = optStr("title"),
-            artist = optStr("artist"),
-            albumArtist = optStr("albumArtist"),
-            album = optStr("album"),
-            durationMs = optLong("durationMs"),
-            contentUri = Uri.parse(obj.getString("contentUri")),
-            albumArtUri = art?.let { Uri.parse(it) },
-            trackNumber = optInt("trackNumber"),
-            year = optInt("year"),
-            path = optStr("path"),
-            mimeType = optStr("mimeType")
-        )
-    }
-
+    @Serializable
     data class SavedPlayback(
         val snapshot: QueueSnapshot,
         val positionMs: Long,
@@ -186,6 +123,27 @@ class PlaybackStateStore(context: Context) {
     companion object {
         private const val TAG = "PlaybackStateStore"
         private const val FILE_NAME = "playback_state.json"
-        private const val VERSION = 2
+        /** v4: playedStack for Previous across restarts. */
+        private const val VERSION = 4
     }
 }
+
+@Serializable
+private data class PlaybackStateDto(
+    val version: Int = 4,
+    val positionMs: Long = 0L,
+    val playWhenReady: Boolean = false,
+    val lane: QueueLane = QueueLane.COLD,
+    val indexInLane: Int = 0,
+    val shuffleEnabled: Boolean = false,
+    val repeatMode: RepeatMode = RepeatMode.OFF,
+    val savedAt: Long = 0L,
+    val hotQueue: List<Song> = emptyList(),
+    val coldQueue: List<Song> = emptyList(),
+    val coldOriginal: List<Song> = emptyList(),
+    val playedStack: List<Song> = emptyList(),
+    val coldSource: ColdSource? = null,
+    /** Pre–hot/cold legacy single queue. */
+    val queue: List<Song>? = null,
+    val index: Int? = null
+)

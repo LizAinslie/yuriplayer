@@ -5,19 +5,25 @@ import android.content.Context
 import android.content.Intent
 import android.content.ServiceConnection
 import android.os.IBinder
+import android.util.Log
 import androidx.core.content.ContextCompat
+import capital.yuri.yuriplayer.data.AlbumItem
 import capital.yuri.yuriplayer.data.Song
+import capital.yuri.yuriplayer.player.radio.RadioEngine
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 
 class PlayerController(
     private val context: Context,
-    private val historyStore: PlaybackHistoryStore
+    private val historyStore: PlaybackHistoryStore,
+    private val radioEngine: RadioEngine,
+    private val queueManager: QueueManager
 ) {
 
     private var service: MusicService? = null
     private var bound = false
+    private var pendingAction: (() -> Unit)? = null
 
     private val _isConnected = MutableStateFlow(false)
     val isConnected: StateFlow<Boolean> = _isConnected.asStateFlow()
@@ -30,6 +36,13 @@ class PlayerController(
             service = local.getService()
             bound = true
             _isConnected.value = true
+            val pending = pendingAction
+            pendingAction = null
+            try {
+                pending?.invoke()
+            } catch (e: Exception) {
+                Log.e(TAG, "pending action failed", e)
+            }
         }
 
         override fun onServiceDisconnected(name: ComponentName?) {
@@ -56,52 +69,132 @@ class PlayerController(
         bound = false
         service = null
         _isConnected.value = false
+        pendingAction = null
+    }
+
+    private fun runOrQueue(action: (MusicService) -> Unit) {
+        ensureServiceStarted()
+        val s = service
+        if (s != null) {
+            action(s)
+        } else {
+            Log.i(TAG, "service not bound yet — queueing action")
+            pendingAction = { service?.let(action) }
+        }
     }
 
     fun setPlaylist(songs: List<Song>, startIndex: Int = 0) {
-        ensureServiceStarted()
-        service?.playSource(songs, startIndex, autoPlay = true)
+        runOrQueue { it.playSource(songs, startIndex, autoPlay = true) }
     }
 
-    fun playSource(songs: List<Song>, startIndex: Int = 0) {
-        ensureServiceStarted()
-        service?.playSource(songs, startIndex, autoPlay = true)
+    fun playSource(
+        songs: List<Song>,
+        startIndex: Int = 0,
+        source: ColdSource? = null
+    ) {
+        runOrQueue { it.playSource(songs, startIndex, autoPlay = true, source = source) }
+    }
+
+    private fun launchRadioSession(session: capital.yuri.yuriplayer.player.radio.RadioSession) {
+        queueManager.setRepeatMode(RepeatMode.OFF)
+        queueManager.setRadioSession(session)
+        val batch = radioEngine.planBatch() ?: return
+        runOrQueue {
+            it.setRepeatMode(RepeatMode.OFF)
+            it.playSource(
+                songs = batch.songs,
+                startIndex = 0,
+                autoPlay = true,
+                source = batch.source
+            )
+            queueManager.setRadioSession(session)
+            queueManager.setRadioUpcoming(emptyList())
+        }
+    }
+
+    fun startAlbumRadio(album: AlbumItem) {
+        launchRadioSession(radioEngine.startAlbumRadio(album))
+    }
+
+    fun startArtistRadio(artistName: String) {
+        launchRadioSession(radioEngine.startArtistRadio(artistName))
+    }
+
+    fun startPlaylistRadio(songs: List<Song>, playlistName: String?) {
+        if (songs.isEmpty()) return
+        launchRadioSession(radioEngine.startPlaylistRadio(songs, playlistName))
+    }
+
+    /** Song radio = artist radio seeded from the track's primary artist. */
+    fun startSongRadio(song: Song) {
+        val name = song.effectiveAlbumArtist ?: song.artist ?: song.displayArtist
+        startArtistRadio(name)
+    }
+
+    fun stopRadio() {
+        radioEngine.stopRadio()
+        queueManager.clearRadio()
+    }
+
+    fun updateColdFromSource(songs: List<Song>, sourceId: String) {
+        runOrQueue { it.updateColdFromSource(songs, sourceId) }
     }
 
     fun addToHotQueue(song: Song) {
-        ensureServiceStarted()
-        service?.addToHotQueue(song)
+        runOrQueue { it.addToHotQueue(song) }
     }
 
     fun addToHotQueue(songs: List<Song>) {
-        ensureServiceStarted()
-        service?.addToHotQueue(songs)
+        runOrQueue { it.addToHotQueue(songs) }
     }
 
     fun clearHotQueue() {
-        ensureServiceStarted()
-        service?.clearHotQueue()
+        runOrQueue { it.clearHotQueue() }
     }
 
-    fun removeFromHot(index: Int) = service?.removeFromHot(index)
-    fun removeFromCold(index: Int) = service?.removeFromCold(index)
-    fun moveHot(from: Int, to: Int) = service?.moveHot(from, to)
-    fun moveCold(from: Int, to: Int) = service?.moveCold(from, to)
-    fun moveColdToHot(index: Int) = service?.moveColdToHot(index)
+    fun removeFromHot(index: Int) {
+        service?.removeFromHot(index) ?: queueManager.removeFromQueue(index)
+    }
+
+    fun removeFromCold(index: Int) {
+        service?.removeFromCold(index) ?: queueManager.removeFromContext(index)
+    }
+
+    fun moveHot(from: Int, to: Int) {
+        service?.moveHot(from, to) ?: queueManager.moveInQueue(from, to)
+    }
+
+    fun moveCold(from: Int, to: Int) {
+        service?.moveCold(from, to) ?: queueManager.moveInContext(from, to)
+    }
+
+    fun moveColdToHot(index: Int) {
+        service?.moveColdToHot(index) ?: queueManager.moveColdToHot(index)
+    }
 
     fun playQueueItem(lane: QueueLane, index: Int) {
-        ensureServiceStarted()
-        service?.playQueueItem(lane, index)
+        runOrQueue { it.playQueueItem(lane, index) }
     }
 
-    fun setShuffle(enabled: Boolean) = service?.setShuffle(enabled)
+    fun setShuffle(enabled: Boolean) {
+        queueManager.setShuffle(enabled)
+        service?.setShuffle(enabled)
+    }
+
     fun toggleShuffle() {
-        val snap = service?.getQueueSnapshot()
-        service?.setShuffle(!(snap?.shuffleEnabled ?: false))
+        val enabled = !queueManager.getSnapshot().shuffleEnabled
+        setShuffle(enabled)
     }
 
-    fun cycleRepeatMode() = service?.cycleRepeatMode()
-    fun setRepeatMode(mode: RepeatMode) = service?.setRepeatMode(mode)
+    fun cycleRepeatMode() {
+        if (service != null) service?.cycleRepeatMode()
+        else queueManager.cycleRepeatMode()
+    }
+
+    fun setRepeatMode(mode: RepeatMode) {
+        if (service != null) service?.setRepeatMode(mode)
+        else queueManager.setRepeatMode(mode)
+    }
 
     fun play() {
         ContextCompat.startForegroundService(
@@ -119,19 +212,21 @@ class PlayerController(
     }
 
     fun skipToNext() {
-        ensureServiceStarted()
-        service?.skipToNext()
+        runOrQueue { it.skipToNext() }
     }
 
-    fun skipToPrevious() {
-        ensureServiceStarted()
-        service?.skipToPrevious()
+    fun skipToPrevious(forceTrackChange: Boolean = false) {
+        runOrQueue { it.skipToPrevious(forceTrackChange) }
     }
 
     fun seekTo(positionMs: Long) = service?.seekTo(positionMs)
 
-    fun peekNext(): Song? = service?.peekNext()
-    fun peekPrevious(): Song? = service?.peekPrevious()
+    fun seekToFraction(fraction: Float) {
+        runOrQueue { it.seekToFraction(fraction) }
+    }
+
+    fun peekNext(): Song? = service?.peekNext() ?: queueManager.peekNext()
+    fun peekPrevious(): Song? = service?.peekPrevious() ?: queueManager.peekPrevious()
 
     fun clearHistory() {
         historyStore.clear()
@@ -151,7 +246,7 @@ class PlayerController(
     fun getDurationMs(): Long = service?.getDurationMs() ?: 0L
     fun getQueue(): List<Song> = service?.getQueue() ?: emptyList()
     fun getQueueSnapshot(): QueueSnapshot =
-        service?.getQueueSnapshot() ?: QueueSnapshot()
+        service?.getQueueSnapshot() ?: queueManager.getSnapshot()
 
     fun queueSnapshotFlow(): StateFlow<QueueSnapshot>? = service?.queueSnapshot
 
@@ -167,5 +262,9 @@ class PlayerController(
                 Context.BIND_AUTO_CREATE
             )
         }
+    }
+
+    companion object {
+        private const val TAG = "YuriPlayer.Ctrl"
     }
 }

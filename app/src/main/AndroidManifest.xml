@@ -2,9 +2,58 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:tools="http://schemas.android.com/tools">
 
-    <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" />
+    <!--
+      Storage / audio library access
+      Justification: core feature — scan and play the user's local music library
+      (Music/, Download/, user-configured roots). No other media types are read.
+    -->
+    <uses-permission
+        android:name="android.permission.READ_EXTERNAL_STORAGE"
+        android:maxSdkVersion="32"
+        tools:ignore="ScopedStorage" />
+    <uses-permission
+        android:name="android.permission.READ_MEDIA_AUDIO" />
+
+    <!--
+      Write tags into local audio files (edit song/album metadata).
+      Runtime-grantable through API 28; on API 29+ pair with requestLegacyExternalStorage
+      and/or MANAGE_EXTERNAL_STORAGE for full file tag rewrites.
+    -->
+    <uses-permission
+        android:name="android.permission.WRITE_EXTERNAL_STORAGE"
+        tools:ignore="ScopedStorage" />
+
+    <!--
+      All-files access (API 30+)
+      Justification: rewrite embedded tags (title/artist/year/cover) in the user's
+      own music files under Music/. Without this, scoped storage blocks File writes
+      even when the user explicitly edits metadata in-app.
+    -->
+    <uses-permission
+        android:name="android.permission.MANAGE_EXTERNAL_STORAGE"
+        tools:ignore="ScopedStorage" />
+
+    <!--
+      Network
+      Justification: optional metadata enrichment (MusicBrainz year, Cover Art
+      Archive images) and future remote library / scrobbler connections.
+      External Explore results are not bulk-downloaded into the DB.
+    -->
+    <uses-permission android:name="android.permission.INTERNET" />
+
+    <!--
+      Foreground playback service
+      Justification: keep music playing with media controls when the app is
+      backgrounded or the screen is off (car / pocket use).
+    -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK" />
+
+    <!--
+      Wake lock
+      Justification: hold a partial wake lock during active playback so the
+      CPU is not suspended mid-track on some devices.
+    -->
     <uses-permission android:name="android.permission.WAKE_LOCK" />
 
     <application
@@ -28,13 +77,11 @@
             android:configChanges="orientation|screenSize|keyboardHidden|screenLayout"
             android:windowSoftInputMode="adjustResize">
 
-            <!-- Normal launcher entry -->
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
 
-            <!-- Car control app entry point -->
             <intent-filter>
                 <action android:name="capital.yuri.yuriplayer.action.CAR_MODE" />
                 <category android:name="android.intent.category.DEFAULT" />

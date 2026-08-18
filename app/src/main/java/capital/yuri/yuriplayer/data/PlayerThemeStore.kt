@@ -2,20 +2,21 @@ package capital.yuri.yuriplayer.data
 
 import android.content.Context
 import android.graphics.Bitmap
+import androidx.compose.material3.ColorScheme
 import capital.yuri.yuriplayer.activities.ui.PlayerColors
-import capital.yuri.yuriplayer.activities.ui.extractPlayerColors
 import capital.yuri.yuriplayer.activities.ui.fallbackPlayerColors
+import capital.yuri.yuriplayer.data.theme.ThemeService
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
-import androidx.compose.material3.ColorScheme
 
 /**
  * Holds the active now-playing palette + art so reopening the full player
- * does not FOUC (flash default theme then swap).
+ * does not FOUC. Uses [ThemeService] for muted-bg / punchy-accent extraction.
  */
 class PlayerThemeStore(
-    private val artCache: AlbumArtCache
+    private val artCache: AlbumArtCache,
+    private val themeService: ThemeService
 ) {
     data class Theme(
         val artKey: String,
@@ -34,10 +35,28 @@ class PlayerThemeStore(
     private val _peekPrev = MutableStateFlow<Theme?>(null)
     val peekPrev: StateFlow<Theme?> = _peekPrev.asStateFlow()
 
+    fun promoteNext() {
+        val n = _peekNext.value ?: return
+        _current.value = n
+        _peekPrev.value = n
+        _peekNext.value = null
+    }
+
+    fun promotePrev() {
+        val p = _peekPrev.value ?: return
+        _current.value = p
+        _peekNext.value = p
+        _peekPrev.value = null
+    }
+
+    /**
+     * @param forceRefresh re-decode art and palette (e.g. after MusicBrainz cover lands).
+     */
     suspend fun updateCurrent(
         context: Context,
         song: Song?,
-        baseScheme: ColorScheme
+        baseScheme: ColorScheme,
+        forceRefresh: Boolean = false
     ) {
         if (song == null) {
             _current.value = null
@@ -45,22 +64,30 @@ class PlayerThemeStore(
         }
         val key = artCache.artKey(song)
         val existing = _current.value
-        if (existing != null && existing.artKey == key && existing.songId == song.id) {
+        if (!forceRefresh && existing != null && existing.artKey == key) {
+            if (existing.songId != song.id || existing.path != song.path) {
+                _current.value = existing.copy(songId = song.id, path = song.path)
+            }
             return
         }
-        // Reuse colors if same art key (different track, same album cover)
-        if (existing != null && existing.artKey == key) {
-            _current.value = existing.copy(songId = song.id, path = song.path)
-            return
+        if (!forceRefresh) {
+            val fromNext = _peekNext.value?.takeIf { it.artKey == key }
+            val fromPrev = _peekPrev.value?.takeIf { it.artKey == key }
+            val warm = fromNext ?: fromPrev
+            if (warm != null) {
+                _current.value = warm.copy(songId = song.id, path = song.path)
+                return
+            }
         }
-        val bmp = artCache.get(context, song, maxSize = 768)
-        val colors = extractPlayerColors(bmp, baseScheme)
+        val resolved = themeService.themeFromSong(
+            context, song, baseScheme, maxSize = 768, forceRefresh = forceRefresh
+        )
         _current.value = Theme(
-            artKey = key,
+            artKey = resolved.key,
             songId = song.id,
             path = song.path,
-            colors = colors,
-            bitmap = bmp
+            colors = resolved.colors,
+            bitmap = resolved.bitmap
         )
     }
 
@@ -70,10 +97,7 @@ class PlayerThemeStore(
         prev: Song?,
         baseScheme: ColorScheme
     ) {
-        artCache.prefetch(context, listOf(_current.value?.let { null }, next, prev).mapNotNull { it }, 512)
-        // Actually prefetch the songs
         artCache.prefetch(context, listOf(next, prev), 512)
-
         _peekNext.value = next?.let { songToTheme(context, it, baseScheme) }
         _peekPrev.value = prev?.let { songToTheme(context, it, baseScheme) }
     }
@@ -84,7 +108,6 @@ class PlayerThemeStore(
         baseScheme: ColorScheme
     ): Theme {
         val key = artCache.artKey(song)
-        // Same cover as current → reuse palette + bitmap
         val cur = _current.value
         if (cur != null && cur.artKey == key) {
             return Theme(key, song.id, song.path, cur.colors, cur.bitmap)
@@ -97,10 +120,8 @@ class PlayerThemeStore(
         if (prevT != null && prevT.artKey == key) {
             return Theme(key, song.id, song.path, prevT.colors, prevT.bitmap)
         }
-        val bmp = artCache.get(context, song, maxSize = 512)
-        val colors = if (bmp != null) extractPlayerColors(bmp, baseScheme)
-        else fallbackPlayerColors(baseScheme)
-        return Theme(key, song.id, song.path, colors, bmp)
+        val resolved = themeService.themeFromSong(context, song, baseScheme, maxSize = 512)
+        return Theme(key, song.id, song.path, resolved.colors, resolved.bitmap)
     }
 
     fun colorsOrFallback(base: ColorScheme): PlayerColors =

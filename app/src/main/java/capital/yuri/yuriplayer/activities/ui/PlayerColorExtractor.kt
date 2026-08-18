@@ -121,8 +121,20 @@ fun fallbackPlayerColors(scheme: ColorScheme): PlayerColors = PlayerColors(
     onSurface = scheme.onSurface
 )
 
-/** Build a temporary dark ColorScheme tinted by album art for MaterialTheme. */
-fun playerColorScheme(colors: PlayerColors, base: ColorScheme): ColorScheme {
+/**
+ * Build a ColorScheme tinted by album art.
+ * [useArtBackground]=false keeps the app default background (Now Playing)
+ * while still using art-derived accents.
+ */
+fun playerColorScheme(
+    colors: PlayerColors,
+    base: ColorScheme,
+    useArtBackground: Boolean = true
+): ColorScheme {
+    val bg = if (useArtBackground) colors.container else base.background
+    val onBg = if (useArtBackground) colors.onContainer else base.onBackground
+    val surface = if (useArtBackground) colors.container else base.surface
+    val onSurface = if (useArtBackground) colors.onContainer else base.onSurface
     return darkColorScheme(
         primary = colors.accent,
         onPrimary = colors.onAccent,
@@ -130,12 +142,12 @@ fun playerColorScheme(colors: PlayerColors, base: ColorScheme): ColorScheme {
         onPrimaryContainer = colors.onContainer,
         secondary = colors.accent,
         onSecondary = colors.onAccent,
-        background = colors.container,
-        onBackground = colors.onContainer,
-        surface = colors.container,
-        onSurface = colors.onContainer,
-        surfaceVariant = colors.surface,
-        onSurfaceVariant = colors.muted,
+        background = bg,
+        onBackground = onBg,
+        surface = surface,
+        onSurface = onSurface,
+        surfaceVariant = if (useArtBackground) colors.surface else base.surfaceVariant,
+        onSurfaceVariant = if (useArtBackground) colors.muted else base.onSurfaceVariant,
         outline = colors.muted
     )
 }
