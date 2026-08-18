@@ -175,15 +175,14 @@ fun LibraryScreen(
     val albums = remember(allSongs, query) { library.albums(query, taggedOnly = true) }
     val artists = remember(allSongs, query) { library.artists(query, taggedOnly = true) }
 
-    fun openArtistForSong(song: Song) {
-        val name = song.effectiveAlbumArtist ?: return
+    fun openArtistByName(name: String, seed: Song? = null) {
         val match = library.artists(taggedOnly = false)
             .firstOrNull { it.name.equals(name, ignoreCase = true) }
             ?: ArtistItem(
                 name = name,
-                trackCount = 1,
-                albumCount = if (song.hasAlbum) 1 else 0,
-                songs = listOf(song)
+                trackCount = seed?.let { 1 } ?: 0,
+                albumCount = if (seed?.hasAlbum == true) 1 else 0,
+                songs = listOfNotNull(seed)
             )
         onOpenArtist(match)
     }
@@ -205,15 +204,7 @@ fun LibraryScreen(
 
     fun openArtistForAlbum(album: AlbumItem) {
         val name = album.artist?.takeIf { it.isNotBlank() } ?: return
-        val match = library.artists(taggedOnly = false)
-            .firstOrNull { it.name.equals(name, ignoreCase = true) }
-            ?: ArtistItem(
-                name = name,
-                trackCount = album.trackCount,
-                albumCount = 1,
-                songs = album.songs
-            )
-        onOpenArtist(match)
+        openArtistByName(name, album.songs.firstOrNull())
     }
 
     Column(modifier = Modifier.fillMaxSize()) {
@@ -295,7 +286,7 @@ fun LibraryScreen(
                     Toast.makeText(context, "Added to queue", Toast.LENGTH_SHORT).show()
                 },
                 onGoToAlbum = { openAlbumForSong(it) },
-                onGoToArtist = { openArtistForSong(it) },
+                onGoToArtist = { name -> openArtistByName(name) },
                 onEditSong = onEditSong,
                 onStartRadio = { song ->
                     player.startSongRadio(song)
@@ -313,7 +304,7 @@ fun LibraryScreen(
                     Toast.makeText(context, "Added to queue", Toast.LENGTH_SHORT).show()
                 },
                 onGoToAlbum = { openAlbumForSong(it) },
-                onGoToArtist = { openArtistForSong(it) },
+                onGoToArtist = { name -> openArtistByName(name) },
                 onEditSong = onEditSong,
                 onStartRadio = { song ->
                     player.startSongRadio(song)
@@ -366,7 +357,7 @@ private fun SongList(
     onPlay: (List<Song>, Int) -> Unit,
     onAddToQueue: (Song) -> Unit,
     onGoToAlbum: (Song) -> Unit,
-    onGoToArtist: (Song) -> Unit,
+    onGoToArtist: (String) -> Unit,
     onEditSong: (Song) -> Unit,
     onStartRadio: (Song) -> Unit = {}
 ) {
@@ -384,7 +375,7 @@ private fun SongList(
                     isPlaybackActive = isPlaybackActive,
                     showHeart = true,
                     onGoToAlbum = { onGoToAlbum(song) },
-                    onGoToArtist = { onGoToArtist(song) },
+                    onGoToArtist = onGoToArtist,
                     onEditMetadata = { onEditSong(song) },
                     onStartRadio = { onStartRadio(song) }
                 )
@@ -405,8 +396,9 @@ fun SwipeAddSongRow(
     transparentSurface: Boolean = false,
     surfaceColor: Color? = null,
     showHeart: Boolean = true,
+    hideGoToAlbum: Boolean = false,
     onGoToAlbum: (() -> Unit)? = null,
-    onGoToArtist: (() -> Unit)? = null,
+    onGoToArtist: ((String) -> Unit)? = null,
     onEditMetadata: (() -> Unit)? = null,
     onStartRadio: (() -> Unit)? = null
 ) {
@@ -421,7 +413,6 @@ fun SwipeAddSongRow(
     val saved = remember(entries, song.songKey) {
         pinStore.contains(StuffPinKind.SONG, song.songKey)
     }
-    val hasContext = onGoToAlbum != null || onGoToArtist != null || onEditMetadata != null || onStartRadio != null
 
     val revealAlpha = (offsetX / (threshold * 0.35f)).coerceIn(0f, 1f)
 
@@ -471,7 +462,7 @@ fun SwipeAddSongRow(
                 }
                 .combinedClickable(
                     onClick = onClick,
-                    onLongClick = { if (hasContext) showSheet = true }
+                    onLongClick = { showSheet = true }
                 )
                 .padding(
                     start = if (showTrackNumber) 8.dp else 16.dp,
@@ -542,6 +533,7 @@ fun SwipeAddSongRow(
         SongContextSheet(
             song = song,
             onDismiss = { showSheet = false },
+            hideGoToAlbum = hideGoToAlbum,
             onGoToAlbum = onGoToAlbum,
             onGoToArtist = onGoToArtist,
             onEditMetadata = onEditMetadata,
