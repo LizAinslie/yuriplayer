@@ -374,6 +374,7 @@ fun AlbumDetailScreen(
                                 isPlaybackActive = isPlaying,
                                 transparentSurface = true,
                                 showHeart = true,
+                                hideGoToAlbum = true,
                                 onEditMetadata = { onEditSong(song) }
                             )
                         }
