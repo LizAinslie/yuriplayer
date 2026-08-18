@@ -11,7 +11,6 @@ import kotlinx.coroutines.withContext
 import org.json.JSONArray
 import org.json.JSONObject
 import java.net.URLEncoder
-import kotlin.math.min
 
 /** Direct Wikipedia / Commons image + summary bio. Music artists only. */
 class WikipediaArtistImageSource(
@@ -24,24 +23,26 @@ class WikipediaArtistImageSource(
     override suspend fun fetchProfile(artistName: String): ArtistProfile? =
         withContext(Dispatchers.IO) {
             val key = artistKey(artistName) ?: return@withContext null
-            val titles = searchTitles(artistName).ifEmpty {
-                listOf(artistName.trim())
-            }
+            val titles = searchTitles(artistName)
             for (title in titles.take(5)) {
-                if (!titleLooksLikeMusicCandidate(artistName, title)) continue
+                if (!ArtistNameMatch.looksLike(artistName, title)) continue
                 val summary = pageSummary(title) ?: continue
                 if (summary.optString("type") == "disambiguation") continue
                 val description = summary.optString("description")
                 if (!isMusicDescription(description) && !isMusicExtract(summary.optString("extract"))) {
                     continue
                 }
+                // Title on the page must still look like the artist (redirect safety)
+                val pageTitle = summary.optString("title").ifBlank { title }
+                if (!ArtistNameMatch.looksLike(artistName, pageTitle)) continue
+
                 val extract = summary.optString("extract").takeIf { it.isNotBlank() } ?: continue
                 val pageUrl = summary.optJSONObject("content_urls")
                     ?.optJSONObject("desktop")
                     ?.optString("page")
                 return@withContext ArtistProfile(
                     artistKey = key,
-                    displayName = summary.optString("title").ifBlank { artistName.trim() },
+                    displayName = pageTitle.ifBlank { artistName.trim() },
                     bio = extract,
                     links = listOfNotNull(
                         pageUrl?.takeIf { it.isNotBlank() }?.let { categorizeLink(it, "Wikipedia") }
@@ -56,45 +57,38 @@ class WikipediaArtistImageSource(
         artistName: String,
         kind: ArtistImageKind
     ): List<ArtistImageCandidate> = withContext(Dispatchers.IO) {
-        val titles = searchTitles(artistName).ifEmpty {
-            listOf(artistName.trim().replace(' ', '_'))
-        }
+        val titles = searchTitles(artistName)
         val out = LinkedHashMap<String, ArtistImageCandidate>()
         for (title in titles.take(5)) {
-            if (!titleLooksLikeMusicCandidate(artistName, title)) continue
+            if (!ArtistNameMatch.looksLike(artistName, title)) continue
             val summary = pageSummary(title)
+            val pageTitle = summary?.optString("title")?.ifBlank { title } ?: title
+            if (!ArtistNameMatch.looksLike(artistName, pageTitle)) continue
+            if (summary != null && summary.optString("type") == "disambiguation") continue
             val desc = summary?.optString("description").orEmpty()
             if (summary != null &&
-                summary.optString("type") != "disambiguation" &&
                 !isMusicDescription(desc) &&
                 !isMusicExtract(summary.optString("extract"))
             ) {
-                continue
+                // Still allow images if the title matched tightly and has a pageimage
+                // only when description is empty (new/stub pages)
+                if (desc.isNotBlank()) continue
             }
-            summaryImages(title).forEach { (url, label) ->
-                if (url !in out) out[url] = ArtistImageCandidate(url, id, label)
+            summaryImages(summary, pageTitle).forEach { (url, label) ->
+                val fp = ArtistNameMatch.imageFingerprint(url)
+                if (fp !in out) out[fp] = ArtistImageCandidate(url, id, label)
             }
             pageImages(title).forEach { url ->
-                if (url !in out) out[url] = ArtistImageCandidate(url, id, "Wikipedia · $title")
+                val fp = ArtistNameMatch.imageFingerprint(url)
+                if (fp !in out) out[fp] = ArtistImageCandidate(url, id, "Wikipedia · $pageTitle")
             }
         }
         out.values.toList()
     }
 
-    private fun titleLooksLikeMusicCandidate(wanted: String, title: String): Boolean {
-        val a = normalizeName(wanted)
-        val b = normalizeName(title.substringBefore("(").trim())
-        if (a == b) return true
-        if (a in b || b in a) return true
-        val dist = levenshtein(a, b)
-        val maxLen = maxOf(a.length, b.length).coerceAtLeast(1)
-        return dist <= 2 || dist.toFloat() / maxLen <= 0.25f
-    }
-
     private fun isMusicDescription(description: String): Boolean {
         if (description.isBlank()) return false
         val d = description.lowercase()
-        // Reject obvious non-music
         if (NON_MUSIC_HINTS.any { d.contains(it) }) return false
         return MUSIC_HINTS.any { d.contains(it) }
     }
@@ -103,28 +97,6 @@ class WikipediaArtistImageSource(
         if (extract.isBlank()) return false
         val head = extract.take(400).lowercase()
         return MUSIC_HINTS.any { head.contains(it) }
-    }
-
-    private fun normalizeName(s: String): String =
-        s.trim().lowercase()
-            .replace(Regex("[^a-z0-9\\s]"), "")
-            .replace(Regex("\\s+"), " ")
-
-    private fun levenshtein(a: String, b: String): Int {
-        if (a == b) return 0
-        if (a.isEmpty()) return b.length
-        if (b.isEmpty()) return a.length
-        val prev = IntArray(b.length + 1) { it }
-        val cur = IntArray(b.length + 1)
-        for (i in 1..a.length) {
-            cur[0] = i
-            for (j in 1..b.length) {
-                val cost = if (a[i - 1] == b[j - 1]) 0 else 1
-                cur[j] = min(min(cur[j - 1] + 1, prev[j] + 1), prev[j - 1] + cost)
-            }
-            for (j in prev.indices) prev[j] = cur[j]
-        }
-        return prev[b.length]
     }
 
     private suspend fun searchTitles(name: String): List<String> {
@@ -140,7 +112,8 @@ class WikipediaArtistImageSource(
                 for (i in 0 until titles.length()) {
                     titles.optString(i).takeIf { it.isNotBlank() }?.let { add(it) }
                 }
-            }
+            }.sortedByDescending { ArtistNameMatch.score(name, it) }
+                .filter { ArtistNameMatch.score(name, it) >= 70 }
         } catch (e: Exception) {
             Log.w(TAG, "opensearch failed", e)
             emptyList()
@@ -148,7 +121,7 @@ class WikipediaArtistImageSource(
     }
 
     private suspend fun pageSummary(title: String): JSONObject? {
-        val path = URLEncoder.encode(title.replace(' ', '_'), "UTF-8")
+        val path = URLEncoder.encode(title.replace(' ', '_'), "UTF-8").replace("+", "%20")
         val body = get("https://en.wikipedia.org/api/rest_v1/page/summary/$path") ?: return null
         return try {
             JSONObject(body)
@@ -157,23 +130,26 @@ class WikipediaArtistImageSource(
         }
     }
 
-    private suspend fun summaryImages(title: String): List<Pair<String, String>> {
-        val root = pageSummary(title) ?: return emptyList()
+    private fun summaryImages(
+        root: JSONObject?,
+        title: String
+    ): List<Pair<String, String>> {
+        if (root == null) return emptyList()
         return buildList {
             root.optJSONObject("originalimage")?.optString("source")
-                ?.takeIf { it.isNotBlank() }
+                ?.takeIf { it.startsWith("http") }
                 ?.let { add(it to "Wikipedia original · $title") }
             root.optJSONObject("thumbnail")?.optString("source")
-                ?.takeIf { it.isNotBlank() }
+                ?.takeIf { it.startsWith("http") }
                 ?.let { add(it to "Wikipedia thumb · $title") }
         }
     }
 
     private suspend fun pageImages(title: String): List<String> {
-        val q = URLEncoder.encode(title, "UTF-8")
+        val q = URLEncoder.encode(title, "UTF-8").replace("+", "%20")
         val url =
             "https://en.wikipedia.org/w/api.php?action=query&titles=$q" +
-                "&prop=pageimages|images&pithumbsize=1000&pilimit=5&imlimit=12&format=json"
+                "&prop=pageimages&pithumbsize=1000&pilimit=5&format=json"
         val body = get(url) ?: return emptyList()
         return try {
             val pages = JSONObject(body)
@@ -185,25 +161,13 @@ class WikipediaArtistImageSource(
             while (keys.hasNext()) {
                 val page = pages.optJSONObject(keys.next()) ?: continue
                 page.optJSONObject("thumbnail")?.optString("source")
-                    ?.takeIf { it.isNotBlank() }
+                    ?.takeIf { it.startsWith("http") }
                     ?.let { out += it }
                 page.optJSONObject("original")?.optString("source")
-                    ?.takeIf { it.isNotBlank() }
+                    ?.takeIf { it.startsWith("http") }
                     ?.let { out += it }
-                val images = page.optJSONArray("images") ?: continue
-                for (i in 0 until minOf(images.length(), 8)) {
-                    val fname = images.optJSONObject(i)?.optString("title") ?: continue
-                    if (!fname.startsWith("File:", ignoreCase = true)) continue
-                    val lower = fname.lowercase()
-                    if (lower.endsWith(".svg") || lower.endsWith(".gif")) continue
-                    if (!lower.contains(".jpg") && !lower.contains(".jpeg") &&
-                        !lower.contains(".png") && !lower.contains(".webp")
-                    ) continue
-                    val file = fname.removePrefix("File:").replace(' ', '_')
-                    out += "https://commons.wikimedia.org/wiki/Special:FilePath/" +
-                        URLEncoder.encode(file, "UTF-8") + "?width=800"
-                }
             }
+            // Prefer original-style (larger) by putting them first — fingerprint dedupes later
             out.distinct()
         } catch (e: Exception) {
             Log.w(TAG, "pageImages failed", e)
