@@ -60,7 +60,6 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
@@ -70,9 +69,6 @@ import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
 import androidx.compose.ui.input.nestedscroll.NestedScrollSource
 import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.input.pointer.pointerInput
-import androidx.compose.ui.layout.LayoutCoordinates
-import androidx.compose.ui.layout.onGloballyPositioned
-import androidx.compose.ui.layout.positionInRoot
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
@@ -96,9 +92,7 @@ import kotlin.math.sqrt
 private val ExpandedHeaderBody = 360.dp
 private val CollapsedBarHeight = 56.dp
 private val GradientFadeLength = 200.dp
-/** Compact header used while reordering (top bar + hint only). */
 private val ReorderHeaderBody = 110.dp
-/** Fixed height for edit mode so cover + name/description fields fit. */
 private val EditHeaderBody = 380.dp
 
 private enum class PlaylistMode { Browse, EditDetails, Reorder }
@@ -142,7 +136,6 @@ fun PlaylistDetailScreen(
         if (uri != null) cropUri = uri
     }
 
-    // Theme from playlist cover (custom → first unique art), not the first song’s album.
     LaunchedEffect(playlist?.id, playlist?.customImageUri, playlist?.songs?.size) {
         val pl = playlist ?: return@LaunchedEffect
         val cover = PlaylistRepository.coverFor(pl)
@@ -238,7 +231,6 @@ fun PlaylistDetailScreen(
     val defaultBg = base.background
     val fadePx = with(density) { GradientFadeLength.toPx() }
 
-    // Collapse only in Browse; Edit/Reorder use fixed heights that match their content.
     val collapseRangePx = with(density) { (ExpandedHeaderBody - CollapsedBarHeight).toPx() }
     var collapsePx by remember { mutableFloatStateOf(0f) }
     val f = if (mode == PlaylistMode.Browse) {
@@ -279,14 +271,9 @@ fun PlaylistDetailScreen(
         }
     }
 
-    LaunchedEffect(playlistId) {
-        collapsePx = 0f
-    }
-    LaunchedEffect(mode) {
-        if (mode != PlaylistMode.Browse) collapsePx = 0f
-    }
+    LaunchedEffect(playlistId) { collapsePx = 0f }
+    LaunchedEffect(mode) { if (mode != PlaylistMode.Browse) collapsePx = 0f }
 
-    // Nest LocalPlaylistNav so PlaylistContextSheet defaults cover/edit/delete.
     val rootPlaylistNav = LocalPlaylistNav.current
     val nestedPlaylistNav = rootPlaylistNav.copy(
         startRadio = { startRadio() },
@@ -379,44 +366,38 @@ fun PlaylistDetailScreen(
                                 }
                         ) {
                             when (mode) {
-                                PlaylistMode.Browse -> {
-                                    PlaylistExpandedHero(
-                                        playlist = pl,
-                                        onArt = onArt,
-                                        themeColors = themeColors,
-                                        showPause = showPause,
-                                        onPrimary = onPrimary,
-                                        onStartRadio = { startRadio() },
-                                        onEdit = {
-                                            editName = pl.name
-                                            editDescription = pl.description.orEmpty()
-                                            mode = PlaylistMode.EditDetails
-                                        },
-                                        onReorder = { mode = PlaylistMode.Reorder },
-                                        onMore = { showMenu = true }
-                                    )
-                                }
-                                PlaylistMode.EditDetails -> {
-                                    PlaylistEditHero(
-                                        playlist = pl,
-                                        editName = editName,
-                                        onEditNameChange = { editName = it },
-                                        editDescription = editDescription,
-                                        onEditDescriptionChange = { editDescription = it },
-                                        onArt = onArt,
-                                        themeColors = themeColors,
-                                        onPickCover = { pickCover.launch("image/*") },
-                                        onDone = { saveDetailsAndExit() },
-                                        onBackToBrowse = { mode = PlaylistMode.Browse }
-                                    )
-                                }
-                                PlaylistMode.Reorder -> {
-                                    PlaylistReorderHero(
-                                        onArt = onArt,
-                                        onDone = { mode = PlaylistMode.Browse },
-                                        onBackToBrowse = { mode = PlaylistMode.Browse }
-                                    )
-                                }
+                                PlaylistMode.Browse -> PlaylistExpandedHero(
+                                    playlist = pl,
+                                    onArt = onArt,
+                                    themeColors = themeColors,
+                                    showPause = showPause,
+                                    onPrimary = onPrimary,
+                                    onStartRadio = { startRadio() },
+                                    onEdit = {
+                                        editName = pl.name
+                                        editDescription = pl.description.orEmpty()
+                                        mode = PlaylistMode.EditDetails
+                                    },
+                                    onReorder = { mode = PlaylistMode.Reorder },
+                                    onMore = { showMenu = true }
+                                )
+                                PlaylistMode.EditDetails -> PlaylistEditHero(
+                                    playlist = pl,
+                                    editName = editName,
+                                    onEditNameChange = { editName = it },
+                                    editDescription = editDescription,
+                                    onEditDescriptionChange = { editDescription = it },
+                                    onArt = onArt,
+                                    themeColors = themeColors,
+                                    onPickCover = { pickCover.launch("image/*") },
+                                    onDone = { saveDetailsAndExit() },
+                                    onBackToBrowse = { mode = PlaylistMode.Browse }
+                                )
+                                PlaylistMode.Reorder -> PlaylistReorderHero(
+                                    onArt = onArt,
+                                    onDone = { mode = PlaylistMode.Browse },
+                                    onBackToBrowse = { mode = PlaylistMode.Browse }
+                                )
                             }
                         }
 
@@ -461,7 +442,6 @@ fun PlaylistDetailScreen(
                 var dragHover by remember { mutableIntStateOf(-1) }
                 var dragOffset by remember { mutableFloatStateOf(0f) }
 
-                // Keep dragged row under the finger when edge-scrolling.
                 autoScroll.onScrolled = { delta ->
                     if (dragFrom >= 0) {
                         dragOffset += delta
@@ -472,17 +452,7 @@ fun PlaylistDetailScreen(
 
                 LazyColumn(
                     state = listState,
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .onGloballyPositioned { coords ->
-                            val p = coords.positionInRoot()
-                            autoScroll.viewportInRoot = Rect(
-                                p.x,
-                                p.y,
-                                p.x + coords.size.width,
-                                p.y + coords.size.height
-                            )
-                        },
+                    modifier = Modifier.fillMaxSize(),
                     contentPadding = PaddingValues(
                         top = if (mode == PlaylistMode.Browse) 8.dp else 0.dp,
                         bottom = 96.dp
@@ -501,13 +471,11 @@ fun PlaylistDetailScreen(
                             }
                             var swipeX by remember { mutableFloatStateOf(0f) }
                             val threshold = with(density) { 96.dp.toPx() }
-                            var rowCoords by remember { mutableStateOf<LayoutCoordinates?>(null) }
 
                             Box(
                                 modifier = Modifier
                                     .fillMaxWidth()
                                     .zIndex(if (isDragged) 5f else 0f)
-                                    .onGloballyPositioned { rowCoords = it }
                             ) {
                                 Row(
                                     verticalAlignment = Alignment.CenterVertically,
@@ -520,14 +488,15 @@ fun PlaylistDetailScreen(
                                         .background(Color.Transparent)
                                         .pointerInput(index, pl.songs.size) {
                                             detectDragGesturesAfterLongPress(
-                                                onDragStart = { start ->
+                                                onDragStart = {
                                                     swipeX = 0f
                                                     dragFrom = index
                                                     dragHover = index
                                                     dragOffset = 0f
-                                                    rowCoords?.localToRoot(start)?.let {
-                                                        autoScroll.onDragStart(it)
-                                                    }
+                                                    // layout index == song index (no headers)
+                                                    autoScroll.onDragStart(
+                                                        fingerYFromListItem(listState, index, 0f)
+                                                    )
                                                 },
                                                 onDragEnd = {
                                                     autoScroll.onDragEnd()
@@ -549,9 +518,7 @@ fun PlaylistDetailScreen(
                                                 onDrag = { change, amount ->
                                                     change.consume()
                                                     dragOffset += amount.y
-                                                    rowCoords?.localToRoot(change.position)?.let {
-                                                        autoScroll.updateFingerRoot(it)
-                                                    }
+                                                    autoScroll.onDragDelta(amount.y)
                                                     val raw = dragFrom +
                                                         (dragOffset / rowH).roundToInt()
                                                     dragHover = raw.coerceIn(
@@ -668,9 +635,7 @@ private fun PlaylistExpandedHero(
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
         PlaylistCoverArt(playlist, size = 160.dp)
-
         Spacer(modifier = Modifier.height(16.dp))
-
         Column(
             modifier = Modifier.fillMaxWidth(),
             horizontalAlignment = Alignment.Start
@@ -695,9 +660,7 @@ private fun PlaylistExpandedHero(
                 color = onArt.copy(alpha = 0.55f),
                 modifier = Modifier.padding(top = 4.dp)
             )
-
             Spacer(modifier = Modifier.height(12.dp))
-
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 verticalAlignment = Alignment.CenterVertically
@@ -720,9 +683,7 @@ private fun PlaylistExpandedHero(
                 IconButton(onClick = onStartRadio) {
                     Icon(Icons.Default.Radio, contentDescription = "Start radio", tint = onArt)
                 }
-
                 Spacer(modifier = Modifier.weight(1f))
-
                 IconButton(onClick = onEdit) {
                     Icon(Icons.Default.Edit, contentDescription = "Edit details", tint = onArt)
                 }
@@ -757,11 +718,7 @@ private fun PlaylistEditHero(
             modifier = Modifier.fillMaxWidth()
         ) {
             IconButton(onClick = onBackToBrowse) {
-                Icon(
-                    Icons.AutoMirrored.Filled.ArrowBack,
-                    contentDescription = "Back",
-                    tint = onArt
-                )
+                Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back", tint = onArt)
             }
             Text(
                 "Edit details",
@@ -770,17 +727,11 @@ private fun PlaylistEditHero(
                 modifier = Modifier.weight(1f)
             )
             TextButton(onClick = onDone) {
-                Icon(
-                    Icons.Default.Check,
-                    contentDescription = null,
-                    modifier = Modifier.size(18.dp),
-                    tint = onArt
-                )
+                Icon(Icons.Default.Check, contentDescription = null, modifier = Modifier.size(18.dp), tint = onArt)
                 Spacer(modifier = Modifier.width(4.dp))
                 Text("Done", color = onArt)
             }
         }
-
         Column(modifier = Modifier.padding(horizontal = 20.dp)) {
             Box {
                 PlaylistCoverArt(playlist, size = 160.dp)
@@ -788,24 +739,17 @@ private fun PlaylistEditHero(
                     onClick = onPickCover,
                     modifier = Modifier
                         .align(Alignment.BottomEnd)
-                        .background(
-                            base.surface.copy(alpha = 0.9f),
-                            RoundedCornerShape(8.dp)
-                        )
+                        .background(base.surface.copy(alpha = 0.9f), RoundedCornerShape(8.dp))
                 ) {
                     Icon(Icons.Default.Image, contentDescription = "Change cover")
                 }
             }
             Spacer(modifier = Modifier.height(16.dp))
-
             BasicTextField(
                 value = editName,
                 onValueChange = onEditNameChange,
                 singleLine = true,
-                textStyle = MaterialTheme.typography.headlineSmall.copy(
-                    fontWeight = FontWeight.Bold,
-                    color = onArt
-                ),
+                textStyle = MaterialTheme.typography.headlineSmall.copy(fontWeight = FontWeight.Bold, color = onArt),
                 cursorBrush = SolidColor(themeColors.accent),
                 modifier = Modifier
                     .fillMaxWidth()
@@ -814,11 +758,7 @@ private fun PlaylistEditHero(
                 decorationBox = { inner ->
                     Box {
                         if (editName.isEmpty()) {
-                            Text(
-                                "Playlist name",
-                                style = MaterialTheme.typography.headlineSmall,
-                                color = onArt.copy(alpha = 0.4f)
-                            )
+                            Text("Playlist name", style = MaterialTheme.typography.headlineSmall, color = onArt.copy(alpha = 0.4f))
                         }
                         inner()
                     }
@@ -838,17 +778,12 @@ private fun PlaylistEditHero(
                 decorationBox = { inner ->
                     Box {
                         if (editDescription.isEmpty()) {
-                            Text(
-                                "Description (optional)",
-                                style = MaterialTheme.typography.bodyMedium,
-                                color = onArt.copy(alpha = 0.4f)
-                            )
+                            Text("Description (optional)", style = MaterialTheme.typography.bodyMedium, color = onArt.copy(alpha = 0.4f))
                         }
                         inner()
                     }
                 }
             )
-
             Text(
                 formatTrackCount(playlist.songs.size),
                 style = MaterialTheme.typography.bodySmall,
@@ -871,24 +806,13 @@ private fun PlaylistReorderHero(
             modifier = Modifier.fillMaxWidth()
         ) {
             IconButton(onClick = onBackToBrowse) {
-                Icon(
-                    Icons.AutoMirrored.Filled.ArrowBack,
-                    contentDescription = "Back",
-                    tint = onArt
-                )
+                Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back", tint = onArt)
             }
-            Text(
-                "Reorder",
-                style = MaterialTheme.typography.titleMedium,
-                color = onArt,
-                modifier = Modifier.weight(1f)
-            )
-            TextButton(onClick = onDone) {
-                Text("Done", color = onArt)
-            }
+            Text("Reorder", style = MaterialTheme.typography.titleMedium, color = onArt, modifier = Modifier.weight(1f))
+            TextButton(onClick = onDone) { Text("Done", color = onArt) }
         }
         Text(
-            "Long-press and drag to reorder · swipe left to remove",
+            "Long-press and drag to reorder · hold near top/bottom to scroll · swipe left to remove",
             style = MaterialTheme.typography.labelMedium,
             color = onArt.copy(alpha = 0.65f),
             modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)
@@ -914,11 +838,7 @@ private fun CollapsedPlaylistBar(
         verticalAlignment = Alignment.CenterVertically
     ) {
         IconButton(onClick = onBack) {
-            Icon(
-                Icons.AutoMirrored.Filled.ArrowBack,
-                contentDescription = "Back",
-                tint = onArt
-            )
+            Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back", tint = onArt)
         }
         PlaylistCoverArt(playlist, size = 40.dp)
         Spacer(modifier = Modifier.width(10.dp))
@@ -937,10 +857,7 @@ private fun CollapsedPlaylistBar(
         Spacer(modifier = Modifier.width(8.dp))
         IconButton(
             onClick = onPrimary,
-            modifier = Modifier
-                .size(40.dp)
-                .clip(CircleShape)
-                .background(themeColors.accent)
+            modifier = Modifier.size(40.dp).clip(CircleShape).background(themeColors.accent)
         ) {
             Icon(
                 if (showPause) Icons.Default.Pause else Icons.Default.PlayArrow,
