@@ -395,6 +395,8 @@ private fun QueueTabContent(
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         Spacer(modifier = Modifier.width(32.dp))
+                        AlbumArt(song = entry.song, size = 40.dp, corner = 4.dp)
+                        Spacer(modifier = Modifier.width(12.dp))
                         Column(modifier = Modifier.weight(1f)) {
                             MarqueeText(
                                 text = entry.song.displayTitle,
@@ -601,6 +603,8 @@ private fun SwipeableQueueRow(
                 tint = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.4f),
                 modifier = Modifier.padding(end = 8.dp)
             )
+            AlbumArt(song = song, size = 40.dp, corner = 4.dp)
+            Spacer(modifier = Modifier.width(12.dp))
             Column(modifier = Modifier.weight(1f)) {
                 MarqueeText(
                     text = buildString {
@@ -709,6 +713,8 @@ private fun HistorySwipeRow(
                 .padding(horizontal = 8.dp, vertical = 10.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
+            AlbumArt(song = entry.song, size = 40.dp, corner = 4.dp)
+            Spacer(modifier = Modifier.width(12.dp))
             Column(modifier = Modifier.weight(1f)) {
                 MarqueeText(
                     text = entry.song.displayTitle,
