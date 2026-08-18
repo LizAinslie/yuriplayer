@@ -594,7 +594,7 @@ fun PlaylistDetailScreen(
 private fun PlaylistExpandedHero(
     playlist: Playlist,
     onArt: Color,
-    themeColors: capital.yuri.yuriplayer.data.theme.PlayerColors,
+    themeColors: PlayerColors,
     showPause: Boolean,
     onPrimary: () -> Unit,
     onStartRadio: () -> Unit,
@@ -687,7 +687,7 @@ private fun PlaylistEditHero(
     editDescription: String,
     onEditDescriptionChange: (String) -> Unit,
     onArt: Color,
-    themeColors: capital.yuri.yuriplayer.data.theme.PlayerColors,
+    themeColors: PlayerColors,
     onPickCover: () -> Unit,
     onDone: () -> Unit,
     onBackToBrowse: () -> Unit
@@ -843,7 +843,7 @@ private fun CollapsedPlaylistBar(
     playlist: Playlist,
     showPause: Boolean,
     onArt: Color,
-    themeColors: capital.yuri.yuriplayer.data.theme.PlayerColors,
+    themeColors: PlayerColors,
     onBack: () -> Unit,
     onPrimary: () -> Unit,
     modifier: Modifier = Modifier
