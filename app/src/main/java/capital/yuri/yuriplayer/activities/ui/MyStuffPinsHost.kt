@@ -7,6 +7,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -36,8 +37,6 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.layout.ContentScale
-import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -46,6 +45,8 @@ import capital.yuri.yuriplayer.data.MyStuffPinStore
 import capital.yuri.yuriplayer.data.Playlist
 import capital.yuri.yuriplayer.data.Song
 import capital.yuri.yuriplayer.data.StuffPin
+import capital.yuri.yuriplayer.data.StuffPinKind
+import capital.yuri.yuriplayer.data.albumKey
 
 private sealed class HostPinCell {
     data class Filled(val pin: StuffPin) : HostPinCell()
@@ -181,44 +182,40 @@ private fun HostPinCard(
             .combinedClickable(onClick = onClick, onLongClick = onLongClick)
             .padding(12.dp)
     ) {
-        // Art sits directly on the card — no inset surfaceVariant frame.
-        Box(
+        // Art fills the square slot with no extra surfaceVariant frame around it.
+        BoxWithConstraints(
             modifier = Modifier
                 .fillMaxWidth()
                 .aspectRatio(1f),
             contentAlignment = Alignment.Center
         ) {
+            val artSize = maxWidth
             when (pin.kind) {
-                capital.yuri.yuriplayer.data.StuffPinKind.ARTIST ->
+                StuffPinKind.ARTIST ->
                     ArtistArt(
                         artistName = pin.title,
-                        size = 0.dp, // filled via modifier below when supported; use large fixed as fallback
-                        circular = true,
-                        modifier = Modifier.fillMaxSize()
+                        size = artSize,
+                        circular = true
                     )
-                capital.yuri.yuriplayer.data.StuffPinKind.PLAYLIST -> {
+                StuffPinKind.PLAYLIST -> {
                     val pl = playlists.firstOrNull { it.id == pin.id }
-                    if (pl != null) {
-                        PlaylistCoverArt(pl, size = 0.dp, modifier = Modifier.fillMaxSize())
-                    }
+                    if (pl != null) PlaylistCoverArt(pl, size = artSize)
                 }
-                capital.yuri.yuriplayer.data.StuffPinKind.ALBUM -> {
+                StuffPinKind.ALBUM -> {
                     val album = library.albums(taggedOnly = false)
-                        .firstOrNull {
-                            capital.yuri.yuriplayer.data.albumKey(it.name, it.artist) == pin.id
-                        }
+                        .firstOrNull { albumKey(it.name, it.artist) == pin.id }
                     AlbumArt(
                         song = album?.songs?.firstOrNull(),
-                        size = 0.dp,
+                        size = null,
                         corner = 8.dp,
                         modifier = Modifier.fillMaxSize()
                     )
                 }
-                capital.yuri.yuriplayer.data.StuffPinKind.SONG -> {
+                StuffPinKind.SONG -> {
                     val song = allSongs.firstOrNull { it.songKey == pin.id }
                     AlbumArt(
                         song = song,
-                        size = 0.dp,
+                        size = null,
                         corner = 8.dp,
                         modifier = Modifier.fillMaxSize()
                     )
