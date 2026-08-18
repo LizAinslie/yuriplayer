@@ -109,15 +109,15 @@ object ArtistNameMatch {
 
         var u = raw.substringBefore("?")
         // Generic WxH in path or filename
-        u = u.replace(Regex("/\d+x\d+[^/]*"), "/SIZE")
+        u = u.replace(Regex("/\\d+x\\d+[^/]*"), "/SIZE")
         u = u.replace(Regex("\\d+x\\d+"), "SIZE")
-        u = u.replace(Regex("/\d+/"), "/")
+        u = u.replace(Regex("/\\d+/"), "/")
         return u.trimEnd('/')
     }
 
     /** Approximate pixel area from common size markers in the URL (for preferring xl). */
     fun imageSizeHint(url: String): Int {
-        val m = Regex("(\d{2,4})x(\d{2,4})").find(url.lowercase()) ?: return 0
+        val m = Regex("(\\d{2,4})x(\\d{2,4})").find(url.lowercase()) ?: return 0
         val w = m.groupValues[1].toIntOrNull() ?: return 0
         val h = m.groupValues[2].toIntOrNull() ?: return 0
         return w * h
