@@ -28,6 +28,8 @@ data class AlbumMetadataEntity(
     val mbid: String? = null,
     val coverPath: String? = null,
     val coverUrl: String? = null,
+    /** JSON string array of genre names from remote enrichment. */
+    val genresJson: String? = null,
     val source: String = "musicbrainz",
     val updatedAtMs: Long = System.currentTimeMillis(),
     val lookupFailed: Boolean = false
@@ -70,7 +72,6 @@ data class PlaylistTrackEntity(
     val songKey: String
 )
 
-/** Cached / merged artist profile from local + remote providers. */
 @Entity(tableName = "artist_profiles")
 data class ArtistProfileEntity(
     @PrimaryKey val artistKey: String,
@@ -78,9 +79,7 @@ data class ArtistProfileEntity(
     val bio: String? = null,
     val imageUri: String? = null,
     val websiteUrl: String? = null,
-    /** JSON array of {"label","url","category"}. */
     val linksJson: String? = null,
-    /** JSON string array of genre names. */
     val genresJson: String? = null,
     val source: String = "local",
     val updatedAtMs: Long = System.currentTimeMillis()

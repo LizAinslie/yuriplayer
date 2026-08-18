@@ -14,16 +14,6 @@ import org.jaudiotagger.tag.images.ArtworkFactory
 import java.io.File
 import java.io.FileOutputStream
 
-/**
- * Local-file-only metadata editor.
- *
- * Writes tags into the actual audio files (MP3 / FLAC / Ogg / …) with
- * jaudiotagger, mirrors a subset into MediaStore, optionally drops
- * `cover.jpg` next to the tracks, then rescans so [LibraryIndex] picks up
- * the changes.
- *
- * Remote / Explore-only items must never reach this path.
- */
 class MetadataEditService(
     private val context: Context,
     private val libraryIndex: LibraryIndex
@@ -31,15 +21,17 @@ class MetadataEditService(
 
     data class SongEdit(
         val title: String?,
-        /** Semicolon-separated credits — same convention as local tags. */
-        val artist: String?
+        val artist: String?,
+        /** Genre string (semicolon-separated ok). */
+        val genre: String? = null
     )
 
     data class AlbumEdit(
         val albumName: String?,
         val albumArtist: String?,
         val year: Int?,
-        /** Optional new cover image (JPEG/PNG bytes). Applied to every track + folder. */
+        /** Applied to every track when set. */
+        val genre: String? = null,
         val coverBytes: ByteArray? = null,
         val coverMime: String? = null
     )
@@ -50,11 +42,6 @@ class MetadataEditService(
         val message: String
     )
 
-    /**
-     * True when we can resolve a real filesystem path for the track.
-     * Note: [File.canWrite] is often false on Android even when tag writes
-     * succeed with storage permission — do not require it for enabling the UI.
-     */
     fun isLocalFile(song: Song): Boolean {
         val path = resolveWritablePath(song) ?: return false
         return File(path).isFile
@@ -67,11 +54,8 @@ class MetadataEditService(
         val path = resolveWritablePath(song)
             ?: return@withContext Result(0, 1, "Not a local file path (cannot write tags)")
         try {
-            // Ensure writable bit when possible (no-op if already set / not allowed)
             val file = File(path)
-            if (!file.canWrite()) {
-                runCatching { file.setWritable(true) }
-            }
+            if (!file.canWrite()) runCatching { file.setWritable(true) }
             writeSongTags(file, edit)
             updateMediaStoreSong(song, edit)
             scanPaths(listOf(path))
@@ -138,6 +122,7 @@ class MetadataEditService(
         val tag = audio.tagOrCreateAndSetDefault
         setOrDelete(tag, FieldKey.TITLE, edit.title)
         setOrDelete(tag, FieldKey.ARTIST, edit.artist)
+        setOrDelete(tag, FieldKey.GENRE, edit.genre)
         audio.commit()
     }
 
@@ -148,6 +133,9 @@ class MetadataEditService(
         setOrDelete(tag, FieldKey.ALBUM_ARTIST, edit.albumArtist)
         if (edit.year != null && edit.year in 1000..2100) {
             tag.setField(FieldKey.YEAR, edit.year.toString())
+        }
+        if (edit.genre != null) {
+            setOrDelete(tag, FieldKey.GENRE, edit.genre)
         }
         if (coverFile != null && coverFile.isFile) {
             try {
@@ -212,6 +200,7 @@ class MetadataEditService(
         val values = ContentValues().apply {
             edit.title?.let { put(MediaStore.Audio.Media.TITLE, it) }
             edit.artist?.let { put(MediaStore.Audio.Media.ARTIST, it) }
+            edit.genre?.let { put(MediaStore.Audio.Media.GENRE, it) }
         }
         if (values.size() == 0) return
         runCatching {
@@ -223,6 +212,7 @@ class MetadataEditService(
         val values = ContentValues().apply {
             edit.albumName?.let { put(MediaStore.Audio.Media.ALBUM, it) }
             edit.year?.let { put(MediaStore.Audio.Media.YEAR, it) }
+            edit.genre?.let { put(MediaStore.Audio.Media.GENRE, it) }
         }
         if (values.size() == 0) return
         runCatching {
