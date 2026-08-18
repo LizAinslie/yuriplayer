@@ -12,6 +12,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -47,7 +48,6 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
-import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -81,7 +81,6 @@ import capital.yuri.yuriplayer.data.StuffPinKind
 import capital.yuri.yuriplayer.data.albumKey
 import capital.yuri.yuriplayer.data.artistKey
 import capital.yuri.yuriplayer.player.PlayerController
-import capital.yuri.yuriplayer.ui.formatTrackCount
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import org.koin.compose.koinInject
@@ -119,7 +118,6 @@ fun MyStuffScreen(
     var showAddPin by remember { mutableStateOf(false) }
     var showCreatePlaylist by remember { mutableStateOf(false) }
 
-    // Collect from Room Flow directly — never prune against collectAsState's empty initial.
     LaunchedEffect(playlistsRepo) {
         playlistsRepo.observePlaylistsResolved().collect { list ->
             pinStore.pruneMissingPlaylists(list.map { it.id }.toSet())
@@ -162,36 +160,16 @@ fun MyStuffScreen(
                     onPlaySong = { song -> onPlay(listOf(song), 0) },
                     onRemoveEntry = { pinStore.removeEntry(it) }
                 )
-                MyStuffTab.Playlists -> MyStuffPlaylistsTab(
+                MyStuffTab.Playlists -> MyStuffPlaylistsList(
                     playlists = playlists,
                     onOpen = onOpenPlaylist,
-                    onCreate = { showCreatePlaylist = true },
-                    onDelete = { pl ->
-                        scope.launch {
-                            playlistsRepo.delete(pl.id)
-                            // Prefer next Flow emission for prune; also pass remaining ids now
-                            pinStore.pruneMissingPlaylists(
-                                playlists.filter { it.id != pl.id }.map { it.id }.toSet()
-                            )
-                            Toast.makeText(context, "Deleted ${pl.name}", Toast.LENGTH_SHORT).show()
-                        }
-                    },
-                    onPin = { pl ->
-                        pinStore.pin(
-                            StuffPin(
-                                kind = StuffPinKind.PLAYLIST,
-                                id = pl.id,
-                                title = pl.name,
-                                subtitle = "Playlist"
-                            )
-                        )
-                        Toast.makeText(context, "Pinned ${pl.name}", Toast.LENGTH_SHORT).show()
-                    }
+                    onCreate = { showCreatePlaylist = true }
                 )
             }
         }
 
-        NavigationBar {
+        // Zero bottom inset — parent Scaffold already pads for mini-player / system bars
+        NavigationBar(windowInsets = WindowInsets(0, 0, 0, 0)) {
             NavigationBarItem(
                 selected = tab == MyStuffTab.Pins,
                 onClick = { tab = MyStuffTab.Pins },
@@ -305,9 +283,9 @@ private fun MyStuffPinsTab(
         LazyVerticalGrid(
             columns = GridCells.Fixed(2),
             modifier = Modifier.fillMaxSize(),
-            contentPadding = PaddingValues(horizontal = 16.dp, vertical = 4.dp),
-            horizontalArrangement = Arrangement.spacedBy(14.dp),
-            verticalArrangement = Arrangement.spacedBy(16.dp)
+            contentPadding = PaddingValues(horizontal = 20.dp, vertical = 4.dp, bottom = 8.dp),
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
             items(
                 cells.size,
@@ -355,19 +333,20 @@ private fun GridPinCard(
     onClick: () -> Unit,
     onLongClick: () -> Unit
 ) {
+    val shape = RoundedCornerShape(12.dp)
     Column(
         modifier = Modifier
             .fillMaxWidth()
-            .combinedClickable(
-                onClick = onClick,
-                onLongClick = onLongClick
-            )
+            .clip(shape)
+            .background(MaterialTheme.colorScheme.surface)
+            .combinedClickable(onClick = onClick, onLongClick = onLongClick)
+            .padding(12.dp)
     ) {
         Box(
             modifier = Modifier
                 .fillMaxWidth()
                 .aspectRatio(1f)
-                .clip(RoundedCornerShape(6.dp))
+                .clip(RoundedCornerShape(8.dp))
                 .background(MaterialTheme.colorScheme.surfaceVariant),
             contentAlignment = Alignment.Center
         ) {
@@ -376,11 +355,11 @@ private fun GridPinCard(
                 library = library,
                 playlists = playlists,
                 allSongs = allSongs,
-                size = 200.dp,
+                size = 120.dp,
                 fill = true
             )
         }
-        Spacer(modifier = Modifier.height(8.dp))
+        Spacer(modifier = Modifier.height(10.dp))
         MarqueeText(
             text = pin.title,
             style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.SemiBold),
@@ -400,29 +379,32 @@ private fun GridPinCard(
 
 @Composable
 private fun EmptyGridPin(onClick: () -> Unit) {
-    Column(modifier = Modifier.fillMaxWidth()) {
+    val shape = RoundedCornerShape(12.dp)
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(shape)
+            .background(MaterialTheme.colorScheme.surface)
+            .border(1.dp, MaterialTheme.colorScheme.onSurface.copy(alpha = 0.22f), shape)
+            .clickable(onClick = onClick)
+            .padding(12.dp)
+    ) {
         Box(
             modifier = Modifier
                 .fillMaxWidth()
                 .aspectRatio(1f)
-                .clip(RoundedCornerShape(6.dp))
-                .background(MaterialTheme.colorScheme.surface)
-                .border(
-                    1.dp,
-                    MaterialTheme.colorScheme.onSurface.copy(alpha = 0.22f),
-                    RoundedCornerShape(6.dp)
-                )
-                .clickable(onClick = onClick),
+                .clip(RoundedCornerShape(8.dp))
+                .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)),
             contentAlignment = Alignment.Center
         ) {
             Icon(
                 Icons.Default.Add,
                 contentDescription = "Add pin",
-                modifier = Modifier.size(36.dp),
+                modifier = Modifier.size(32.dp),
                 tint = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.45f)
             )
         }
-        Spacer(modifier = Modifier.height(8.dp))
+        Spacer(modifier = Modifier.height(10.dp))
         Text(
             "Add pin",
             style = MaterialTheme.typography.bodyMedium,
@@ -512,7 +494,7 @@ private fun MyStuffCollectionTab(
 
         LazyColumn(
             modifier = Modifier.fillMaxSize(),
-            contentPadding = PaddingValues(bottom = 24.dp)
+            contentPadding = PaddingValues(bottom = 8.dp)
         ) {
             if (artists.isNotEmpty()) {
                 item { SectionLabel("Artists") }
@@ -565,87 +547,6 @@ private fun MyStuffCollectionTab(
 }
 
 @Composable
-private fun MyStuffPlaylistsTab(
-    playlists: List<Playlist>,
-    onOpen: (Playlist) -> Unit,
-    onCreate: () -> Unit,
-    onDelete: (Playlist) -> Unit,
-    onPin: (Playlist) -> Unit
-) {
-    Column(modifier = Modifier.fillMaxSize()) {
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 16.dp, vertical = 12.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Text(
-                text = "Playlists",
-                style = MaterialTheme.typography.headlineMedium,
-                fontWeight = FontWeight.Bold,
-                modifier = Modifier.weight(1f)
-            )
-            OutlinedButton(onClick = onCreate) {
-                Icon(Icons.Default.Add, contentDescription = null, modifier = Modifier.size(18.dp))
-                Spacer(modifier = Modifier.width(6.dp))
-                Text("New")
-            }
-        }
-
-        if (playlists.isEmpty()) {
-            PlaceholderScreen(
-                title = "No playlists yet",
-                body = "Create a playlist — it lives here in My Stuff."
-            )
-            return
-        }
-
-        LazyColumn(
-            modifier = Modifier.fillMaxSize(),
-            contentPadding = PaddingValues(bottom = 24.dp)
-        ) {
-            items(playlists, key = { it.id }) { pl ->
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .clickable { onOpen(pl) }
-                        .padding(horizontal = 16.dp, vertical = 10.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    PlaylistCoverArt(pl, size = 56.dp)
-                    Spacer(modifier = Modifier.width(12.dp))
-                    Column(modifier = Modifier.weight(1f)) {
-                        MarqueeText(
-                            text = pl.name,
-                            style = MaterialTheme.typography.bodyLarge.copy(fontWeight = FontWeight.SemiBold)
-                        )
-                        Text(
-                            if (pl.trackCount > 0) formatTrackCount(pl.trackCount) else "Playlist",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
-                        )
-                    }
-                    IconButton(onClick = { onPin(pl) }) {
-                        Icon(
-                            Icons.Outlined.PushPin,
-                            contentDescription = "Pin to home",
-                            tint = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.55f)
-                        )
-                    }
-                    IconButton(onClick = { onDelete(pl) }) {
-                        Icon(
-                            Icons.Default.Close,
-                            contentDescription = "Delete playlist",
-                            tint = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.45f)
-                        )
-                    }
-                }
-            }
-        }
-    }
-}
-
-@Composable
 private fun PinLeadingArt(
     pin: StuffPin,
     library: LibraryIndex,
@@ -678,11 +579,8 @@ private fun PinLeadingArt(
             .background(MaterialTheme.colorScheme.surfaceVariant)
     }
 
-    Box(
-        modifier = boxMod,
-        contentAlignment = Alignment.Center
-    ) {
-        val artSize = if (fill) size else size
+    Box(modifier = boxMod, contentAlignment = Alignment.Center) {
+        val artSize = size
         when (pin.kind) {
             StuffPinKind.ALBUM -> {
                 val album = remember(pin.id, library) {
@@ -692,11 +590,11 @@ private fun PinLeadingArt(
                 if (album != null) {
                     AlbumArt(
                         song = album.songs.firstOrNull(),
-                        size = if (fill) 200.dp else artSize,
+                        size = if (fill) 120.dp else artSize,
                         corner = 8.dp
                     )
                 } else {
-                    Icon(fallback, null, Modifier.size((if (fill) 64.dp else artSize) * 0.55f))
+                    Icon(fallback, null, Modifier.size((if (fill) 48.dp else artSize) * 0.55f))
                 }
             }
             StuffPinKind.ARTIST -> {
@@ -708,16 +606,16 @@ private fun PinLeadingArt(
                 ArtistArt(
                     artistName = pin.title,
                     seedSong = seed,
-                    size = if (fill) 200.dp else artSize,
+                    size = if (fill) 120.dp else artSize,
                     circular = true
                 )
             }
             StuffPinKind.PLAYLIST -> {
                 val pl = playlists.firstOrNull { it.id == pin.id }
                 if (pl != null) {
-                    PlaylistCoverArt(pl, size = if (fill) 200.dp else artSize)
+                    PlaylistCoverArt(pl, size = if (fill) 120.dp else artSize)
                 } else {
-                    Icon(fallback, null, Modifier.size((if (fill) 64.dp else artSize) * 0.55f))
+                    Icon(fallback, null, Modifier.size((if (fill) 48.dp else artSize) * 0.55f))
                 }
             }
             StuffPinKind.SONG -> {
@@ -725,11 +623,11 @@ private fun PinLeadingArt(
                 if (song != null) {
                     AlbumArt(
                         song = song,
-                        size = if (fill) 200.dp else artSize,
+                        size = if (fill) 120.dp else artSize,
                         corner = 8.dp
                     )
                 } else {
-                    Icon(fallback, null, Modifier.size((if (fill) 64.dp else artSize) * 0.55f))
+                    Icon(fallback, null, Modifier.size((if (fill) 48.dp else artSize) * 0.55f))
                 }
             }
         }
@@ -764,10 +662,7 @@ private fun BrowseEntryRow(
         leading()
         Spacer(modifier = Modifier.width(12.dp))
         Column(modifier = Modifier.weight(1f)) {
-            MarqueeText(
-                text = pin.title,
-                style = MaterialTheme.typography.bodyLarge
-            )
+            MarqueeText(text = pin.title, style = MaterialTheme.typography.bodyLarge)
             if (pin.subtitle.isNotBlank()) {
                 Text(
                     pin.subtitle,
