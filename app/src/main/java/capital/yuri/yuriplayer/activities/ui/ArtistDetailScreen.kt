@@ -77,7 +77,9 @@ import capital.yuri.yuriplayer.data.StuffPinKind
 import capital.yuri.yuriplayer.data.artistKey
 import capital.yuri.yuriplayer.data.releaseType
 import capital.yuri.yuriplayer.data.releaseYear
+import capital.yuri.yuriplayer.data.source.ArtistEvent
 import capital.yuri.yuriplayer.data.source.ArtistImageKind
+import capital.yuri.yuriplayer.data.source.ArtistInfoService
 import capital.yuri.yuriplayer.data.source.ArtistLink
 import capital.yuri.yuriplayer.data.theme.ThemeService
 import capital.yuri.yuriplayer.ui.formatAlbumCount
@@ -154,6 +156,7 @@ fun ArtistDetailScreen(
 ) {
     val themeService: ThemeService = koinInject()
     val profileRepo: ArtistProfileRepository = koinInject()
+    val artistInfo: ArtistInfoService = koinInject()
     val pinStore: MyStuffPinStore = koinInject()
     val entries by pinStore.entries.collectAsState()
     val base = MaterialTheme.colorScheme
@@ -170,6 +173,7 @@ fun ArtistDetailScreen(
     var cropUri by remember { mutableStateOf<Uri?>(null) }
     var cropKind by remember { mutableStateOf(ArtistImageKind.PROFILE) }
     var dataLinks by remember { mutableStateOf<List<ArtistLink>>(emptyList()) }
+    var events by remember { mutableStateOf<List<ArtistEvent>>(emptyList()) }
     var themeTick by remember { mutableStateOf(0) }
     val uriHandler = LocalUriHandler.current
 
@@ -193,20 +197,16 @@ fun ArtistDetailScreen(
         }
     }
 
-    LaunchedEffect(artist.name, albums.size, profile?.imageUri, themeTick) {
+    LaunchedEffect(artist.name, albums.size, profile?.imageUri, profile?.bio, profile?.genres, themeTick) {
         val resolved = runCatching { profileRepo.resolve(artist.displayName) }.getOrNull()
-        // Prefer banner for page theming when the user set one
         val themeUri = parseImageUri(profileRepo.bannerUri(artist.displayName))
             ?: parseImageUri(profile?.imageUri ?: resolved?.imageUri)
 
-        dataLinks = buildList {
-            resolved?.websiteUrl?.takeIf { it.isNotBlank() }?.let {
-                add(ArtistLink("Website", it))
-            }
-            addAll(resolved?.links.orEmpty())
-            val q = java.net.URLEncoder.encode(artist.displayName, "UTF-8")
-            add(ArtistLink("MusicBrainz", "https://musicbrainz.org/search?query=$q&type=artist"))
-        }.distinctBy { it.url }
+        dataLinks = (resolved?.links.orEmpty() + profile?.links.orEmpty())
+            .distinctBy { it.url.lowercase() }
+
+        events = runCatching { artistInfo.upcomingEvents(artist.displayName) }
+            .getOrDefault(emptyList())
 
         themeColors = if (themeUri != null) {
             themeService.themeFromUri(
@@ -350,32 +350,17 @@ fun ArtistDetailScreen(
                 modifier = Modifier.padding(horizontal = 20.dp, vertical = 8.dp)
             )
             Text(
-                "Links from MusicBrainz and related catalogs for ${artist.displayName}.",
+                "Official, streaming, social, and catalog links for ${artist.displayName}.",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
                 modifier = Modifier
                     .padding(horizontal = 20.dp)
-                    .padding(bottom = 12.dp)
+                    .padding(bottom = 8.dp)
             )
-            if (dataLinks.isEmpty()) {
-                Text(
-                    "No external links found yet.",
-                    modifier = Modifier.padding(20.dp),
-                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.55f)
-                )
-            } else {
-                dataLinks.forEach { link ->
-                    Text(
-                        link.label,
-                        style = MaterialTheme.typography.bodyLarge,
-                        color = MaterialTheme.colorScheme.primary,
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .clickable { runCatching { uriHandler.openUri(link.url) } }
-                            .padding(horizontal = 20.dp, vertical = 14.dp)
-                    )
-                }
-            }
+            ArtistDataSourcesContent(
+                links = dataLinks.ifEmpty { profile?.links.orEmpty() },
+                onOpenUrl = { url -> runCatching { uriHandler.openUri(url) } }
+            )
             Spacer(modifier = Modifier.height(32.dp))
         }
     }
@@ -461,7 +446,6 @@ fun ArtistDetailScreen(
                         seedSong = albums.firstOrNull()?.songs?.firstOrNull()
                             ?: artist.songs.firstOrNull(),
                         stats = "${formatAlbumCount(artist.albumCount)} · ${formatTrackCount(artist.trackCount)}",
-                        bio = profile?.bio,
                         titleColor = onArt,
                         mutedColor = mutedOnArt,
                         accent = accent,
@@ -476,6 +460,14 @@ fun ArtistDetailScreen(
                             ).show()
                         },
                         onPlayAll = onStartRadio
+                    )
+                }
+
+                item {
+                    ArtistGenreChips(
+                        genres = profile?.genres.orEmpty(),
+                        titleColor = onArt,
+                        mutedColor = mutedOnArt
                     )
                 }
 
@@ -555,6 +547,27 @@ fun ArtistDetailScreen(
                                 )
                             }
                         }
+                    }
+                }
+
+                // Shows → bio (requested order)
+                item {
+                    ArtistUpcomingShows(
+                        events = events,
+                        titleColor = base.onBackground,
+                        mutedColor = base.onBackground.copy(alpha = 0.6f),
+                        onOpenUrl = { url -> runCatching { uriHandler.openUri(url) } }
+                    )
+                }
+
+                item {
+                    val bio = profile?.bio
+                    if (!bio.isNullOrBlank()) {
+                        ArtistBioCard(
+                            bio = bio,
+                            titleColor = base.onBackground,
+                            mutedColor = base.onBackground.copy(alpha = 0.6f)
+                        )
                     }
                 }
             }
@@ -777,7 +790,6 @@ private fun ArtistHero(
     name: String,
     seedSong: Song?,
     stats: String,
-    bio: String?,
     titleColor: Color,
     mutedColor: Color,
     accent: Color,
@@ -844,16 +856,6 @@ private fun ArtistHero(
                 onToggle = onToggleFavorite,
                 tint = titleColor.copy(alpha = 0.85f),
                 savedTint = accent
-            )
-        }
-
-        if (!bio.isNullOrBlank()) {
-            Spacer(modifier = Modifier.height(12.dp))
-            Text(
-                bio,
-                style = MaterialTheme.typography.bodyMedium,
-                color = titleColor.copy(alpha = 0.75f),
-                modifier = Modifier.fillMaxWidth()
             )
         }
     }
