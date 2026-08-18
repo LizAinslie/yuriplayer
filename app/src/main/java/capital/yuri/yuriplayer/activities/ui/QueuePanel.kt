@@ -251,6 +251,7 @@ private fun QueueTabContent(
     }
     val showHotSection = upcomingHot.isNotEmpty()
     val isRadio = snapshot.isRadio
+    val radioShuffled = isRadio && snapshot.shuffleEnabled
 
     val placementSpec = spring<androidx.compose.ui.unit.IntOffset>(
         stiffness = Spring.StiffnessMediumLow,
@@ -322,7 +323,11 @@ private fun QueueTabContent(
                 )
                 if (isRadio) {
                     Text(
-                        "Shuffle only mixes tracks in this release. Next release is radio-picked.",
+                        if (radioShuffled) {
+                            "Shuffle picks random tracks from this radio pool and tops the list up as you listen."
+                        } else {
+                            "Plays whole releases in order. The next album, EP, or single is added when this run runs low."
+                        },
                         style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.4f),
                         modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp)
@@ -339,8 +344,11 @@ private fun QueueTabContent(
             if (upcomingCold.isEmpty()) {
                 item(key = "cold-empty") {
                     Text(
-                        if (isRadio) "Radio will load the next release when this one ends."
-                        else "Play an album or list to fill what comes next.",
+                        when {
+                            radioShuffled -> "Radio will pull more random tracks from the pool as you keep listening."
+                            isRadio -> "Radio will load the next release when this one ends."
+                            else -> "Play an album or list to fill what comes next."
+                        },
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f),
                         modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
@@ -378,7 +386,11 @@ private fun QueueTabContent(
                     val nextAlbum = radioNext.firstOrNull()?.song?.displayAlbum ?: "Next"
                     SectionHeader("Up next · $nextAlbum · ${radioNext.size}")
                     Text(
-                        "Prefetched by radio — plays after this release",
+                        if (radioShuffled) {
+                            "More tracks radio already picked from the pool"
+                        } else {
+                            "Next release radio prefetched — plays after the current run"
+                        },
                         style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.4f),
                         modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp)
