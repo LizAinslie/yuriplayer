@@ -62,6 +62,7 @@ fun EditSongMetadataScreen(
 
     var title by remember(song.songKey) { mutableStateOf(song.title.orEmpty()) }
     var artist by remember(song.songKey) { mutableStateOf(song.artist.orEmpty()) }
+    var genre by remember(song.songKey) { mutableStateOf(song.genre.orEmpty()) }
     var coverBytes by remember { mutableStateOf<ByteArray?>(null) }
     var coverMime by remember { mutableStateOf<String?>(null) }
     var cropUri by remember { mutableStateOf<Uri?>(null) }
@@ -102,7 +103,8 @@ fun EditSongMetadataScreen(
                 song,
                 MetadataEditService.SongEdit(
                     title = title.ifBlank { null },
-                    artist = artist.ifBlank { null }
+                    artist = artist.ifBlank { null },
+                    genre = genre.ifBlank { null }
                 )
             )
             if (coverBytes != null && tagResult.failed == 0) {
@@ -118,6 +120,7 @@ fun EditSongMetadataScreen(
                         albumName = song.album,
                         albumArtist = song.effectiveAlbumArtist,
                         year = song.year,
+                        genre = genre.ifBlank { null },
                         coverBytes = coverBytes,
                         coverMime = coverMime
                     )
@@ -206,6 +209,17 @@ fun EditSongMetadataScreen(
                 singleLine = true,
                 enabled = canEdit && !saving
             )
+            OutlinedTextField(
+                value = genre,
+                onValueChange = { genre = it },
+                modifier = Modifier.fillMaxWidth(),
+                label = { Text("Genre") },
+                supportingText = {
+                    Text("Semicolon-separated is fine (e.g. indie; alternative)")
+                },
+                singleLine = true,
+                enabled = canEdit && !saving
+            )
 
             error?.let {
                 Text(it, color = MaterialTheme.colorScheme.error)
@@ -244,6 +258,13 @@ fun EditAlbumMetadataScreen(
             album.songs.mapNotNull { it.year }.maxOrNull()?.toString().orEmpty()
         )
     }
+    var genre by remember(album.name, album.artist) {
+        mutableStateOf(
+            album.songs.mapNotNull { it.genre }.flatMap {
+                it.split(';', '/', ',', '|').map { g -> g.trim() }.filter { g -> g.isNotEmpty() }
+            }.distinctBy { it.lowercase() }.joinToString("; ")
+        )
+    }
     var coverBytes by remember { mutableStateOf<ByteArray?>(null) }
     var coverMime by remember { mutableStateOf<String?>(null) }
     var cropUri by remember { mutableStateOf<Uri?>(null) }
@@ -276,6 +297,33 @@ fun EditAlbumMetadataScreen(
         return
     }
 
+    fun doSave() {
+        saving = true
+        error = null
+        scope.launch {
+            val year = yearText.trim().toIntOrNull()
+            val result = editor.saveAlbum(
+                album,
+                MetadataEditService.AlbumEdit(
+                    albumName = albumName.ifBlank { null },
+                    albumArtist = albumArtist.ifBlank { null },
+                    year = year,
+                    genre = genre.ifBlank { null },
+                    coverBytes = coverBytes,
+                    coverMime = coverMime
+                )
+            )
+            saving = false
+            if (result.ok > 0) {
+                Toast.makeText(context, result.message, Toast.LENGTH_SHORT).show()
+                onSaved()
+                onBack()
+            } else {
+                error = result.message
+            }
+        }
+    }
+
     Scaffold(
         topBar = {
             TopAppBar(
@@ -288,31 +336,7 @@ fun EditAlbumMetadataScreen(
                 actions = {
                     IconButton(
                         enabled = canEdit && !saving,
-                        onClick = {
-                            saving = true
-                            error = null
-                            scope.launch {
-                                val year = yearText.trim().toIntOrNull()
-                                val result = editor.saveAlbum(
-                                    album,
-                                    MetadataEditService.AlbumEdit(
-                                        albumName = albumName.ifBlank { null },
-                                        albumArtist = albumArtist.ifBlank { null },
-                                        year = year,
-                                        coverBytes = coverBytes,
-                                        coverMime = coverMime
-                                    )
-                                )
-                                saving = false
-                                if (result.ok > 0) {
-                                    Toast.makeText(context, result.message, Toast.LENGTH_SHORT).show()
-                                    onSaved()
-                                    onBack()
-                                } else {
-                                    error = result.message
-                                }
-                            }
-                        }
+                        onClick = { doSave() }
                     ) {
                         if (saving) {
                             CircularProgressIndicator(modifier = Modifier.size(22.dp), strokeWidth = 2.dp)
@@ -389,37 +413,24 @@ fun EditAlbumMetadataScreen(
                 keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
                 enabled = canEdit && !saving
             )
+            OutlinedTextField(
+                value = genre,
+                onValueChange = { genre = it },
+                modifier = Modifier.fillMaxWidth(),
+                label = { Text("Genre") },
+                supportingText = {
+                    Text("Written to every track in the album")
+                },
+                singleLine = true,
+                enabled = canEdit && !saving
+            )
 
             error?.let {
                 Text(it, color = MaterialTheme.colorScheme.error)
             }
 
             Button(
-                onClick = {
-                    saving = true
-                    error = null
-                    scope.launch {
-                        val year = yearText.trim().toIntOrNull()
-                        val result = editor.saveAlbum(
-                            album,
-                            MetadataEditService.AlbumEdit(
-                                albumName = albumName.ifBlank { null },
-                                albumArtist = albumArtist.ifBlank { null },
-                                year = year,
-                                coverBytes = coverBytes,
-                                coverMime = coverMime
-                            )
-                        )
-                        saving = false
-                        if (result.ok > 0) {
-                            Toast.makeText(context, result.message, Toast.LENGTH_SHORT).show()
-                            onSaved()
-                            onBack()
-                        } else {
-                            error = result.message
-                        }
-                    }
-                },
+                onClick = { doSave() },
                 enabled = canEdit && !saving,
                 modifier = Modifier.fillMaxWidth()
             ) {
