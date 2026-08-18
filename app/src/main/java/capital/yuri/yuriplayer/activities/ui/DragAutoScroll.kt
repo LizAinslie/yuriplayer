@@ -13,19 +13,20 @@ import androidx.compose.runtime.setValue
 import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
-import androidx.compose.ui.input.pointer.PointerInputChange
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.dp
-import kotlin.math.sign
+import kotlinx.coroutines.delay
 
 /**
  * While a reorder drag is active, slowly scrolls the host list when the finger
- * sits near the top or bottom of the viewport. Speed ramps with how deep into
- * the edge zone the pointer is (not too fast).
+ * sits near the top or bottom of the viewport. Speed ramps with depth into the
+ * edge zone (gentle near the threshold, faster at the extreme).
  *
- * Call [onDragStart]/ [onDrag]/ [onDragEnd] from the same long-press drag
- * handlers. [onScrolled] receives the applied scroll delta so the caller can
- * compensate the dragged item's translation (keeps it under the finger).
+ * Wire-up:
+ * 1. [viewportInRoot] — set from the scroll container's `onGloballyPositioned`
+ * 2. [onDragStart] / [updateFingerRoot] / [onDragEnd] — from long-press handlers
+ * 3. [onScrolled] — bump the dragged item's translation by the same delta so it
+ *    stays under the finger as the list moves
  */
 class DragAutoScrollController(
     private val edgeZonePx: Float,
@@ -40,36 +41,33 @@ class DragAutoScrollController(
         private set
 
     var viewportHeight by mutableFloatStateOf(0f)
+        private set
 
-    /** Window-space bounds of the scroll viewport (updated via onGloballyPositioned). */
+    /** Window-space bounds of the scroll viewport. */
     var viewportInRoot by mutableStateOf(Rect.Zero)
 
-    /** Optional callback after a scroll step — use to bump drag offset by the same delta. */
+    /** Applied after each scroll step so callers can compensate drag offset. */
     var onScrolled: ((Float) -> Unit)? = null
 
-    fun onDragStart(changePositionInRoot: Offset) {
+    fun onDragStart(fingerRoot: Offset) {
         active = true
-        updateFingerFromRoot(changePositionInRoot)
+        updateFingerRoot(fingerRoot)
     }
 
-    fun onDrag(change: PointerInputChange) {
-        if (!active) return
-        updateFingerFromRoot(change.positionInRootCompat())
+    fun updateFingerRoot(fingerRoot: Offset) {
+        val bounds = viewportInRoot
+        if (bounds.height <= 1f) return
+        viewportHeight = bounds.height
+        fingerY = (fingerRoot.y - bounds.top).coerceIn(0f, bounds.height)
     }
 
     fun onDragEnd() {
         active = false
         fingerY = Float.NaN
+        pendingDelta = 0f
     }
 
-    private fun updateFingerFromRoot(root: Offset) {
-        val bounds = viewportInRoot
-        if (bounds.height <= 0f) return
-        viewportHeight = bounds.height
-        fingerY = (root.y - bounds.top).coerceIn(0f, bounds.height)
-    }
-
-    /** px/sec: negative scrolls toward top, positive toward bottom. */
+    /** px/sec: negative → toward top, positive → toward bottom. */
     fun scrollSpeedPxPerSec(): Float {
         if (!active || fingerY.isNaN() || viewportHeight <= 0f || edgeZonePx <= 0f) return 0f
         val y = fingerY
@@ -77,7 +75,6 @@ class DragAutoScrollController(
         return when {
             y < zone -> {
                 val t = (1f - y / zone).coerceIn(0f, 1f)
-                // Ease-in so near the threshold is gentle
                 -maxSpeedPxPerSec * (t * t)
             }
             y > viewportHeight - zone -> {
@@ -95,14 +92,10 @@ class DragAutoScrollController(
                 val dt = ((now - last).coerceAtLeast(0L)) / 1_000_000_000f
                 last = now
                 val speed = scrollSpeedPxPerSec()
-                if (speed != 0f && dt > 0f) {
-                    val delta = speed * dt
-                    // scrollBy is suspending; drive from the outer loop
-                    pendingDelta += delta
-                }
+                if (speed != 0f && dt > 0f) pendingDelta += speed * dt
             }
             val step = pendingDelta
-            if (step != 0f) {
+            if (kotlin.math.abs(step) >= 0.5f) {
                 pendingDelta = 0f
                 scrollBy(step)
                 onScrolled?.invoke(step)
@@ -114,23 +107,14 @@ class DragAutoScrollController(
     private var pendingDelta = 0f
 }
 
-private fun PointerInputChange.positionInRootCompat(): Offset =
-    position + (this as? Any).let {
-        // position is local to the pointerInput element; use position with
-        // previous absolute via historical — Compose exposes position relative
-        // to the component. Prefer change.position on the element and convert
-        // via stored component root later if needed.
-        position
-    }
-
 @Composable
 fun rememberListDragAutoScroll(
     listState: LazyListState
 ): DragAutoScrollController {
     val density = LocalDensity.current
-    val edge = with(density) { 64.dp.toPx() }
-    // ~220dp/s peak — noticeable but not aggressive
-    val maxSpeed = with(density) { 220.dp.toPx() }
+    val edge = with(density) { 72.dp.toPx() }
+    // ~200dp/s peak — slowish, not a fling
+    val maxSpeed = with(density) { 200.dp.toPx() }
     val controller = remember(listState) {
         DragAutoScrollController(
             edgeZonePx = edge,
@@ -138,15 +122,10 @@ fun rememberListDragAutoScroll(
             scrollBy = { delta -> listState.scrollBy(delta) }
         )
     }
-    // Keep edge/speed in sync if density changes
-    controller.let {
-        // edge/speed are constructor-fixed; fine for normal use
-    }
     LaunchedEffect(controller) {
-        // Restart loop whenever activity flips via polling inside runWhileActive
         while (true) {
             if (controller.active) controller.runWhileActive()
-            else kotlinx.coroutines.delay(32)
+            else delay(32)
         }
     }
     return controller
@@ -157,8 +136,8 @@ fun rememberGridDragAutoScroll(
     gridState: LazyGridState
 ): DragAutoScrollController {
     val density = LocalDensity.current
-    val edge = with(density) { 64.dp.toPx() }
-    val maxSpeed = with(density) { 220.dp.toPx() }
+    val edge = with(density) { 72.dp.toPx() }
+    val maxSpeed = with(density) { 200.dp.toPx() }
     val controller = remember(gridState) {
         DragAutoScrollController(
             edgeZonePx = edge,
@@ -169,11 +148,8 @@ fun rememberGridDragAutoScroll(
     LaunchedEffect(controller) {
         while (true) {
             if (controller.active) controller.runWhileActive()
-            else kotlinx.coroutines.delay(32)
+            else delay(32)
         }
     }
     return controller
 }
-
-/** True edge direction for tests / debug. */
-fun DragAutoScrollController.edgeSign(): Float = scrollSpeedPxPerSec().sign
