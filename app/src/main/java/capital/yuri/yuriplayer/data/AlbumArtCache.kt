@@ -12,12 +12,16 @@ import java.io.File
 import java.security.MessageDigest
 
 /**
- * Cover cache for now-playing / peek transitions.
+ * Cover cache tuned for list scrolling on mid-range devices.
  *
- * - Memory: hard cap [MAX_MEMORY] bitmaps (LRU)
- * - Disk: JPEG files under cacheDir/album_art (survives process death)
- * - Identical art (same folder cover / album identity) shares one key
- * - MusicBrainz downloads under filesDir/covers change the key so themes reload
+ * Two in-memory LRUs:
+ * - **Thumbs** ([MAX_THUMB_MEMORY] × ~[THUMB_DECODE_SIZE]px) for queue, playlist,
+ *   library, and other dense rows — stays warm while the app is open.
+ * - **Hero** ([MAX_HERO_MEMORY] × ~[HERO_DECODE_SIZE]px) for now-playing / detail.
+ *
+ * Disk JPEG cache under cacheDir/album_art survives process death.
+ * Identical art (folder cover / album identity) shares one base key; size tier
+ * is appended so thumb and hero do not clobber each other.
  */
 class AlbumArtCache(
     context: Context
@@ -27,11 +31,20 @@ class AlbumArtCache(
     private val enrichedDir = File(appContext.filesDir, "covers")
     private val lock = Mutex()
 
-    /** Access-ordered: eldest evicted when over capacity. */
-    private val map = object : LinkedHashMap<String, Bitmap>(MAX_MEMORY + 1, 0.75f, true) {
+    /** Access-ordered thumbnails for scrolling lists. */
+    private val thumbs = object : LinkedHashMap<String, Bitmap>(MAX_THUMB_MEMORY + 1, 0.75f, true) {
         override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, Bitmap>?): Boolean {
-            val drop = size > MAX_MEMORY
-            if (drop) Log.d(TAG, "mem-evict ${eldest?.key}")
+            val drop = size > MAX_THUMB_MEMORY
+            if (drop) Log.d(TAG, "thumb-evict ${eldest?.key}")
+            return drop
+        }
+    }
+
+    /** Access-ordered large covers for NP / detail heroes. */
+    private val heroes = object : LinkedHashMap<String, Bitmap>(MAX_HERO_MEMORY + 1, 0.75f, true) {
+        override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, Bitmap>?): Boolean {
+            val drop = size > MAX_HERO_MEMORY
+            if (drop) Log.d(TAG, "hero-evict ${eldest?.key}")
             return drop
         }
     }
@@ -49,7 +62,6 @@ class AlbumArtCache(
                 }
             }
         }
-        // Network-enriched cover (MusicBrainz / Cover Art Archive)
         val aKey = albumKey(song.album, song.effectiveAlbumArtist)
         val enriched = enrichedCoverFile(aKey)
         if (enriched.isFile && enriched.length() > 0) {
@@ -66,30 +78,62 @@ class AlbumArtCache(
         return File(enrichedDir, name)
     }
 
-    /** Drop memory + decode-cache disk entries that match this album (after a new cover download). */
+    /** Normalize requested max edge to a stable tier size for cache keys. */
+    fun tierSize(maxSize: Int): Int = when {
+        maxSize <= THUMB_DECODE_SIZE -> THUMB_DECODE_SIZE
+        maxSize <= 256 -> 256
+        else -> HERO_DECODE_SIZE
+    }
+
+    private fun isThumbTier(tier: Int): Boolean = tier <= THUMB_DECODE_SIZE
+
+    private fun memKey(baseKey: String, tier: Int): String = "$baseKey@$tier"
+
+    private fun mapFor(tier: Int): LinkedHashMap<String, Bitmap> =
+        if (isThumbTier(tier)) thumbs else heroes
+
+    /**
+     * Synchronous memory peek (no disk / decode). Use from composition so list
+     * rows that scroll back on-screen can show art immediately.
+     */
+    fun peek(song: Song, maxSize: Int = THUMB_DECODE_SIZE): Bitmap? {
+        val tier = tierSize(maxSize)
+        val key = memKey(artKey(song), tier)
+        val bmp = mapFor(tier)[key]
+        return bmp?.takeIf { !it.isRecycled }
+    }
+
+    fun peekKey(baseKey: String, maxSize: Int = THUMB_DECODE_SIZE): Bitmap? {
+        val tier = tierSize(maxSize)
+        val key = memKey(baseKey, tier)
+        val bmp = mapFor(tier)[key]
+        return bmp?.takeIf { !it.isRecycled }
+    }
+
+    /** Drop memory entries that match this album (after a new cover download). */
     suspend fun invalidateAlbum(albumKeyStr: String) {
         val enriched = enrichedCoverFile(albumKeyStr)
         val markers = listOf(
             albumKeyStr.lowercase(),
             enriched.absolutePath,
-            "album:" + albumKeyStr.substringBefore('|').lowercase() // best-effort
+            "album:" + albumKeyStr.substringBefore('|').lowercase()
         )
         lock.withLock {
-            val keys = map.keys.filter { k ->
-                markers.any { m -> k.contains(m, ignoreCase = true) } ||
-                    k.startsWith("album:") && k.contains(albumKeyStr.substringAfter('|', ""), ignoreCase = true)
+            fun purge(map: LinkedHashMap<String, Bitmap>) {
+                val keys = map.keys.filter { k ->
+                    markers.any { m -> k.contains(m, ignoreCase = true) }
+                }
+                keys.forEach { map.remove(it) }
+                if (keys.isNotEmpty()) Log.d(TAG, "invalidate album=$albumKeyStr keys=$keys")
             }
-            keys.forEach { map.remove(it) }
-            if (keys.isNotEmpty()) Log.d(TAG, "invalidate album=$albumKeyStr keys=$keys")
-        }
-        withContext(Dispatchers.IO) {
-            // Drop hashed disk files is harder without key list; next get() re-decodes from resolver.
-            // Clear any disk file whose name we can derive from known keys is skippable.
+            purge(thumbs)
+            purge(heroes)
         }
     }
 
     suspend fun invalidateAllMemory() = lock.withLock {
-        map.clear()
+        thumbs.clear()
+        heroes.clear()
         Log.d(TAG, "mem-clear")
     }
 
@@ -118,7 +162,7 @@ class AlbumArtCache(
             val target = diskFile(key)
             val tmp = File(diskDir, "tmp-${Thread.currentThread().id}-${System.nanoTime()}.jpg")
             tmp.outputStream().use { out ->
-                bmp.compress(Bitmap.CompressFormat.JPEG, 88, out)
+                bmp.compress(Bitmap.CompressFormat.JPEG, 85, out)
             }
             if (!tmp.renameTo(target)) {
                 tmp.copyTo(target, overwrite = true)
@@ -139,13 +183,17 @@ class AlbumArtCache(
             .forEach { it.delete() }
     }
 
-    suspend fun get(context: Context, song: Song, maxSize: Int = 512): Bitmap? {
-        val key = artKey(song)
+    suspend fun get(context: Context, song: Song, maxSize: Int = HERO_DECODE_SIZE): Bitmap? {
+        val tier = tierSize(maxSize)
+        val base = artKey(song)
+        val key = memKey(base, tier)
+        val map = mapFor(tier)
 
         lock.withLock {
             map[key]?.takeIf { !it.isRecycled }?.let { return it }
         }
 
+        // Disk is keyed by full mem key so thumb/hero stay separate.
         val fromDisk = withContext(Dispatchers.IO) { readDisk(key) }
         if (fromDisk != null) {
             lock.withLock {
@@ -156,8 +204,25 @@ class AlbumArtCache(
             return fromDisk
         }
 
+        // Prefer a larger in-memory sibling and downscale rather than re-decode.
+        if (isThumbTier(tier)) {
+            val heroKey = memKey(base, HERO_DECODE_SIZE)
+            val heroBmp = lock.withLock { heroes[heroKey]?.takeIf { !it.isRecycled } }
+            if (heroBmp != null) {
+                val scaled = withContext(Dispatchers.Default) {
+                    scaleTo(heroBmp, tier)
+                }
+                lock.withLock {
+                    map[key]?.takeIf { !it.isRecycled }?.let { return it }
+                    map[key] = scaled
+                }
+                withContext(Dispatchers.IO) { writeDisk(key, scaled) }
+                return scaled
+            }
+        }
+
         val bmp = withContext(Dispatchers.IO) {
-            AlbumArtResolver.loadUncached(context, song, maxSize)
+            AlbumArtResolver.loadUncached(context, song, tier)
         } ?: return null
 
         withContext(Dispatchers.IO) { writeDisk(key, bmp) }
@@ -170,24 +235,41 @@ class AlbumArtCache(
         return bmp
     }
 
-    suspend fun prefetch(context: Context, songs: List<Song?>, maxSize: Int = 512) {
+    private fun scaleTo(src: Bitmap, maxSize: Int): Bitmap {
+        val w = src.width
+        val h = src.height
+        if (w <= maxSize && h <= maxSize) return src
+        val scale = maxSize.toFloat() / maxOf(w, h)
+        val nw = (w * scale).toInt().coerceAtLeast(1)
+        val nh = (h * scale).toInt().coerceAtLeast(1)
+        return Bitmap.createScaledBitmap(src, nw, nh, true)
+    }
+
+    suspend fun prefetch(context: Context, songs: List<Song?>, maxSize: Int = THUMB_DECODE_SIZE) {
         val seen = mutableSetOf<String>()
+        val tier = tierSize(maxSize)
         for (song in songs) {
             if (song == null) continue
-            val key = artKey(song)
+            val key = memKey(artKey(song), tier)
             if (!seen.add(key)) continue
             try {
-                get(context, song, maxSize)
+                get(context, song, tier)
             } catch (e: Exception) {
                 Log.w(TAG, "prefetch failed $key", e)
             }
         }
     }
 
-    suspend fun clearMemory() = lock.withLock { map.clear() }
+    suspend fun clearMemory() = lock.withLock {
+        thumbs.clear()
+        heroes.clear()
+    }
 
     suspend fun clearAll() {
-        lock.withLock { map.clear() }
+        lock.withLock {
+            thumbs.clear()
+            heroes.clear()
+        }
         withContext(Dispatchers.IO) {
             diskDir.listFiles()?.forEach { it.delete() }
         }
@@ -195,8 +277,24 @@ class AlbumArtCache(
 
     companion object {
         private const val TAG = "YuriPlayer.ArtCache"
-        const val MAX_MEMORY = 4
-        const val MAX_DISK = 48
+
+        /** Decode edge for list rows (queue, playlist members, library). */
+        const val THUMB_DECODE_SIZE = 128
+
+        /** Decode edge for now-playing / album hero. */
+        const val HERO_DECODE_SIZE = 512
+
+        /** In-memory thumbnail slots — keeps ~a screen or two of dense lists warm. */
+        const val MAX_THUMB_MEMORY = 96
+
+        /** In-memory large-cover slots. */
+        const val MAX_HERO_MEMORY = 6
+
+        /** Legacy alias used by older call sites. */
+        const val MAX_MEMORY = MAX_THUMB_MEMORY
+
+        const val MAX_DISK = 96
+
         private val COVER_NAMES = listOf(
             "cover.jpg", "cover.jpeg", "cover.png",
             "folder.jpg", "folder.png", "AlbumArt.jpg"
