@@ -50,9 +50,12 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import capital.yuri.yuriplayer.data.PlayerThemeStore
 import capital.yuri.yuriplayer.data.Song
+import capital.yuri.yuriplayer.player.ColdSourceType
 import capital.yuri.yuriplayer.player.QueueLane
 import capital.yuri.yuriplayer.player.QueueSnapshot
 import capital.yuri.yuriplayer.player.RepeatMode
@@ -172,6 +175,33 @@ fun NowPlayingScreen(
     val scheme = playerColorScheme(shownColors, baseScheme, useArtBackground = true)
     ThemedStatusBar(color = scheme.background, enabled = true)
 
+    val playingFromLabel = remember(snapshot.lane, snapshot.coldSource, snapshot.radioSession, song?.displayAlbum) {
+        when (snapshot.lane) {
+            QueueLane.HOT -> "Playing from queue"
+            QueueLane.COLD -> {
+                val name = when {
+                    snapshot.isRadio ->
+                        snapshot.radioSession?.displayName
+                            ?.takeIf { it.isNotBlank() }
+                            ?: snapshot.coldSource?.title?.takeIf { it.isNotBlank() }
+                            ?: "Radio"
+                    else ->
+                        snapshot.coldSource?.title?.takeIf { it.isNotBlank() }
+                            ?: song?.displayAlbum?.takeIf { it.isNotBlank() }
+                            ?: when (snapshot.coldSource?.type) {
+                                ColdSourceType.ALBUM -> "album"
+                                ColdSourceType.PLAYLIST -> "playlist"
+                                ColdSourceType.ARTIST -> "artist"
+                                ColdSourceType.SONGS -> "songs"
+                                ColdSourceType.RADIO -> "radio"
+                                ColdSourceType.UNKNOWN, null -> null
+                            }
+                }
+                name?.let { "Playing from $it" }
+            }
+        }
+    }
+
     MaterialTheme(colorScheme = scheme) {
         Surface(
             modifier = Modifier.fillMaxSize(),
@@ -270,6 +300,22 @@ fun NowPlayingScreen(
                         IconButton(onClick = onCollapse) {
                             Icon(Icons.Default.ExpandMore, "Close", tint = scheme.onBackground)
                         }
+                    }
+
+                    if (playingFromLabel != null) {
+                        Text(
+                            text = playingFromLabel,
+                            style = MaterialTheme.typography.labelMedium,
+                            fontWeight = FontWeight.Medium,
+                            color = scheme.onBackground.copy(alpha = 0.7f),
+                            textAlign = TextAlign.Center,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 24.dp)
+                                .padding(bottom = 8.dp)
+                        )
                     }
 
                     SwipeableAlbumArt(
@@ -441,7 +487,7 @@ fun NowPlayingScreen(
                             style = MaterialTheme.typography.labelSmall,
                             color = scheme.onBackground.copy(alpha = 0.55f),
                             modifier = Modifier.weight(1f),
-                            textAlign = androidx.compose.ui.text.style.TextAlign.Center
+                            textAlign = TextAlign.Center
                         )
 
                         IconButton(onClick = { showQueue = true }) {
