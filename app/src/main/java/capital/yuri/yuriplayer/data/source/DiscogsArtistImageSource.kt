@@ -13,15 +13,11 @@ import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import org.json.JSONObject
 import java.net.URLEncoder
-import kotlin.math.min
 import kotlin.time.Duration.Companion.milliseconds
 
 /**
  * Discogs public API — artist search + /artists/{id} images.
- *
- * Search results often have empty thumb/cover_image; the artist detail
- * endpoint carries the real image list (primary + secondary).
- * Requires a descriptive User-Agent (set globally on [HttpClient]).
+ * Search thumbs are often empty; detail endpoint has the real image list.
  */
 class DiscogsArtistImageSource(
     private val http: HttpClient
@@ -56,7 +52,7 @@ class DiscogsArtistImageSource(
                         add(categorizeLink(u))
                     }
                 }
-            }.distinctBy { it.url.lowercase() }
+            }.distinctBy { ArtistNameMatch.linkFingerprint(it.url) }
 
             ArtistProfile(
                 artistKey = key,
@@ -71,21 +67,23 @@ class DiscogsArtistImageSource(
         artistName: String,
         kind: ArtistImageKind
     ): List<ArtistImageCandidate> = withContext(Dispatchers.IO) {
-        val hits = searchArtists(artistName).take(3)
+        val hits = searchArtists(artistName).take(2)
         if (hits.isEmpty()) return@withContext emptyList()
 
         val out = LinkedHashMap<String, ArtistImageCandidate>()
         for (hit in hits) {
             val detail = artistDetail(hit.id)
             val images = detail?.optJSONArray("images")
-            if (images != null && images.length() > 0) {
+            if (images != null) {
                 for (i in 0 until images.length()) {
                     val img = images.optJSONObject(i) ?: continue
                     val type = img.optString("type")
+                    // Prefer full-size uri over uri150
                     val url = img.optString("uri").takeIf { it.startsWith("http") }
                         ?: img.optString("resource_url").takeIf { it.startsWith("http") }
                         ?: continue
-                    if (url in out) continue
+                    val fp = ArtistNameMatch.imageFingerprint(url)
+                    if (fp in out) continue
                     val w = img.optInt("width").takeIf { it > 0 }
                     val h = img.optInt("height").takeIf { it > 0 }
                     val label = buildString {
@@ -93,7 +91,7 @@ class DiscogsArtistImageSource(
                         if (type.isNotBlank()) append(" · ").append(type)
                         append(" · ").append(hit.title)
                     }
-                    out[url] = ArtistImageCandidate(
+                    out[fp] = ArtistImageCandidate(
                         url = url,
                         sourceId = id,
                         label = label,
@@ -104,8 +102,10 @@ class DiscogsArtistImageSource(
             }
 
             listOfNotNull(hit.coverImage, hit.thumb).forEach { url ->
-                if (url.startsWith("http") && url !in out) {
-                    out[url] = ArtistImageCandidate(
+                if (!url.startsWith("http")) return@forEach
+                val fp = ArtistNameMatch.imageFingerprint(url)
+                if (fp !in out) {
+                    out[fp] = ArtistImageCandidate(
                         url = url,
                         sourceId = id,
                         label = "Discogs · ${hit.title}"
@@ -139,7 +139,7 @@ class DiscogsArtistImageSource(
                 if (id <= 0L) continue
                 val title = o.optString("title")
                 if (title.isBlank()) continue
-                if (!nameLooksClose(wanted, title)) continue
+                if (!ArtistNameMatch.looksLike(wanted, title)) continue
                 hits.add(
                     ArtistSearchHit(
                         id = id,
@@ -149,7 +149,7 @@ class DiscogsArtistImageSource(
                     )
                 )
             }
-            hits.sortedByDescending { nameScore(wanted, it.title) }
+            hits.sortedByDescending { ArtistNameMatch.score(wanted, it.title) }
         } catch (e: Exception) {
             Log.w(TAG, "search parse failed", e)
             emptyList()
@@ -164,49 +164,6 @@ class DiscogsArtistImageSource(
             Log.w(TAG, "artist detail parse failed $id", e)
             null
         }
-    }
-
-    private fun nameLooksClose(wanted: String, label: String): Boolean {
-        if (label.isBlank()) return false
-        val a = normalizeName(wanted)
-        val b = normalizeName(label)
-        if (a == b) return true
-        if (a in b || b in a) return true
-        val dist = levenshtein(a, b)
-        val maxLen = maxOf(a.length, b.length).coerceAtLeast(1)
-        return dist <= 2 || dist.toFloat() / maxLen <= 0.25f
-    }
-
-    private fun nameScore(wanted: String, label: String): Int {
-        val a = normalizeName(wanted)
-        val b = normalizeName(label)
-        return when {
-            a == b -> 100
-            a in b || b in a -> 80
-            else -> 60 - levenshtein(a, b) * 5
-        }
-    }
-
-    private fun normalizeName(s: String): String =
-        s.trim().lowercase()
-            .replace(Regex("[^a-z0-9\\s]"), "")
-            .replace(Regex("\\s+"), " ")
-
-    private fun levenshtein(a: String, b: String): Int {
-        if (a == b) return 0
-        if (a.isEmpty()) return b.length
-        if (b.isEmpty()) return a.length
-        val prev = IntArray(b.length + 1) { it }
-        val cur = IntArray(b.length + 1)
-        for (i in 1..a.length) {
-            cur[0] = i
-            for (j in 1..b.length) {
-                val cost = if (a[i - 1] == b[j - 1]) 0 else 1
-                cur[j] = min(min(cur[j - 1] + 1, prev[j] + 1), prev[j - 1] + cost)
-            }
-            for (j in prev.indices) prev[j] = cur[j]
-        }
-        return prev[b.length]
     }
 
     private suspend fun get(url: String): String? = rateLock.withLock {
