@@ -4,10 +4,6 @@ import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
 
-/**
- * Plugin-friendly SPI for artist metadata / images.
- * Built-in sources implement this; future JAR plugins register more via Koin.
- */
 interface ArtistInfoSource {
     val id: String
     val displayName: String get() = id
@@ -54,21 +50,25 @@ class ArtistInfoService(
         val out = LinkedHashMap<String, ArtistImageCandidate>()
         lists.flatten().forEach { c ->
             if (c.url.isBlank()) return@forEach
+            // Skip empty / placeholder CDN paths
+            if (c.url.contains("/images/artist//")) return@forEach
+            if (c.url.contains("artist-default")) return@forEach
+
             val key = ArtistNameMatch.imageFingerprint(c.url)
             val existing = out[key]
-            // Prefer larger / non-thumb when fingerprint collides
             if (existing == null) {
                 out[key] = c
-            } else {
-                val preferNew = (c.width ?: 0) * (c.height ?: 0) >
-                    (existing.width ?: 0) * (existing.height ?: 0)
-                val existingLooksThumb = existing.label.contains("thumb", true) ||
-                    existing.url.contains("thumb", true)
-                val newLooksThumb = c.label.contains("thumb", true) ||
-                    c.url.contains("thumb", true)
-                if (preferNew || (existingLooksThumb && !newLooksThumb)) {
-                    out[key] = c
-                }
+                return@forEach
+            }
+            val newArea = (c.width ?: 0) * (c.height ?: 0).let { if (it > 0) it else ArtistNameMatch.imageSizeHint(c.url) }
+            val oldArea = (existing.width ?: 0) * (existing.height ?: 0).let {
+                if (it > 0) it else ArtistNameMatch.imageSizeHint(existing.url)
+            }
+            val existingThumb = existing.label.contains("thumb", true) ||
+                existing.url.contains("thumb", true)
+            val newThumb = c.label.contains("thumb", true) || c.url.contains("thumb", true)
+            if (newArea > oldArea || (existingThumb && !newThumb)) {
+                out[key] = c
             }
         }
         out.values.toList()

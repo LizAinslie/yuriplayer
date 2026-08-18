@@ -3,7 +3,7 @@ package capital.yuri.yuriplayer.data.source
 import kotlin.math.min
 
 /**
- * Strict artist-name matching for wide-scope sources (Wikipedia, Wikidata, Discogs).
+ * Strict artist-name matching for wide-scope sources (Wikipedia, Wikidata, Discogs, Deezer).
  *
  * Rules:
  * - Same token count (or candidate is wanted + suffix like "Band")
@@ -13,7 +13,6 @@ import kotlin.math.min
  */
 object ArtistNameMatch {
 
-    /** Tokens that appear in many names and must not alone justify a match/bio. */
     private val WEAK = setOf(
         "the", "a", "an", "and", "of", "dj", "mc", "ms", "mr",
         "lil", "little", "young", "big", "da", "de", "la", "el",
@@ -27,20 +26,17 @@ object ArtistNameMatch {
         if (a == b) return true
 
         if (a.size != b.size) {
-            // "Artist" vs "Artist Band" only if prefix tokens match exactly
             if (a.size < b.size && b.take(a.size) == a) {
                 return distinctive(a).isEmpty() || distinctive(a).all { it in b }
             }
             return false
         }
 
-        // Pairwise: each token equal or ≤1 edit
         val pairwiseOk = a.zip(b).all { (x, y) ->
             x == y || levenshtein(x, y) <= 1
         }
         if (!pairwiseOk) return false
 
-        // Distinctive tokens must be exact (or 1-edit only if same length)
         val distA = distinctive(a)
         if (distA.isEmpty()) return pairwiseOk
         return distA.all { tok ->
@@ -70,7 +66,6 @@ object ArtistNameMatch {
 
     fun normalize(s: String): String =
         s.trim().lowercase()
-            // strip curly/straight quotes and punctuation
             .replace(Regex("[^a-z0-9\\s]"), "")
             .replace(Regex("\\s+"), " ")
 
@@ -93,21 +88,39 @@ object ArtistNameMatch {
 
     fun imageFingerprint(url: String): String {
         val raw = url.trim().substringBefore("#").lowercase()
+
+        // Discogs object-store key shared across sizes
         val discogsKey = Regex("czm6ly9[a-z0-9_\\-]+").find(raw)?.value
         if (discogsKey != null) return "discogs:$discogsKey"
+
+        // Deezer: .../images/artist/<md5>/<size>-....jpg — same md5, different size
+        val deezer = Regex("/images/artist/([a-f0-9]+)/").find(raw)
+        if (deezer != null) return "deezer:${deezer.groupValues[1]}"
 
         if (raw.contains("wikimedia.org") || raw.contains("wikipedia.org")) {
             val file = raw
                 .substringAfter("special:filepath/", "")
                 .ifBlank { raw.substringAfterLast('/') }
                 .substringBefore("?")
+                // strip size from thumb paths like /thumb/a/ab/File.jpg/800px-File.jpg
+                .replace(Regex("^\\d+px-"), "")
             if (file.isNotBlank()) return "wiki:$file"
         }
 
         var u = raw.substringBefore("?")
-        u = u.replace(Regex("/\d+x\d+/"), "/")
+        // Generic WxH in path or filename
+        u = u.replace(Regex("/\d+x\d+[^/]*"), "/SIZE")
+        u = u.replace(Regex("\\d+x\\d+"), "SIZE")
         u = u.replace(Regex("/\d+/"), "/")
         return u.trimEnd('/')
+    }
+
+    /** Approximate pixel area from common size markers in the URL (for preferring xl). */
+    fun imageSizeHint(url: String): Int {
+        val m = Regex("(\d{2,4})x(\d{2,4})").find(url.lowercase()) ?: return 0
+        val w = m.groupValues[1].toIntOrNull() ?: return 0
+        val h = m.groupValues[2].toIntOrNull() ?: return 0
+        return w * h
     }
 
     fun linkFingerprint(url: String): String {
@@ -118,22 +131,16 @@ object ArtistNameMatch {
         return u.trimEnd('/')
     }
 
-    /**
-     * Bio must mention distinctive artist tokens (not just "lil").
-     * Wrong stuck bios (Lil Darlin for Lil Darkie) score 0 and lose.
-     */
     fun preferBio(artistName: String, a: String?, b: String?): String? {
         fun score(bio: String?): Int {
             if (bio.isNullOrBlank()) return -1
             val lower = bio.lowercase()
-            val toks = tokens(artistName)
-            val dist = distinctive(toks)
+            val dist = distinctive(tokens(artistName))
             if (dist.isNotEmpty()) {
                 val hits = dist.count { lower.contains(it) }
-                if (hits == 0) return 0 // unrelated bio
+                if (hits == 0) return 0
                 return hits * 20 + min(bio.length / 200, 3)
             }
-            // Single weak-token names: require full normalized name substring
             val full = normalize(artistName)
             return if (full.isNotEmpty() && lower.contains(full)) {
                 10 + min(bio.length / 200, 3)
@@ -144,7 +151,6 @@ object ArtistNameMatch {
         return listOfNotNull(a, b).maxByOrNull { score(it) }?.takeIf { score(it) > 0 }
     }
 
-    /** Drop bios that don't mention any distinctive token of the artist. */
     fun bioRelevant(artistName: String, bio: String?): Boolean {
         if (bio.isNullOrBlank()) return false
         val lower = bio.lowercase()
