@@ -150,7 +150,7 @@ fun ArtistBioCard(
     }
 }
 
-/** Deduped, categorized links for the Data sources sheet. */
+/** Deduped, categorized links for the Links sheet. */
 @Composable
 fun ArtistDataSourcesContent(
     links: List<ArtistLink>,
