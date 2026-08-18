@@ -50,6 +50,7 @@ import capital.yuri.yuriplayer.data.StuffPin
 import capital.yuri.yuriplayer.data.StuffPinKind
 import capital.yuri.yuriplayer.data.albumKey
 import capital.yuri.yuriplayer.data.artistKey
+import capital.yuri.yuriplayer.player.PlayerController
 import kotlinx.coroutines.launch
 import org.koin.compose.koinInject
 
@@ -114,14 +115,25 @@ fun MediaSheetBottomPad() {
     Spacer(modifier = Modifier.height(28.dp))
 }
 
+private fun songArtistNames(song: Song): List<String> {
+    val credits = song.creditArtists
+    if (credits.isNotEmpty()) return credits
+    val single = song.effectiveAlbumArtist?.takeIf { it.isNotBlank() }
+        ?: song.artist?.takeIf { it.isNotBlank() }
+    return listOfNotNull(single)
+}
+
 /** Shared song sheet — keep every entry point in sync. */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun SongContextSheet(
     song: Song,
     onDismiss: () -> Unit,
+    /** Hide when already viewing this song's album. */
+    hideGoToAlbum: Boolean = false,
     onGoToAlbum: (() -> Unit)? = null,
-    onGoToArtist: (() -> Unit)? = null,
+    /** Called with the chosen artist name (picker when multiple credits). */
+    onGoToArtist: ((String) -> Unit)? = null,
     onEditMetadata: (() -> Unit)? = null,
     onAddToQueue: (() -> Unit)? = null,
     onStartRadio: (() -> Unit)? = null,
@@ -129,14 +141,53 @@ fun SongContextSheet(
     onAddToMyStuff: (() -> Unit)? = null
 ) {
     val pinStore: MyStuffPinStore = koinInject()
+    val player: PlayerController = koinInject()
     val context = LocalContext.current
     var showPlaylistPicker by remember { mutableStateOf(false) }
+    var showArtistPicker by remember { mutableStateOf(false) }
+    val artists = remember(song) { songArtistNames(song) }
 
     if (showPlaylistPicker) {
         AddToPlaylistSheet(
             songs = listOf(song),
-            onDismiss = { showPlaylistPicker = false }
+            onDismiss = {
+                showPlaylistPicker = false
+                onDismiss()
+            }
         )
+        return
+    }
+
+    if (showArtistPicker) {
+        ModalBottomSheet(
+            onDismissRequest = {
+                showArtistPicker = false
+                onDismiss()
+            },
+            sheetState = rememberModalBottomSheetState()
+        ) {
+            Text(
+                "Go to artist",
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.SemiBold,
+                modifier = Modifier.padding(horizontal = 20.dp, vertical = 8.dp)
+            )
+            Text(
+                song.displayTitle,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.55f),
+                modifier = Modifier.padding(horizontal = 20.dp)
+            )
+            HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
+            artists.forEach { name ->
+                MediaSheetItem(name) {
+                    showArtistPicker = false
+                    onDismiss()
+                    onGoToArtist?.invoke(name)
+                }
+            }
+            MediaSheetBottomPad()
+        }
         return
     }
 
@@ -149,17 +200,18 @@ fun SongContextSheet(
             title = song.displayTitle,
             subtitle = "${song.displayArtist} · ${song.displayAlbum}"
         )
-        if (onStartRadio != null) {
-            MediaSheetItem("Start radio") {
-                onDismiss()
-                onStartRadio()
+        MediaSheetItem("Start radio") {
+            onDismiss()
+            if (onStartRadio != null) onStartRadio()
+            else {
+                player.startSongRadio(song)
+                Toast.makeText(context, "Radio · ${song.displayArtist}", Toast.LENGTH_SHORT).show()
             }
         }
-        if (onAddToQueue != null) {
-            MediaSheetItem("Add to queue") {
-                onDismiss()
-                onAddToQueue()
-            }
+        MediaSheetItem("Add to queue") {
+            onDismiss()
+            if (onAddToQueue != null) onAddToQueue()
+            else Toast.makeText(context, "No queue handler", Toast.LENGTH_SHORT).show()
         }
         MediaSheetItem("Add to playlist") {
             if (onAddToPlaylist != null) {
@@ -184,16 +236,20 @@ fun SongContextSheet(
                 Toast.makeText(context, "Added to My Stuff", Toast.LENGTH_SHORT).show()
             }
         }
-        if (onGoToAlbum != null) {
+        if (!hideGoToAlbum && onGoToAlbum != null) {
             MediaSheetItem("Go to album") {
                 onDismiss()
                 onGoToAlbum()
             }
         }
-        if (onGoToArtist != null) {
+        if (onGoToArtist != null && artists.isNotEmpty()) {
             MediaSheetItem("Go to artist") {
-                onDismiss()
-                onGoToArtist()
+                if (artists.size == 1) {
+                    onDismiss()
+                    onGoToArtist(artists.first())
+                } else {
+                    showArtistPicker = true
+                }
             }
         }
         if (onEditMetadata != null) {
