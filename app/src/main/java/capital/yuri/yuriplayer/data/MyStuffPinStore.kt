@@ -210,16 +210,35 @@ class MyStuffPinStore(context: Context) {
 
     fun isPinned(pin: StuffPin): Boolean = isPinned(pin.kind, pin.id)
 
+    /**
+     * Pin to the home grid. Playlist pins may not exist as collection entries yet —
+     * entry + pin key are written together so prune/resolve can't drop them mid-call.
+     */
     fun pin(pin: StuffPin) {
         if (pin.kind != StuffPinKind.PLAYLIST && !contains(pin)) return
-        if (pin.kind == StuffPinKind.PLAYLIST && !contains(pin)) {
-            addEntry(pin)
+
+        // Ensure the entry exists first (playlists often aren't in collection)
+        var entries = _entries.value
+        if (entries.none { it.kind == pin.kind && it.id == pin.id }) {
+            entries = entries + pin
+            _entries.value = entries
+            prefs.edit().putString(KEY_ENTRIES, json.encodeToString(entries)).apply()
         }
+
         val keys = _pinKeys.value.toMutableList()
-        if (pin.key in keys) return
+        if (pin.key in keys) {
+            _pinsResolved.value = resolvePins()
+            return
+        }
         if (keys.size >= PIN_SLOTS) return
         keys.add(pin.key)
-        persistPinKeys(keys)
+        // Persist keys against the entries we just wrote (don't call persistEntries,
+        // which can race-clean keys before the new key is added).
+        val valid = entries.map { it.key }.toSet()
+        val cleaned = keys.filter { it in valid }.take(PIN_SLOTS)
+        _pinKeys.value = cleaned
+        prefs.edit().putString(KEY_PIN_KEYS, json.encodeToString(cleaned)).apply()
+        _pinsResolved.value = resolvePins()
     }
 
     fun unpin(pin: StuffPin) {
@@ -242,8 +261,21 @@ class MyStuffPinStore(context: Context) {
         persistPinKeys(keys)
     }
 
-    /** Drop PLAYLIST pin entries whose id is not in [validPlaylistIds]. */
+    /**
+     * Drop PLAYLIST entries/pins whose id is not in [validPlaylistIds].
+     *
+     * Important: do **not** call this with an empty set while playlists are still
+     * loading — that wipes every playlist pin. Callers should only pass ids from a
+     * real repository emission (Room), never Compose `collectAsState(initial=empty)`.
+     */
     fun pruneMissingPlaylists(validPlaylistIds: Set<String>) {
+        val playlistEntries = _entries.value.filter { it.kind == StuffPinKind.PLAYLIST }
+        if (playlistEntries.isEmpty()) return
+
+        // Empty valid set with existing playlist pins → treat as "still loading" unless
+        // we know the user has zero playlists. Safer to no-op on empty.
+        if (validPlaylistIds.isEmpty()) return
+
         val next = _entries.value.filterNot {
             it.kind == StuffPinKind.PLAYLIST && it.id !in validPlaylistIds
         }
