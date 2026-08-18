@@ -36,6 +36,8 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -179,31 +181,47 @@ private fun HostPinCard(
             .combinedClickable(onClick = onClick, onLongClick = onLongClick)
             .padding(12.dp)
     ) {
+        // Art sits directly on the card — no inset surfaceVariant frame.
         Box(
             modifier = Modifier
                 .fillMaxWidth()
-                .aspectRatio(1f)
-                .clip(RoundedCornerShape(8.dp))
-                .background(MaterialTheme.colorScheme.surfaceVariant),
+                .aspectRatio(1f),
             contentAlignment = Alignment.Center
         ) {
             when (pin.kind) {
                 capital.yuri.yuriplayer.data.StuffPinKind.ARTIST ->
-                    ArtistArt(artistName = pin.title, size = 120.dp, circular = true)
+                    ArtistArt(
+                        artistName = pin.title,
+                        size = 0.dp, // filled via modifier below when supported; use large fixed as fallback
+                        circular = true,
+                        modifier = Modifier.fillMaxSize()
+                    )
                 capital.yuri.yuriplayer.data.StuffPinKind.PLAYLIST -> {
                     val pl = playlists.firstOrNull { it.id == pin.id }
-                    if (pl != null) PlaylistCoverArt(pl, size = 120.dp)
+                    if (pl != null) {
+                        PlaylistCoverArt(pl, size = 0.dp, modifier = Modifier.fillMaxSize())
+                    }
                 }
                 capital.yuri.yuriplayer.data.StuffPinKind.ALBUM -> {
                     val album = library.albums(taggedOnly = false)
                         .firstOrNull {
                             capital.yuri.yuriplayer.data.albumKey(it.name, it.artist) == pin.id
                         }
-                    AlbumArt(song = album?.songs?.firstOrNull(), size = 120.dp, corner = 8.dp)
+                    AlbumArt(
+                        song = album?.songs?.firstOrNull(),
+                        size = 0.dp,
+                        corner = 8.dp,
+                        modifier = Modifier.fillMaxSize()
+                    )
                 }
                 capital.yuri.yuriplayer.data.StuffPinKind.SONG -> {
                     val song = allSongs.firstOrNull { it.songKey == pin.id }
-                    AlbumArt(song = song, size = 120.dp, corner = 8.dp)
+                    AlbumArt(
+                        song = song,
+                        size = 0.dp,
+                        corner = 8.dp,
+                        modifier = Modifier.fillMaxSize()
+                    )
                 }
             }
         }
@@ -240,9 +258,7 @@ private fun HostEmptyPin(onClick: () -> Unit) {
         Box(
             modifier = Modifier
                 .fillMaxWidth()
-                .aspectRatio(1f)
-                .clip(RoundedCornerShape(8.dp))
-                .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)),
+                .aspectRatio(1f),
             contentAlignment = Alignment.Center
         ) {
             Icon(
