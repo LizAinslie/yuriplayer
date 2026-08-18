@@ -28,13 +28,14 @@ data class StuffPin(
 }
 
 /**
- * My Stuff has two layers:
- * - [entries]: everything the user saved via heart / "Add to My Stuff"
- * - [pins]: ordered subset shown on the home grid (max [PIN_SLOTS])
+ * My Stuff collection + home pins.
  *
- * Adding an album also saves every track on that album (cascade).
- * Unhearting an album removes only cascade-added tracks — songs the user
- * hearted on their own stay in the collection.
+ * Playlists do **not** live here — they live in [PlaylistRepository] and are
+ * shown on the My Stuff → Playlists tab. A PLAYLIST [StuffPin] is only used
+ * when the user pins a playlist onto the home Pins grid.
+ *
+ * - [entries]: hearted albums / artists / songs (+ optional pinned playlist refs)
+ * - [pins]: ordered subset on the home grid (max [PIN_SLOTS])
  */
 class MyStuffPinStore(context: Context) {
 
@@ -64,7 +65,6 @@ class MyStuffPinStore(context: Context) {
         val cur = _entries.value.toMutableList()
         if (cur.any { it.kind == pin.kind && it.id == pin.id }) return
         cur.add(pin)
-        // Independent song heart: drop from any cascade sets
         if (pin.kind == StuffPinKind.SONG) {
             cascadeByAlbum.keys.toList().forEach { ak ->
                 val set = cascadeByAlbum[ak] ?: return@forEach
@@ -90,7 +90,6 @@ class MyStuffPinStore(context: Context) {
         if (changed) persistEntries(cur)
     }
 
-    /** Album entry + tracks not already in collection (those become cascade). */
     fun addAlbumWithSongs(album: AlbumItem) {
         val aKey = albumKey(album.name, album.artist)
         val existingSongIds = _entries.value
@@ -121,7 +120,6 @@ class MyStuffPinStore(context: Context) {
                         )
                     )
                 }
-                // already present → independent, leave alone
             }
         }
         addEntries(batch)
@@ -145,10 +143,6 @@ class MyStuffPinStore(context: Context) {
         }
     }
 
-    /**
-     * Heart album → album + missing songs (cascade).
-     * Unheart → drop album + cascade-only songs; independently hearted songs stay.
-     */
     fun toggleAlbum(album: AlbumItem): Boolean {
         val aKey = albumKey(album.name, album.artist)
         val pin = StuffPin(
@@ -172,7 +166,7 @@ class MyStuffPinStore(context: Context) {
         cascadeByAlbum.remove(aKey)
         persistCascade()
 
-        val dropSongIds = cascade // only cascade-tracked songs
+        val dropSongIds = cascade
         val next = _entries.value.filterNot { e ->
             (e.kind == StuffPinKind.ALBUM && e.id == aKey) ||
                 (e.kind == StuffPinKind.SONG && e.id in dropSongIds)
@@ -208,7 +202,6 @@ class MyStuffPinStore(context: Context) {
         return toggleEntry(pin)
     }
 
-    /** @return true if now in collection */
     fun toggleEntry(pin: StuffPin): Boolean {
         return if (contains(pin)) {
             removeEntry(pin)
@@ -225,7 +218,11 @@ class MyStuffPinStore(context: Context) {
     fun isPinned(pin: StuffPin): Boolean = isPinned(pin.kind, pin.id)
 
     fun pin(pin: StuffPin) {
-        if (!contains(pin)) return
+        // Playlist pins may not be in entries — allow pin-only refs for home grid
+        if (pin.kind != StuffPinKind.PLAYLIST && !contains(pin)) return
+        if (pin.kind == StuffPinKind.PLAYLIST && !contains(pin)) {
+            addEntry(pin) // keep resolvePins working
+        }
         val keys = _pinKeys.value.toMutableList()
         if (pin.key in keys) return
         if (keys.size >= PIN_SLOTS) return
@@ -253,7 +250,25 @@ class MyStuffPinStore(context: Context) {
         persistPinKeys(keys)
     }
 
-    @Deprecated("Use addEntry — does not pin", ReplaceWith("addEntry(pin)"))
+    /**
+     * Drop PLAYLIST entries/pins whose id is not in [validPlaylistIds].
+     * Call when playlists are loaded so wiped/deleted playlists leave the grid.
+     */
+    fun pruneMissingPlaylists(validPlaylistIds: Set<String>) {
+        val next = _entries.value.filterNot {
+            it.kind == StuffPinKind.PLAYLIST && it.id !in validPlaylistIds
+        }
+        if (next.size != _entries.value.size) {
+            persistEntries(next)
+        } else {
+            // still clean pin keys that point at missing playlists
+            val validKeys = next.map { it.key }.toSet()
+            val cleaned = _pinKeys.value.filter { it in validKeys }
+            if (cleaned != _pinKeys.value) persistPinKeys(cleaned)
+        }
+    }
+
+    @Deprecated("Use addEntry", ReplaceWith("addEntry(pin)"))
     fun add(pin: StuffPin) = addEntry(pin)
 
     @Deprecated("Use removeEntry", ReplaceWith("removeEntry(pin)"))
@@ -287,7 +302,6 @@ class MyStuffPinStore(context: Context) {
     }
 
     private fun persistCascade() {
-        // Map<String, List<String>> for JSON
         val serializable = cascadeByAlbum.mapValues { it.value.toList() }
         prefs.edit().putString(KEY_CASCADE, json.encodeToString(serializable)).apply()
     }
