@@ -36,7 +36,10 @@ import androidx.compose.ui.unit.dp
 import capital.yuri.yuriplayer.data.source.ArtistImageCandidate
 import capital.yuri.yuriplayer.data.source.ArtistImageKind
 import capital.yuri.yuriplayer.data.source.ArtistInfoService
+import capital.yuri.yuriplayer.data.source.ArtistNameMatch
 import coil3.compose.AsyncImage
+import kotlinx.coroutines.async
+import kotlinx.coroutines.coroutineScope
 import org.koin.compose.koinInject
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -50,15 +53,30 @@ fun FetchArtistImageSheet(
     val info: ArtistInfoService = koinInject()
     var loading by remember { mutableStateOf(true) }
     var candidates by remember { mutableStateOf<List<ArtistImageCandidate>>(emptyList()) }
+    var failedUrls by remember { mutableStateOf(setOf<String>()) }
     var error by remember { mutableStateOf<String?>(null) }
 
-    LaunchedEffect(artistName, kind) {
+    // Always pull PROFILE + BANNER sources and merge so either picker can use any hit.
+    LaunchedEffect(artistName) {
         loading = true
         error = null
-        candidates = runCatching { info.gatherImageCandidates(artistName, kind) }
-            .onFailure { error = it.message }
-            .getOrDefault(emptyList())
+        failedUrls = emptySet()
+        candidates = runCatching {
+            coroutineScope {
+                val profile = async {
+                    info.gatherImageCandidates(artistName, ArtistImageKind.PROFILE)
+                }
+                val banner = async {
+                    info.gatherImageCandidates(artistName, ArtistImageKind.BANNER)
+                }
+                mergeCandidates(profile.await() + banner.await())
+            }
+        }.onFailure { error = it.message }.getOrDefault(emptyList())
         loading = false
+    }
+
+    val visible = remember(candidates, failedUrls) {
+        candidates.filter { it.url !in failedUrls }
     }
 
     ModalBottomSheet(
@@ -75,7 +93,8 @@ fun FetchArtistImageSheet(
                 modifier = Modifier.padding(bottom = 8.dp)
             )
             Text(
-                "Original aspect shown — crop next. MusicBrainz · Wikipedia · Wikidata · Deezer · AudioDB · Discogs",
+                "All sources combined (profile + banner). Original aspect shown — crop next. " +
+                    "MusicBrainz · Wikipedia · Wikidata · Deezer · AudioDB · Discogs",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
                 modifier = Modifier.padding(bottom = 12.dp)
@@ -95,6 +114,12 @@ fun FetchArtistImageSheet(
                     modifier = Modifier.padding(24.dp)
                 )
 
+                visible.isEmpty() -> Text(
+                    "Images failed to load",
+                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.55f),
+                    modifier = Modifier.padding(24.dp)
+                )
+
                 else -> LazyVerticalGrid(
                     columns = GridCells.Fixed(3),
                     contentPadding = PaddingValues(bottom = 16.dp),
@@ -102,8 +127,7 @@ fun FetchArtistImageSheet(
                     verticalArrangement = Arrangement.spacedBy(8.dp),
                     modifier = Modifier.height(420.dp)
                 ) {
-                    items(candidates, key = { it.url }) { c ->
-                        // Uniform cell; Fit keeps the photo's real proportions (letterbox)
+                    items(visible, key = { it.url }) { c ->
                         Box(
                             modifier = Modifier
                                 .aspectRatio(1f)
@@ -123,7 +147,10 @@ fun FetchArtistImageSheet(
                                 contentScale = ContentScale.Fit,
                                 modifier = Modifier
                                     .fillMaxWidth()
-                                    .padding(4.dp)
+                                    .padding(4.dp),
+                                onError = {
+                                    failedUrls = failedUrls + c.url
+                                }
                             )
                             Text(
                                 c.label,
@@ -142,4 +169,34 @@ fun FetchArtistImageSheet(
             }
         }
     }
+}
+
+/** Dedupe by image fingerprint; keep the larger / non-thumb variant. */
+private fun mergeCandidates(list: List<ArtistImageCandidate>): List<ArtistImageCandidate> {
+    val out = LinkedHashMap<String, ArtistImageCandidate>()
+    list.forEach { c ->
+        if (c.url.isBlank()) return@forEach
+        if (c.url.contains("/images/artist//")) return@forEach
+        if (c.url.contains("artist-default")) return@forEach
+
+        val key = ArtistNameMatch.imageFingerprint(c.url)
+        val existing = out[key]
+        if (existing == null) {
+            out[key] = c
+            return@forEach
+        }
+        val newArea = (c.width ?: 0) * (c.height ?: 0).let {
+            if (it > 0) it else ArtistNameMatch.imageSizeHint(c.url)
+        }
+        val oldArea = (existing.width ?: 0) * (existing.height ?: 0).let {
+            if (it > 0) it else ArtistNameMatch.imageSizeHint(existing.url)
+        }
+        val existingThumb = existing.label.contains("thumb", true) ||
+            existing.url.contains("thumb", true)
+        val newThumb = c.label.contains("thumb", true) || c.url.contains("thumb", true)
+        if (newArea > oldArea || (existingThumb && !newThumb)) {
+            out[key] = c
+        }
+    }
+    return out.values.toList()
 }
