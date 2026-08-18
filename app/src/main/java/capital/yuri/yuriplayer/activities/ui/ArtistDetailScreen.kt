@@ -5,6 +5,7 @@ import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
@@ -17,6 +18,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
@@ -61,6 +63,7 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalUriHandler
@@ -84,6 +87,9 @@ import capital.yuri.yuriplayer.data.source.ArtistLink
 import capital.yuri.yuriplayer.data.theme.ThemeService
 import capital.yuri.yuriplayer.ui.formatAlbumCount
 import capital.yuri.yuriplayer.ui.formatTrackCount
+import coil3.compose.AsyncImage
+import coil3.request.ImageRequest
+import coil3.request.crossfade
 import kotlinx.coroutines.launch
 import org.koin.compose.koinInject
 
@@ -130,8 +136,15 @@ private fun sortedReleaseTracks(album: AlbumItem): List<Song> =
             .thenBy(String.CASE_INSENSITIVE_ORDER) { it.displayTitle }
     )
 
-private val ArtistHeaderHeight = 300.dp
+/** Full-bleed banner height (avatar straddles its bottom edge). */
+private val ArtistBannerHeight = 200.dp
+/** Circular profile size when a banner is present. */
+private val ArtistAvatarOnBanner = 132.dp
+/** Centered avatar when there is no banner. */
+private val ArtistAvatarPlain = 160.dp
 private val ArtistGradientFade = 200.dp
+/** Header solid region without banner (legacy). */
+private val ArtistHeaderHeightPlain = 300.dp
 
 private fun parseImageUri(raw: String?): Uri? {
     if (raw.isNullOrBlank()) return null
@@ -175,6 +188,7 @@ fun ArtistDetailScreen(
     var dataLinks by remember { mutableStateOf<List<ArtistLink>>(emptyList()) }
     var events by remember { mutableStateOf<List<ArtistEvent>>(emptyList()) }
     var themeTick by remember { mutableStateOf(0) }
+    var bannerUri by remember { mutableStateOf(profileRepo.bannerUri(artist.displayName)) }
     val uriHandler = LocalUriHandler.current
 
     val profile by profileRepo.observe(artist.displayName).collectAsState(initial = null)
@@ -199,7 +213,8 @@ fun ArtistDetailScreen(
 
     LaunchedEffect(artist.name, albums.size, profile?.imageUri, profile?.bio, profile?.genres, themeTick) {
         val resolved = runCatching { profileRepo.resolve(artist.displayName) }.getOrNull()
-        val themeUri = parseImageUri(profileRepo.bannerUri(artist.displayName))
+        bannerUri = profileRepo.bannerUri(artist.displayName)
+        val themeUri = parseImageUri(bannerUri)
             ?: parseImageUri(profile?.imageUri ?: resolved?.imageUri)
 
         dataLinks = (resolved?.links.orEmpty() + profile?.links.orEmpty())
@@ -234,8 +249,11 @@ fun ArtistDetailScreen(
     val accent = themeColors.accent
     val onAccent = themeColors.onAccent
 
+    val hasBanner = !bannerUri.isNullOrBlank()
+    // Solid theme color covers the banner strip only; gradient begins at its bottom edge.
+    val solidHeaderHeight = if (hasBanner) ArtistBannerHeight else ArtistHeaderHeightPlain
     val fadePx = with(density) { ArtistGradientFade.toPx() }
-    val headerPx = with(density) { ArtistHeaderHeight.toPx() }
+    val headerPx = with(density) { solidHeaderHeight.toPx() }
 
     val sortedAlbums = remember(albums) {
         albums.sortedWith(
@@ -330,6 +348,14 @@ fun ArtistDetailScreen(
                     Toast.makeText(context, "Artist image cleared", Toast.LENGTH_SHORT).show()
                 }
             }
+            MediaSheetItem("Clear banner") {
+                showMenu = false
+                scope.launch {
+                    profileRepo.setBannerImage(artist.displayName, null)
+                    themeTick++
+                    Toast.makeText(context, "Banner cleared", Toast.LENGTH_SHORT).show()
+                }
+            }
             MediaSheetItem("Data sources") {
                 showMenu = false
                 showDataSources = true
@@ -386,6 +412,7 @@ fun ArtistDetailScreen(
             .fillMaxSize()
             .background(defaultBg)
             .drawBehind {
+                // Solid theme wash through the banner (or plain header) region.
                 val solidEnd = headerPx
                 val fadeEnd = solidEnd + fadePx
                 drawRect(
@@ -393,6 +420,7 @@ fun ArtistDetailScreen(
                     topLeft = Offset.Zero,
                     size = Size(size.width, solidEnd.coerceAtMost(size.height))
                 )
+                // Gradient starts at the bottom edge of the banner / header solid.
                 if (fadeEnd > solidEnd) {
                     drawRect(
                         brush = Brush.verticalGradient(
@@ -414,9 +442,12 @@ fun ArtistDetailScreen(
                 }
             }
     ) {
-        Column(modifier = Modifier.fillMaxSize().statusBarsPadding()) {
+        Column(modifier = Modifier.fillMaxSize()) {
+            // Top bar over banner / solid header
             Row(
-                modifier = Modifier.fillMaxWidth(),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .statusBarsPadding(),
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 IconButton(onClick = onBack) {
@@ -445,6 +476,7 @@ fun ArtistDetailScreen(
                         name = artist.displayName,
                         seedSong = albums.firstOrNull()?.songs?.firstOrNull()
                             ?: artist.songs.firstOrNull(),
+                        bannerUri = bannerUri,
                         stats = "${formatAlbumCount(artist.albumCount)} · ${formatTrackCount(artist.trackCount)}",
                         titleColor = onArt,
                         mutedColor = mutedOnArt,
@@ -550,7 +582,6 @@ fun ArtistDetailScreen(
                     }
                 }
 
-                // Shows → bio (requested order)
                 item {
                     ArtistUpcomingShows(
                         events = events,
@@ -789,6 +820,7 @@ private fun DiscographyReleaseHeader(
 private fun ArtistHero(
     name: String,
     seedSong: Song?,
+    bannerUri: String?,
     stats: String,
     titleColor: Color,
     mutedColor: Color,
@@ -798,65 +830,134 @@ private fun ArtistHero(
     onToggleFavorite: () -> Unit,
     onPlayAll: () -> Unit
 ) {
+    val context = LocalContext.current
+    val hasBanner = !bannerUri.isNullOrBlank()
+
     Column(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(horizontal = 20.dp)
-            .padding(bottom = 12.dp),
+        modifier = Modifier.fillMaxWidth(),
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
-        ArtistArt(
-            artistName = name,
-            seedSong = seedSong,
-            size = 160.dp,
-            circular = true
-        )
+        if (hasBanner) {
+            // Banner full-bleed; avatar centered on its bottom edge (half above / half below).
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(ArtistBannerHeight + ArtistAvatarOnBanner / 2)
+            ) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(ArtistBannerHeight)
+                        .align(Alignment.TopCenter)
+                ) {
+                    AsyncImage(
+                        model = ImageRequest.Builder(context)
+                            .data(bannerUri)
+                            .crossfade(true)
+                            .build(),
+                        contentDescription = "$name banner",
+                        contentScale = ContentScale.Crop,
+                        modifier = Modifier.fillMaxSize()
+                    )
+                    // Soft scrim so light banners don't wash out the avatar edge
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(72.dp)
+                            .align(Alignment.BottomCenter)
+                            .background(
+                                Brush.verticalGradient(
+                                    listOf(Color.Transparent, Color.Black.copy(alpha = 0.35f))
+                                )
+                            )
+                    )
+                }
 
-        Spacer(modifier = Modifier.height(16.dp))
+                // Center of the circle sits on the banner's bottom edge
+                Box(
+                    modifier = Modifier
+                        .align(Alignment.BottomCenter)
+                        .offset(y = 0.dp)
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .size(ArtistAvatarOnBanner)
+                            .border(3.dp, titleColor.copy(alpha = 0.9f), CircleShape)
+                            .clip(CircleShape)
+                    ) {
+                        ArtistArt(
+                            artistName = name,
+                            seedSong = seedSong,
+                            size = ArtistAvatarOnBanner,
+                            circular = true
+                        )
+                    }
+                }
+            }
 
-        MarqueeText(
-            text = name,
-            style = MaterialTheme.typography.headlineMedium.copy(fontWeight = FontWeight.Bold),
-            color = titleColor,
-            modifier = Modifier.fillMaxWidth()
-        )
+            Spacer(modifier = Modifier.height(12.dp))
+        } else {
+            Spacer(modifier = Modifier.height(8.dp))
+            ArtistArt(
+                artistName = name,
+                seedSong = seedSong,
+                size = ArtistAvatarPlain,
+                circular = true
+            )
+            Spacer(modifier = Modifier.height(16.dp))
+        }
 
-        Text(
-            stats,
-            style = MaterialTheme.typography.bodyMedium,
-            color = mutedColor,
+        Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(top = 4.dp)
-        )
-
-        Spacer(modifier = Modifier.height(12.dp))
-
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.Start,
-            verticalAlignment = Alignment.CenterVertically
+                .padding(horizontal = 20.dp)
+                .padding(bottom = 12.dp),
+            horizontalAlignment = Alignment.CenterHorizontally
         ) {
-            IconButton(
-                onClick = onPlayAll,
+            MarqueeText(
+                text = name,
+                style = MaterialTheme.typography.headlineMedium.copy(fontWeight = FontWeight.Bold),
+                color = titleColor,
+                modifier = Modifier.fillMaxWidth()
+            )
+
+            Text(
+                stats,
+                style = MaterialTheme.typography.bodyMedium,
+                color = mutedColor,
                 modifier = Modifier
-                    .size(48.dp)
-                    .clip(CircleShape)
-                    .background(accent)
+                    .fillMaxWidth()
+                    .padding(top = 4.dp)
+            )
+
+            Spacer(modifier = Modifier.height(12.dp))
+
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.Start,
+                verticalAlignment = Alignment.CenterVertically
             ) {
-                Icon(
-                    Icons.Default.PlayArrow,
-                    contentDescription = "Start radio",
-                    tint = onAccent
+                IconButton(
+                    onClick = onPlayAll,
+                    modifier = Modifier
+                        .size(48.dp)
+                        .clip(CircleShape)
+                        .background(accent)
+                ) {
+                    Icon(
+                        Icons.Default.PlayArrow,
+                        contentDescription = "Start radio",
+                        tint = onAccent
+                    )
+                }
+                Spacer(modifier = Modifier.width(4.dp))
+                MyStuffHeart(
+                    saved = artistSaved,
+                    onToggle = onToggleFavorite,
+                    tint = titleColor.copy(alpha = 0.85f),
+                    savedTint = accent
                 )
             }
-            Spacer(modifier = Modifier.width(4.dp))
-            MyStuffHeart(
-                saved = artistSaved,
-                onToggle = onToggleFavorite,
-                tint = titleColor.copy(alpha = 0.85f),
-                savedTint = accent
-            )
         }
     }
 }
