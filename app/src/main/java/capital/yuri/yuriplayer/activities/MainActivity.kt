@@ -67,11 +67,16 @@ import androidx.compose.ui.zIndex
 import androidx.core.content.ContextCompat
 import capital.yuri.yuriplayer.activities.ui.AddToPlaylistSheet
 import capital.yuri.yuriplayer.activities.ui.AlbumDetailScreen
+import capital.yuri.yuriplayer.activities.ui.AlbumNavActions
 import capital.yuri.yuriplayer.activities.ui.ApplyStatusBarStack
 import capital.yuri.yuriplayer.activities.ui.ArtistDetailScreen
+import capital.yuri.yuriplayer.activities.ui.ArtistNavActions
 import capital.yuri.yuriplayer.activities.ui.EditAlbumMetadataScreen
 import capital.yuri.yuriplayer.activities.ui.EditSongMetadataScreen
 import capital.yuri.yuriplayer.activities.ui.LibraryScreen
+import capital.yuri.yuriplayer.activities.ui.LocalAlbumNav
+import capital.yuri.yuriplayer.activities.ui.LocalArtistNav
+import capital.yuri.yuriplayer.activities.ui.LocalPlaylistNav
 import capital.yuri.yuriplayer.activities.ui.LocalSongNav
 import capital.yuri.yuriplayer.activities.ui.LocalStatusBarStack
 import capital.yuri.yuriplayer.activities.ui.MiniPlayerBar
@@ -79,6 +84,7 @@ import capital.yuri.yuriplayer.activities.ui.MyStuffScreen
 import capital.yuri.yuriplayer.activities.ui.NowPlayingScreen
 import capital.yuri.yuriplayer.activities.ui.PlaceholderScreen
 import capital.yuri.yuriplayer.activities.ui.PlaylistDetailScreen
+import capital.yuri.yuriplayer.activities.ui.PlaylistNavActions
 import capital.yuri.yuriplayer.activities.ui.SettingsScreen
 import capital.yuri.yuriplayer.activities.ui.SongNavActions
 import capital.yuri.yuriplayer.activities.ui.StatusBarColorStack
@@ -89,10 +95,13 @@ import capital.yuri.yuriplayer.data.ArtistItem
 import capital.yuri.yuriplayer.data.LibraryIndex
 import capital.yuri.yuriplayer.data.LibrarySettings
 import capital.yuri.yuriplayer.data.MetadataEnrichmentService
+import capital.yuri.yuriplayer.data.MyStuffPinStore
 import capital.yuri.yuriplayer.data.PlayerThemeStore
 import capital.yuri.yuriplayer.data.Playlist
 import capital.yuri.yuriplayer.data.PlaylistRepository
 import capital.yuri.yuriplayer.data.Song
+import capital.yuri.yuriplayer.data.StuffPin
+import capital.yuri.yuriplayer.data.StuffPinKind
 import capital.yuri.yuriplayer.data.albumKey
 import capital.yuri.yuriplayer.data.artistKey
 import capital.yuri.yuriplayer.player.ColdSource
@@ -301,6 +310,7 @@ fun YuriApp(
     val settings: LibrarySettings = koinInject()
     val enrichment: MetadataEnrichmentService = koinInject()
     val playlistRepo: PlaylistRepository = koinInject()
+    val pinStore: MyStuffPinStore = koinInject()
     val baseScheme = MaterialTheme.colorScheme
 
     val statusBarStack = remember(baseScheme.background) {
@@ -376,8 +386,6 @@ fun YuriApp(
     }
 
     val detail = detailStack.lastOrNull()
-    // Album, artist, playlist draw their own themed header under the status bar.
-    // Scaffold must not also inset Top or the back row sits with a double gap.
     val edgeToEdgeDetail = detail is DetailRoute.Album ||
         detail is DetailRoute.Artist ||
         detail is DetailRoute.Playlist
@@ -497,6 +505,91 @@ fun YuriApp(
         LocalSongNav provides SongNavActions(
             openAlbumForSong = { openAlbumForSong(it) },
             openArtistByName = { openArtistByName(it) }
+        ),
+        LocalAlbumNav provides AlbumNavActions(
+            openAlbum = {
+                playerExpanded = false
+                pushDetail(DetailRoute.Album(it))
+            },
+            openArtist = { album ->
+                val name = album.artist ?: return@AlbumNavActions
+                playerExpanded = false
+                pushDetail(DetailRoute.Artist(resolveArtist(name)))
+            },
+            startRadio = {
+                player.startAlbumRadio(it)
+                Toast.makeText(context, "Radio · ${it.displayName}", Toast.LENGTH_SHORT).show()
+            },
+            addToQueue = {
+                player.addToHotQueue(it.songs)
+                Toast.makeText(context, "Queued ${it.trackCount} tracks", Toast.LENGTH_SHORT).show()
+            },
+            editMetadata = {
+                playerExpanded = false
+                pushDetail(DetailRoute.EditAlbum(it))
+            },
+            addToMyStuff = { album ->
+                pinStore.addEntry(
+                    StuffPin(
+                        kind = StuffPinKind.ALBUM,
+                        id = albumKey(album.name, album.artist),
+                        title = album.displayName,
+                        subtitle = album.displayArtist
+                    )
+                )
+                Toast.makeText(context, "Added to My Stuff", Toast.LENGTH_SHORT).show()
+            }
+        ),
+        LocalArtistNav provides ArtistNavActions(
+            openArtist = {
+                playerExpanded = false
+                pushDetail(DetailRoute.Artist(it))
+            },
+            openArtistByName = { openArtistByName(it) },
+            startRadio = { name ->
+                player.startArtistRadio(name)
+                Toast.makeText(context, "Radio · $name", Toast.LENGTH_SHORT).show()
+            },
+            addToMyStuff = { artist ->
+                val key = artistKey(artist.name) ?: return@ArtistNavActions
+                pinStore.addEntry(
+                    StuffPin(
+                        kind = StuffPinKind.ARTIST,
+                        id = key,
+                        title = artist.displayName,
+                        subtitle = "Artist"
+                    )
+                )
+                Toast.makeText(context, "Added to My Stuff", Toast.LENGTH_SHORT).show()
+            }
+            // Image/banner actions stay null at root; ArtistDetailScreen can override
+            // LocalArtistNav with a nested provider that fills them in.
+        ),
+        LocalPlaylistNav provides PlaylistNavActions(
+            openPlaylist = { id ->
+                playerExpanded = false
+                pushDetail(DetailRoute.Playlist(id))
+            },
+            startRadio = { pl ->
+                if (pl.songs.isEmpty()) {
+                    Toast.makeText(context, "Playlist is empty", Toast.LENGTH_SHORT).show()
+                } else {
+                    player.startPlaylistRadio(pl.songs, pl.name)
+                    Toast.makeText(context, "Radio · ${pl.name}", Toast.LENGTH_SHORT).show()
+                }
+            },
+            addToMyStuff = { pl ->
+                pinStore.addEntry(
+                    StuffPin(
+                        kind = StuffPinKind.PLAYLIST,
+                        id = pl.id,
+                        title = pl.name,
+                        subtitle = "Playlist"
+                    )
+                )
+                Toast.makeText(context, "Added to My Stuff", Toast.LENGTH_SHORT).show()
+            }
+            // changeCover / edit / delete stay null at root; PlaylistDetail can override.
         )
     ) {
         ApplyStatusBarStack(statusBarStack)
