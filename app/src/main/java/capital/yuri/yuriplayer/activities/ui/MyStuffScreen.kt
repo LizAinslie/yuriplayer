@@ -6,6 +6,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
@@ -19,6 +20,9 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
+import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -84,6 +88,11 @@ import kotlinx.coroutines.launch
 import org.koin.compose.koinInject
 
 private enum class MyStuffTab { Pins, Collection, Playlists }
+
+private sealed class PinGridCell {
+    data class Filled(val pin: StuffPin) : PinGridCell()
+    data object Empty : PinGridCell()
+}
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -256,65 +265,70 @@ private fun MyStuffPinsTab(
     onPlayAll: () -> Unit
 ) {
     val emptyCount = (MyStuffPinStore.PIN_SLOTS - pins.size).coerceAtLeast(0)
+    val cells = remember(pins, emptyCount) {
+        pins.map { PinGridCell.Filled(it) } +
+            List(emptyCount) { PinGridCell.Empty }
+    }
     var pinForSheet by remember { mutableStateOf<StuffPin?>(null) }
 
-    LazyColumn(
-        modifier = Modifier.fillMaxSize(),
-        contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp)
-    ) {
-        item {
-            Row(
+    Column(modifier = Modifier.fillMaxSize()) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 16.dp, vertical = 8.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text(
+                text = "My Stuff",
+                style = MaterialTheme.typography.headlineMedium,
+                fontWeight = FontWeight.Bold,
+                modifier = Modifier.weight(1f)
+            )
+            IconButton(
+                onClick = onPlayAll,
                 modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(bottom = 12.dp),
-                verticalAlignment = Alignment.CenterVertically
+                    .size(48.dp)
+                    .clip(CircleShape)
+                    .border(1.5.dp, MaterialTheme.colorScheme.onSurface.copy(alpha = 0.35f), CircleShape)
             ) {
-                Text(
-                    text = "My Stuff",
-                    style = MaterialTheme.typography.headlineMedium,
-                    fontWeight = FontWeight.Bold,
-                    modifier = Modifier.weight(1f)
+                Icon(
+                    Icons.Default.PlayArrow,
+                    contentDescription = "Start radio from My Stuff",
+                    modifier = Modifier.size(28.dp)
                 )
-                IconButton(
-                    onClick = onPlayAll,
-                    modifier = Modifier
-                        .size(48.dp)
-                        .clip(CircleShape)
-                        .border(1.5.dp, MaterialTheme.colorScheme.onSurface.copy(alpha = 0.35f), CircleShape)
-                ) {
-                    Icon(
-                        Icons.Default.PlayArrow,
-                        contentDescription = "Start radio from My Stuff",
-                        modifier = Modifier.size(28.dp)
-                    )
-                }
             }
         }
 
-        items(pins, key = { it.key }) { pin ->
-            SquarePinCard(
-                pin = pin,
-                library = library,
-                playlists = playlists,
-                allSongs = allSongs,
-                onClick = { onOpenPin(pin) },
-                onLongClick = { pinForSheet = pin },
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(bottom = 12.dp)
-            )
+        // 2×3 grid — same card shape as discography album tiles
+        LazyVerticalGrid(
+            columns = GridCells.Fixed(2),
+            modifier = Modifier.fillMaxSize(),
+            contentPadding = PaddingValues(horizontal = 16.dp, vertical = 4.dp),
+            horizontalArrangement = Arrangement.spacedBy(14.dp),
+            verticalArrangement = Arrangement.spacedBy(16.dp)
+        ) {
+            items(
+                cells.size,
+                key = { i ->
+                    when (val c = cells[i]) {
+                        is PinGridCell.Filled -> c.pin.key
+                        is PinGridCell.Empty -> "empty-$i"
+                    }
+                }
+            ) { i ->
+                when (val cell = cells[i]) {
+                    is PinGridCell.Filled -> GridPinCard(
+                        pin = cell.pin,
+                        library = library,
+                        playlists = playlists,
+                        allSongs = allSongs,
+                        onClick = { onOpenPin(cell.pin) },
+                        onLongClick = { pinForSheet = cell.pin }
+                    )
+                    is PinGridCell.Empty -> EmptyGridPin(onClick = onAddPinSlot)
+                }
+            }
         }
-
-        items(emptyCount) {
-            EmptySquarePin(
-                onClick = onAddPinSlot,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(bottom = 12.dp)
-            )
-        }
-
-        item { Spacer(modifier = Modifier.height(16.dp)) }
     }
 
     pinForSheet?.let { pin ->
@@ -329,24 +343,23 @@ private fun MyStuffPinsTab(
     }
 }
 
-/** Full-width square pin on [surface]; long-press opens action sheet (no always-on delete). */
+/**
+ * Discography-style pin: square cover + title / subtitle under.
+ * Long-press opens the unpin sheet (no always-visible X).
+ */
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
-private fun SquarePinCard(
+private fun GridPinCard(
     pin: StuffPin,
     library: LibraryIndex,
     playlists: List<Playlist>,
     allSongs: List<Song>,
     onClick: () -> Unit,
-    onLongClick: () -> Unit,
-    modifier: Modifier = Modifier
+    onLongClick: () -> Unit
 ) {
-    val shape = RoundedCornerShape(12.dp)
     Column(
-        modifier = modifier
-            .aspectRatio(1f)
-            .clip(shape)
-            .background(MaterialTheme.colorScheme.surface)
+        modifier = Modifier
+            .fillMaxWidth()
             .combinedClickable(
                 onClick = onClick,
                 onLongClick = onLongClick
@@ -355,8 +368,9 @@ private fun SquarePinCard(
         Box(
             modifier = Modifier
                 .fillMaxWidth()
-                .weight(1f)
-                .padding(12.dp),
+                .aspectRatio(1f)
+                .clip(RoundedCornerShape(6.dp))
+                .background(MaterialTheme.colorScheme.surfaceVariant),
             contentAlignment = Alignment.Center
         ) {
             PinLeadingArt(
@@ -364,57 +378,57 @@ private fun SquarePinCard(
                 library = library,
                 playlists = playlists,
                 allSongs = allSongs,
-                size = 160.dp,
+                size = 200.dp,
                 fill = true
             )
         }
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 14.dp)
-                .padding(bottom = 14.dp)
-        ) {
-            MarqueeText(
-                text = pin.title,
-                style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.SemiBold)
+        Spacer(modifier = Modifier.height(8.dp))
+        MarqueeText(
+            text = pin.title,
+            style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.SemiBold),
+            modifier = Modifier.fillMaxWidth()
+        )
+        if (pin.subtitle.isNotBlank()) {
+            Text(
+                text = pin.subtitle,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.55f),
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
             )
-            if (pin.subtitle.isNotBlank()) {
-                Text(
-                    text = pin.subtitle,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.55f),
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis
-                )
-            }
         }
     }
 }
 
 @Composable
-private fun EmptySquarePin(
-    onClick: () -> Unit,
-    modifier: Modifier = Modifier
-) {
-    val shape = RoundedCornerShape(12.dp)
-    Box(
-        modifier = modifier
-            .aspectRatio(1f)
-            .clip(shape)
-            .background(MaterialTheme.colorScheme.surface)
-            .border(
-                1.dp,
-                MaterialTheme.colorScheme.onSurface.copy(alpha = 0.2f),
-                shape
+private fun EmptyGridPin(onClick: () -> Unit) {
+    Column(modifier = Modifier.fillMaxWidth()) {
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .aspectRatio(1f)
+                .clip(RoundedCornerShape(6.dp))
+                .background(MaterialTheme.colorScheme.surface)
+                .border(
+                    1.dp,
+                    MaterialTheme.colorScheme.onSurface.copy(alpha = 0.22f),
+                    RoundedCornerShape(6.dp)
+                )
+                .clickable(onClick = onClick),
+            contentAlignment = Alignment.Center
+        ) {
+            Icon(
+                Icons.Default.Add,
+                contentDescription = "Add pin",
+                modifier = Modifier.size(36.dp),
+                tint = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.45f)
             )
-            .clickable(onClick = onClick),
-        contentAlignment = Alignment.Center
-    ) {
-        Icon(
-            Icons.Default.Add,
-            contentDescription = "Add pin",
-            modifier = Modifier.size(40.dp),
-            tint = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.45f)
+        }
+        Spacer(modifier = Modifier.height(8.dp))
+        Text(
+            "Add pin",
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.45f)
         )
     }
 }

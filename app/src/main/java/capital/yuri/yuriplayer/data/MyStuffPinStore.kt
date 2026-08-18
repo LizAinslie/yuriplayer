@@ -320,11 +320,11 @@ class MyStuffPinStore(context: Context) {
         private const val KEY_PIN_KEYS = "pin_keys"
         private const val KEY_LEGACY_PINS = "pins"
         private const val KEY_CASCADE = "album_cascade_songs"
-        /** Home pin list capacity (full-width rows). */
-        const val PIN_SLOTS = 8
+        /** Home pin grid capacity (2×3). */
+        const val PIN_SLOTS = 6
 
         @Deprecated("Use PIN_SLOTS")
-        const val GRID_MIN_CELLS = 8
+        const val GRID_MIN_CELLS = 6
         @Deprecated("No fixed browse cards")
         const val FIXED_BROWSE_COUNT = 0
     }
