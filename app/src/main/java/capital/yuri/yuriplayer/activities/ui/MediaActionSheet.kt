@@ -44,6 +44,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import capital.yuri.yuriplayer.data.AlbumItem
 import capital.yuri.yuriplayer.data.ArtistItem
@@ -62,7 +63,7 @@ fun MediaSheetHeader(
     song: Song?,
     title: String,
     subtitle: String,
-    artSize: androidx.compose.ui.unit.Dp = 56.dp
+    artSize: Dp = 56.dp
 ) {
     Row(
         modifier = Modifier
@@ -97,7 +98,7 @@ fun PlaylistSheetHeader(
     playlist: Playlist,
     title: String,
     subtitle: String,
-    artSize: androidx.compose.ui.unit.Dp = 56.dp
+    artSize: Dp = 56.dp
 ) {
     Row(
         modifier = Modifier
@@ -106,6 +107,47 @@ fun PlaylistSheetHeader(
         verticalAlignment = Alignment.CenterVertically
     ) {
         PlaylistCoverArt(playlist, size = artSize)
+        Spacer(modifier = Modifier.width(14.dp))
+        Column(modifier = Modifier.weight(1f)) {
+            Text(
+                text = title,
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.SemiBold,
+                maxLines = 2
+            )
+            if (subtitle.isNotBlank()) {
+                Text(
+                    text = subtitle,
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.65f),
+                    maxLines = 1
+                )
+            }
+        }
+    }
+    HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
+}
+
+/** Artist sheet header — circular profile art (no album-cover fallback). */
+@Composable
+fun ArtistSheetHeader(
+    artistName: String,
+    title: String,
+    subtitle: String,
+    artSize: Dp = 56.dp
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 20.dp, vertical = 8.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        ArtistArt(
+            artistName = artistName,
+            seedSong = null,
+            size = artSize,
+            circular = true
+        )
         Spacer(modifier = Modifier.width(14.dp))
         Column(modifier = Modifier.weight(1f)) {
             Text(
@@ -412,8 +454,8 @@ fun ArtistContextSheet(
         onDismissRequest = onDismiss,
         sheetState = rememberModalBottomSheetState()
     ) {
-        MediaSheetHeader(
-            song = artist.songs.firstOrNull(),
+        ArtistSheetHeader(
+            artistName = artist.name ?: artist.displayName,
             title = artist.displayName,
             subtitle = "Artist"
         )
