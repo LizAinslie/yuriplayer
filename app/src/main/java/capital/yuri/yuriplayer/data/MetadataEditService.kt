@@ -6,6 +6,11 @@ import android.media.MediaScannerConnection
 import android.net.Uri
 import android.provider.MediaStore
 import android.util.Log
+import capital.yuri.yuriplayer.data.source.SourceOffering
+import capital.yuri.yuriplayer.data.source.SourceType
+import capital.yuri.yuriplayer.data.source.isTagWritable
+import capital.yuri.yuriplayer.data.source.supportsEmbeddedTagWrites
+import capital.yuri.yuriplayer.data.source.writableOfferings
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import org.jaudiotagger.audio.AudioFileIO
@@ -42,6 +47,7 @@ class MetadataEditService(
         val message: String
     )
 
+    /** True when the song has a resolvable local/SAF path that we can write tags into. */
     fun isLocalFile(song: Song): Boolean {
         val path = resolveWritablePath(song) ?: return false
         return File(path).isFile
@@ -50,30 +56,109 @@ class MetadataEditService(
     fun isLocalAlbum(album: AlbumItem): Boolean =
         album.songs.any { isLocalFile(it) }
 
-    suspend fun saveSong(song: Song, edit: SongEdit): Result = withContext(Dispatchers.IO) {
-        val path = resolveWritablePath(song)
-            ?: return@withContext Result(0, 1, "Not a local file path (cannot write tags)")
-        try {
-            val file = File(path)
-            if (!file.canWrite()) runCatching { file.setWritable(true) }
-            writeSongTags(file, edit)
-            updateMediaStoreSong(song, edit)
-            scanPaths(listOf(path))
-            libraryIndex.refresh()
-            Result(1, 0, "Saved")
-        } catch (e: Exception) {
-            Log.e(TAG, "saveSong failed path=$path", e)
-            Result(0, 1, e.message ?: "Write failed — need storage permission?")
-        }
+    /**
+     * True when at least one offering is tag-writable (LOCAL / WEBDAV / future cloud).
+     * Jellyfin + Navidrome (Subsonic/OpenSubsonic) never qualify.
+     */
+    fun hasWritableOffering(offerings: List<SourceOffering>): Boolean =
+        offerings.any { it.isTagWritable() }
+
+    fun canEditSong(song: Song, offerings: List<SourceOffering> = emptyList()): Boolean {
+        if (offerings.isNotEmpty()) return hasWritableOffering(offerings)
+        // Fallback when multi-source list is not yet wired: local path only.
+        return isLocalFile(song)
     }
 
-    suspend fun saveAlbum(album: AlbumItem, edit: AlbumEdit): Result = withContext(Dispatchers.IO) {
+    fun canEditAlbum(album: AlbumItem, offerings: List<SourceOffering> = emptyList()): Boolean {
+        if (offerings.isNotEmpty()) return hasWritableOffering(offerings)
+        return isLocalAlbum(album)
+    }
+
+    /**
+     * Write song tags only into [targets] (must already be filtered to writable offerings).
+     * If [targets] is empty, falls back to the single local path for [song] when present.
+     */
+    suspend fun saveSong(
+        song: Song,
+        edit: SongEdit,
+        targets: List<SourceOffering> = emptyList()
+    ): Result = withContext(Dispatchers.IO) {
+        val writeTargets = resolveWriteTargets(song, targets)
+        if (writeTargets.isEmpty()) {
+            return@withContext Result(
+                0,
+                1,
+                "No writable source selected (Jellyfin / Subsonic are read-only)"
+            )
+        }
+
+        var ok = 0
+        var failed = 0
+        val scanned = mutableListOf<String>()
+        for (path in writeTargets) {
+            try {
+                val file = File(path)
+                if (!file.canWrite()) runCatching { file.setWritable(true) }
+                writeSongTags(file, edit)
+                scanned += path
+                ok++
+            } catch (e: Exception) {
+                Log.e(TAG, "saveSong failed path=$path", e)
+                failed++
+            }
+        }
+        if (ok > 0) {
+            updateMediaStoreSong(song, edit)
+            scanPaths(scanned)
+            libraryIndex.refresh()
+        }
+        Result(
+            ok = ok,
+            failed = failed,
+            message = when {
+                failed == 0 -> if (ok == 1) "Saved" else "Saved $ok sources"
+                ok == 0 -> "Write failed — need storage permission?"
+                else -> "Saved $ok, failed $failed"
+            }
+        )
+    }
+
+    /**
+     * Write album-level tags only into writable targets.
+     * When [targets] is empty, uses every local path under the album (legacy path).
+     */
+    suspend fun saveAlbum(
+        album: AlbumItem,
+        edit: AlbumEdit,
+        targets: List<SourceOffering> = emptyList()
+    ): Result = withContext(Dispatchers.IO) {
+        val perSongPaths: List<Pair<Song, String>> = if (targets.isNotEmpty()) {
+            targets
+                .filter { it.isTagWritable() }
+                .mapNotNull { offering ->
+                    val path = resolveWritablePath(offering.song) ?: return@mapNotNull null
+                    offering.song to path
+                }
+        } else {
+            album.songs.mapNotNull { s ->
+                val path = resolveWritablePath(s) ?: return@mapNotNull null
+                s to path
+            }
+        }
+
+        if (perSongPaths.isEmpty()) {
+            return@withContext Result(
+                0,
+                1,
+                "No writable source selected (Jellyfin / Subsonic are read-only)"
+            )
+        }
+
         var ok = 0
         var failed = 0
         val scanned = mutableListOf<String>()
         val coverFile = edit.coverBytes?.let { bytes ->
-            val firstPath = album.songs.firstNotNullOfOrNull { resolveWritablePath(it) }
-            val dir = firstPath?.let { File(it).parentFile }
+            val dir = perSongPaths.firstOrNull()?.second?.let { File(it).parentFile }
             if (dir != null && dir.isDirectory) {
                 val out = File(dir, "cover.jpg")
                 try {
@@ -87,11 +172,7 @@ class MetadataEditService(
             } else null
         }
 
-        for (song in album.songs) {
-            val path = resolveWritablePath(song) ?: run {
-                failed++
-                continue
-            }
+        for ((song, path) in perSongPaths) {
             try {
                 val file = File(path)
                 if (!file.canWrite()) runCatching { file.setWritable(true) }
@@ -115,6 +196,24 @@ class MetadataEditService(
                 else -> "Saved $ok, failed $failed"
             }
         )
+    }
+
+    /**
+     * Resolve concrete filesystem paths we are allowed to write.
+     * Skips non-writable source types even if a path somehow exists.
+     */
+    private fun resolveWriteTargets(
+        song: Song,
+        targets: List<SourceOffering>
+    ): List<String> {
+        if (targets.isNotEmpty()) {
+            return targets
+                .filter { it.isTagWritable() }
+                .mapNotNull { resolveWritablePath(it.song) }
+                .distinct()
+        }
+        // Legacy single-source local path
+        return listOfNotNull(resolveWritablePath(song))
     }
 
     private fun writeSongTags(file: File, edit: SongEdit) {
@@ -244,5 +343,14 @@ class MetadataEditService(
 
     companion object {
         private const val TAG = "MetadataEdit"
+
+        /** Convenience for UI: single local offering when multi-source list is not supplied. */
+        fun localOffering(song: Song): SourceOffering =
+            SourceOffering(
+                sourceType = SourceType.LOCAL,
+                sourceId = null,
+                sourceName = "Local files",
+                song = song
+            )
     }
 }
