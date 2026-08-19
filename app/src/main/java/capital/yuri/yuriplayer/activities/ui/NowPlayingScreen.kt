@@ -20,12 +20,13 @@ import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.Radio
 import androidx.compose.material.icons.filled.Repeat
 import androidx.compose.material.icons.filled.RepeatOne
+import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Shuffle
 import androidx.compose.material.icons.filled.SkipNext
 import androidx.compose.material.icons.filled.SkipPrevious
-import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -67,6 +68,35 @@ import java.util.concurrent.TimeUnit
 import kotlin.math.abs
 
 private const val PREV_RESTART_MS = 3_000L
+
+/** Radio + small settings cog badge (no single Material glyph for both). */
+@Composable
+private fun RadioSettingsIcon(
+    tint: androidx.compose.ui.graphics.Color,
+    modifier: Modifier = Modifier
+) {
+    Box(modifier = modifier.size(28.dp), contentAlignment = Alignment.Center) {
+        Icon(
+            Icons.Default.Radio,
+            contentDescription = null,
+            tint = tint,
+            modifier = Modifier.size(26.dp)
+        )
+        Icon(
+            Icons.Default.Settings,
+            contentDescription = null,
+            tint = tint,
+            modifier = Modifier
+                .align(Alignment.BottomEnd)
+                .size(14.dp)
+                .background(
+                    color = MaterialTheme.colorScheme.background.copy(alpha = 0.92f),
+                    shape = MaterialTheme.shapes.extraSmall
+                )
+                .padding(1.dp)
+        )
+    }
+}
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -297,12 +327,19 @@ fun NowPlayingScreen(
                             )
                         }
                 ) {
-                    Box(
+                    // Top bar: collapse left, radio settings top-right when radio
+                    Row(
                         modifier = Modifier.fillMaxWidth(),
-                        contentAlignment = Alignment.Center
+                        verticalAlignment = Alignment.CenterVertically
                     ) {
                         IconButton(onClick = onCollapse) {
                             Icon(Icons.Default.ExpandMore, "Close", tint = scheme.onBackground)
+                        }
+                        Spacer(modifier = Modifier.weight(1f))
+                        if (isRadio) {
+                            IconButton(onClick = { showRadioSettings = true }) {
+                                RadioSettingsIcon(tint = scheme.primary)
+                            }
                         }
                     }
 
@@ -483,16 +520,6 @@ fun NowPlayingScreen(
                             )
                         }
 
-                        if (isRadio) {
-                            IconButton(onClick = { showRadioSettings = true }) {
-                                Icon(
-                                    Icons.Default.Tune,
-                                    contentDescription = "Radio settings",
-                                    tint = scheme.primary
-                                )
-                            }
-                        }
-
                         Text(
                             buildString {
                                 append(repeatLabel(snapshot.repeatMode))
@@ -552,6 +579,13 @@ fun NowPlayingScreen(
                         onClick = {
                             showSongMenu = false
                             onAddToQueue(song)
+                        }
+                    )
+                    MediaSheetItem(
+                        label = "Sources",
+                        onClick = {
+                            showSongMenu = false
+                            // long-press path uses SongContextSheet; keep NP simple
                         }
                     )
                     MediaSheetBottomPad()
