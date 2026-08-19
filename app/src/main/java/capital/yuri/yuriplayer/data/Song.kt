@@ -143,6 +143,9 @@ fun artistKey(name: String?): String? {
  * Titles match with or without `(feat. …)` / `ft.` / `featuring …`.
  * Track artist may differ so long as album + album artist line up — common when
  * one source tags "Artist" and another tags featured credits differently.
+ *
+ * For **display**, prefer the richest tags across offerings (title with feat.
+ * beats a bare title) while playback URI still follows source preference.
  */
 object TrackIdentity {
     private val FEAT_IN_PARENS = Regex(
@@ -196,8 +199,6 @@ object TrackIdentity {
     fun albumArtistsMatch(a: String?, b: String?): Boolean {
         val na = normalizeToken(a)
         val nb = normalizeToken(b)
-        // Empty on both sides counts as match only when titles already matched
-        // and we have an album anchor; callers decide strictness.
         return na == nb
     }
 
@@ -221,5 +222,76 @@ object TrackIdentity {
             if (ta.isNotEmpty() && tb.isNotEmpty() && ta != tb) return false
         }
         return true
+    }
+
+    /** Prefer titles that include feat./ft./featuring credits, then longer text. */
+    fun titleDetailScore(title: String?): Int {
+        if (title.isNullOrBlank()) return -1
+        val t = title.trim()
+        var score = t.length
+        if (FEAT_IN_PARENS.containsMatchIn(t) || FEAT_SUFFIX.containsMatchIn(t)) {
+            score += 100
+        } else {
+            val lower = t.lowercase()
+            if (lower.contains("feat.") || lower.contains("ft.") || lower.contains("featuring")) {
+                score += 80
+            }
+        }
+        return score
+    }
+
+    /** Prefer artist lines with more credit detail (feat, commas, &). */
+    fun artistDetailScore(artist: String?): Int {
+        if (artist.isNullOrBlank()) return -1
+        val a = artist.trim()
+        var score = a.length
+        val lower = a.lowercase()
+        if (lower.contains("feat") || lower.contains("ft.")) score += 40
+        if (a.contains(',') || a.contains('&') || a.contains(';')) score += 20
+        return score
+    }
+
+    /**
+     * Keep [playback]'s URI/path (source preference) but upgrade display tags from
+     * the richest candidate — e.g. "Song (feat. X)" over bare "Song".
+     */
+    fun withRichestDisplay(playback: Song, candidates: List<Song>): Song {
+        if (candidates.isEmpty()) return playback
+        val all = candidates + playback
+        val bestTitle = all.mapNotNull { it.title?.takeIf { t -> t.isNotBlank() } }
+            .maxByOrNull { titleDetailScore(it) }
+        val bestArtist = all.mapNotNull { it.artist?.takeIf { t -> t.isNotBlank() } }
+            .maxByOrNull { artistDetailScore(it) }
+        val bestAlbumArtist = all.mapNotNull { it.albumArtist?.takeIf { t -> t.isNotBlank() } }
+            .maxByOrNull { artistDetailScore(it) }
+        val bestAlbum = all.mapNotNull { it.album?.takeIf { t -> t.isNotBlank() } }
+            .maxByOrNull { it.length }
+        val anyExplicit = all.any { it.explicit || it.isExplicit }
+
+        return playback.copy(
+            title = when {
+                bestTitle != null && titleDetailScore(bestTitle) > titleDetailScore(playback.title) ->
+                    bestTitle
+                else -> playback.title
+            },
+            artist = when {
+                bestArtist != null && artistDetailScore(bestArtist) > artistDetailScore(playback.artist) ->
+                    bestArtist
+                else -> playback.artist
+            },
+            albumArtist = when {
+                bestAlbumArtist != null &&
+                    artistDetailScore(bestAlbumArtist) > artistDetailScore(playback.albumArtist) ->
+                    bestAlbumArtist
+                else -> playback.albumArtist
+            },
+            album = when {
+                bestAlbum != null &&
+                    (playback.album.isNullOrBlank() || bestAlbum.length > playback.album.length) ->
+                    bestAlbum
+                else -> playback.album
+            },
+            explicit = playback.explicit || anyExplicit
+        )
     }
 }
