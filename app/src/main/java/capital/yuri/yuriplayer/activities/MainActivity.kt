@@ -53,6 +53,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -88,6 +89,7 @@ import capital.yuri.yuriplayer.activities.ui.theme.YuriPlayerTheme
 import capital.yuri.yuriplayer.data.ActivityTitleFormat
 import capital.yuri.yuriplayer.data.AlbumItem
 import capital.yuri.yuriplayer.data.ArtistItem
+import capital.yuri.yuriplayer.data.CatalogRepository
 import capital.yuri.yuriplayer.data.LibraryIndex
 import capital.yuri.yuriplayer.data.LibrarySettings
 import capital.yuri.yuriplayer.data.MetadataEnrichmentService
@@ -105,8 +107,11 @@ import capital.yuri.yuriplayer.player.ColdSourceType
 import capital.yuri.yuriplayer.player.PlayerController
 import capital.yuri.yuriplayer.player.QueueSnapshot
 import capital.yuri.yuriplayer.player.RepeatMode
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import org.koin.android.ext.android.inject
 import org.koin.compose.koinInject
 
@@ -314,6 +319,8 @@ fun YuriApp(
     val enrichment: MetadataEnrichmentService = koinInject()
     val playlistRepo: PlaylistRepository = koinInject()
     val pinStore: MyStuffPinStore = koinInject()
+    val catalog: CatalogRepository = koinInject()
+    val scope = rememberCoroutineScope()
     val baseScheme = MaterialTheme.colorScheme
 
     val statusBarStack = remember(baseScheme.background) {
@@ -450,7 +457,8 @@ fun YuriApp(
         )
     }
 
-    fun resolveArtist(name: String): ArtistItem {
+    /** Local-only fallback when catalog has no row yet. */
+    fun resolveArtistLocal(name: String): ArtistItem {
         val key = artistKey(name)
         val found = library.artists(taggedOnly = false).firstOrNull {
             artistKey(it.name) == key
@@ -469,30 +477,39 @@ fun YuriApp(
         )
     }
 
+    fun openAlbumResolved(seed: AlbumItem) {
+        playerExpanded = false
+        pushDetail(DetailRoute.Album(seed))
+    }
+
+    fun openArtistResolved(seed: ArtistItem) {
+        playerExpanded = false
+        pushDetail(DetailRoute.Artist(seed))
+    }
+
     fun openAlbumForSong(song: Song) {
         val key = albumKey(song.album, song.effectiveAlbumArtist)
-        val found = library.albums(taggedOnly = false).firstOrNull {
-            albumKey(it.name, it.artist) == key
-        } ?: library.albums(taggedOnly = false).firstOrNull {
-            it.name.equals(song.album, ignoreCase = true)
-        }
-        if (found != null) {
-            playerExpanded = false
-            pushDetail(DetailRoute.Album(found))
-        } else if (song.hasAlbum) {
-            playerExpanded = false
-            pushDetail(
-                DetailRoute.Album(
-                    AlbumItem(
-                        name = song.album,
-                        artist = song.effectiveAlbumArtist,
-                        trackCount = 1,
-                        songs = listOf(song)
-                    )
+        scope.launch {
+            val fromCatalog = withContext(Dispatchers.IO) { catalog.albumItemForKey(key) }
+            val fromLocal = library.albums(taggedOnly = false).firstOrNull {
+                albumKey(it.name, it.artist) == key
+            } ?: library.albums(taggedOnly = false).firstOrNull {
+                it.name.equals(song.album, ignoreCase = true)
+            }
+            val album = when {
+                fromCatalog != null && fromCatalog.songs.isNotEmpty() -> fromCatalog
+                fromLocal != null && fromLocal.songs.isNotEmpty() -> fromLocal
+                fromCatalog != null -> fromCatalog
+                song.hasAlbum -> AlbumItem(
+                    name = song.album,
+                    artist = song.effectiveAlbumArtist,
+                    trackCount = 1,
+                    songs = listOf(song)
                 )
-            )
-        } else {
-            Toast.makeText(context, "Album not found in library", Toast.LENGTH_SHORT).show()
+                else -> null
+            }
+            if (album != null) openAlbumResolved(album)
+            else Toast.makeText(context, "Album not found in library", Toast.LENGTH_SHORT).show()
         }
     }
 
@@ -502,8 +519,11 @@ fun YuriApp(
             Toast.makeText(context, "No artist tag", Toast.LENGTH_SHORT).show()
             return
         }
-        playerExpanded = false
-        pushDetail(DetailRoute.Artist(resolveArtist(name)))
+        val key = artistKey(name) ?: name.lowercase()
+        scope.launch {
+            val fromCatalog = withContext(Dispatchers.IO) { catalog.artistItemForKey(key) }
+            openArtistResolved(fromCatalog ?: resolveArtistLocal(name))
+        }
     }
 
     fun openArtistByName(name: String) {
@@ -511,8 +531,11 @@ fun YuriApp(
             Toast.makeText(context, "No artist tag", Toast.LENGTH_SHORT).show()
             return
         }
-        playerExpanded = false
-        pushDetail(DetailRoute.Artist(resolveArtist(name)))
+        val key = artistKey(name) ?: name.lowercase()
+        scope.launch {
+            val fromCatalog = withContext(Dispatchers.IO) { catalog.artistItemForKey(key) }
+            openArtistResolved(fromCatalog ?: resolveArtistLocal(name))
+        }
     }
 
     CompositionLocalProvider(
@@ -522,14 +545,10 @@ fun YuriApp(
             openArtistByName = { openArtistByName(it) }
         ),
         LocalAlbumNav provides AlbumNavActions(
-            openAlbum = {
-                playerExpanded = false
-                pushDetail(DetailRoute.Album(it))
-            },
+            openAlbum = { openAlbumResolved(it) },
             openArtist = { album ->
                 val name = album.artist ?: return@AlbumNavActions
-                playerExpanded = false
-                pushDetail(DetailRoute.Artist(resolveArtist(name)))
+                openArtistByName(name)
             },
             startRadio = {
                 player.startAlbumRadio(it)
@@ -556,10 +575,7 @@ fun YuriApp(
             }
         ),
         LocalArtistNav provides ArtistNavActions(
-            openArtist = {
-                playerExpanded = false
-                pushDetail(DetailRoute.Artist(it))
-            },
+            openArtist = { openArtistResolved(it) },
             openArtistByName = { openArtistByName(it) },
             startRadio = { name ->
                 player.startArtistRadio(name)
@@ -672,11 +688,25 @@ fun YuriApp(
                     when (val d = detail) {
                         is DetailRoute.Album -> {
                             val key = albumKey(d.album.name, d.album.artist)
-                            val liveAlbum = library.albums(taggedOnly = false).firstOrNull {
-                                albumKey(it.name, it.artist) == key
-                            } ?: d.album
-                            LaunchedEffect(liveAlbum.songs.size, key) {
-                                player.updateColdFromSource(liveAlbum.songs, key)
+                            var liveAlbum by remember(key) { mutableStateOf(d.album) }
+                            LaunchedEffect(key) {
+                                val fromCatalog = withContext(Dispatchers.IO) {
+                                    catalog.albumItemForKey(key)
+                                }
+                                val fromLocal = library.albums(taggedOnly = false).firstOrNull {
+                                    albumKey(it.name, it.artist) == key
+                                }
+                                liveAlbum = when {
+                                    fromCatalog != null && fromCatalog.songs.size >=
+                                        (fromLocal?.songs?.size ?: 0) &&
+                                        fromCatalog.songs.isNotEmpty() -> fromCatalog
+                                    fromLocal != null && fromLocal.songs.isNotEmpty() -> fromLocal
+                                    fromCatalog != null -> fromCatalog
+                                    else -> d.album
+                                }
+                                if (liveAlbum.songs.isNotEmpty()) {
+                                    player.updateColdFromSource(liveAlbum.songs, key)
+                                }
                                 if (settings.isNetworkMetadataEnabled()) {
                                     enrichment.enrichAlbumAsync(liveAlbum)
                                 }
@@ -694,7 +724,7 @@ fun YuriApp(
                                 onFavorite = {},
                                 onOpenArtist = {
                                     val name = liveAlbum.artist ?: return@AlbumDetailScreen
-                                    pushDetail(DetailRoute.Artist(resolveArtist(name)))
+                                    openArtistByName(name)
                                 },
                                 onEditAlbum = { pushDetail(DetailRoute.EditAlbum(liveAlbum)) },
                                 onEditSong = { pushDetail(DetailRoute.EditSong(it)) },
@@ -704,32 +734,49 @@ fun YuriApp(
                             )
                         }
                         is DetailRoute.Artist -> {
-                            val albums = library.albums(taggedOnly = false).filter {
-                                it.artist.equals(d.artist.name, ignoreCase = true)
-                            }
-                            LaunchedEffect(d.artist.name, albums.size) {
+                            val aKey = artistKey(d.artist.name) ?: d.artist.displayName.lowercase()
+                            var liveArtist by remember(aKey) { mutableStateOf(d.artist) }
+                            var albums by remember(aKey) { mutableStateOf<List<AlbumItem>>(emptyList()) }
+                            LaunchedEffect(aKey) {
+                                val fromCatalog = withContext(Dispatchers.IO) {
+                                    catalog.artistItemForKey(aKey)
+                                }
+                                val catalogAlbums = withContext(Dispatchers.IO) {
+                                    catalog.albumItemsForArtist(aKey)
+                                }
+                                val localAlbums = library.albums(taggedOnly = false).filter {
+                                    it.artist.equals(d.artist.name, ignoreCase = true)
+                                }
+                                liveArtist = fromCatalog ?: d.artist
+                                albums = when {
+                                    catalogAlbums.isNotEmpty() -> catalogAlbums
+                                    localAlbums.isNotEmpty() -> localAlbums
+                                    else -> emptyList()
+                                }
                                 if (settings.isNetworkMetadataEnabled()) {
                                     albums.forEach { enrichment.enrichAlbumAsync(it) }
                                 }
                             }
                             ArtistDetailScreen(
-                                artist = d.artist,
+                                artist = liveArtist,
                                 albums = albums,
                                 onBack = { popDetail() },
-                                onOpenAlbum = { pushDetail(DetailRoute.Album(it)) },
+                                onOpenAlbum = { openAlbumResolved(it) },
                                 onPlaySongs = { songs, i ->
                                     player.setRepeatMode(RepeatMode.COLD)
                                     player.playSource(
                                         songs, i,
                                         ColdSource(
                                             ColdSourceType.ARTIST,
-                                            d.artist.name ?: "",
-                                            d.artist.displayName
+                                            liveArtist.name ?: "",
+                                            liveArtist.displayName
                                         )
                                     )
                                 },
                                 onStartRadio = {
-                                    player.startArtistRadio(d.artist.name ?: d.artist.displayName)
+                                    player.startArtistRadio(
+                                        liveArtist.name ?: liveArtist.displayName
+                                    )
                                 },
                                 onAddToQueue = { player.addToHotQueue(it) }
                             )
@@ -794,8 +841,8 @@ fun YuriApp(
                                 isPlaybackActive = playing,
                                 onPlay = { songs, index -> player.playSource(songs, index) },
                                 onAddToQueue = { player.addToHotQueue(it) },
-                                onOpenAlbum = { pushDetail(DetailRoute.Album(it)) },
-                                onOpenArtist = { pushDetail(DetailRoute.Artist(it)) },
+                                onOpenAlbum = { openAlbumResolved(it) },
+                                onOpenArtist = { openArtistResolved(it) },
                                 onOpenPlaylist = { pl: Playlist ->
                                     pushDetail(DetailRoute.Playlist(pl.id))
                                 }
@@ -805,14 +852,8 @@ fun YuriApp(
                                 isPlaybackActive = playing,
                                 onPlay = { songs, index -> player.playSource(songs, index) },
                                 onAddToQueue = { player.addToHotQueue(it) },
-                                onOpenAlbum = { album ->
-                                    playerExpanded = false
-                                    pushDetail(DetailRoute.Album(album))
-                                },
-                                onOpenArtist = { artist ->
-                                    playerExpanded = false
-                                    pushDetail(DetailRoute.Artist(artist))
-                                }
+                                onOpenAlbum = { album -> openAlbumResolved(album) },
+                                onOpenArtist = { artist -> openArtistResolved(artist) }
                             )
                         }
                     }
