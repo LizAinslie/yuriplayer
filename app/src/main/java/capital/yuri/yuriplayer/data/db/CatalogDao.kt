@@ -99,6 +99,16 @@ interface CatalogDao {
     suspend fun getTracksForAlbum(albumKey: String): List<CatalogTrackEntity>
 
     /**
+     * All rows whose album tag equals [album] (case-insensitive), any source / key.
+     * Needed because local vs JF often land under different albumKey strings.
+     */
+    @Query(
+        "SELECT * FROM catalog_tracks WHERE album = :album COLLATE NOCASE " +
+            "ORDER BY discNumber, trackNumber, title LIMIT :limit"
+    )
+    suspend fun getTracksByAlbumName(album: String, limit: Int = 500): List<CatalogTrackEntity>
+
+    /**
      * Single seed track for list / hero cover art.
      * Prefer LOCAL (embedded tags / folder art), then any row that already has art.
      */
