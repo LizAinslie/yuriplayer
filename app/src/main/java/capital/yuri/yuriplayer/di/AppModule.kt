@@ -137,7 +137,6 @@ val appModule = module {
         )
     }
 
-    // dao, catalog (not LibraryIndex), images — playlist resolve is SQL-keyed
     single { PlaylistRepository(get(), get(), get()) }
     single { MusicBrainzClient(get<HttpClient>()) }
     single { BandsintownClient(get<HttpClient>()) }
@@ -182,7 +181,7 @@ val appModule = module {
         )
     }
 
-    single { MetadataEditService(androidContext(), get()) }
+    single { MetadataEditService(androidContext(), get(), get()) }
 
     single { QueueManager() }
 
