@@ -1,0 +1,243 @@
+package capital.yuri.yuriplayer.player.engine
+
+import android.content.Context
+import android.net.Uri
+import android.os.Handler
+import android.os.Looper
+import android.util.Log
+import androidx.annotation.OptIn
+import androidx.media3.common.AudioAttributes
+import androidx.media3.common.C
+import androidx.media3.common.MediaItem
+import androidx.media3.common.PlaybackException
+import androidx.media3.common.Player
+import androidx.media3.common.util.UnstableApi
+import androidx.media3.datasource.DefaultHttpDataSource
+import androidx.media3.exoplayer.DefaultLoadControl
+import androidx.media3.exoplayer.DefaultRenderersFactory
+import androidx.media3.exoplayer.ExoPlayer
+import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
+
+/**
+ * Android [PlaybackEngine] backed by Media3 ExoPlayer.
+ *
+ * Supports local files and HTTP(S) streams (Jellyfin / Subsonic). Optional
+ * per-item headers are applied via a shared [DefaultHttpDataSource.Factory]
+ * when every item in the window shares the same header set (typical for one
+ * remote library session).
+ */
+@OptIn(UnstableApi::class)
+class Media3PlaybackEngine(
+    context: Context
+) : PlaybackEngine {
+
+    private val appContext = context.applicationContext
+    private val mainHandler = Handler(Looper.getMainLooper())
+    private val listeners = linkedSetOf<PlaybackEngine.Listener>()
+
+    private val httpFactory = DefaultHttpDataSource.Factory()
+        .setAllowCrossProtocolRedirects(true)
+        .setConnectTimeoutMs(15_000)
+        .setReadTimeoutMs(30_000)
+        .setUserAgent("YuriPlayer/0.1 (Media3)")
+
+    private val mediaSourceFactory = DefaultMediaSourceFactory(appContext)
+        .setDataSourceFactory(httpFactory)
+
+    private val audioAttributes = AudioAttributes.Builder()
+        .setUsage(C.USAGE_MEDIA)
+        .setContentType(C.AUDIO_CONTENT_TYPE_MUSIC)
+        .build()
+
+    private val loadControl = DefaultLoadControl.Builder()
+        .setBufferDurationsMs(20_000, 60_000, 1_000, 2_000)
+        .setPrioritizeTimeOverSizeThresholds(true)
+        .build()
+
+    private val renderersFactory = DefaultRenderersFactory(appContext)
+        .setEnableDecoderFallback(true)
+        .setExtensionRendererMode(DefaultRenderersFactory.EXTENSION_RENDERER_MODE_OFF)
+
+    private val player: ExoPlayer = ExoPlayer.Builder(appContext, renderersFactory)
+        .setMediaSourceFactory(mediaSourceFactory)
+        .setAudioAttributes(audioAttributes, true)
+        .setHandleAudioBecomingNoisy(true)
+        // NETWORK so remote streams keep the radio up
+        .setWakeMode(C.WAKE_MODE_NETWORK)
+        .setLoadControl(loadControl)
+        .setPauseAtEndOfMediaItems(false)
+        .build()
+        .also {
+            it.repeatMode = Player.REPEAT_MODE_OFF
+            it.addListener(playerListener)
+        }
+
+    /** Exposed for MediaSession on Android. */
+    fun exoPlayer(): ExoPlayer = player
+
+    private val _isPlaying = MutableStateFlow(false)
+    override val isPlaying: StateFlow<Boolean> = _isPlaying.asStateFlow()
+
+    private val _currentUri = MutableStateFlow<Uri?>(null)
+    override val currentUri: StateFlow<Uri?> = _currentUri.asStateFlow()
+
+    override fun setWindow(items: List<PlaybackMedia>, startIndex: Int, startPositionMs: Long) {
+        if (items.isEmpty()) {
+            player.stop()
+            player.clearMediaItems()
+            _currentUri.value = null
+            return
+        }
+        // Apply headers from the first network item (session-scoped token)
+        val headers = items.firstOrNull { it.headers.isNotEmpty() }?.headers.orEmpty()
+        if (headers.isNotEmpty()) {
+            httpFactory.setDefaultRequestProperties(headers)
+        }
+        val mediaItems = items.map { it.toMediaItem() }
+        val idx = startIndex.coerceIn(0, mediaItems.lastIndex)
+        player.setMediaItems(mediaItems, idx, startPositionMs.coerceAtLeast(0L))
+        player.prepare()
+        _currentUri.value = items.getOrNull(idx)?.uri
+        Log.i(TAG, "setWindow size=${items.size} start=$idx network=${items[idx].isNetwork}")
+    }
+
+    override fun play() {
+        player.playWhenReady = true
+        player.play()
+    }
+
+    override fun pause() {
+        player.pause()
+    }
+
+    override fun stop() {
+        player.stop()
+    }
+
+    override fun seekTo(index: Int, positionMs: Long) {
+        if (player.mediaItemCount <= 0) return
+        val idx = index.coerceIn(0, player.mediaItemCount - 1)
+        player.seekTo(idx, positionMs.coerceAtLeast(0L))
+    }
+
+    override fun seekToNext() {
+        if (player.hasNextMediaItem()) player.seekToNextMediaItem()
+    }
+
+    override fun prepare() {
+        player.prepare()
+    }
+
+    override fun getPositionMs(): Long = player.currentPosition.coerceAtLeast(0L)
+
+    override fun getDurationMs(): Long {
+        val d = player.duration
+        return if (d > 0L && d != C.TIME_UNSET) d else 0L
+    }
+
+    override fun getCurrentIndex(): Int = player.currentMediaItemIndex.coerceAtLeast(0)
+
+    override fun getMediaCount(): Int = player.mediaItemCount
+
+    override fun getUriAt(index: Int): Uri? {
+        if (index < 0 || index >= player.mediaItemCount) return null
+        return player.getMediaItemAt(index).localConfiguration?.uri
+    }
+
+    override fun setPlayWhenReady(value: Boolean) {
+        player.playWhenReady = value
+    }
+
+    override fun getPlayWhenReady(): Boolean = player.playWhenReady
+
+    override fun release() {
+        listeners.clear()
+        player.release()
+    }
+
+    override fun addListener(listener: PlaybackEngine.Listener) {
+        listeners += listener
+    }
+
+    override fun removeListener(listener: PlaybackEngine.Listener) {
+        listeners -= listener
+    }
+
+    private fun PlaybackMedia.toMediaItem(): MediaItem =
+        MediaItem.Builder()
+            .setUri(uri)
+            .setMediaId(mediaId)
+            .setMediaMetadata(
+                androidx.media3.common.MediaMetadata.Builder()
+                    .setTitle(title)
+                    .setArtist(artist)
+                    .setAlbumTitle(album)
+                    .setAlbumArtist(albumArtist)
+                    .setArtworkUri(artworkUri)
+                    .build()
+            )
+            .build()
+
+    private val playerListener = object : Player.Listener {
+        override fun onIsPlayingChanged(isPlaying: Boolean) {
+            _isPlaying.value = isPlaying
+            dispatch { onIsPlayingChanged(isPlaying) }
+        }
+
+        override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) {
+            _currentUri.value = mediaItem?.localConfiguration?.uri
+            val r = when (reason) {
+                Player.MEDIA_ITEM_TRANSITION_REASON_AUTO -> PlaybackEngine.TransitionReason.AUTO
+                Player.MEDIA_ITEM_TRANSITION_REASON_SEEK -> PlaybackEngine.TransitionReason.SEEK
+                Player.MEDIA_ITEM_TRANSITION_REASON_PLAYLIST_CHANGED -> PlaybackEngine.TransitionReason.PLAYLIST
+                Player.MEDIA_ITEM_TRANSITION_REASON_REPEAT -> PlaybackEngine.TransitionReason.REPEAT
+                else -> PlaybackEngine.TransitionReason.OTHER
+            }
+            dispatch { onMediaTransition(r) }
+        }
+
+        override fun onPlaybackStateChanged(playbackState: Int) {
+            val state = when (playbackState) {
+                Player.STATE_IDLE -> PlaybackEngine.PlaybackState.IDLE
+                Player.STATE_BUFFERING -> PlaybackEngine.PlaybackState.BUFFERING
+                Player.STATE_READY -> PlaybackEngine.PlaybackState.READY
+                Player.STATE_ENDED -> PlaybackEngine.PlaybackState.ENDED
+                else -> PlaybackEngine.PlaybackState.IDLE
+            }
+            dispatch { onPlaybackStateChanged(state) }
+            if (playbackState == Player.STATE_ENDED) dispatch { onEnded() }
+        }
+
+        override fun onPlayerError(error: PlaybackException) {
+            Log.e(TAG, "player error code=${error.errorCode} ${error.message}", error)
+            val recoverable =
+                error.errorCode == PlaybackException.ERROR_CODE_IO_NETWORK_CONNECTION_FAILED ||
+                    error.errorCode == PlaybackException.ERROR_CODE_IO_NETWORK_CONNECTION_TIMEOUT ||
+                    error.errorCode == PlaybackException.ERROR_CODE_IO_BAD_HTTP_STATUS ||
+                    error.errorCode == PlaybackException.ERROR_CODE_AUDIO_TRACK_INIT_FAILED ||
+                    error.errorCode == PlaybackException.ERROR_CODE_AUDIO_TRACK_WRITE_FAILED
+            dispatch { onError(error.message ?: "Playback error", recoverable) }
+        }
+    }
+
+    private inline fun dispatch(block: PlaybackEngine.Listener.() -> Unit) {
+        val copy = listeners.toList()
+        mainHandler.post {
+            copy.forEach { runCatching { it.block() } }
+        }
+    }
+
+    companion object {
+        private const val TAG = "Media3Engine"
+
+        val DESCRIPTOR = PlaybackEngineDescriptor(
+            id = "media3",
+            displayName = "Media3 (ExoPlayer)",
+            description = "Android Media3 backend — local files and HTTP streams",
+            platforms = setOf("android")
+        )
+    }
+}
