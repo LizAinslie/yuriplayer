@@ -18,6 +18,11 @@ import kotlin.time.Duration.Companion.milliseconds
 /**
  * Discogs public API — artist search + /artists/{id} images.
  * Search thumbs are often empty; detail endpoint has the real image list.
+ *
+ * **Later:** fold this into a dedicated Ktor `DiscogsClient` (search, artist,
+ * release, images) instead of depending on the aging Retrofit
+ * `saschpe.android:discogs` library. Auth (key/secret or token) can live there
+ * when we need higher rate limits.
  */
 class DiscogsArtistImageSource(
     private val http: HttpClient
@@ -78,7 +83,6 @@ class DiscogsArtistImageSource(
                 for (i in 0 until images.length()) {
                     val img = images.optJSONObject(i) ?: continue
                     val type = img.optString("type")
-                    // Prefer full-size uri over uri150
                     val url = img.optString("uri").takeIf { it.startsWith("http") }
                         ?: img.optString("resource_url").takeIf { it.startsWith("http") }
                         ?: continue
