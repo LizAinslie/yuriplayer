@@ -208,7 +208,7 @@ private fun songArtistNames(song: Song): List<String> {
     return listOfNotNull(single)
 }
 
-/** Shared song sheet — defaults Go to album / artist from [LocalSongNav]. */
+/** Shared song sheet — Sources is always available; multi badge is separate. */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun SongContextSheet(
@@ -222,7 +222,6 @@ fun SongContextSheet(
     onStartRadio: (() -> Unit)? = null,
     onAddToPlaylist: (() -> Unit)? = null,
     onAddToMyStuff: (() -> Unit)? = null,
-    /** When multiple sources exist, show a Sources option that opens a priority picker. */
     sourceOfferings: List<SourceOffering>? = null,
     onPreferSource: ((SourceOffering) -> Unit)? = null
 ) {
@@ -239,11 +238,9 @@ fun SongContextSheet(
         pinStore.contains(StuffPinKind.SONG, song.songKey)
     }
 
-    val multiSources = sourceOfferings
-        ?.map { "${it.sourceType.name}:${it.sourceId}" }
-        ?.toSet()
-        ?.size
-        ?.let { it > 1 } == true
+    // Always resolve so album/playlist/discography long-press works without parents.
+    val offerings = rememberSongOfferings(song, sourceOfferings)
+    val preferHandler = onPreferSource ?: rememberPreferSourceHandler(song)
 
     val goToAlbum = onGoToAlbum ?: { songNav.openAlbumForSong(song) }
     val goToArtist = onGoToArtist ?: { name -> songNav.openArtistByName(name) }
@@ -292,17 +289,17 @@ fun SongContextSheet(
         return
     }
 
-    if (showSourcesPicker && sourceOfferings != null) {
+    if (showSourcesPicker) {
         SourcesPickerSheet(
             songTitle = song.displayTitle,
-            offerings = sourceOfferings,
-            preferred = sourceOfferings.firstOrNull(),
+            offerings = offerings,
+            preferred = offerings.firstOrNull(),
             onDismiss = {
                 showSourcesPicker = false
                 onDismiss()
             },
             onPick = { off ->
-                onPreferSource?.invoke(off)
+                preferHandler(off)
                 showSourcesPicker = false
                 onDismiss()
             }
@@ -369,11 +366,9 @@ fun SongContextSheet(
                 }
             }
         }
-        // Sources always available when multi-source — prefer handler optional
-        if (multiSources) {
-            MediaSheetItem("Sources") {
-                showSourcesPicker = true
-            }
+        // Always available — even with a single local/Jellyfin source.
+        MediaSheetItem("Sources") {
+            showSourcesPicker = true
         }
         if (onEditMetadata != null) {
             MediaSheetItem("Edit metadata") {
