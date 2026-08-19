@@ -10,7 +10,6 @@ import capital.yuri.yuriplayer.data.source.SourceOffering
 import capital.yuri.yuriplayer.data.source.SourceResolver
 import capital.yuri.yuriplayer.data.source.SourceType
 import capital.yuri.yuriplayer.data.source.SubsonicClient
-import capital.yuri.yuriplayer.player.engine.isVirtualLibraryPath
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -149,13 +148,10 @@ class ExploreSearchService(
         offs.distinctBy { "${it.sourceType.name}:${it.sourceId}" }
 
     private fun collectMatched(needle: String): List<SourceOffering> {
-        // Only treat real local filesystem tracks as LOCAL — virtual remote keys
-        // that landed in LibraryIndex after reload must not become a second source.
+        // Only real local files count as LOCAL. Catalog rows with jellyfin:/subsonic:
+        // paths must not invent a second "This device" source.
         val local = library.songs.value
-            .filter { song ->
-                !isVirtualLibraryPath(song.path) &&
-                    song.path?.contains("://") != true
-            }
+            .filter { song -> isLocalFilesystemSong(song) }
             .map { song ->
                 SourceOffering(
                     sourceType = SourceType.LOCAL,
@@ -440,6 +436,17 @@ class ExploreSearchService(
             val al = song.album?.trim()?.lowercase().orEmpty()
             return if (t.isNotEmpty() || a.isNotEmpty()) "$t|$a|$al"
             else song.songKey
+        }
+
+        /** Remote catalog keys — not real filesystem paths. */
+        fun isLocalFilesystemSong(song: Song): Boolean {
+            val p = song.path ?: return song.contentUri.scheme == "content" ||
+                song.contentUri.scheme == "file"
+            if (p.startsWith("jellyfin:", ignoreCase = true)) return false
+            if (p.startsWith("subsonic:", ignoreCase = true)) return false
+            if (p.startsWith("navidrome:", ignoreCase = true)) return false
+            if (p.contains("://")) return false
+            return true
         }
     }
 }
