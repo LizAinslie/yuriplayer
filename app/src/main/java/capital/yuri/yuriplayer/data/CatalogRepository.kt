@@ -193,24 +193,57 @@ class CatalogRepository(
             dao.countTracksForSource(sourceType, sourceInstanceId)
         }
 
+    /**
+     * Multi-source offerings for one logical track.
+     * Exact SQL first; if thin, broaden via album search + [TrackIdentity] so
+     * feat. title variants and track-artist drift still group when album +
+     * album artist match. Results ordered local → remote.
+     */
     suspend fun offeringsMatchingSong(song: Song, limit: Int = 12): List<SourceOffering> =
         withContext(Dispatchers.IO) {
             val title = song.title?.trim().orEmpty()
             val artist = (song.effectiveAlbumArtist ?: song.artist)?.trim().orEmpty()
             val album = song.album?.trim().orEmpty()
-            val rows = if (title.isNotEmpty() || artist.isNotEmpty() || album.isNotEmpty()) {
+
+            val exact = if (title.isNotEmpty() || artist.isNotEmpty() || album.isNotEmpty()) {
                 dao.findTracksMatching(title, artist, album, limit)
             } else {
                 emptyList()
             }
-            val fromDb = rows.map { row ->
-                SourceOffering(
-                    sourceType = SourceType.from(row.sourceType),
-                    sourceId = row.sourceInstanceId,
-                    sourceName = friendlySourceName(row.sourceType),
-                    song = row.toSong()
-                )
-            }.distinctBy { "${it.sourceType.name}:${it.sourceId}:${it.song.songKey}" }
+
+            val candidates = LinkedHashMap<String, CatalogTrackEntity>()
+            exact.forEach { candidates[it.songKey] = it }
+
+            // Loose pass: same normalized title + album(+album artist), any track artist
+            if (candidates.size < 2 && (title.isNotEmpty() || album.isNotEmpty())) {
+                val needle = TrackIdentity.normalizeTitle(title).ifEmpty { title }
+                val broaden = if (needle.isNotEmpty()) {
+                    dao.searchTracks(needle.take(48), limit = 48)
+                } else {
+                    emptyList()
+                }
+                for (row in broaden) {
+                    if (candidates.size >= limit) break
+                    val other = row.toSong()
+                    if (TrackIdentity.matches(song, other)) {
+                        candidates.putIfAbsent(row.songKey, row)
+                    }
+                }
+            }
+
+            val fromDb = candidates.values
+                .map { row ->
+                    SourceOffering(
+                        sourceType = SourceType.from(row.sourceType),
+                        sourceId = row.sourceInstanceId,
+                        sourceName = friendlySourceName(row.sourceType),
+                        song = row.toSong()
+                    )
+                }
+                .distinctBy { "${it.sourceType.name}:${it.sourceId}:${it.song.songKey}" }
+                // LOCAL (rank 0) first, then Jellyfin / Subsonic
+                .sortedBy { it.sourceType.rank }
+                .take(limit)
 
             if (fromDb.isNotEmpty()) return@withContext fromDb
 
