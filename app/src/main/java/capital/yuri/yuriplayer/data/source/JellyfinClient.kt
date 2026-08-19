@@ -81,10 +81,6 @@ class JellyfinClient(
         }
     }.onFailure { Log.w(TAG, "authenticate failed: ${it.message}") }
 
-    /**
-     * Lists audio items (up to [limit]) in one shot.
-     * Prefer [listAudioItemsPaged] when the UI should update live during scan.
-     */
     suspend fun listAudioItems(session: Session, limit: Int = 50_000): Result<List<Song>> =
         runCatching {
             val out = mutableListOf<Song>()
@@ -95,12 +91,8 @@ class JellyfinClient(
         }.onFailure { Log.w(TAG, "listAudioItems failed: ${it.message}") }
 
     /**
-     * Page through the user's audio library. [onPage] is invoked after every
-     * successful page so the index can update live (songs, startIndex, totalHint).
-     * Returns total songs delivered.
-     *
-     * Pagination uses the **raw** server item count, not the mapped [Song] count,
-     * so a few unmappable rows never truncate the rest of the library.
+     * Page through the user's audio library. Pagination uses the **raw** server
+     * item count so unmappable rows never truncate the rest of the library.
      */
     suspend fun listAudioItemsPaged(
         session: Session,
@@ -148,7 +140,6 @@ class JellyfinClient(
             // Always advance by what the server returned, not by mapped count
             start += raw.size
 
-            // Last page: fewer raw items than requested
             if (raw.size < take) break
             if (totalHint != null && start >= totalHint) break
         }
@@ -167,25 +158,19 @@ class JellyfinClient(
         val id = id?.toString() ?: return null
         val stream = streamUrl(session, id)
 
-        val hasPrimary = imageTags?.containsKey(ImageType.PRIMARY) == true ||
-            !albumPrimaryImageTag.isNullOrBlank()
         val art = when {
             imageTags?.containsKey(ImageType.PRIMARY) == true ->
                 Uri.parse(primaryImageUrl(session, id))
-            // Fall back to album primary when the track has no embedded image
             albumId != null && !albumPrimaryImageTag.isNullOrBlank() ->
                 Uri.parse(
                     "${session.baseUrl.trimEnd('/')}/Items/$albumId/Images/Primary" +
                         "?maxWidth=512&api_key=${session.accessToken}"
                 )
-            hasPrimary -> Uri.parse(primaryImageUrl(session, id))
             else -> null
         }
 
-        // RunTimeTicks is 100-ns units → ms
         val durationMs = runTimeTicks?.let { it / 10_000L }?.takeIf { it > 0 }
 
-        // Prefer structured artist fields Jellyfin fills from tags / library scan
         val artistFromList = artists?.firstOrNull { it.isNotBlank() }
             ?: artistItems?.mapNotNull { it.name }?.firstOrNull { !it.isNullOrBlank() }
         val albumArtistName = albumArtist?.takeIf { it.isNotBlank() }
@@ -195,21 +180,18 @@ class JellyfinClient(
             ?: path?.substringAfterLast('/')?.substringBeforeLast('.')
         val title = cleanTrackTitle(rawTitle, indexNumber)
 
-        val albumName = album?.takeIf { it.isNotBlank() }
-
         return Song(
             id = id.hashCode().toLong(),
             title = title,
             artist = artistFromList ?: albumArtistName,
             albumArtist = albumArtistName ?: artistFromList,
-            album = albumName,
+            album = album?.takeIf { it.isNotBlank() },
             durationMs = durationMs,
             contentUri = Uri.parse(stream),
             albumArtUri = art,
             trackNumber = indexNumber,
             discNumber = parentIndexNumber,
             year = productionYear,
-            // Stable key for catalog: jellyfin item id (not server filesystem path)
             path = "jellyfin:$id",
             mimeType = null
         )
@@ -220,10 +202,6 @@ class JellyfinClient(
         private const val PREFS = "jellyfin_client"
         private const val KEY_DEVICE_ID = "device_id"
 
-        /**
-         * Fields needed for usable track rows. Album / Artists / AlbumArtist are
-         * basic DTO properties; Path + media/image fields need explicit request.
-         */
         private val AUDIO_FIELDS = listOf(
             ItemFields.PATH,
             ItemFields.MEDIA_SOURCES,
@@ -237,15 +215,12 @@ class JellyfinClient(
 
         /**
          * Strip leading "01 - " / "1. " style prefixes when the server stored the
-         * filename as the title (common for poorly tagged rips).
+         * filename as the title.
          */
         fun cleanTrackTitle(raw: String?, trackNumber: Int?): String? {
             if (raw.isNullOrBlank()) return raw
             val trimmed = raw.trim()
-            // "01 - Title" / "01. Title" / "01 Title"
-            val prefixed = Regex(
-                """^0*(\d{1,3})\s*[\-._)]\s+(.+)$"""
-            ).matchEntire(trimmed)
+            val prefixed = Regex("""^0*(\d{1,3})\s*[\-._)]\s+(.+)$""").matchEntire(trimmed)
             if (prefixed != null) {
                 val num = prefixed.groupValues[1].toIntOrNull()
                 val rest = prefixed.groupValues[2].trim()
@@ -260,13 +235,9 @@ class JellyfinClient(
             val prefs = context.applicationContext.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
             val existing = prefs.getString(KEY_DEVICE_ID, null)
             if (!existing.isNullOrBlank()) return existing
-            val id = UUID.fromString(
-                java.util.UUID.randomUUID().toString()
-            ).toString()
-            // keep UUID format consistent
-            val fresh = java.util.UUID.randomUUID().toString()
-            prefs.edit().putString(KEY_DEVICE_ID, fresh).apply()
-            return fresh
+            val id = UUID.randomUUID().toString()
+            prefs.edit().putString(KEY_DEVICE_ID, id).apply()
+            return id
         }
     }
 }
