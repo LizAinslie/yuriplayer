@@ -81,11 +81,36 @@ class JellyfinClient(
     }.onFailure { Log.w(TAG, "authenticate failed: ${it.message}") }
 
     /**
-     * Lists audio items the user can play (up to [limit]).
+     * Lists audio items (up to [limit]) in one shot.
+     * Prefer [listAudioItemsPaged] when the UI should update live during scan.
      */
     suspend fun listAudioItems(session: Session, limit: Int = 10_000): Result<List<Song>> =
         runCatching {
-            val userId = runCatching { UUID.fromString(session.userId) }.getOrNull()
+            val out = mutableListOf<Song>()
+            listAudioItemsPaged(session, pageSize = 500, maxItems = limit) { page, _, _ ->
+                out += page
+            }.getOrThrow()
+            out
+        }.onFailure { Log.w(TAG, "listAudioItems failed: ${it.message}") }
+
+    /**
+     * Page through the user's audio library. [onPage] is invoked after every
+     * successful page so the index can update live (songs, startIndex, totalHint).
+     * Returns total songs delivered.
+     */
+    suspend fun listAudioItemsPaged(
+        session: Session,
+        pageSize: Int = 200,
+        maxItems: Int = 50_000,
+        onPage: suspend (songs: List<Song>, startIndex: Int, totalHint: Int?) -> Unit
+    ): Result<Int> = runCatching {
+        val userId = runCatching { UUID.fromString(session.userId) }.getOrNull()
+        var start = 0
+        var delivered = 0
+        var totalHint: Int? = null
+
+        while (delivered < maxItems) {
+            val take = minOf(pageSize, maxItems - delivered)
             val result by session.api.itemsApi.getItems(
                 userId = userId,
                 recursive = true,
@@ -97,10 +122,25 @@ class JellyfinClient(
                 ),
                 sortBy = listOf(ItemSortBy.ALBUM, ItemSortBy.INDEX_NUMBER),
                 sortOrder = listOf(SortOrder.ASCENDING),
-                limit = limit
+                startIndex = start,
+                limit = take
             )
-            result.items.orEmpty().mapNotNull { it.toSong(session) }
-        }.onFailure { Log.w(TAG, "listAudioItems failed: ${it.message}") }
+            totalHint = result.totalRecordCount ?: totalHint
+            val page = result.items.orEmpty().mapNotNull { it.toSong(session) }
+            if (page.isEmpty()) break
+
+            onPage(page, start, totalHint)
+            delivered += page.size
+            start += page.size
+
+            // Server returned fewer than requested → last page
+            if (page.size < take) break
+            if (totalHint != null && start >= totalHint) break
+        }
+
+        Log.i(TAG, "listAudioItemsPaged delivered=$delivered totalHint=$totalHint")
+        delivered
+    }.onFailure { Log.w(TAG, "listAudioItemsPaged failed: ${it.message}") }
 
     fun streamUrl(session: Session, itemId: String): String =
         "${session.baseUrl.trimEnd('/')}/Audio/$itemId/stream?static=true&api_key=${session.accessToken}"
