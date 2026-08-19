@@ -37,8 +37,10 @@
       Network
       Justification: optional metadata enrichment (MusicBrainz year, Cover Art
       Archive images) and remote library / scrobbler connections.
+      ACCESS_NETWORK_STATE: decide Wi‑Fi vs metered before large library syncs.
     -->
     <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
 
     <!--
       Foreground playback + library sync
