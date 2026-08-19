@@ -284,6 +284,17 @@ class ExploreSearchService(
         if (force) lastCountPublishAt.set(now)
     }
 
+    /** Always refresh album/artist counts when we have catalog tracks. */
+    private suspend fun rebuildRollupsSafe(reason: String) {
+        progress("Building album / artist index…")
+        runCatching {
+            catalog.rebuildRollups()
+            Log.i(TAG, "rollups rebuilt ($reason)")
+        }.onFailure {
+            Log.w(TAG, "rollups failed ($reason): ${it.message}")
+        }
+    }
+
     private suspend fun runRemoteScan(force: Boolean) {
         if (!mutex.tryLock()) {
             Log.i(TAG, "scan already running — skip")
@@ -410,6 +421,10 @@ class ExploreSearchService(
                 }
                 totalIngested += ingested
                 bumpIndexedCount(totalIngested, force = true)
+                // Refresh rollups after each completed source so counts stay current
+                if (ingested > 0) {
+                    runCatching { catalog.rebuildRollups() }
+                }
             }
 
             refreshCheckpointSnapshot()
@@ -421,6 +436,7 @@ class ExploreSearchService(
                 )
                 val count = catalog.countRemoteTracks()
                 bumpIndexedCount(count, force = true)
+                if (count > 0) rebuildRollupsSafe("network pause")
                 runCatching { library.reloadFromCatalog() }
                 return
             }
@@ -429,6 +445,7 @@ class ExploreSearchService(
                 progress(if (stopAll.get()) "Stopped" else "Paused")
                 val count = catalog.countRemoteTracks()
                 bumpIndexedCount(count, force = true)
+                if (count > 0) rebuildRollupsSafe(if (stopAll.get()) "stop" else "pause")
                 runCatching { library.reloadFromCatalog() }
                 return
             }
@@ -437,13 +454,14 @@ class ExploreSearchService(
                 progress("Index ready")
                 val count = catalog.countRemoteTracks()
                 bumpIndexedCount(count, force = true)
+                // Warm skip path: still ensure album/artist rollups exist
+                if (count > 0) rebuildRollupsSafe("warm skip")
                 cacheAtMs = System.currentTimeMillis()
                 runCatching { library.reloadFromCatalog() }
                 return
             }
 
-            progress("Building album / artist index…")
-            runCatching { catalog.rebuildRollups() }
+            rebuildRollupsSafe("scan complete")
 
             val finalCount = catalog.countRemoteTracks()
             bumpIndexedCount(finalCount, force = true)
