@@ -18,7 +18,12 @@ import java.io.File
 import java.net.URLEncoder
 import kotlin.time.Duration.Companion.milliseconds
 
-/** MusicBrainz + Wikidata helpers via shared Ktor [HttpClient]. */
+/**
+ * MusicBrainz + Cover Art Archive + light Wikidata/Wikipedia helpers via shared Ktor [HttpClient].
+ *
+ * Kept hand-rolled (not eAlvaBrainz): that library last shipped 2022 on Retrofit/Moshi and would
+ * duplicate HTTP stacks. We keep MB's ~1.1s throttle here so auto-enrich stays polite.
+ */
 class MusicBrainzClient(
     private val http: HttpClient
 ) {
@@ -43,7 +48,15 @@ class MusicBrainzClient(
     private val rateLock = Mutex()
     private var lastRequestAt = 0L
 
-    suspend fun searchRelease(artist: String?, album: String?): ReleaseHit? =
+    /**
+     * @param includeTags when true, issues a second MB request for release tags (genres).
+     *   Auto year/cover fill should pass false — halves rate-limited traffic.
+     */
+    suspend fun searchRelease(
+        artist: String?,
+        album: String?,
+        includeTags: Boolean = true
+    ): ReleaseHit? =
         withContext(Dispatchers.IO) {
             if (album.isNullOrBlank()) return@withContext null
             val query = buildString {
@@ -61,7 +74,7 @@ class MusicBrainzClient(
                 "&fmt=json&limit=5"
             val body = getText(url) ?: return@withContext null
             val basic = parseReleaseSearch(body) ?: return@withContext null
-            // Tags on the release for genres
+            if (!includeTags) return@withContext basic
             val detail = getText(
                 "https://musicbrainz.org/ws/2/release/${basic.mbid}?inc=tags&fmt=json"
             )
@@ -384,6 +397,8 @@ class MusicBrainzClient(
     }
 
     private suspend fun downloadToFile(url: String, dest: File): Boolean = rateLock.withLock {
+        // CAA is separate from MB and does not need the same strict throttle,
+        // but sharing the lock keeps total outbound polite under auto-enrich.
         throttle()
         try {
             http.prepareGet(url).execute { response ->
@@ -418,6 +433,7 @@ class MusicBrainzClient(
 
     companion object {
         private const val TAG = "MusicBrainz"
+        /** Anonymous MB guideline ≈ 1 req/s. */
         private const val MIN_INTERVAL_MS = 1_100L
     }
 }
