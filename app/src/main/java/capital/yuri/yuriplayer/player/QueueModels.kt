@@ -71,8 +71,13 @@ data class QueueSnapshot(
     val flatQueue: List<Song>
         get() = hotQueue + coldQueue
 
+    /**
+     * True when a radio session is active **or** the cold source is typed RADIO.
+     * Label text alone is not enough — some stations set coldSource without
+     * keeping [radioSession].active, which hid the tune button.
+     */
     val isRadio: Boolean
-        get() = radioSession?.active == true
+        get() = radioSession?.active == true || coldSource?.type == ColdSourceType.RADIO
 
     fun isPlayingFromAlbum(albumKey: String): Boolean =
         coldSource?.matches(ColdSourceType.ALBUM, albumKey) == true ||
