@@ -4,6 +4,7 @@ import android.net.Uri
 import capital.yuri.yuriplayer.data.json.UriAsStringSerializer
 import kotlinx.serialization.Serializable
 import java.io.File
+import java.text.Normalizer
 
 /**
  * All tag fields are nullable — missing tags stay null rather than "Unknown …".
@@ -52,7 +53,6 @@ data class Song(
     val displayAlbumArtist: String
         get() = effectiveAlbumArtist ?: "Unknown Artist"
 
-    /** Parsed genre list from semicolon / slash / comma separated tag. */
     val genres: List<String>
         get() = genre.orEmpty()
             .split(';', '/', ',', '|')
@@ -78,7 +78,6 @@ data class Song(
     val hasArtist: Boolean get() = artist.isMeaningfulTag() || albumArtist.isMeaningfulTag()
     val hasTitle: Boolean get() = title.isMeaningfulTag()
 
-    /** Spotify-style explicit: flag or common title/genre markers. */
     val isExplicit: Boolean
         get() {
             if (explicit) return true
@@ -125,15 +124,34 @@ fun SortMode.label(): String = when (this) {
     SortMode.TRACK -> "Track #"
 }
 
+/**
+ * Fold stylized / accented music tags so "Twenty Øne Piløts" and
+ * "Twenty One Pilots" share the same catalog keys.
+ */
+fun foldTagToken(value: String): String {
+    var t = value.trim().replace(Regex("\\s+"), " ").lowercase()
+    t = Normalizer.normalize(t, Normalizer.Form.NFKD)
+        .replace(Regex("\\p{M}+"), "")
+    // Letters that often survive NFKD unchanged in tag data
+    t = t
+        .replace('ø', 'o')
+        .replace('æ', 'ae')
+        .replace('œ', 'oe')
+        .replace('ł', 'l')
+        .replace('đ', 'd')
+        .replace('ß', 'ss')
+    return t
+}
+
 fun albumKey(name: String?, artist: String?): String {
-    val a = (artist ?: "").trim().lowercase()
-    val n = (name ?: "").trim().lowercase()
+    val a = foldTagToken(artist ?: "")
+    val n = foldTagToken(name ?: "")
     return "$a|$n"
 }
 
 fun artistKey(name: String?): String? {
     if (name == null) return null
-    val t = name.trim().replace(Regex("\\s+"), " ").lowercase()
+    val t = foldTagToken(name)
     return t.takeIf { it.isNotEmpty() }
 }
 
@@ -141,11 +159,7 @@ fun artistKey(name: String?): String? {
  * Cross-source track identity.
  *
  * Titles match with or without `(feat. …)` / `ft.` / `featuring …`.
- * Track artist may differ so long as album + album artist line up — common when
- * one source tags "Artist" and another tags featured credits differently.
- *
- * For **display**, prefer the richest tags across offerings (title with feat.
- * beats a bare title) while playback URI still follows source preference.
+ * Track artist may differ so long as album + album artist line up.
  */
 object TrackIdentity {
     private val FEAT_IN_PARENS = Regex(
@@ -161,19 +175,17 @@ object TrackIdentity {
         var t = title.trim()
         t = FEAT_IN_PARENS.replace(t, "")
         t = FEAT_SUFFIX.replace(t, "")
-        return t.replace(WS, " ").trim().lowercase()
+        return foldTagToken(t)
     }
 
     fun normalizeToken(value: String?): String {
         if (value == null) return ""
-        return value.trim().replace(WS, " ").lowercase()
+        return foldTagToken(value)
     }
 
-    /** Stable key used for multi-source grouping + preferred-source overrides. */
     fun of(song: Song): String {
         val title = normalizeTitle(song.title)
         val album = normalizeToken(song.album)
-        // Anchor on album artist (not track artist) so feat. credit drift is ok
         val albumArtist = normalizeToken(song.effectiveAlbumArtist)
         return when {
             title.isNotEmpty() && (album.isNotEmpty() || albumArtist.isNotEmpty()) ->
@@ -202,11 +214,6 @@ object TrackIdentity {
         return na == nb
     }
 
-    /**
-     * True when two songs are the same logical track across sources.
-     * Requires normalized title + album; album-artist may be empty on one side;
-     * track artist is intentionally ignored when album + album artist agree.
-     */
     fun matches(a: Song, b: Song): Boolean {
         if (!titlesMatch(a.title, b.title)) return false
         val albumA = normalizeToken(a.album)
@@ -215,7 +222,6 @@ object TrackIdentity {
         val aaA = normalizeToken(a.effectiveAlbumArtist)
         val aaB = normalizeToken(b.effectiveAlbumArtist)
         if (aaA.isNotEmpty() && aaB.isNotEmpty() && aaA != aaB) return false
-        // If both album and album-artist missing, fall back to track artist
         if (albumA.isEmpty() && albumB.isEmpty() && aaA.isEmpty() && aaB.isEmpty()) {
             val ta = normalizeToken(a.artist)
             val tb = normalizeToken(b.artist)
@@ -224,7 +230,6 @@ object TrackIdentity {
         return true
     }
 
-    /** Prefer titles that include feat./ft./featuring credits, then longer text. */
     fun titleDetailScore(title: String?): Int {
         if (title.isNullOrBlank()) return -1
         val t = title.trim()
@@ -240,7 +245,6 @@ object TrackIdentity {
         return score
     }
 
-    /** Prefer artist lines with more credit detail (feat, commas, &). */
     fun artistDetailScore(artist: String?): Int {
         if (artist.isNullOrBlank()) return -1
         val a = artist.trim()
@@ -251,10 +255,6 @@ object TrackIdentity {
         return score
     }
 
-    /**
-     * Keep [playback]'s URI/path (source preference) but upgrade display tags from
-     * the richest candidate — e.g. "Song (feat. X)" over bare "Song".
-     */
     fun withRichestDisplay(playback: Song, candidates: List<Song>): Song {
         if (candidates.isEmpty()) return playback
         val all = candidates + playback
