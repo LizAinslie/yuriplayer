@@ -23,6 +23,7 @@ import capital.yuri.yuriplayer.data.source.AudioDbArtistImageSource
 import capital.yuri.yuriplayer.data.source.BandsintownClient
 import capital.yuri.yuriplayer.data.source.DeezerArtistImageSource
 import capital.yuri.yuriplayer.data.source.DiscogsArtistImageSource
+import capital.yuri.yuriplayer.data.source.JellyfinArtistImageSource
 import capital.yuri.yuriplayer.data.source.JellyfinClient
 import capital.yuri.yuriplayer.data.source.LibrarySource
 import capital.yuri.yuriplayer.data.source.LibrarySourceFactory
@@ -141,6 +142,7 @@ val appModule = module {
     single { MusicBrainzClient(get<HttpClient>()) }
     single { BandsintownClient(get<HttpClient>()) }
 
+    single { JellyfinArtistImageSource(get(), get()) }
     single<List<ArtistInfoSource>> {
         listOf(
             MusicBrainzArtistProfileProvider(androidContext(), get()),
@@ -148,7 +150,8 @@ val appModule = module {
             WikidataArtistImageSource(get()),
             DeezerArtistImageSource(get()),
             AudioDbArtistImageSource(get()),
-            DiscogsArtistImageSource(get())
+            DiscogsArtistImageSource(get()),
+            get<JellyfinArtistImageSource>()
         )
     }
     single { ArtistInfoService(get(), get()) }

@@ -94,7 +94,7 @@ fun FetchArtistImageSheet(
             )
             Text(
                 "All sources combined (profile + banner). Original aspect shown — crop next. " +
-                    "MusicBrainz · Wikipedia · Wikidata · Deezer · AudioDB · Discogs",
+                    "MusicBrainz · Wikipedia · Wikidata · Deezer · AudioDB · Discogs · Jellyfin",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
                 modifier = Modifier.padding(bottom = 12.dp)

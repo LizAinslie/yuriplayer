@@ -68,8 +68,16 @@ data class ReleasePoolConfig(
 /**
  * Per radio-source preferences (artist / album / playlist station).
  *
- * Discovery flags control whether external servers (Jellyfin InstantMix,
- * future Subsonic similar, …) can inject tracks beyond the local catalog.
+ * Discovery flags control whether external servers can inject similar
+ * artists / songs / genres beyond the on-device catalog.
+ *
+ * - Library discovery is always the baseline (local + already-scanned sources).
+ * - Jellyfin Instant Mix uses the official SDK InstantMix endpoint when a
+ *   matching item exists on an enabled Jellyfin instance.
+ * - Subsonic/OpenSubsonic similar-songs is reserved.
+ * - Monochrome (monochrome.tf / community hifi-api) is recommendation-oriented
+ *   (Tidal metadata + /recommendations, /artist/similar, /mix) — not a library
+ *   store. Flag reserved for a thin discovery client later.
  */
 @Serializable
 data class RadioSourcePrefs(
@@ -86,8 +94,14 @@ data class RadioSourcePrefs(
      * for Instant Mix / similar items and merge into the radio pool.
      */
     val useJellyfinInstantMix: Boolean = false,
-    /** Reserved for Subsonic / OpenSubsonic similar-songs endpoints. */
-    val useSubsonicSimilar: Boolean = false
+    /** Reserved for Subsonic / OpenSubsonic getSimilarSongs / getSimilarArtists. */
+    val useSubsonicSimilar: Boolean = false,
+    /**
+     * Reserved: monochrome.tf community hifi-api recommendations
+     * (`/recommendations`, `/artist/similar`, `/album/similar`, `/mix`).
+     * Discovery only — not a primary library source.
+     */
+    val useMonochromeDiscovery: Boolean = false
 ) {
     companion object {
         const val DEFAULT_MAX_RADIO_QUEUE = 50
