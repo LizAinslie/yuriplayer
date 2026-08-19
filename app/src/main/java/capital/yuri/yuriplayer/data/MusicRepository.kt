@@ -8,6 +8,7 @@ import android.net.Uri
 import android.provider.MediaStore
 import android.util.Log
 import android.webkit.MimeTypeMap
+import androidx.documentfile.provider.DocumentFile
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
@@ -37,6 +38,14 @@ class MusicRepository(
     }
 
     suspend fun scanLibrary(): List<Song> = withContext(Dispatchers.IO) {
+        when (settings.getScanMode()) {
+            LibraryScanMode.MANUAL -> scanManualTrees()
+            LibraryScanMode.MEDIASTORE -> scanMediaStoreHybrid()
+        }
+    }
+
+    /** MediaStore query + filesystem fill for configured roots (legacy default). */
+    private suspend fun scanMediaStoreHybrid(): List<Song> {
         requestMediaScan()
 
         val byKey = LinkedHashMap<String, Song>()
@@ -49,8 +58,80 @@ class MusicRepository(
             if (!byKey.containsKey(key)) byKey[key] = song
         }
         val withYear = byKey.values.count { it.year != null }
-        Log.i(TAG, "scan complete: ${byKey.size} tracks ($withYear with year)")
-        byKey.values.toList()
+        Log.i(TAG, "mediastore scan: ${byKey.size} tracks ($withYear with year)")
+        return byKey.values.toList()
+    }
+
+    /**
+     * Walk user-granted SAF trees only. Uses DocumentFile + our tag reader;
+     * never calls MediaStore / MediaScannerConnection.
+     */
+    private fun scanManualTrees(): List<Song> {
+        val trees = settings.getManualTreeUris()
+        if (trees.isEmpty()) {
+            Log.w(TAG, "manual scan: no SAF trees configured")
+            return emptyList()
+        }
+        val byKey = LinkedHashMap<String, Song>()
+        for (uriString in trees) {
+            val treeUri = runCatching { Uri.parse(uriString) }.getOrNull() ?: continue
+            val root = DocumentFile.fromTreeUri(context, treeUri)
+            if (root == null || !root.isDirectory) {
+                Log.w(TAG, "manual scan: invalid tree $uriString")
+                continue
+            }
+            Log.i(TAG, "manual scan tree $uriString")
+            walkDocumentTree(root, depth = 0, maxDepth = 12) { doc ->
+                val name = doc.name ?: return@walkDocumentTree
+                if (!isAudioFileName(name)) return@walkDocumentTree
+                val uri = doc.uri
+                val key = uri.toString()
+                if (byKey.containsKey(key)) return@walkDocumentTree
+                val tags = readTagsFromUri(uri)
+                byKey[key] = Song(
+                    id = key.hashCode().toLong(),
+                    title = tags.title ?: name.substringBeforeLast('.'),
+                    artist = tags.artist,
+                    albumArtist = tags.albumArtist,
+                    album = tags.album,
+                    durationMs = tags.durationMs,
+                    contentUri = uri,
+                    trackNumber = tags.trackNumber,
+                    year = tags.year,
+                    genre = tags.genre,
+                    path = tags.pathHint ?: key,
+                    mimeType = doc.type ?: mimeFromPath(name)
+                )
+            }
+        }
+        Log.i(TAG, "manual scan complete: ${byKey.size} tracks")
+        return byKey.values.toList()
+    }
+
+    private fun walkDocumentTree(
+        dir: DocumentFile,
+        depth: Int,
+        maxDepth: Int,
+        onFile: (DocumentFile) -> Unit
+    ) {
+        if (depth > maxDepth) return
+        val children = try {
+            dir.listFiles()
+        } catch (e: Exception) {
+            Log.w(TAG, "listFiles failed for ${dir.uri}: ${e.message}")
+            return
+        }
+        for (child in children) {
+            when {
+                child.isDirectory -> walkDocumentTree(child, depth + 1, maxDepth, onFile)
+                child.isFile -> onFile(child)
+            }
+        }
+    }
+
+    private fun isAudioFileName(name: String): Boolean {
+        val ext = name.substringAfterLast('.', "").lowercase()
+        return ext in AUDIO_EXTENSIONS
     }
 
     private suspend fun requestMediaScan() {
@@ -278,8 +359,29 @@ class MusicRepository(
         val durationMs: Long? = null,
         val trackNumber: Int? = null,
         val year: Int? = null,
-        val genre: String? = null
+        val genre: String? = null,
+        val pathHint: String? = null
     )
+
+    private fun readTagsFromUri(uri: Uri): FileTags {
+        val fromMmr = readTagsWithRetrieverUri(uri)
+        // jaudiotagger needs a real File; try openFileDescriptor path when possible
+        val path = uri.path
+        val fromJaudio = if (path != null && path.startsWith("/") && File(path).canRead()) {
+            readTagsWithJaudio(path)
+        } else FileTags()
+        return FileTags(
+            title = fromMmr.title ?: fromJaudio.title,
+            artist = fromMmr.artist ?: fromJaudio.artist,
+            albumArtist = fromMmr.albumArtist ?: fromJaudio.albumArtist,
+            album = fromMmr.album ?: fromJaudio.album,
+            durationMs = fromMmr.durationMs ?: fromJaudio.durationMs,
+            trackNumber = fromMmr.trackNumber ?: fromJaudio.trackNumber,
+            year = fromJaudio.year ?: fromMmr.year,
+            genre = fromJaudio.genre ?: fromMmr.genre,
+            pathHint = path
+        )
+    }
 
     private fun readTagsFromFile(path: String): FileTags {
         val fromMmr = readTagsWithRetriever(path)
@@ -292,8 +394,37 @@ class MusicRepository(
             durationMs = fromMmr.durationMs ?: fromJaudio.durationMs,
             trackNumber = fromMmr.trackNumber ?: fromJaudio.trackNumber,
             year = fromJaudio.year ?: fromMmr.year,
-            genre = fromJaudio.genre ?: fromMmr.genre
+            genre = fromJaudio.genre ?: fromMmr.genre,
+            pathHint = path
         )
+    }
+
+    private fun readTagsWithRetrieverUri(uri: Uri): FileTags {
+        val retriever = MediaMetadataRetriever()
+        return try {
+            retriever.setDataSource(context, uri)
+            val yearRaw = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_YEAR)
+            val dateRaw = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DATE)
+            FileTags(
+                title = cleanTag(retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_TITLE)),
+                artist = cleanTag(retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_ARTIST)),
+                albumArtist = cleanTag(retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_ALBUMARTIST)),
+                album = cleanTag(retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_ALBUM)),
+                durationMs = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION)
+                    ?.toLongOrNull()?.takeIf { it > 0 },
+                trackNumber = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_CD_TRACK_NUMBER)
+                    ?.let { parseTrackNumber(it) },
+                year = parseYear(yearRaw) ?: parseYear(dateRaw),
+                genre = cleanTag(retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_GENRE))
+            )
+        } catch (_: Exception) {
+            FileTags()
+        } finally {
+            try {
+                retriever.release()
+            } catch (_: Exception) {
+            }
+        }
     }
 
     private fun readTagsWithRetriever(path: String): FileTags {
@@ -347,7 +478,8 @@ class MusicRepository(
                 }.getOrNull(),
                 trackNumber = field(FieldKey.TRACK)?.let { parseTrackNumber(it) },
                 year = year,
-                genre = field(FieldKey.GENRE)
+                genre = field(FieldKey.GENRE),
+                pathHint = path
             )
         } catch (e: Exception) {
             Log.d(TAG, "jaudio tags failed for $path: ${e.message}")
