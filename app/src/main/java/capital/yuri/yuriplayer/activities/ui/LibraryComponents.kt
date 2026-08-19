@@ -64,6 +64,7 @@ import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import capital.yuri.yuriplayer.data.AlbumItem
 import capital.yuri.yuriplayer.data.ArtistItem
+import capital.yuri.yuriplayer.data.CatalogRepository
 import capital.yuri.yuriplayer.data.LibraryIndex
 import capital.yuri.yuriplayer.data.MyStuffPinStore
 import capital.yuri.yuriplayer.data.Song
@@ -74,6 +75,8 @@ import capital.yuri.yuriplayer.data.source.SourceOffering
 import capital.yuri.yuriplayer.player.PlayerController
 import capital.yuri.yuriplayer.ui.formatAlbumCount
 import capital.yuri.yuriplayer.ui.formatTrackCount
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import org.koin.compose.koinInject
 import java.text.DateFormat
 import java.util.Date
@@ -415,16 +418,29 @@ fun SwipeAddSongRow(
     val accent = MaterialTheme.colorScheme.primary
     val onSurface = MaterialTheme.colorScheme.onSurface
     val pinStore: MyStuffPinStore = koinInject()
+    val catalog: CatalogRepository = koinInject()
     val entries by pinStore.entries.collectAsState()
     val saved = remember(entries, song.songKey) {
         pinStore.contains(StuffPinKind.SONG, song.songKey)
     }
     val songNav = LocalSongNav.current
 
+    // Resolve offerings for every row so album / library / queue all show multi-source.
+    var resolvedOfferings by remember(song.songKey) { mutableStateOf(sourceOfferings) }
+    LaunchedEffect(song.songKey, sourceOfferings) {
+        if (sourceOfferings != null) {
+            resolvedOfferings = sourceOfferings
+            return@LaunchedEffect
+        }
+        resolvedOfferings = withContext(Dispatchers.IO) {
+            catalog.offeringsMatchingSong(song)
+        }
+    }
+    val offerings = resolvedOfferings
+
     val revealAlpha = (offsetX / (threshold * 0.35f)).coerceIn(0f, 1f)
     val showE = isExplicit || song.isExplicit
-    val showMulti = multiSource ||
-        ((sourceOfferings?.map { "${it.sourceType.name}:${it.sourceId}" }?.toSet()?.size ?: 0) > 1)
+    val showMulti = multiSource || CatalogRepository.isMultiSource(offerings.orEmpty())
 
     val rowBg = when {
         isPlaying -> accent.copy(alpha = 0.18f)
@@ -517,9 +533,6 @@ fun SwipeAddSongRow(
                     style = MaterialTheme.typography.bodyLarge.copy(fontWeight = titleWeight),
                     color = titleColor
                 )
-                // Spotify-style: E + cloud sit immediately after the artist line,
-                // not pushed to the far edge of the row (MarqueeText's fillMaxWidth
-                // was forcing that).
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
                     modifier = Modifier.fillMaxWidth()
@@ -566,7 +579,7 @@ fun SwipeAddSongRow(
             onEditMetadata = onEditMetadata,
             onAddToQueue = onSwipeAdd,
             onStartRadio = onStartRadio,
-            sourceOfferings = sourceOfferings,
+            sourceOfferings = offerings,
             onPreferSource = onPreferSource
         )
     }
