@@ -75,8 +75,6 @@ import capital.yuri.yuriplayer.data.source.SourceOffering
 import capital.yuri.yuriplayer.player.PlayerController
 import capital.yuri.yuriplayer.ui.formatAlbumCount
 import capital.yuri.yuriplayer.ui.formatTrackCount
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.withContext
 import org.koin.compose.koinInject
 import java.text.DateFormat
 import java.util.Date
@@ -418,29 +416,19 @@ fun SwipeAddSongRow(
     val accent = MaterialTheme.colorScheme.primary
     val onSurface = MaterialTheme.colorScheme.onSurface
     val pinStore: MyStuffPinStore = koinInject()
-    val catalog: CatalogRepository = koinInject()
     val entries by pinStore.entries.collectAsState()
     val saved = remember(entries, song.songKey) {
         pinStore.contains(StuffPinKind.SONG, song.songKey)
     }
     val songNav = LocalSongNav.current
 
-    // Resolve offerings for every row so album / library / queue all show multi-source.
-    var resolvedOfferings by remember(song.songKey) { mutableStateOf(sourceOfferings) }
-    LaunchedEffect(song.songKey, sourceOfferings) {
-        if (sourceOfferings != null) {
-            resolvedOfferings = sourceOfferings
-            return@LaunchedEffect
-        }
-        resolvedOfferings = withContext(Dispatchers.IO) {
-            catalog.offeringsMatchingSong(song)
-        }
-    }
-    val offerings = resolvedOfferings
+    // Always resolve — album / playlist / artist discography rows never passed this before.
+    val offerings = rememberSongOfferings(song, sourceOfferings)
+    val preferHandler = onPreferSource ?: rememberPreferSourceHandler(song)
 
     val revealAlpha = (offsetX / (threshold * 0.35f)).coerceIn(0f, 1f)
     val showE = isExplicit || song.isExplicit
-    val showMulti = multiSource || CatalogRepository.isMultiSource(offerings.orEmpty())
+    val showMulti = multiSource || CatalogRepository.isMultiSource(offerings)
 
     val rowBg = when {
         isPlaying -> accent.copy(alpha = 0.18f)
@@ -580,7 +568,7 @@ fun SwipeAddSongRow(
             onAddToQueue = onSwipeAdd,
             onStartRadio = onStartRadio,
             sourceOfferings = offerings,
-            onPreferSource = onPreferSource
+            onPreferSource = preferHandler
         )
     }
 }
