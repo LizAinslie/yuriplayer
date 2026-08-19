@@ -137,8 +137,6 @@ tasks.register<Exec>("buildFfmpeg") {
     workingDir = ffmpegRoot
     commandLine("bash", "build.sh")
 
-    // Always set process env explicitly — Gradle daemon does not reliably
-    // inherit IDEA run-config environment variables.
     val ndk = resolveNdkHome()
     environment("FFMPEG_ASSETS_DIR", ffmpegAssetsDir.absolutePath)
     environment("FFMPEG_ABIS", ffmpegAbis.joinToString(","))
@@ -164,6 +162,7 @@ dependencies {
     implementation(libs.androidx.compose.ui.graphics)
     implementation(libs.androidx.compose.ui.tooling.preview)
     implementation(libs.androidx.core.ktx)
+    implementation(libs.androidx.documentfile)
     implementation(libs.androidx.lifecycle.runtime.ktx)
     implementation(libs.material)
     implementation(libs.androidx.palette)
