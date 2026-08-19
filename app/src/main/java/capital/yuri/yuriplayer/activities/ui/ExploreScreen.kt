@@ -54,8 +54,6 @@ import androidx.compose.ui.unit.sp
 import capital.yuri.yuriplayer.data.ExploreSearchService
 import capital.yuri.yuriplayer.data.Song
 import capital.yuri.yuriplayer.data.source.SourceOffering
-import kotlinx.coroutines.Job
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import org.koin.compose.koinInject
 
@@ -74,9 +72,6 @@ fun ExploreScreen(
     val scope = rememberCoroutineScope()
 
     var query by remember { mutableStateOf("") }
-    var hits by remember { mutableStateOf<List<ExploreSearchService.Hit>>(emptyList()) }
-    var searching by remember { mutableStateOf(false) }
-    var searchJob by remember { mutableStateOf<Job?>(null) }
     var sourcesFor by remember { mutableStateOf<ExploreSearchService.Hit?>(null) }
 
     val scanning by explore.isScanning.collectAsState()
@@ -85,35 +80,24 @@ fun ExploreScreen(
     val remoteOfferings by explore.remoteOfferings.collectAsState()
     val err by explore.lastError.collectAsState()
     val remoteSources by explore.sourceCount.collectAsState()
+    val localSongs by explore.let {
+        // library songs change separately — re-filter via remoteOfferings + query keys
+        remember { mutableStateOf(0) }
+    }
 
+    // Hydrate + ensure a background scan once. Leaving this screen does NOT cancel it.
     LaunchedEffect(Unit) {
         explore.hydrateFromCatalog()
+        explore.requestRemoteScan(force = false)
     }
 
     LaunchedEffect(forceRescanKey) {
-        if (forceRescanKey > 0) {
-            explore.refreshRemotes()
-        }
+        if (forceRescanKey > 0) explore.requestRemoteScan(force = true)
     }
 
-    // Kick off remote index when the user actually searches
-    LaunchedEffect(query) {
-        val q = query.trim()
-        if (q.isEmpty()) {
-            hits = emptyList()
-            return@LaunchedEffect
-        }
-        delay(280)
-        searching = true
-        hits = explore.searchWithPrefer(q, forceRescan = false)
-        searching = false
-    }
-
-    // Live-refresh results as Jellyfin pages land in the index
-    LaunchedEffect(remoteOfferings, query) {
-        val q = query.trim()
-        if (q.isEmpty()) return@LaunchedEffect
-        hits = explore.searchWithPrefer(q, forceRescan = false)
+    // Pure in-memory filter — cheap, updates live as the index grows.
+    val hits = remember(query, remoteOfferings, localSongs) {
+        explore.searchLive(query)
     }
 
     Column(modifier = Modifier.fillMaxSize()) {
@@ -127,10 +111,7 @@ fun ExploreScreen(
             leadingIcon = { Icon(Icons.Default.Search, contentDescription = null) },
             trailingIcon = {
                 if (query.isNotEmpty()) {
-                    IconButton(onClick = {
-                        query = ""
-                        hits = emptyList()
-                    }) {
+                    IconButton(onClick = { query = "" }) {
                         Icon(Icons.Default.Clear, contentDescription = "Clear search")
                     }
                 }
@@ -156,7 +137,6 @@ fun ExploreScreen(
                     else -> "Type to search your library"
                 }
             }
-            searching -> "Searching…"
             else -> "${hits.size} result${if (hits.size == 1) "" else "s"}" +
                 if (indexed > 0) " · $indexed remote indexed" else ""
         }
@@ -164,7 +144,7 @@ fun ExploreScreen(
             modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            if (scanning || searching) {
+            if (scanning) {
                 CircularProgressIndicator(
                     modifier = Modifier.size(14.dp),
                     strokeWidth = 2.dp
@@ -206,7 +186,7 @@ fun ExploreScreen(
                     }
                 }
             }
-            hits.isEmpty() && !searching && !scanning -> {
+            hits.isEmpty() && !scanning -> {
                 Text(
                     "No matches for \"${query.trim()}\".",
                     modifier = Modifier.padding(16.dp),
@@ -271,7 +251,6 @@ fun ExploreScreen(
             onPick = { off ->
                 scope.launch {
                     explore.setPreferredSource(hit.identityKey, off)
-                    hits = explore.searchWithPrefer(query)
                     sourcesFor = null
                     Toast.makeText(context, "Preferred: ${off.sourceName}", Toast.LENGTH_SHORT).show()
                 }
@@ -322,7 +301,6 @@ private fun SourcesPickerSheet(
     }
 }
 
-/** Tiny “E” badge (Spotify-style) and multi-source cloud pip. */
 @Composable
 fun SongBadgeRow(
     isExplicit: Boolean,
