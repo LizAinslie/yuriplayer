@@ -19,6 +19,8 @@ class ScanBudget(context: Context) {
     val pageYieldMs: Long
     /** Min interval between full remoteOfferings StateFlow publishes. */
     val publishMinIntervalMs: Long
+    /** Update notification / progress text every N pages (keeps main thread free). */
+    val progressEveryPages: Int
     /** How many album-art downloads to attempt in one post-scan pass. */
     val artBatchLimit: Int
     val artConcurrency: Int
@@ -40,24 +42,27 @@ class ScanBudget(context: Context) {
         when (deviceClass) {
             Class.LOW -> {
                 pageSize = 80
-                pageYieldMs = 120L
-                publishMinIntervalMs = 4_000L
+                pageYieldMs = 150L
+                publishMinIntervalMs = 8_000L
+                progressEveryPages = 4
                 artBatchLimit = 8
                 artConcurrency = 1
                 artYieldMs = 250L
             }
             Class.MID -> {
                 pageSize = 150
-                pageYieldMs = 60L
-                publishMinIntervalMs = 2_500L
+                pageYieldMs = 80L
+                publishMinIntervalMs = 5_000L
+                progressEveryPages = 3
                 artBatchLimit = 16
                 artConcurrency = 1
                 artYieldMs = 120L
             }
             Class.HIGH -> {
                 pageSize = 250
-                pageYieldMs = 25L
-                publishMinIntervalMs = 1_500L
+                pageYieldMs = 30L
+                publishMinIntervalMs = 2_500L
+                progressEveryPages = 2
                 artBatchLimit = 32
                 artConcurrency = 2
                 artYieldMs = 40L
