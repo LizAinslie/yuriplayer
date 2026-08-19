@@ -140,14 +140,13 @@ class JellyfinClient(
     }.onFailure { Log.w(TAG, "listAudioItemsPaged failed: ${it.message}") }
 
     /**
-     * Direct static stream. Path ends with `/{itemId}` so Media3 / MusicService
-     * URI equality (which compares lastPathSegment) stays unique per track.
+     * Official static stream. `_id` query keeps the full URI unique per item even when
+     * some callers compare only path segments poorly.
      */
     fun streamUrl(session: Session, itemId: String): String {
         val root = session.baseUrl.trimEnd('/')
-        // Include item id in the path so lastPathSegment ≠ "stream" for every track
-        return "$root/Audio/$itemId/stream/$itemId" +
-            "?static=true&api_key=${session.accessToken}"
+        return "$root/Audio/$itemId/stream" +
+            "?static=true&api_key=${session.accessToken}&_id=$itemId"
     }
 
     fun primaryImageUrl(session: Session, itemId: String, maxWidth: Int = 512): String =
@@ -176,7 +175,7 @@ class JellyfinClient(
             ?: albumArtists?.mapNotNull { it.name }?.firstOrNull { !it.isNullOrBlank() }
 
         val rawTitle = name?.takeIf { it.isNotBlank() }
-            ?: path?.substringAfterLast('/')?.substringBeforeLast('.')
+            ?: this.path?.substringAfterLast('/')?.substringBeforeLast('.')
         val title = cleanTrackTitle(rawTitle, indexNumber)
 
         return Song(
@@ -191,8 +190,8 @@ class JellyfinClient(
             trackNumber = indexNumber,
             discNumber = parentIndexNumber,
             year = productionYear,
-            // Catalog key only — not a filesystem path (MusicService must not File() this)
-            path = "jellyfin:$id",
+            // null path → player always uses contentUri (never File("jellyfin:…"))
+            path = null,
             mimeType = null
         )
     }
