@@ -12,6 +12,7 @@ import capital.yuri.yuriplayer.data.source.SourceType
 import capital.yuri.yuriplayer.data.source.SubsonicClient
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -19,11 +20,14 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import java.io.File
+import java.util.concurrent.atomic.AtomicLong
 
 /**
  * Live, **source-tagged** music index for Explore.
  *
  * Heavy remote scans run in [LibraryScanService] with a live notification.
+ * Publishes are throttled and album-art is deferred so large libraries
+ * (thousands of tracks) don't ANR mid-range / older devices.
  */
 class ExploreSearchService(
     private val context: Context,
@@ -43,7 +47,6 @@ class ExploreSearchService(
         val preferred: SourceOffering
     ) {
         val song: Song get() = preferred.song
-        /** True only when two or more *distinct* source instances provide this track. */
         val isMultiSource: Boolean
             get() = offerings
                 .map { "${it.sourceType.name}:${it.sourceId}" }
@@ -55,6 +58,8 @@ class ExploreSearchService(
     private val mutex = Mutex()
     private val jellyfinSessions = mutableMapOf<Long, JellyfinClient.Session>()
     private val cachedAlbumArtKeys = mutableSetOf<String>()
+    private val budget = ScanBudget(context.applicationContext)
+    private val lastPublishAt = AtomicLong(0L)
 
     private val _remoteOfferings = MutableStateFlow<List<SourceOffering>>(emptyList())
     val remoteOfferings: StateFlow<List<SourceOffering>> = _remoteOfferings.asStateFlow()
@@ -82,7 +87,7 @@ class ExploreSearchService(
         mutex.withLock {
             if (hydrated) return@withLock
             val rows = catalog.getRemoteOfferings()
-            publish(rows)
+            publish(rows, force = true)
             hydrated = true
             if (rows.isNotEmpty()) cacheAtMs = System.currentTimeMillis()
             Log.i(TAG, "hydrated ${rows.size} remote offerings from catalog")
@@ -93,7 +98,11 @@ class ExploreSearchService(
         val age = System.currentTimeMillis() - cacheAtMs
         if (!force && _remoteOfferings.value.isNotEmpty() && age < CACHE_TTL_MS) return
         if (!force && _isScanning.value) return
-        Log.i(TAG, "requestRemoteScan force=$force offerings=${_remoteOfferings.value.size}")
+        Log.i(
+            TAG,
+            "requestRemoteScan force=$force offerings=${_remoteOfferings.value.size} " +
+                "device=${budget.deviceClass} page=${budget.pageSize}"
+        )
         LibraryScanService.startRemote(context.applicationContext, force)
     }
 
@@ -143,13 +152,10 @@ class ExploreSearchService(
         }.sortedBy { it.song.displayTitle.lowercase() }
     }
 
-    /** One row per source instance (not per duplicate catalog row). */
     private fun dedupeOfferings(offs: List<SourceOffering>): List<SourceOffering> =
         offs.distinctBy { "${it.sourceType.name}:${it.sourceId}" }
 
     private fun collectMatched(needle: String): List<SourceOffering> {
-        // Only real local files count as LOCAL. Catalog rows with jellyfin:/subsonic:
-        // paths must not invent a second "This device" source.
         val local = library.songs.value
             .filter { song -> isLocalFilesystemSong(song) }
             .map { song ->
@@ -188,7 +194,13 @@ class ExploreSearchService(
     }
 
     private suspend fun runRemoteScan(force: Boolean) {
-        mutex.withLock {
+        // Hold the mutex only for the exclusive scan slot — do the heavy work
+        // without hammering the UI thread via continuous list copies.
+        if (!mutex.tryLock()) {
+            Log.i(TAG, "scan already running — skip")
+            return
+        }
+        try {
             val age = System.currentTimeMillis() - cacheAtMs
             if (!force && _remoteOfferings.value.isNotEmpty() && age < CACHE_TTL_MS) {
                 Log.i(TAG, "skip scan — cache warm (${_remoteOfferings.value.size})")
@@ -198,82 +210,93 @@ class ExploreSearchService(
             _isScanning.value = true
             _lastError.value = null
             notifier.update("Syncing libraries", "Connecting…")
-            try {
-                val rows = instances.getAll().filter { it.enabled }
-                _sourceCount.value = rows.size
-                if (rows.isEmpty()) {
-                    _scanProgress.value = null
-                    progress("No remote sources enabled")
-                    return
-                }
+            Log.i(TAG, "remote scan start device=${budget.deviceClass} page=${budget.pageSize}")
 
-                val keepKeys = pinStore.entries.value
-                    .filter { it.kind == StuffPinKind.SONG }
-                    .map { it.id }
-                    .toSet()
-
-                val rebuilt = _remoteOfferings.value.toMutableList()
-
-                for (row in rows) {
-                    val type = SourceType.from(row.type)
-                    val sourceName = row.name
-                    val instanceId = row.id
-                    val seenAt = System.currentTimeMillis()
-
-                    rebuilt.removeAll {
-                        it.sourceId == instanceId && it.sourceType == type
-                    }
-                    publish(rebuilt)
-                    progress("Scanning $sourceName…")
-
-                    when (type) {
-                        SourceType.JELLYFIN -> scanJellyfin(
-                            rowId = instanceId,
-                            sourceName = sourceName,
-                            baseUrl = row.baseUrl,
-                            username = row.username,
-                            secret = row.secret,
-                            seenAt = seenAt,
-                            keepKeys = keepKeys,
-                            rebuilt = rebuilt
-                        )
-                        SourceType.SUBSONIC, SourceType.NAVIDROME -> scanSubsonic(
-                            type = type,
-                            instanceId = instanceId,
-                            sourceName = sourceName,
-                            baseUrl = row.baseUrl,
-                            username = row.username,
-                            secret = row.secret,
-                            seenAt = seenAt,
-                            keepKeys = keepKeys,
-                            rebuilt = rebuilt
-                        )
-                        else -> Unit
-                    }
-                }
-
-                val cleaned = rebuilt.filter {
-                    it.sourceType != SourceType.OTHER || it.song.songKey in keepKeys
-                }
-                publish(cleaned)
-                cacheAtMs = System.currentTimeMillis()
-                runCatching { library.reloadFromCatalog() }
-                Log.i(TAG, "remote index ready: ${cleaned.size} offerings")
-            } catch (e: CancellationException) {
-                Log.i(TAG, "remote scan cancelled")
-                throw e
-            } catch (e: Exception) {
-                _lastError.value = e.message ?: "Scan failed"
-                Log.e(TAG, "remote index failed", e)
-            } finally {
-                _isScanning.value = false
+            val rows = instances.getAll().filter { it.enabled }
+            _sourceCount.value = rows.size
+            if (rows.isEmpty()) {
                 _scanProgress.value = null
+                progress("No remote sources enabled")
+                return
             }
+
+            val keepKeys = pinStore.entries.value
+                .filter { it.kind == StuffPinKind.SONG }
+                .map { it.id }
+                .toSet()
+
+            // Work list lives off the StateFlow; we only snapshot-publish occasionally.
+            val rebuilt = ArrayList<SourceOffering>(_remoteOfferings.value)
+
+            for (row in rows) {
+                val type = SourceType.from(row.type)
+                val sourceName = row.name
+                val instanceId = row.id
+                val seenAt = System.currentTimeMillis()
+
+                rebuilt.removeAll {
+                    it.sourceId == instanceId && it.sourceType == type
+                }
+                publish(rebuilt, force = false)
+                progress("Scanning $sourceName…")
+
+                when (type) {
+                    SourceType.JELLYFIN -> scanJellyfin(
+                        rowId = instanceId,
+                        sourceName = sourceName,
+                        baseUrl = row.baseUrl,
+                        username = row.username,
+                        secret = row.secret,
+                        seenAt = seenAt,
+                        keepKeys = keepKeys,
+                        rebuilt = rebuilt
+                    )
+                    SourceType.SUBSONIC, SourceType.NAVIDROME -> scanSubsonic(
+                        type = type,
+                        instanceId = instanceId,
+                        sourceName = sourceName,
+                        baseUrl = row.baseUrl,
+                        username = row.username,
+                        secret = row.secret,
+                        seenAt = seenAt,
+                        keepKeys = keepKeys,
+                        rebuilt = rebuilt
+                    )
+                    else -> Unit
+                }
+            }
+
+            val cleaned = rebuilt.filter {
+                it.sourceType != SourceType.OTHER || it.song.songKey in keepKeys
+            }
+            publish(cleaned, force = true)
+            cacheAtMs = System.currentTimeMillis()
+
+            // Cheap count-only progress while catalog merge runs
+            progress("Merging into library…")
+            runCatching { library.reloadFromCatalog() }
+
+            // Album art is optional polish — do a small passive pass after index is live
+            progress("Caching covers…")
+            runCatching { cacheAlbumArtPassive(cleaned.map { it.song }) }
+
+            Log.i(TAG, "remote index ready: ${cleaned.size} offerings")
+        } catch (e: CancellationException) {
+            Log.i(TAG, "remote scan cancelled")
+            throw e
+        } catch (e: Exception) {
+            _lastError.value = e.message ?: "Scan failed"
+            Log.e(TAG, "remote index failed", e)
+        } finally {
+            _isScanning.value = false
+            _scanProgress.value = null
+            mutex.unlock()
         }
     }
 
     private fun progress(text: String) {
         _scanProgress.value = text
+        // Notification only — LibraryScanService no longer re-calls startForeground every tick
         notifier.update("Syncing libraries", text)
     }
 
@@ -299,7 +322,7 @@ class ExploreSearchService(
                 return
             }.also { jellyfinSessions[rowId] = it }
 
-        jellyfinClient.listAudioItemsPaged(session, pageSize = 500) { page, start, total ->
+        jellyfinClient.listAudioItemsPaged(session, pageSize = budget.pageSize) { page, start, total ->
             val offs = page.map { song ->
                 SourceOffering(
                     sourceType = SourceType.JELLYFIN,
@@ -309,19 +332,31 @@ class ExploreSearchService(
                 )
             }
             rebuilt.addAll(offs)
-            publish(rebuilt)
+
+            // Always bump the cheap counter; full list publish is rate-limited
+            _indexedCount.value = rebuilt.size
+            publish(rebuilt, force = false)
+
             catalog.ingestRemoteBatch(
                 songs = page,
                 sourceType = CatalogSources.JELLYFIN,
                 sourceInstanceId = rowId,
                 seenAt = seenAt
             )
-            cacheAlbumArtBatch(page)
+            // NO album-art download here — that was a major ANR source on large libs
+
             val totalPart = total?.let { " / $it" }.orEmpty()
             val done = start + page.size
             progress("$sourceName: $done$totalPart")
             if (total != null && total > 0) {
                 notifier.update("Syncing libraries", "$sourceName: $done / $total", done, total)
+            }
+
+            budget.yieldBetweenPages()
+            // Extra breathe every ~1k tracks on low/mid devices
+            if (budget.deviceClass != ScanBudget.Class.HIGH && done % 1000 == 0) {
+                delay(budget.pageYieldMs * 2)
+                System.gc()
             }
         }.onFailure {
             if (it is CancellationException) throw it
@@ -338,10 +373,16 @@ class ExploreSearchService(
         )
     }
 
-    private suspend fun cacheAlbumArtBatch(songs: List<Song>) {
+    /**
+     * Slow, limited cover download after the index is searchable.
+     * Never blocks page ingestion.
+     */
+    private suspend fun cacheAlbumArtPassive(songs: List<Song>) {
         val coversDir = File(context.filesDir, "covers").also { it.mkdirs() }
+        var attempted = 0
         val seen = mutableSetOf<String>()
         for (song in songs) {
+            if (attempted >= budget.artBatchLimit) break
             val aKey = albumKey(song.album, song.effectiveAlbumArtist)
             if (aKey in seen || aKey in cachedAlbumArtKeys) continue
             seen += aKey
@@ -353,15 +394,20 @@ class ExploreSearchService(
             )
             if (dest.isFile && dest.length() > 0) {
                 cachedAlbumArtKeys += aKey
-                catalog.applyAlbumCover(aKey, dest.absolutePath, url, null)
+                runCatching { catalog.applyAlbumCover(aKey, dest.absolutePath, url, null) }
                 continue
             }
-            val ok = AlbumArtResolver.downloadToFile(url, dest, maxSize = 512)
+            val ok = runCatching {
+                AlbumArtResolver.downloadToFile(url, dest, maxSize = 320)
+            }.getOrDefault(false)
             if (ok) {
                 cachedAlbumArtKeys += aKey
-                catalog.applyAlbumCover(aKey, dest.absolutePath, url, null)
+                runCatching { catalog.applyAlbumCover(aKey, dest.absolutePath, url, null) }
             }
+            attempted++
+            budget.yieldBetweenArt()
         }
+        Log.i(TAG, "passive art pass: attempted=$attempted cached=${cachedAlbumArtKeys.size}")
     }
 
     private suspend fun scanSubsonic(
@@ -385,7 +431,7 @@ class ExploreSearchService(
         runCatching {
             subsonicClient.ping(session).getOrThrow()
             val songs = subsonicClient.listAllSongs(session).getOrThrow()
-            songs.chunked(500).forEachIndexed { i, chunk ->
+            songs.chunked(budget.pageSize).forEachIndexed { i, chunk ->
                 val offs = chunk.map { song ->
                     SourceOffering(
                         sourceType = type,
@@ -395,17 +441,23 @@ class ExploreSearchService(
                     )
                 }
                 rebuilt.addAll(offs)
-                publish(rebuilt)
+                _indexedCount.value = rebuilt.size
+                publish(rebuilt, force = false)
                 catalog.ingestRemoteBatch(
                     songs = chunk,
                     sourceType = catalogType,
                     sourceInstanceId = instanceId,
                     seenAt = seenAt
                 )
-                cacheAlbumArtBatch(chunk)
-                val done = minOf((i + 1) * 500, songs.size)
+                val done = minOf((i + 1) * budget.pageSize, songs.size)
                 progress("$sourceName: $done / ${songs.size}")
-                notifier.update("Syncing libraries", "$sourceName: $done / ${songs.size}", done, songs.size)
+                notifier.update(
+                    "Syncing libraries",
+                    "$sourceName: $done / ${songs.size}",
+                    done,
+                    songs.size
+                )
+                budget.yieldBetweenPages()
             }
             catalog.pruneRemoteSource(
                 sourceType = catalogType,
@@ -420,9 +472,20 @@ class ExploreSearchService(
         }
     }
 
-    private fun publish(list: List<SourceOffering>) {
-        _remoteOfferings.value = list.toList()
+    /**
+     * @param force always push a new list snapshot (end of scan / hydrate).
+     * Otherwise only publish when [ScanBudget.publishMinIntervalMs] has elapsed —
+     * indexedCount still updates every page so the UI can show progress numbers.
+     */
+    private fun publish(list: List<SourceOffering>, force: Boolean) {
         _indexedCount.value = list.size
+        val now = System.currentTimeMillis()
+        val last = lastPublishAt.get()
+        if (!force && now - last < budget.publishMinIntervalMs) return
+        if (!lastPublishAt.compareAndSet(last, now) && !force) return
+        // Snapshot once for collectors; avoid sharing the working ArrayList
+        _remoteOfferings.value = ArrayList(list)
+        if (force) lastPublishAt.set(now)
     }
 
     companion object {
@@ -438,7 +501,6 @@ class ExploreSearchService(
             else song.songKey
         }
 
-        /** Remote catalog keys — not real filesystem paths. */
         fun isLocalFilesystemSong(song: Song): Boolean {
             val p = song.path ?: return song.contentUri.scheme == "content" ||
                 song.contentUri.scheme == "file"
