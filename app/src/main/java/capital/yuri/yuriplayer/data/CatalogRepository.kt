@@ -40,8 +40,7 @@ class CatalogRepository(
     /** How many tracks we already have for a remote instance (used to skip warm re-syncs). */
     suspend fun countTracksForSource(sourceType: String, sourceInstanceId: Long?): Int =
         withContext(Dispatchers.IO) {
-            dao.getTracksBySource(sourceType)
-                .count { sourceInstanceId == null || it.sourceInstanceId == sourceInstanceId }
+            dao.countTracksForSource(sourceType, sourceInstanceId)
         }
 
     suspend fun syncLocalLibrary(): List<Song> = withContext(Dispatchers.IO) {
@@ -61,9 +60,8 @@ class CatalogRepository(
 
     /**
      * Cheap path used during multi-thousand-track remote pages.
-     * Only upserts the batch — **does not** rebuild album/artist rollups
-     * (that was the main ANR source on 40k+ libraries). Call [rebuildRollups]
-     * once after the full source scan finishes.
+     * Only upserts the batch — **does not** rebuild album/artist rollups.
+     * Call [rebuildRollups] once after the full source scan finishes.
      */
     suspend fun ingestRemoteBatch(
         songs: List<Song>,
@@ -83,10 +81,6 @@ class CatalogRepository(
         dao.upsertTracks(entities)
     }
 
-    /**
-     * Full album + artist rollup from the current track table.
-     * Run once at end of a remote sync (or after local scan), never per page.
-     */
     suspend fun rebuildRollups() = withContext(Dispatchers.IO) {
         rebuildRollupsLocked()
     }
@@ -99,7 +93,7 @@ class CatalogRepository(
         dao.upsertArtists(buildArtistRollups(all, prevArtists))
         dao.deleteOrphanAlbums()
         dao.deleteOrphanArtists()
-        Log.i(TAG, "rollups rebuilt: tracks=${all.size} albums=${prevAlbums.size}-> artists=${prevArtists.size}")
+        Log.i(TAG, "rollups rebuilt: tracks=${all.size}")
     }
 
     suspend fun pruneRemoteSource(
@@ -145,7 +139,6 @@ class CatalogRepository(
                 seenAt = now
             )
             dao.upsertTrack(entity)
-            // Single-track import: cheap incremental rollup for just this row's keys
             val all = dao.getAllTracks()
             val prevAlbums = dao.getAllAlbums().associateBy { it.albumKey }
             val prevArtists = dao.getAllArtists().associateBy { it.artistKey }
