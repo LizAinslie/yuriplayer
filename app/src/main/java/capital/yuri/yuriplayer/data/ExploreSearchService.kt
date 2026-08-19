@@ -9,10 +9,15 @@ import capital.yuri.yuriplayer.data.source.SourceOffering
 import capital.yuri.yuriplayer.data.source.SourceResolver
 import capital.yuri.yuriplayer.data.source.SourceType
 import capital.yuri.yuriplayer.data.source.SubsonicClient
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
@@ -20,12 +25,11 @@ import kotlinx.coroutines.withContext
 /**
  * Live, **source-tagged** music index for Explore.
  *
- * - Local files come from [LibraryIndex].
- * - Remote libraries (Jellyfin / Subsonic) are scanned progressively; each page
- *   is published into [remoteOfferings] immediately and persisted to the catalog
- *   with sourceType + sourceInstanceId.
- * - Tracks that lose every source are dropped from the index unless they are
- *   pinned in My Stuff.
+ * Scans run on an **app-scoped** [CoroutineScope] so leaving Explore / cancelling
+ * a Compose [rememberCoroutineScope] never aborts Jellyfin paging mid-flight.
+ *
+ * Search is non-blocking: returns whatever is indexed so far and lets the UI
+ * re-filter as [remoteOfferings] grows.
  */
 class ExploreSearchService(
     private val factory: LibrarySourceFactory,
@@ -47,9 +51,14 @@ class ExploreSearchService(
         val isExplicit: Boolean get() = offerings.any { it.song.isExplicit }
     }
 
+    /** Survives UI disposal — never use Compose scopes for remote scans. */
+    private val appScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val mutex = Mutex()
+    private var scanJob: Job? = null
 
-    /** Live remote offerings (source-tagged). Updated page-by-page during scan. */
+    private val jellyfinSessions =
+        mutableMapOf<Long, JellyfinClient.Session>()
+
     private val _remoteOfferings = MutableStateFlow<List<SourceOffering>>(emptyList())
     val remoteOfferings: StateFlow<List<SourceOffering>> = _remoteOfferings.asStateFlow()
 
@@ -71,38 +80,92 @@ class ExploreSearchService(
     private var cacheAtMs: Long = 0L
     private var hydrated = false
 
-    /** Load previously persisted remote catalog rows into the live index (once). */
     suspend fun hydrateFromCatalog() = withContext(Dispatchers.IO) {
         if (hydrated) return@withContext
         mutex.withLock {
             if (hydrated) return@withLock
             val rows = catalog.getRemoteOfferings()
-            _remoteOfferings.value = rows
-            _indexedCount.value = rows.size
+            publish(rows)
             hydrated = true
+            if (rows.isNotEmpty()) cacheAtMs = System.currentTimeMillis()
             Log.i(TAG, "hydrated ${rows.size} remote offerings from catalog")
         }
     }
 
+    /**
+     * Kick a background remote scan if needed. Safe to call from any UI scope —
+     * the work is owned by [appScope].
+     */
+    fun requestRemoteScan(force: Boolean = false) {
+        val age = System.currentTimeMillis() - cacheAtMs
+        if (!force && _remoteOfferings.value.isNotEmpty() && age < CACHE_TTL_MS) return
+        if (!force && _isScanning.value) return
+
+        // Cancel only when forcing a full rescan; otherwise let the running job finish
+        if (force) {
+            scanJob?.cancel()
+            scanJob = null
+        } else if (scanJob?.isActive == true) {
+            return
+        }
+
+        scanJob = appScope.launch {
+            runRemoteScan(force)
+        }
+    }
+
+    suspend fun refreshRemotes() {
+        requestRemoteScan(force = true)
+        // Don't join — UI observes progress. Optional: wait briefly for start.
+    }
+
+    /**
+     * Non-blocking search: hydrate, start scan in background if needed, return
+     * hits from whatever is already indexed.
+     */
     suspend fun search(query: String, forceRescan: Boolean = false): List<Hit> =
         withContext(Dispatchers.IO) {
             val q = query.trim()
             if (q.isEmpty()) return@withContext emptyList()
-
             hydrateFromCatalog()
-            ensureRemoteIndex(forceRescan)
-
-            buildHits(q)
+            requestRemoteScan(forceRescan)
+            buildHitsPrefer(q)
         }
 
-    /** Snapshot search against the current live index (no network). */
+    suspend fun searchWithPrefer(query: String, forceRescan: Boolean = false): List<Hit> =
+        search(query, forceRescan)
+
     fun searchLive(query: String): List<Hit> {
         val q = query.trim()
         if (q.isEmpty()) return emptyList()
-        return buildHits(q)
+        return buildHitsRankOnly(q)
     }
 
-    private fun buildHits(needle: String): List<Hit> {
+    private suspend fun buildHitsPrefer(needle: String): List<Hit> {
+        val matched = collectMatched(needle)
+        return matched.groupBy { trackIdentity(it.song) }.map { (key, offs) ->
+            val distinct = offs.distinctBy {
+                "${it.sourceType}:${it.sourceId}:${it.song.songKey}"
+            }
+            val preferred = sourceResolver.prefer(SCOPE_TRACK, key, distinct)
+                ?: distinct.minByOrNull { it.sourceType.rank }
+                ?: distinct.first()
+            Hit(key, distinct, preferred)
+        }.sortedBy { it.song.displayTitle.lowercase() }
+    }
+
+    private fun buildHitsRankOnly(needle: String): List<Hit> {
+        val matched = collectMatched(needle)
+        return matched.groupBy { trackIdentity(it.song) }.map { (key, offs) ->
+            val distinct = offs.distinctBy {
+                "${it.sourceType}:${it.sourceId}:${it.song.songKey}"
+            }
+            val preferred = distinct.minByOrNull { it.sourceType.rank } ?: distinct.first()
+            Hit(key, distinct, preferred)
+        }.sortedBy { it.song.displayTitle.lowercase() }
+    }
+
+    private fun collectMatched(needle: String): List<SourceOffering> {
         val local = library.songs.value.map { song ->
             SourceOffering(
                 sourceType = SourceType.LOCAL,
@@ -111,62 +174,14 @@ class ExploreSearchService(
                 song = song
             )
         }
-        val all = local + _remoteOfferings.value
-        val matched = all.filter { off ->
+        return (local + _remoteOfferings.value).filter { off ->
             val s = off.song
             s.displayTitle.contains(needle, true) ||
                 s.displayArtist.contains(needle, true) ||
                 s.displayAlbum.contains(needle, true) ||
                 (s.path?.contains(needle, true) == true)
         }
-        return matched
-            .groupBy { trackIdentity(it.song) }
-            .map { (key, offs) ->
-                // Drop identity groups with zero offerings (shouldn't happen)
-                val distinct = offs.distinctBy {
-                    "${it.sourceType}:${it.sourceId}:${it.song.songKey}"
-                }
-                val preferred = runCatching {
-                    // prefer is suspend — approximate with rank when called from non-suspend
-                    distinct.minByOrNull { it.sourceType.rank } ?: distinct.first()
-                }.getOrDefault(distinct.first())
-                Hit(identityKey = key, offerings = distinct, preferred = preferred)
-            }
-            .sortedBy { it.song.displayTitle.lowercase() }
     }
-
-    suspend fun searchWithPrefer(query: String, forceRescan: Boolean = false): List<Hit> =
-        withContext(Dispatchers.IO) {
-            val q = query.trim()
-            if (q.isEmpty()) return@withContext emptyList()
-            hydrateFromCatalog()
-            ensureRemoteIndex(forceRescan)
-
-            val local = library.songs.value.map { song ->
-                SourceOffering(
-                    sourceType = SourceType.LOCAL,
-                    sourceId = null,
-                    sourceName = "This device",
-                    song = song
-                )
-            }
-            val matched = (local + _remoteOfferings.value).filter { off ->
-                val s = off.song
-                s.displayTitle.contains(q, true) ||
-                    s.displayArtist.contains(q, true) ||
-                    s.displayAlbum.contains(q, true) ||
-                    (s.path?.contains(q, true) == true)
-            }
-            matched.groupBy { trackIdentity(it.song) }.map { (key, offs) ->
-                val distinct = offs.distinctBy {
-                    "${it.sourceType}:${it.sourceId}:${it.song.songKey}"
-                }
-                val preferred = sourceResolver.prefer(SCOPE_TRACK, key, distinct)
-                    ?: distinct.minByOrNull { it.sourceType.rank }
-                    ?: distinct.first()
-                Hit(key, distinct, preferred)
-            }.sortedBy { it.song.displayTitle.lowercase() }
-        }
 
     suspend fun setPreferredSource(
         identityKey: String,
@@ -184,14 +199,11 @@ class ExploreSearchService(
         sourceResolver.clearOverride(SCOPE_TRACK, identityKey)
     }
 
-    suspend fun refreshRemotes() {
-        ensureRemoteIndex(force = true)
-    }
-
-    private suspend fun ensureRemoteIndex(force: Boolean) {
+    private suspend fun runRemoteScan(force: Boolean) {
         mutex.withLock {
             val age = System.currentTimeMillis() - cacheAtMs
             if (!force && _remoteOfferings.value.isNotEmpty() && age < CACHE_TTL_MS) return
+
             _isScanning.value = true
             _lastError.value = null
             try {
@@ -215,110 +227,48 @@ class ExploreSearchService(
                     val instanceId = row.id
                     val seenAt = System.currentTimeMillis()
 
-                    // Drop prior offerings for this instance; pages will refill live
                     rebuilt.removeAll {
                         it.sourceId == instanceId && it.sourceType == type
                     }
                     publish(rebuilt)
-
                     _scanProgress.value = "Scanning $sourceName…"
 
                     when (type) {
-                        SourceType.JELLYFIN -> {
-                            val url = row.baseUrl ?: continue
-                            val user = row.username ?: continue
-                            val secret = row.secret ?: continue
-                            val session = jellyfinClient.authenticate(url, user, secret)
-                                .getOrElse {
-                                    Log.w(TAG, "jellyfin auth failed: ${it.message}")
-                                    _lastError.value = "${sourceName}: ${it.message}"
-                                    continue
-                                }
-                            jellyfinClient.listAudioItemsPaged(session, pageSize = 200) { page, start, total ->
-                                val offs = page.map { song ->
-                                    SourceOffering(
-                                        sourceType = SourceType.JELLYFIN,
-                                        sourceId = instanceId,
-                                        sourceName = sourceName,
-                                        song = song
-                                    )
-                                }
-                                rebuilt.addAll(offs)
-                                publish(rebuilt)
-                                catalog.ingestRemoteBatch(
-                                    songs = page,
-                                    sourceType = CatalogSources.JELLYFIN,
-                                    sourceInstanceId = instanceId,
-                                    seenAt = seenAt
-                                )
-                                val totalPart = total?.let { " / $it" }.orEmpty()
-                                _scanProgress.value =
-                                    "$sourceName: ${start + page.size}$totalPart"
-                            }.onFailure {
-                                Log.w(TAG, "jellyfin scan failed: ${it.message}")
-                                _lastError.value = "${sourceName}: ${it.message}"
-                            }
-                            catalog.pruneRemoteSource(
-                                sourceType = CatalogSources.JELLYFIN,
-                                sourceInstanceId = instanceId,
-                                beforeMs = seenAt,
-                                keepSongKeys = keepKeys
-                            )
-                        }
-                        SourceType.SUBSONIC, SourceType.NAVIDROME -> {
-                            val url = row.baseUrl ?: continue
-                            val user = row.username ?: continue
-                            val secret = row.secret ?: continue
-                            val session = SubsonicClient.Session(url, user, secret)
-                            runCatching {
-                                subsonicClient.ping(session).getOrThrow()
-                                val songs = subsonicClient.listAllSongs(session).getOrThrow()
-                                // Publish in chunks so the UI still feels live
-                                songs.chunked(200).forEachIndexed { i, chunk ->
-                                    val offs = chunk.map { song ->
-                                        SourceOffering(
-                                            sourceType = type,
-                                            sourceId = instanceId,
-                                            sourceName = sourceName,
-                                            song = song
-                                        )
-                                    }
-                                    rebuilt.addAll(offs)
-                                    publish(rebuilt)
-                                    catalog.ingestRemoteBatch(
-                                        songs = chunk,
-                                        sourceType = if (type == SourceType.NAVIDROME)
-                                            CatalogSources.NAVIDROME else CatalogSources.SUBSONIC,
-                                        sourceInstanceId = instanceId,
-                                        seenAt = seenAt
-                                    )
-                                    _scanProgress.value =
-                                        "$sourceName: ${minOf((i + 1) * 200, songs.size)} / ${songs.size}"
-                                }
-                                catalog.pruneRemoteSource(
-                                    sourceType = if (type == SourceType.NAVIDROME)
-                                        CatalogSources.NAVIDROME else CatalogSources.SUBSONIC,
-                                    sourceInstanceId = instanceId,
-                                    beforeMs = seenAt,
-                                    keepSongKeys = keepKeys
-                                )
-                            }.onFailure {
-                                Log.w(TAG, "subsonic scan failed: ${it.message}")
-                                _lastError.value = "${sourceName}: ${it.message}"
-                            }
-                        }
+                        SourceType.JELLYFIN -> scanJellyfin(
+                            rowId = instanceId,
+                            sourceName = sourceName,
+                            baseUrl = row.baseUrl,
+                            username = row.username,
+                            secret = row.secret,
+                            seenAt = seenAt,
+                            keepKeys = keepKeys,
+                            rebuilt = rebuilt
+                        )
+                        SourceType.SUBSONIC, SourceType.NAVIDROME -> scanSubsonic(
+                            type = type,
+                            instanceId = instanceId,
+                            sourceName = sourceName,
+                            baseUrl = row.baseUrl,
+                            username = row.username,
+                            secret = row.secret,
+                            seenAt = seenAt,
+                            keepKeys = keepKeys,
+                            rebuilt = rebuilt
+                        )
                         else -> Unit
                     }
                 }
 
-                // Drop any remaining remote offerings that somehow have no source tag
-                // (shouldn't happen) unless My Stuff keeps them.
                 val cleaned = rebuilt.filter {
                     it.sourceType != SourceType.OTHER || it.song.songKey in keepKeys
                 }
                 publish(cleaned)
                 cacheAtMs = System.currentTimeMillis()
                 Log.i(TAG, "remote index ready: ${cleaned.size} offerings")
+            } catch (e: CancellationException) {
+                // Forced rescan or process teardown — not a user-facing error
+                Log.i(TAG, "remote scan cancelled")
+                throw e
             } catch (e: Exception) {
                 _lastError.value = e.message ?: "Scan failed"
                 Log.e(TAG, "remote index failed", e)
@@ -326,6 +276,117 @@ class ExploreSearchService(
                 _isScanning.value = false
                 _scanProgress.value = null
             }
+        }
+    }
+
+    private suspend fun scanJellyfin(
+        rowId: Long,
+        sourceName: String,
+        baseUrl: String?,
+        username: String?,
+        secret: String?,
+        seenAt: Long,
+        keepKeys: Set<String>,
+        rebuilt: MutableList<SourceOffering>
+    ) {
+        val url = baseUrl ?: return
+        val user = username ?: return
+        val pass = secret ?: return
+
+        val session = jellyfinSessions[rowId] ?: jellyfinClient.authenticate(url, user, pass)
+            .getOrElse {
+                if (it is CancellationException) throw it
+                Log.w(TAG, "jellyfin auth failed: ${it.message}")
+                _lastError.value = "$sourceName: ${it.message}"
+                return
+            }.also { jellyfinSessions[rowId] = it }
+
+        jellyfinClient.listAudioItemsPaged(session, pageSize = 200) { page, start, total ->
+            val offs = page.map { song ->
+                SourceOffering(
+                    sourceType = SourceType.JELLYFIN,
+                    sourceId = rowId,
+                    sourceName = sourceName,
+                    song = song
+                )
+            }
+            rebuilt.addAll(offs)
+            publish(rebuilt)
+            catalog.ingestRemoteBatch(
+                songs = page,
+                sourceType = CatalogSources.JELLYFIN,
+                sourceInstanceId = rowId,
+                seenAt = seenAt
+            )
+            val totalPart = total?.let { " / $it" }.orEmpty()
+            _scanProgress.value = "$sourceName: ${start + page.size}$totalPart"
+        }.onFailure {
+            if (it is CancellationException) throw it
+            // Stale session — drop cache and surface once
+            jellyfinSessions.remove(rowId)
+            Log.w(TAG, "jellyfin scan failed: ${it.message}")
+            _lastError.value = "$sourceName: ${it.message}"
+        }
+
+        catalog.pruneRemoteSource(
+            sourceType = CatalogSources.JELLYFIN,
+            sourceInstanceId = rowId,
+            beforeMs = seenAt,
+            keepSongKeys = keepKeys
+        )
+    }
+
+    private suspend fun scanSubsonic(
+        type: SourceType,
+        instanceId: Long,
+        sourceName: String,
+        baseUrl: String?,
+        username: String?,
+        secret: String?,
+        seenAt: Long,
+        keepKeys: Set<String>,
+        rebuilt: MutableList<SourceOffering>
+    ) {
+        val url = baseUrl ?: return
+        val user = username ?: return
+        val pass = secret ?: return
+        val session = SubsonicClient.Session(url, user, pass)
+        val catalogType =
+            if (type == SourceType.NAVIDROME) CatalogSources.NAVIDROME else CatalogSources.SUBSONIC
+
+        runCatching {
+            subsonicClient.ping(session).getOrThrow()
+            val songs = subsonicClient.listAllSongs(session).getOrThrow()
+            songs.chunked(200).forEachIndexed { i, chunk ->
+                val offs = chunk.map { song ->
+                    SourceOffering(
+                        sourceType = type,
+                        sourceId = instanceId,
+                        sourceName = sourceName,
+                        song = song
+                    )
+                }
+                rebuilt.addAll(offs)
+                publish(rebuilt)
+                catalog.ingestRemoteBatch(
+                    songs = chunk,
+                    sourceType = catalogType,
+                    sourceInstanceId = instanceId,
+                    seenAt = seenAt
+                )
+                _scanProgress.value =
+                    "$sourceName: ${minOf((i + 1) * 200, songs.size)} / ${songs.size}"
+            }
+            catalog.pruneRemoteSource(
+                sourceType = catalogType,
+                sourceInstanceId = instanceId,
+                beforeMs = seenAt,
+                keepSongKeys = keepKeys
+            )
+        }.onFailure {
+            if (it is CancellationException) throw it
+            Log.w(TAG, "subsonic scan failed: ${it.message}")
+            _lastError.value = "$sourceName: ${it.message}"
         }
     }
 
