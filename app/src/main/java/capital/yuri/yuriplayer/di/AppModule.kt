@@ -20,12 +20,17 @@ import capital.yuri.yuriplayer.data.source.AudioDbArtistImageSource
 import capital.yuri.yuriplayer.data.source.BandsintownClient
 import capital.yuri.yuriplayer.data.source.DeezerArtistImageSource
 import capital.yuri.yuriplayer.data.source.DiscogsArtistImageSource
+import capital.yuri.yuriplayer.data.source.JellyfinClient
 import capital.yuri.yuriplayer.data.source.LibrarySource
+import capital.yuri.yuriplayer.data.source.LibrarySourceFactory
 import capital.yuri.yuriplayer.data.source.LibrarySourceRegistry
 import capital.yuri.yuriplayer.data.source.LocalArtistProfileProvider
+import capital.yuri.yuriplayer.data.source.LocalLibrarySource
 import capital.yuri.yuriplayer.data.source.MusicBrainzArtistProfileProvider
 import capital.yuri.yuriplayer.data.source.MusicBrainzClient
+import capital.yuri.yuriplayer.data.source.SourceInstanceRepository
 import capital.yuri.yuriplayer.data.source.SourceResolver
+import capital.yuri.yuriplayer.data.source.SubsonicClient
 import capital.yuri.yuriplayer.data.source.WikipediaArtistImageSource
 import capital.yuri.yuriplayer.data.source.WikidataArtistImageSource
 import capital.yuri.yuriplayer.data.theme.ThemeService
@@ -40,6 +45,7 @@ import capital.yuri.yuriplayer.player.radio.RadioEngine
 import capital.yuri.yuriplayer.player.radio.RadioPlaybackAlgorithm
 import capital.yuri.yuriplayer.player.radio.ReleasePoolAlgorithm
 import io.ktor.client.HttpClient
+import kotlinx.serialization.json.Json
 import org.koin.android.ext.koin.androidContext
 import org.koin.dsl.module
 
@@ -66,7 +72,20 @@ val appModule = module {
     single { CatalogRepository(get(), get()) }
     single { LibraryIndex(get(), get(), get()) }
 
-    single<List<LibrarySource>> { emptyList() }
+    single { SourceInstanceRepository(get()) }
+    single { JellyfinClient(get<HttpClient>(), get<Json>()) }
+    single { SubsonicClient(get<HttpClient>(), get<Json>()) }
+    single { LocalLibrarySource(get(), get()) }
+    single {
+        LibrarySourceFactory(
+            local = get(),
+            jellyfinClient = get(),
+            subsonicClient = get(),
+            instances = get()
+        )
+    }
+    // Static registry starts with local only; factory.buildAll() refreshes when servers change.
+    single<List<LibrarySource>> { listOf(get<LocalLibrarySource>()) }
     single { LibrarySourceRegistry(get()) }
 
     single { PlaylistRepository(get(), get(), get()) }
