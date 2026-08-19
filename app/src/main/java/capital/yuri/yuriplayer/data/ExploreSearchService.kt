@@ -27,11 +27,7 @@ import java.util.concurrent.atomic.AtomicLong
  * Live, **source-tagged** music index for Explore.
  *
  * Heavy remote scans run in [LibraryScanService] with a live notification.
- * For large libraries (tens of thousands of tracks):
- *  - per-page work is **only** Room upserts (no album/artist rollups, no StateFlow list copies)
- *  - warm sources are skipped unless [force]
- *  - one rollup + one catalog hydrate happens at the end
- *  - remote sync pauses on metered / mobile data unless the user enables it in Settings
+ * Typing in Explore **never** starts a network sync — only hydrate + local match.
  */
 class ExploreSearchService(
     private val context: Context,
@@ -66,6 +62,7 @@ class ExploreSearchService(
     private val budget = ScanBudget(context.applicationContext)
     private val lastPublishAt = AtomicLong(0L)
     private val pageCounter = AtomicInteger(0)
+    private val lastCountPublishAt = AtomicLong(0L)
 
     private val _remoteOfferings = MutableStateFlow<List<SourceOffering>>(emptyList())
     val remoteOfferings: StateFlow<List<SourceOffering>> = _remoteOfferings.asStateFlow()
@@ -108,13 +105,11 @@ class ExploreSearchService(
         }
         if (!force && _isScanning.value) return
 
-        // Early network gate so we don't even start the FGS on pure mobile data
         if (!NetworkPolicy.allowsRemoteSync(context, settings)) {
             val reason = NetworkPolicy.blockedReason(context, settings)
                 ?: "Remote sync blocked on this network"
             Log.i(TAG, "requestRemoteScan blocked: $reason")
             _lastError.value = reason
-            // Still hydrate local catalog so Explore works offline / on data
             return
         }
 
@@ -134,68 +129,92 @@ class ExploreSearchService(
         runRemoteScan(force)
     }
 
+    /**
+     * Background search only — **does not** start a remote scan.
+     * Callers must already have hydrated / indexed data.
+     */
     suspend fun search(query: String, forceRescan: Boolean = false): List<Hit> =
-        withContext(Dispatchers.IO) {
+        withContext(Dispatchers.Default) {
             val q = query.trim()
             if (q.isEmpty()) return@withContext emptyList()
-            hydrateFromCatalog()
-            requestRemoteScan(forceRescan)
-            buildHitsPrefer(q)
+            // forceRescan is ignored here on purpose — searching must stay local/fast.
+            // Explicit resync is only via requestRemoteScan / refresh button.
+            buildHitsRankOnly(q, limit = 120)
         }
 
     suspend fun searchWithPrefer(query: String, forceRescan: Boolean = false): List<Hit> =
         search(query, forceRescan)
 
-    fun searchLive(query: String): List<Hit> {
+    /**
+     * Pure CPU match against the in-memory index. Safe on [Dispatchers.Default].
+     * Early-exits once [limit] unique track identities are found.
+     */
+    fun searchLive(query: String, limit: Int = 80): List<Hit> {
         val q = query.trim()
         if (q.isEmpty()) return emptyList()
-        return buildHitsRankOnly(q)
+        return buildHitsRankOnly(q, limit = limit)
     }
 
-    private suspend fun buildHitsPrefer(needle: String): List<Hit> {
-        val matched = collectMatched(needle)
-        return matched.groupBy { trackIdentity(it.song) }.map { (key, offs) ->
-            val distinct = dedupeOfferings(offs)
-            val preferred = sourceResolver.prefer(SCOPE_TRACK, key, distinct)
-                ?: distinct.minByOrNull { it.sourceType.rank }
-                ?: distinct.first()
-            Hit(key, distinct, preferred)
-        }.sortedBy { it.song.displayTitle.lowercase() }
-    }
-
-    private fun buildHitsRankOnly(needle: String): List<Hit> {
-        val matched = collectMatched(needle)
-        return matched.groupBy { trackIdentity(it.song) }.map { (key, offs) ->
+    private fun buildHitsRankOnly(needle: String, limit: Int): List<Hit> {
+        val matched = collectMatched(needle, softCap = limit * 4)
+        val grouped = matched.groupBy { trackIdentity(it.song) }
+        val hits = ArrayList<Hit>(minOf(limit, grouped.size))
+        for ((key, offs) in grouped) {
+            if (hits.size >= limit) break
             val distinct = dedupeOfferings(offs)
             val preferred = distinct.minByOrNull { it.sourceType.rank } ?: distinct.first()
-            Hit(key, distinct, preferred)
-        }.sortedBy { it.song.displayTitle.lowercase() }
+            hits += Hit(key, distinct, preferred)
+        }
+        hits.sortBy { it.song.displayTitle.lowercase() }
+        return hits
     }
 
     private fun dedupeOfferings(offs: List<SourceOffering>): List<SourceOffering> =
         offs.distinctBy { "${it.sourceType.name}:${it.sourceId}" }
 
-    private fun collectMatched(needle: String): List<SourceOffering> {
-        val local = library.songs.value
-            .filter { song -> isLocalFilesystemSong(song) }
-            .map { song ->
-                SourceOffering(
+    /**
+     * Scan local + remote lists for substring matches. Stops after [softCap] raw hits
+     * so a short query on a 44k library doesn't walk the entire table every keystroke.
+     */
+    private fun collectMatched(needle: String, softCap: Int): List<SourceOffering> {
+        val out = ArrayList<SourceOffering>(minOf(softCap, 64))
+        val remote = _remoteOfferings.value
+        val remoteKeys = if (remote.isEmpty()) emptySet() else {
+            // Only build the key set if we also have local rows to de-dupe against
+            val locals = library.songs.value
+            if (locals.isEmpty()) emptySet()
+            else remote.asSequence().map { it.song.songKey }.toHashSet()
+        }
+
+        // Prefer remote index first (usually the large set)
+        for (off in remote) {
+            if (out.size >= softCap) break
+            if (songMatches(off.song, needle)) out += off
+        }
+
+        // Local-only tracks
+        if (out.size < softCap) {
+            for (song in library.songs.value) {
+                if (out.size >= softCap) break
+                if (!isLocalFilesystemSong(song)) continue
+                if (song.songKey in remoteKeys) continue
+                if (!songMatches(song, needle)) continue
+                out += SourceOffering(
                     sourceType = SourceType.LOCAL,
                     sourceId = null,
                     sourceName = "This device",
                     song = song
                 )
             }
-        val remoteKeys = _remoteOfferings.value.map { it.song.songKey }.toSet()
-        val localOnly = local.filter { it.song.songKey !in remoteKeys }
-        return (localOnly + _remoteOfferings.value).filter { off ->
-            val s = off.song
-            s.displayTitle.contains(needle, true) ||
-                s.displayArtist.contains(needle, true) ||
-                s.displayAlbum.contains(needle, true) ||
-                (s.path?.contains(needle, true) == true)
         }
+        return out
     }
+
+    private fun songMatches(s: Song, needle: String): Boolean =
+        s.displayTitle.contains(needle, true) ||
+            s.displayArtist.contains(needle, true) ||
+            s.displayAlbum.contains(needle, true) ||
+            (s.path?.contains(needle, true) == true)
 
     suspend fun setPreferredSource(
         identityKey: String,
@@ -223,6 +242,18 @@ class ExploreSearchService(
         return false
     }
 
+    /** Throttled so Compose doesn't recompose on every page. */
+    private fun bumpIndexedCount(count: Int, force: Boolean = false) {
+        val now = System.currentTimeMillis()
+        val last = lastCountPublishAt.get()
+        if (!force && now - last < budget.countPublishMinIntervalMs) {
+            return
+        }
+        if (!lastCountPublishAt.compareAndSet(last, now) && !force) return
+        _indexedCount.value = count
+        if (force) lastCountPublishAt.set(now)
+    }
+
     private suspend fun runRemoteScan(force: Boolean) {
         if (!mutex.tryLock()) {
             Log.i(TAG, "scan already running — skip")
@@ -235,9 +266,7 @@ class ExploreSearchService(
                 return
             }
 
-            // Network policy — never start a multi-GB index on cellular by default
             if (!assertSyncAllowedOrThrow()) {
-                // Catalog hydrate still helps Explore while on data
                 runCatching { hydrateFromCatalog() }
                 return
             }
@@ -276,7 +305,6 @@ class ExploreSearchService(
                 val instanceId = row.id
                 val seenAt = System.currentTimeMillis()
 
-                // Skip sources that are already well-indexed unless force
                 if (!force) {
                     val catalogType = when (type) {
                         SourceType.JELLYFIN -> CatalogSources.JELLYFIN
@@ -290,7 +318,7 @@ class ExploreSearchService(
                             Log.i(TAG, "skip $sourceName — already indexed $existing tracks (use force to re-sync)")
                             progress("$sourceName: already indexed ($existing)")
                             totalIngested += existing
-                            _indexedCount.value = totalIngested
+                            bumpIndexedCount(totalIngested, force = true)
                             continue
                         }
                     }
@@ -321,18 +349,16 @@ class ExploreSearchService(
                     )
                     else -> 0
                 }
-                // Negative = aborted mid-source for network policy (do not prune)
                 if (ingested < 0) {
                     abortedForNetwork = true
                     totalIngested += -ingested
                     break
                 }
                 totalIngested += ingested
-                _indexedCount.value = totalIngested
+                bumpIndexedCount(totalIngested, force = true)
             }
 
             if (abortedForNetwork) {
-                // Keep whatever we ingested; do not prune or force a full rollup of partial data
                 progress(
                     NetworkPolicy.blockedReason(context, settings)
                         ?: "Paused on mobile data"
@@ -368,7 +394,6 @@ class ExploreSearchService(
             progress("Merging into library…")
             runCatching { library.reloadFromCatalog() }
 
-            // Cover downloads also respect mobile-data policy
             if (NetworkPolicy.allowsRemoteSync(context, settings)) {
                 progress("Caching covers…")
                 runCatching { cacheAlbumArtPassive(finalRows.map { it.song }) }
@@ -393,10 +418,6 @@ class ExploreSearchService(
         notifier.update("Syncing libraries", text)
     }
 
-    /**
-     * @return tracks ingested, or **negative** count if aborted mid-scan for network policy
-     * (caller must not prune in that case).
-     */
     private suspend fun scanJellyfin(
         rowId: Long,
         sourceName: String,
@@ -424,7 +445,6 @@ class ExploreSearchService(
         jellyfinClient.listAudioItemsPaged(session, pageSize = budget.pageSize) { page, start, total ->
             if (!assertSyncAllowedOrThrow()) {
                 aborted = true
-                // Stop paging by throwing a soft cancellation the paged client will surface
                 throw CancellationException("paused for mobile data policy")
             }
 
@@ -435,7 +455,7 @@ class ExploreSearchService(
                 seenAt = seenAt
             )
             delivered += page.size
-            _indexedCount.value = delivered
+            bumpIndexedCount(delivered)
 
             val totalPart = total?.let { " / $it" }.orEmpty()
             val done = start + page.size
@@ -453,7 +473,6 @@ class ExploreSearchService(
             }
         }.onFailure {
             if (it is CancellationException && aborted) {
-                // expected — network policy pause
                 Log.i(TAG, "jellyfin scan paused after $delivered tracks (mobile data policy)")
             } else if (it is CancellationException) {
                 throw it
@@ -465,7 +484,6 @@ class ExploreSearchService(
         }
 
         if (aborted) {
-            // Do NOT prune — would delete tracks not yet re-seen this run
             return -delivered.coerceAtLeast(1)
         }
 
@@ -546,7 +564,7 @@ class ExploreSearchService(
                     seenAt = seenAt
                 )
                 delivered += chunk.size
-                _indexedCount.value = delivered
+                bumpIndexedCount(delivered)
                 val done = minOf((i + 1) * budget.pageSize, songs.size)
                 if (i == 0 || (i + 1) % budget.progressEveryPages == 0 || done >= songs.size) {
                     progress("$sourceName: $done / ${songs.size}")
@@ -576,7 +594,7 @@ class ExploreSearchService(
     }
 
     private fun publish(list: List<SourceOffering>, force: Boolean) {
-        _indexedCount.value = list.size
+        bumpIndexedCount(list.size, force = true)
         val now = System.currentTimeMillis()
         val last = lastPublishAt.get()
         if (!force && now - last < budget.publishMinIntervalMs) return
