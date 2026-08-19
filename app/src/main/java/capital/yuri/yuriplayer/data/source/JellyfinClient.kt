@@ -139,10 +139,7 @@ class JellyfinClient(
         delivered
     }.onFailure { Log.w(TAG, "listAudioItemsPaged failed: ${it.message}") }
 
-    /**
-     * Official static stream. `_id` query keeps the full URI unique per item even when
-     * some callers compare only path segments poorly.
-     */
+    /** Official static stream; `_id` keeps full URI unique per item. */
     fun streamUrl(session: Session, itemId: String): String {
         val root = session.baseUrl.trimEnd('/')
         return "$root/Audio/$itemId/stream" +
@@ -190,8 +187,8 @@ class JellyfinClient(
             trackNumber = indexNumber,
             discNumber = parentIndexNumber,
             year = productionYear,
-            // null path → player always uses contentUri (never File("jellyfin:…"))
-            path = null,
+            // Catalog identity only — resolvePlayableUri must not treat as a File path
+            path = "jellyfin:$id",
             mimeType = null
         )
     }
