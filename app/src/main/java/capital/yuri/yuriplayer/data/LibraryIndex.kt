@@ -52,27 +52,31 @@ class LibraryIndex(
 
     /**
      * Fast path for cold start:
-     * 1. Disk cache (instant)
-     * 2. Local Room rows only
-     * 3. Full MediaStore rescan only if empty, and only after a delay so
-     *    MusicService restore + first Play win the CPU.
+     * 1. Disk cache only (instant) — enough for My Stuff UI
+     * 2. Room local only if cache was empty
+     * 3. Full MediaStore rescan only if still empty / stale, after long delays
+     *    so MusicService restore + first Play own the CPU
      */
     fun bootstrap(staleAfterMs: Long = DEFAULT_STALE_MS) {
         scope.launch {
             // 1) Cache first — no Room, no MediaStore
             val cached = runCatching { cache.load() }.getOrNull()
-            if (cached != null && cached.songs.isNotEmpty()) {
-                _songs.value = cached.songs
+            val hadCache = cached != null && cached.songs.isNotEmpty()
+            if (hadCache) {
+                _songs.value = cached!!.songs
                 _lastScannedAt.value = cached.scannedAt
                 Log.i(TAG, "bootstrap from cache: ${cached.songs.size} tracks")
             }
 
-            // 2) Local Room rows (not the full remote catalog)
-            val fromDb = runCatching { catalog.getLocalSongs() }.getOrDefault(emptyList())
-            if (fromDb.isNotEmpty()) {
-                _songs.value = fromDb
-                _lastScannedAt.value = System.currentTimeMillis()
-                Log.i(TAG, "bootstrap from Room local: ${fromDb.size} tracks")
+            // 2) Room only when cache missed — avoid loading large local tables
+            //    while playback is still restoring.
+            if (!hadCache) {
+                val fromDb = runCatching { catalog.getLocalSongs() }.getOrDefault(emptyList())
+                if (fromDb.isNotEmpty()) {
+                    _songs.value = fromDb
+                    _lastScannedAt.value = System.currentTimeMillis()
+                    Log.i(TAG, "bootstrap from Room local: ${fromDb.size} tracks")
+                }
             }
 
             val age = System.currentTimeMillis() - _lastScannedAt.value
@@ -85,7 +89,22 @@ class LibraryIndex(
                         refresh()
                     }
                 }
-                // Stale but we have songs — rescan much later, never block play
+                // Warm cache: optionally reconcile Room much later (no MediaStore)
+                hadCache -> {
+                    delay(ROOM_RECONCILE_DELAY_MS)
+                    if (!_isLoading.value) {
+                        runCatching { reloadFromCatalog() }
+                        val stillStale = System.currentTimeMillis() - _lastScannedAt.value > staleAfterMs
+                        if (stillStale && !_isLoading.value) {
+                            delay(STALE_RESCAN_DELAY_MS)
+                            if (!_isLoading.value) {
+                                Log.i(TAG, "bootstrap: stale after reconcile → deferred local rescan")
+                                refresh()
+                            }
+                        }
+                    }
+                }
+                // Had Room rows but no cache — rescan later if stale
                 age > staleAfterMs -> {
                     delay(STALE_RESCAN_DELAY_MS)
                     if (!_isLoading.value) {
@@ -283,6 +302,8 @@ class LibraryIndex(
         /** Wait so MusicService can restore + user can hit Play first. */
         private const val COLD_EMPTY_RESCAN_DELAY_MS = 5_000L
         private const val STALE_RESCAN_DELAY_MS = 12_000L
+        /** After a warm cache hit, wait before touching Room at all. */
+        private const val ROOM_RECONCILE_DELAY_MS = 8_000L
 
         fun normalizeKey(value: String?): String? {
             if (value == null) return null

@@ -57,7 +57,7 @@ import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
-import androidx.compose.ui.Modifier
+import androidx.compose.ui.Modifier.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
@@ -131,8 +131,9 @@ class MainActivity : ComponentActivity() {
                 Manifest.permission.READ_MEDIA_AUDIO
             )
         }
-        if (readOk) libraryIndex.refresh()
-        maybePromptAllFilesAccess()
+        // Do NOT start a library scan here — that raced playback restore on every
+        // cold start. LibraryIndex.bootstrap handles empty / stale later.
+        if (readOk) maybePromptAllFilesAccess()
     }
 
     private fun hasReadPermission(): Boolean {
@@ -161,7 +162,8 @@ class MainActivity : ComponentActivity() {
             ContextCompat.checkSelfPermission(this, it) != PackageManager.PERMISSION_GRANTED
         }
         if (needed.isEmpty()) {
-            libraryIndex.refresh()
+            // Permissions already granted — do NOT refresh(). Bootstrap decides
+            // whether a local scan is needed, and only after playback restore.
             maybePromptAllFilesAccess()
         } else {
             permissionLauncher.launch(needed.toTypedArray())
@@ -202,6 +204,10 @@ class MainActivity : ComponentActivity() {
         isCarMode = intent?.action == "capital.yuri.yuriplayer.action.CAR_MODE" ||
                 intent?.getBooleanExtra("car_mode", false) == true
         openPlayerState.value = intent?.getBooleanExtra(EXTRA_OPEN_PLAYER, false) == true
+
+        // Bind as early as possible so the first play tap has a live service.
+        // Application already started MusicService for restore; this attaches the binder.
+        playerController.bind()
 
         ensurePermissions()
 
@@ -256,6 +262,7 @@ class MainActivity : ComponentActivity() {
 
     override fun onStart() {
         super.onStart()
+        // Re-bind if we lost the connection while backgrounded
         playerController.bind()
     }
 
