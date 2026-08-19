@@ -19,7 +19,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
-import androidx.compose.ui.Modifier
+import androidx.compose.ui.Modifier.modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import capital.yuri.yuriplayer.data.ExploreSearchService
@@ -33,11 +33,12 @@ import org.koin.compose.koinInject
  * Top-bar control for library / remote indexing.
  * Icon is [TravelExplore] (scan/discovery) instead of Refresh.
  * Dropdown: scan/resume all, pause/stop all, and per-source pause/stop/resume.
+ *
+ * All scan start/stop goes through ExploreSearchService → LibraryScanService.
+ * ExploreScreen never starts scans on enter.
  */
 @Composable
-fun ExploreScanMenu(
-    onForceRescanKey: () -> Unit = {}
-) {
+fun ExploreScanMenu() {
     val explore: ExploreSearchService = koinInject()
     val library: LibraryIndex = koinInject()
     val settings: LibrarySettings = koinInject()
@@ -82,7 +83,6 @@ fun ExploreScanMenu(
                 onClick = {
                     expanded = false
                     library.refresh()
-                    onForceRescanKey()
                     explore.requestRemoteScan(force = true)
                     if (settings.isNetworkMetadataEnabled()) {
                         enrichment.enrichLibraryAsync()
@@ -135,7 +135,7 @@ fun ExploreScanMenu(
                     }
                     DropdownMenuItem(
                         text = { Text("${cp.sourceName} · $statusLabel") },
-                        onClick = { /* header-ish */ },
+                        onClick = { /* label row */ },
                         enabled = false
                     )
                     when (cp.status) {
@@ -174,7 +174,7 @@ fun ExploreScanMenu(
                                 text = { Text("  Re-scan ${cp.sourceName}") },
                                 onClick = {
                                     expanded = false
-                                    // Clear done marker by force scan of all for now
+                                    // Force clears DONE markers and restarts from zero
                                     explore.requestRemoteScan(force = true)
                                 }
                             )

@@ -45,7 +45,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
-import androidx.compose.ui.Modifier
+import androidx.compose.ui.Modifier.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalFocusManager
@@ -73,9 +73,7 @@ fun ExploreScreen(
     onPlay: (List<Song>, Int) -> Unit,
     onAddToQueue: (Song) -> Unit,
     onOpenAlbum: (AlbumItem) -> Unit = {},
-    onOpenArtist: (ArtistItem) -> Unit = {},
-    /** Explicit user force-rescan only — never auto-fires on tab enter. */
-    forceRescanKey: Int = 0
+    onOpenArtist: (ArtistItem) -> Unit = {}
 ) {
     val explore: ExploreSearchService = koinInject()
     val library: LibraryIndex = koinInject()
@@ -97,14 +95,11 @@ fun ExploreScreen(
     var artistHits by remember { mutableStateOf<List<ArtistItem>>(emptyList()) }
     var searchBusy by remember { mutableStateOf(false) }
 
-    // Hydrate count only. Do NOT start/restart a remote scan when entering Explore —
-    // the FGS owns that, and re-entry used to cancel in-flight work.
+    // Hydrate count + checkpoint snapshot only.
+    // NEVER start or restart a remote scan on tab enter — the FGS owns that work,
+    // and re-composition used to force-rescan via a sticky forceRescanKey.
     LaunchedEffect(Unit) {
         explore.hydrateFromCatalog()
-    }
-
-    LaunchedEffect(forceRescanKey) {
-        if (forceRescanKey > 0) explore.requestRemoteScan(force = true)
     }
 
     LaunchedEffect(query) {
