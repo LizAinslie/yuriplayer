@@ -31,10 +31,11 @@ val httpModule = module {
             install(Logging) {
                 logger = object : Logger {
                     override fun log(message: String) {
-                        android.util.Log.d("Ktor", message)
+                        android.util.Log.d("Ktor", redactSecrets(message))
                     }
                 }
-                level = LogLevel.INFO
+                // BODY so auth failures are diagnosable; secrets stripped in [redactSecrets].
+                level = LogLevel.BODY
             }
             defaultRequest {
                 header(
@@ -49,3 +50,40 @@ val httpModule = module {
         }
     }
 }
+
+/**
+ * Strip credentials from Ktor log lines before they hit logcat.
+ * Covers JSON bodies (Pw/Password), query tokens, and Authorization headers.
+ */
+internal fun redactSecrets(message: String): String {
+    var out = message
+    // JSON password fields (Jellyfin AuthenticateByName, etc.)
+    out = JSON_SECRET_FIELDS.replace(out) { m ->
+        "\"${m.groupValues[1]}\":\"***\""
+    }
+    // Subsonic token query params and generic secrets
+    out = QUERY_SECRETS.replace(out) { m ->
+        "${m.groupValues[1]}=***"
+    }
+    // Authorization / X-Emby-* header values (may embed Token="...")
+    out = HEADER_SECRETS.replace(out) { m ->
+        "${m.groupValues[1]}: ***"
+    }
+    out = EMBEDDED_TOKEN.replace(out, "Token=\"***\"")
+    return out
+}
+
+private val JSON_SECRET_FIELDS = Regex(
+    "\"(Pw|Password|password|secret|token|AccessToken|api_key|apiKey)\"\\s*:\\s*\"[^\"]*\"",
+    RegexOption.IGNORE_CASE
+)
+private val QUERY_SECRETS = Regex(
+    "(?i)(p|pw|password|t|token|s|secret|api_key|apiKey|AccessToken)=[^&\\s\"']+"
+)
+private val HEADER_SECRETS = Regex(
+    "(?im)^(Authorization|X-Emby-Authorization|X-Emby-Token|X-MediaBrowser-Token)\\s*:\\s*.+$"
+)
+private val EMBEDDED_TOKEN = Regex(
+    "Token=\"[^\"]*\"",
+    RegexOption.IGNORE_CASE
+)
