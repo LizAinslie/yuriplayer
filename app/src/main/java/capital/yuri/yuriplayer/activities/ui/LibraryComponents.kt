@@ -434,13 +434,14 @@ fun SwipeAddSongRow(
     val catalog: CatalogRepository = koinInject()
     val explore: ExploreSearchService = koinInject()
     val scope = rememberCoroutineScope()
+    val context = LocalContext.current
     val entries by pinStore.entries.collectAsState()
     val saved = remember(entries, song.songKey) {
         pinStore.contains(StuffPinKind.SONG, song.songKey)
     }
     val songNav = LocalSongNav.current
 
-    // Auto-resolve offerings when caller didn't pass them (playlist/album/library/queue via this row)
+    // Auto-resolve offerings when caller didn't pass them
     var resolvedOfferings by remember(song.songKey) { mutableStateOf(sourceOfferings) }
     LaunchedEffect(song.songKey, sourceOfferings) {
         if (sourceOfferings != null) {
@@ -457,16 +458,10 @@ fun SwipeAddSongRow(
     val showExplicit = isExplicit || effectiveOfferings.orEmpty().any { it.song.isExplicit }
     val resolvedIdentity = identityKey ?: ExploreSearchService.trackIdentity(song)
 
-    val preferHandler: ((SourceOffering) -> Unit)? = onPreferSource ?: { off ->
+    val prefer: ((SourceOffering) -> Unit) = onPreferSource ?: { off ->
         scope.launch {
             explore.setPreferredSource(resolvedIdentity, off)
-            Toast.makeText(
-                // context captured below — use LocalContext inside toast via remembered
-                // (handled after context val)
-                android.app.Application(), // placeholder replaced below
-                "",
-                Toast.LENGTH_SHORT
-            )
+            Toast.makeText(context, "Preferred: ${off.sourceName}", Toast.LENGTH_SHORT).show()
         }
     }
 
@@ -482,14 +477,6 @@ fun SwipeAddSongRow(
     val titleWeight = if (isPlaying) FontWeight.SemiBold else FontWeight.Normal
     val subtitleColor = if (isPlaying) accent.copy(alpha = 0.75f)
     else onSurface.copy(alpha = 0.6f)
-    val context = LocalContext.current
-
-    val prefer: ((SourceOffering) -> Unit) = onPreferSource ?: { off ->
-        scope.launch {
-            explore.setPreferredSource(resolvedIdentity, off)
-            Toast.makeText(context, "Preferred: ${off.sourceName}", Toast.LENGTH_SHORT).show()
-        }
-    }
 
     val subtitleText = if (showTrackNumber) song.displayArtist
     else "${song.displayArtist} \u2022 ${song.displayAlbum}"
