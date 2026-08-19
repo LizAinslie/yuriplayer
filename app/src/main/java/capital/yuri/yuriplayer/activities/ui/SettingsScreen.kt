@@ -9,7 +9,6 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
@@ -104,6 +103,7 @@ private fun SettingsHubScreen(
     onOpenLicenses: () -> Unit,
     onOpenVersion: () -> Unit
 ) {
+    val context = LocalContext.current
     val settings: LibrarySettings = koinInject()
     var autoMetadata by remember {
         mutableStateOf(settings.isAutomaticMetadataEnabled())
@@ -226,7 +226,14 @@ private fun SettingsHubScreen(
                 subtitle = "github.com/LizAinslie/yuriplayer",
                 icon = Icons.Default.Code,
                 onClick = {
-                    // opened from Version screen too; hub shortcut
+                    runCatching {
+                        context.startActivity(
+                            Intent(
+                                Intent.ACTION_VIEW,
+                                Uri.parse(BuildConfig.REPO_URL)
+                            ).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                        )
+                    }
                 }
             )
         }
