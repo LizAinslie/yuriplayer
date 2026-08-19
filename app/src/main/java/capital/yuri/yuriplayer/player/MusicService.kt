@@ -34,6 +34,7 @@ import capital.yuri.yuriplayer.data.Song
 import capital.yuri.yuriplayer.player.engine.extractStreamHeaders
 import capital.yuri.yuriplayer.player.engine.isNetworkUri
 import capital.yuri.yuriplayer.player.engine.isVirtualLibraryPath
+import capital.yuri.yuriplayer.player.radio.RadioSourcePrefs
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -77,10 +78,6 @@ class MusicService : MediaSessionService() {
     private var stickySeekUntilElapsed: Long = 0L
     private var userSeekGuardUntilElapsed: Long = 0L
 
-    /**
-     * Remote (Jellyfin/Subsonic) restore is deferred so cold start never blocks on
-     * network prepare. Metadata + notification still update immediately.
-     */
     private var pendingRemoteRestore: PendingRemoteRestore? = null
 
     private data class PendingRemoteRestore(
@@ -88,7 +85,6 @@ class MusicService : MediaSessionService() {
         val wasPlayWhenReady: Boolean
     )
 
-    /** Shared HTTP factory so Jellyfin/Subsonic tokens apply to stream requests. */
     private val httpFactory = DefaultHttpDataSource.Factory()
         .setAllowCrossProtocolRedirects(true)
         .setConnectTimeoutMs(12_000)
@@ -120,7 +116,6 @@ class MusicService : MediaSessionService() {
             .setContentType(C.AUDIO_CONTENT_TYPE_MUSIC)
             .build()
 
-        // Leaner buffers so first remote (Jellyfin) prepare returns sooner on mid-range devices
         val loadControl = DefaultLoadControl.Builder()
             .setBufferDurationsMs(8_000, 40_000, 500, 1_500)
             .setPrioritizeTimeOverSizeThresholds(true)
@@ -130,8 +125,6 @@ class MusicService : MediaSessionService() {
             .setEnableDecoderFallback(true)
             .setExtensionRendererMode(DefaultRenderersFactory.EXTENSION_RENDERER_MODE_OFF)
 
-        // Must be built after super.onCreate() — Context is not attached during field init.
-        // Local content:// / file:// first; HTTP only for network schemes.
         val dataSourceFactory = DefaultDataSource.Factory(this, httpFactory)
         val mediaSourceFactory = DefaultMediaSourceFactory(this)
             .setDataSourceFactory(dataSourceFactory)
@@ -140,7 +133,6 @@ class MusicService : MediaSessionService() {
             .setMediaSourceFactory(mediaSourceFactory)
             .setAudioAttributes(audioAttributes, true)
             .setHandleAudioBecomingNoisy(true)
-            // NETWORK so remote streams keep Wi‑Fi / radio awake; local still works
             .setWakeMode(C.WAKE_MODE_NETWORK)
             .setLoadControl(loadControl)
             .setPauseAtEndOfMediaItems(false)
@@ -207,7 +199,6 @@ class MusicService : MediaSessionService() {
         stickySeekUntilElapsed = 0L
     }
 
-    /** Apply Jellyfin/Subsonic auth headers before any network prepare. */
     private fun applyStreamHeaders(song: Song?) {
         if (song == null) return
         val headers = extractStreamHeaders(song)
@@ -216,10 +207,6 @@ class MusicService : MediaSessionService() {
         }
     }
 
-    /**
-     * If a remote track was restored without preparing, do that now (on play).
-     * Returns true when a deferred prepare was kicked off.
-     */
     private fun flushPendingRemoteRestore(autoPlay: Boolean): Boolean {
         val pending = pendingRemoteRestore ?: return false
         pendingRemoteRestore = null
@@ -395,7 +382,6 @@ class MusicService : MediaSessionService() {
         val p = player ?: return
         val current = queueManager.currentSong() ?: return
         if (pendingRemoteRestore != null) {
-            // Window not prepared yet — next item will be attached on flush.
             return
         }
         val playingUri = mediaItemUriAt(p.currentMediaItemIndex)
@@ -521,6 +507,12 @@ class MusicService : MediaSessionService() {
             updateNextMediaItemOnly()
             persistState()
         }
+    }
+
+    fun applyRadioPrefs(prefs: RadioSourcePrefs) {
+        queueManager.applyRadioPrefs(prefs)
+        updateNextMediaItemOnly()
+        persistState()
     }
 
     fun addToHotQueue(song: Song) {
@@ -651,7 +643,6 @@ class MusicService : MediaSessionService() {
 
     fun seekTo(positionMs: Long) {
         if (pendingRemoteRestore != null) {
-            // Seek before first prepare — just update the pending position.
             val pending = pendingRemoteRestore!!
             pendingRemoteRestore = pending.copy(positionMs = positionMs.coerceAtLeast(0L))
             persistState()
@@ -738,12 +729,6 @@ class MusicService : MediaSessionService() {
     private fun toMediaItem(song: Song, mediaIdSuffix: String? = null): MediaItem =
         MusicServicePlaybackHooks.toMediaItem(song, mediaIdSuffix)
 
-    /**
-     * Restore queue metadata immediately so the UI can bind.
-     * Local files: short yield then prepare.
-     * Remote (Jellyfin): **do not prepare** until the user hits play — network
-     * handshake was blocking first frames on mid-range devices.
-     */
     private fun restorePlaybackState() {
         if (restoredOnce) return
         restoredOnce = true
@@ -753,7 +738,6 @@ class MusicService : MediaSessionService() {
             val current = queueManager.currentSong()
             _nowPlaying.value = current
             updateForegroundNotification()
-            // Let Activity/Compose paint before any player work
             yield()
             if (isRemoteSong(current)) {
                 pendingRemoteRestore = PendingRemoteRestore(
@@ -765,7 +749,6 @@ class MusicService : MediaSessionService() {
                     "restore deferred remote '${current?.displayTitle}' " +
                         "pos=${saved.positionMs} wasPlaying=${saved.playWhenReady}"
                 )
-                // Intentionally no rebufferWindow here — play() flushes it.
             } else {
                 delay(RESTORE_PREPARE_DELAY_MS)
                 rebufferWindow(saved.positionMs, autoPlay = false, forceReload = true)
@@ -1109,7 +1092,6 @@ class MusicService : MediaSessionService() {
         private const val STICKY_SEEK_MS = 1_200L
         private const val USER_SEEK_GUARD_MS = 1_000L
         private const val SEEK_CONFIRM_MS = 600L
-        /** Delay after local queue restore before Exo prepare — keeps first UI frames free. */
         private const val RESTORE_PREPARE_DELAY_MS = 40L
     }
 }
