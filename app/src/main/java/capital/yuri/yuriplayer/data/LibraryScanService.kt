@@ -22,9 +22,9 @@ import org.koin.android.ext.android.inject
  * Short-lived foreground service that hosts library scans / remote syncs so they
  * keep running when the UI is backgrounded, with a live progress notification.
  *
- * Work runs at background thread priority; the notification is updated via
- * [LibraryScanNotifier] only — we do **not** re-call startForeground on every
- * progress tick (that was a major source of jank / ANRs on large indexes).
+ * Work runs at **lowest** background priority so touch / composition keep the CPU.
+ * Notification updates go through [LibraryScanNotifier] only — never re-call
+ * startForeground on every progress tick.
  */
 class LibraryScanService : Service() {
 
@@ -32,7 +32,7 @@ class LibraryScanService : Service() {
     private val explore: ExploreSearchService by inject()
     private val library: LibraryIndex by inject()
 
-    // Limited parallelism keeps GC pressure down on mid-range devices
+    // Single worker — never compete with UI / playback threads for pool slots
     private val scanDispatcher = Dispatchers.IO.limitedParallelism(1)
     private val scope = CoroutineScope(SupervisorJob() + scanDispatcher)
     private var work: Job? = null
@@ -47,13 +47,12 @@ class LibraryScanService : Service() {
             ACTION_LOCAL -> "Scanning library"
             else -> "Syncing libraries"
         }
-        // Promote to FGS once at start — subsequent progress is NotificationManager only
         startAsForeground(title, "Starting…")
 
         work?.cancel()
         work = scope.launch {
-            // Prefer remaining responsive for touch / composition
-            Process.setThreadPriority(Process.THREAD_PRIORITY_BACKGROUND)
+            // Lowest priority: UI and audio always win scheduling
+            Process.setThreadPriority(Process.THREAD_PRIORITY_LOWEST)
             try {
                 when (action) {
                     ACTION_LOCAL -> {
