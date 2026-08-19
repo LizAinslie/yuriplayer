@@ -1,5 +1,9 @@
 import java.util.Properties
 import java.io.FileInputStream
+import org.gradle.api.provider.ValueSource
+import org.gradle.api.provider.ValueSourceParameters
+import org.gradle.process.ExecOperations
+import javax.inject.Inject
 
 plugins {
     alias(libs.plugins.android.application)
@@ -10,31 +14,48 @@ plugins {
     alias(libs.plugins.aboutlibraries.android)
 }
 
-fun gitCommand(vararg args: String): String {
-    return try {
-        val proc = ProcessBuilder("git", *args)
-            .directory(rootProject.projectDir)
-            .redirectErrorStream(true)
-            .start()
-        val out = proc.inputStream.bufferedReader().readText().trim()
-        proc.waitFor()
-        if (proc.exitValue() == 0 && out.isNotBlank()) out else "unknown"
-    } catch (_: Exception) {
-        "unknown"
+/**
+ * Configuration-cache compatible git invocation.
+ * Bare ProcessBuilder at configuration time is forbidden under Gradle CC.
+ */
+abstract class GitCommandValueSource : ValueSource<String, GitCommandValueSource.Params> {
+    interface Params : ValueSourceParameters {
+        val args: org.gradle.api.provider.ListProperty<String>
+        val workingDir: org.gradle.api.file.DirectoryProperty
+    }
+
+    @get:Inject
+    abstract val execOperations: ExecOperations
+
+    override fun obtain(): String {
+        val out = java.io.ByteArrayOutputStream()
+        val result = execOperations.exec {
+            commandLine(listOf("git") + parameters.args.get())
+            workingDir(parameters.workingDir.get().asFile)
+            standardOutput = out
+            errorOutput = java.io.ByteArrayOutputStream()
+            isIgnoreExitValue = true
+        }
+        val text = out.toString(Charsets.UTF_8).trim()
+        return if (result.exitValue == 0 && text.isNotBlank()) text else "unknown"
     }
 }
 
-val gitCommit: String = gitCommand("rev-parse", "HEAD")
-val gitCommitShort: String = gitCommand("rev-parse", "--short", "HEAD")
-val gitBranch: String = gitCommand("rev-parse", "--abbrev-ref", "HEAD")
-val gitDescribe: String = gitCommand("describe", "--tags", "--always", "--dirty")
-val gitTag: String = run {
-    val exact = gitCommand("describe", "--tags", "--exact-match")
-    if (exact != "unknown") exact else ""
-}
-val gitDirty: Boolean = gitCommand("status", "--porcelain").let {
-    it != "unknown" && it.isNotBlank()
-}
+fun Project.gitOutput(vararg args: String): Provider<String> =
+    providers.of(GitCommandValueSource::class.java) {
+        parameters.args.set(args.toList())
+        parameters.workingDir.set(rootProject.layout.projectDirectory)
+    }
+
+val gitCommit = gitOutput("rev-parse", "HEAD")
+val gitCommitShort = gitOutput("rev-parse", "--short", "HEAD")
+val gitBranch = gitOutput("rev-parse", "--abbrev-ref", "HEAD")
+val gitDescribe = gitOutput("describe", "--tags", "--always", "--dirty")
+val gitTagExact = gitOutput("describe", "--tags", "--exact-match")
+val gitStatus = gitOutput("status", "--porcelain")
+
+val gitTag: Provider<String> = gitTagExact.map { if (it == "unknown") "" else it }
+val gitDirty: Provider<Boolean> = gitStatus.map { it != "unknown" && it.isNotBlank() }
 
 android {
     namespace = "capital.yuri.yuriplayer"
@@ -51,12 +72,13 @@ android {
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
-        buildConfigField("String", "GIT_COMMIT", "\"$gitCommit\"")
-        buildConfigField("String", "GIT_COMMIT_SHORT", "\"$gitCommitShort\"")
-        buildConfigField("String", "GIT_BRANCH", "\"$gitBranch\"")
-        buildConfigField("String", "GIT_DESCRIBE", "\"$gitDescribe\"")
-        buildConfigField("String", "GIT_TAG", "\"$gitTag\"")
-        buildConfigField("boolean", "GIT_DIRTY", "$gitDirty")
+        // .get() is fine: ValueSource is a tracked CC input
+        buildConfigField("String", "GIT_COMMIT", "\"${gitCommit.get()}\"")
+        buildConfigField("String", "GIT_COMMIT_SHORT", "\"${gitCommitShort.get()}\"")
+        buildConfigField("String", "GIT_BRANCH", "\"${gitBranch.get()}\"")
+        buildConfigField("String", "GIT_DESCRIBE", "\"${gitDescribe.get()}\"")
+        buildConfigField("String", "GIT_TAG", "\"${gitTag.get()}\"")
+        buildConfigField("boolean", "GIT_DIRTY", "${gitDirty.get()}")
         buildConfigField("String", "REPO_URL", "\"https://github.com/LizAinslie/yuriplayer\"")
     }
 
@@ -117,7 +139,6 @@ android {
 }
 
 aboutLibraries {
-    // Merge duplicates; keep SPDX ids for our Settings rows
     library {
         duplicationMode.set(com.mikepenz.aboutlibraries.plugin.DuplicateMode.MERGE)
         duplicationRule.set(com.mikepenz.aboutlibraries.plugin.DuplicateRule.SIMPLE)
@@ -231,7 +252,6 @@ dependencies {
     implementation(libs.coil.network.okhttp)
     implementation(libs.coil.gif)
 
-    // License metadata only — UI stays our Settings rows
     implementation(libs.aboutlibraries.core)
 
     testImplementation(libs.junit)
