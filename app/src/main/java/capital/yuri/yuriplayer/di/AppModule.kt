@@ -134,6 +134,7 @@ val appModule = module {
         )
     }
 
+    // dao, catalog (not LibraryIndex), images — playlist resolve is SQL-keyed
     single { PlaylistRepository(get(), get(), get()) }
     single { MusicBrainzClient(get<HttpClient>()) }
     single { BandsintownClient(get<HttpClient>()) }
