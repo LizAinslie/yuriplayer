@@ -65,13 +65,19 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import capital.yuri.yuriplayer.data.AlbumItem
+import capital.yuri.yuriplayer.data.CatalogRepository
+import capital.yuri.yuriplayer.data.LibraryIndex
 import capital.yuri.yuriplayer.data.MetadataEnrichmentService
 import capital.yuri.yuriplayer.data.MyStuffPinStore
 import capital.yuri.yuriplayer.data.Song
 import capital.yuri.yuriplayer.data.StuffPinKind
 import capital.yuri.yuriplayer.data.albumKey
+import capital.yuri.yuriplayer.data.findLocalAlbum
+import capital.yuri.yuriplayer.data.mergeAlbumSources
 import capital.yuri.yuriplayer.data.theme.ThemeService
 import capital.yuri.yuriplayer.ui.formatTrackCount
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import org.koin.compose.koinInject
 import kotlin.math.sqrt
 
@@ -134,6 +140,8 @@ fun AlbumDetailScreen(
     val themeService: ThemeService = koinInject()
     val enrichment: MetadataEnrichmentService = koinInject()
     val pinStore: MyStuffPinStore = koinInject()
+    val catalog: CatalogRepository = koinInject()
+    val library: LibraryIndex = koinInject()
     val entries by pinStore.entries.collectAsState()
     val coverGen by enrichment.coverGeneration.collectAsState()
     val base = MaterialTheme.colorScheme
@@ -145,6 +153,16 @@ fun AlbumDetailScreen(
     val albumKeyStr = albumKey(album.name, album.artist)
     val albumSaved = remember(entries, albumKeyStr) {
         pinStore.contains(StuffPinKind.ALBUM, albumKeyStr)
+    }
+
+    // Always expand from catalog + local — navigation seed alone is often a single JF track.
+    var liveAlbum by remember(albumKeyStr) { mutableStateOf(album) }
+    LaunchedEffect(albumKeyStr, album.songs.size) {
+        val fromCatalog = withContext(Dispatchers.IO) {
+            catalog.albumItemForKey(albumKeyStr)
+        }
+        val fromLocal = findLocalAlbum(library, album.name, album.artist)
+        liveAlbum = mergeAlbumSources(album, fromCatalog, fromLocal)
     }
 
     val collapseRangePx = with(density) { (ExpandedHeaderBody - CollapsedBarHeight).toPx() }
@@ -183,35 +201,35 @@ fun AlbumDetailScreen(
         collapsePx = 0f
     }
 
-    LaunchedEffect(album.name, album.artist, coverGen) {
+    LaunchedEffect(liveAlbum.name, liveAlbum.artist, liveAlbum.songs.firstOrNull()?.path, coverGen) {
         themeColors = themeService.themeFromSong(
             context = context,
-            song = album.songs.firstOrNull(),
+            song = liveAlbum.songs.firstOrNull(),
             base = base,
             forceRefresh = coverGen > 0L
         ).colors
     }
 
-    val discs = remember(album.songs) { groupByDisc(album.songs) }
+    val discs = remember(liveAlbum.songs) { groupByDisc(liveAlbum.songs) }
     val multiDisc = discs.size > 1 || discs.keys.any { it != null && it > 1 }
     val scheme = playerColorScheme(themeColors, base)
     val albumBg = scheme.background
     val defaultBg = base.background
 
-    val releaseYear = remember(album.songs, coverGen) {
-        album.songs.mapNotNull { it.year }.maxOrNull()
+    val releaseYear = remember(liveAlbum.songs, coverGen) {
+        liveAlbum.songs.mapNotNull { it.year }.maxOrNull()
     }
-    val releaseType = guessReleaseType(album.trackCount)
+    val releaseType = guessReleaseType(liveAlbum.trackCount)
     val metaLine = buildString {
         append(releaseType)
         if (releaseYear != null) append(" · $releaseYear")
-        append(" · ${formatTrackCount(album.trackCount)}")
+        append(" · ${formatTrackCount(liveAlbum.trackCount)}")
     }
 
     val showPause = isSourceActive && isPlaying
     val onPrimary = {
         if (isSourceActive) onTogglePlayPause()
-        else onPlayAlbum(album.songs, 0)
+        else onPlayAlbum(liveAlbum.songs, 0)
     }
 
     val fadePx = with(density) { GradientFadeLength.toPx() }
@@ -277,7 +295,7 @@ fun AlbumDetailScreen(
                                 }
                         ) {
                             SpotifyAlbumHero(
-                                album = album,
+                                album = liveAlbum,
                                 metaLine = metaLine,
                                 showPause = showPause,
                                 shuffleEnabled = shuffleEnabled,
@@ -285,7 +303,7 @@ fun AlbumDetailScreen(
                                 onPrimary = onPrimary,
                                 onToggleShuffle = onToggleShuffle,
                                 onFavorite = {
-                                    val now = pinStore.toggleAlbum(album)
+                                    val now = pinStore.toggleAlbum(liveAlbum)
                                     Toast.makeText(
                                         context,
                                         if (now) "Album + tracks added to My Stuff"
@@ -301,7 +319,7 @@ fun AlbumDetailScreen(
 
                         if (heightF > 0.2f) {
                             CollapsedSpotifyBar(
-                                album = album,
+                                album = liveAlbum,
                                 showPause = showPause,
                                 barColor = Color.Transparent,
                                 onBack = onBack,
@@ -349,12 +367,12 @@ fun AlbumDetailScreen(
                             tracks,
                             key = { _, s -> "${s.id}-${s.path}" }
                         ) { _, song ->
-                            val globalIndex = album.songs.indexOfFirst {
+                            val globalIndex = liveAlbum.songs.indexOfFirst {
                                 (it.path != null && it.path == song.path) || it.id == song.id
                             }.coerceAtLeast(0)
                             SwipeAddSongRow(
                                 song = song,
-                                onClick = { onPlayAlbum(album.songs, globalIndex) },
+                                onClick = { onPlayAlbum(liveAlbum.songs, globalIndex) },
                                 onSwipeAdd = {
                                     onAddSongToQueue(song)
                                     Toast.makeText(context, "Added to queue", Toast.LENGTH_SHORT).show()
@@ -374,14 +392,14 @@ fun AlbumDetailScreen(
 
             if (showMenu) {
                 AlbumContextSheet(
-                    album = album,
+                    album = liveAlbum,
                     onDismiss = { showMenu = false },
                     onGoToArtist = onOpenArtist,
                     onEditMetadata = onEditAlbum,
-                    onAddToQueue = { onAddAlbumToQueue(album.songs) },
+                    onAddToQueue = { onAddAlbumToQueue(liveAlbum.songs) },
                     onStartRadio = onStartRadio,
                     onFetchMetadata = {
-                        enrichment.enrichAlbumAsync(album, force = true)
+                        enrichment.enrichAlbumAsync(liveAlbum, force = true)
                         Toast.makeText(
                             context,
                             "Looking up year & cover online\u2026",
