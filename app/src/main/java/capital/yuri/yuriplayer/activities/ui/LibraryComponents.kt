@@ -30,6 +30,7 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowDropDown
 import androidx.compose.material.icons.filled.Clear
+import androidx.compose.material.icons.filled.Cloud
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
@@ -49,7 +50,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
-import androidx.compose.ui.Modifier
+import androidx.compose.ui.Modifier.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
@@ -64,11 +65,13 @@ import androidx.compose.ui.unit.dp
 import capital.yuri.yuriplayer.data.AlbumItem
 import capital.yuri.yuriplayer.data.ArtistItem
 import capital.yuri.yuriplayer.data.LibraryIndex
+import capital.yuri.yuriplayer.data.MetadataEditService
 import capital.yuri.yuriplayer.data.MyStuffPinStore
 import capital.yuri.yuriplayer.data.Song
 import capital.yuri.yuriplayer.data.SortMode
 import capital.yuri.yuriplayer.data.StuffPinKind
 import capital.yuri.yuriplayer.data.label
+import capital.yuri.yuriplayer.data.source.SourceOffering
 import capital.yuri.yuriplayer.player.PlayerController
 import capital.yuri.yuriplayer.ui.formatAlbumCount
 import capital.yuri.yuriplayer.ui.formatTrackCount
@@ -223,7 +226,7 @@ fun LibraryScreen(
                     }
                 }
             },
-            placeholder = { Text("Filter songs, albums, artists\u2026") },
+            placeholder = { Text("Filter songs, albums, artists…") },
             keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
             keyboardActions = KeyboardActions(
                 onSearch = {
@@ -259,11 +262,11 @@ fun LibraryScreen(
 
         val statusText = when {
             error != null -> error!!
-            loading && allSongs.isEmpty() -> "Scanning library\u2026"
+            loading && allSongs.isEmpty() -> "Scanning library…"
             lastScanned > 0 -> {
                 val whenStr = DateFormat.getDateTimeInstance(DateFormat.SHORT, DateFormat.SHORT)
                     .format(Date(lastScanned))
-                "${library.taggedCount()} tagged \u00b7 ${library.untaggedCount()} untagged \u00b7 updated $whenStr"
+                "${library.taggedCount()} tagged · ${library.untaggedCount()} untagged · updated $whenStr"
             }
             else -> formatTrackCount(allSongs.size)
         }
@@ -290,7 +293,7 @@ fun LibraryScreen(
                 onEditSong = onEditSong,
                 onStartRadio = { song ->
                     player.startSongRadio(song)
-                    Toast.makeText(context, "Radio \u00b7 ${song.displayArtist}", Toast.LENGTH_SHORT).show()
+                    Toast.makeText(context, "Radio · ${song.displayArtist}", Toast.LENGTH_SHORT).show()
                 }
             )
             LibrarySection.Untagged -> SongList(
@@ -308,7 +311,7 @@ fun LibraryScreen(
                 onEditSong = onEditSong,
                 onStartRadio = { song ->
                     player.startSongRadio(song)
-                    Toast.makeText(context, "Radio \u00b7 ${song.displayArtist}", Toast.LENGTH_SHORT).show()
+                    Toast.makeText(context, "Radio · ${song.displayArtist}", Toast.LENGTH_SHORT).show()
                 }
             )
             LibrarySection.Albums -> {
@@ -330,7 +333,7 @@ fun LibraryScreen(
                             onEditMetadata = { onEditAlbum(album) },
                             onStartRadio = {
                                 player.startAlbumRadio(album)
-                                Toast.makeText(context, "Radio \u00b7 ${album.displayName}", Toast.LENGTH_SHORT).show()
+                                Toast.makeText(context, "Radio · ${album.displayName}", Toast.LENGTH_SHORT).show()
                             }
                         )
                     }
@@ -400,7 +403,12 @@ fun SwipeAddSongRow(
     onGoToAlbum: (() -> Unit)? = null,
     onGoToArtist: ((String) -> Unit)? = null,
     onEditMetadata: (() -> Unit)? = null,
-    onStartRadio: (() -> Unit)? = null
+    onStartRadio: (() -> Unit)? = null,
+    /**
+     * Source offerings for this identity. Sources sheet is always available;
+     * the multi-source cloud icon is shown only when size > 1.
+     */
+    offerings: List<SourceOffering> = emptyList()
 ) {
     var offsetX by remember { mutableFloatStateOf(0f) }
     var showSheet by remember { mutableStateOf(false) }
@@ -414,6 +422,12 @@ fun SwipeAddSongRow(
         pinStore.contains(StuffPinKind.SONG, song.songKey)
     }
     val songNav = LocalSongNav.current
+
+    val resolvedOfferings = remember(song, offerings) {
+        if (offerings.isNotEmpty()) offerings
+        else listOf(MetadataEditService.localOffering(song))
+    }
+    val showMultiSourceIcon = resolvedOfferings.size > 1
 
     val revealAlpha = (offsetX / (threshold * 0.35f)).coerceIn(0f, 1f)
 
@@ -504,13 +518,26 @@ fun SwipeAddSongRow(
                     style = MaterialTheme.typography.bodyLarge.copy(fontWeight = titleWeight),
                     color = titleColor
                 )
-                MarqueeText(
-                    text = if (showTrackNumber) song.displayArtist
-                    else "${song.displayArtist} \u2022 ${song.displayAlbum}",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = if (isPlaying) accent.copy(alpha = 0.75f)
-                    else onSurface.copy(alpha = 0.6f)
-                )
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    MarqueeText(
+                        text = if (showTrackNumber) song.displayArtist
+                        else "${song.displayArtist} · ${song.displayAlbum}",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = if (isPlaying) accent.copy(alpha = 0.75f)
+                        else onSurface.copy(alpha = 0.6f),
+                        modifier = Modifier.weight(1f, fill = false)
+                    )
+                    // Multi-source badge only — single source never shows the icon.
+                    if (showMultiSourceIcon) {
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Icon(
+                            Icons.Default.Cloud,
+                            contentDescription = "${resolvedOfferings.size} sources",
+                            modifier = Modifier.size(14.dp),
+                            tint = accent.copy(alpha = 0.85f)
+                        )
+                    }
+                }
             }
             if (showHeart) {
                 MyStuffHeart(
@@ -539,7 +566,8 @@ fun SwipeAddSongRow(
             onGoToArtist = onGoToArtist ?: { name -> songNav.openArtistByName(name) },
             onEditMetadata = onEditMetadata,
             onAddToQueue = onSwipeAdd,
-            onStartRadio = onStartRadio
+            onStartRadio = onStartRadio,
+            offerings = resolvedOfferings
         )
     }
 }
@@ -611,7 +639,7 @@ fun SwipeAddAlbumRow(
             Column(modifier = Modifier.weight(1f)) {
                 MarqueeText(text = album.displayName, style = MaterialTheme.typography.bodyLarge)
                 MarqueeText(
-                    text = "${album.displayArtist} \u00b7 ${formatTrackCount(album.trackCount)}",
+                    text = "${album.displayArtist} · ${formatTrackCount(album.trackCount)}",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
                 )
@@ -660,7 +688,7 @@ fun AlbumRow(
         Column(modifier = Modifier.weight(1f)) {
             MarqueeText(text = album.displayName, style = MaterialTheme.typography.bodyLarge)
             MarqueeText(
-                text = "${album.displayArtist} \u00b7 ${formatTrackCount(album.trackCount)}",
+                text = "${album.displayArtist} · ${formatTrackCount(album.trackCount)}",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
             )
@@ -696,7 +724,7 @@ fun ArtistRow(artist: ArtistItem, onClick: () -> Unit) {
         Column(modifier = Modifier.weight(1f)) {
             MarqueeText(text = artist.displayName, style = MaterialTheme.typography.bodyLarge)
             Text(
-                "${formatAlbumCount(artist.albumCount)} \u00b7 ${formatTrackCount(artist.trackCount)}",
+                "${formatAlbumCount(artist.albumCount)} · ${formatTrackCount(artist.trackCount)}",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
             )
