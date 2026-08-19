@@ -98,6 +98,14 @@ interface CatalogDao {
     @Query("SELECT * FROM catalog_tracks WHERE albumKey = :albumKey ORDER BY discNumber, trackNumber, title")
     suspend fun getTracksForAlbum(albumKey: String): List<CatalogTrackEntity>
 
+    /** Single seed track for list cover art — avoids loading the full album. */
+    @Query(
+        "SELECT * FROM catalog_tracks WHERE albumKey = :albumKey " +
+            "ORDER BY CASE WHEN albumArtUri IS NOT NULL AND albumArtUri != '' THEN 0 ELSE 1 END, " +
+            "discNumber, trackNumber LIMIT 1"
+    )
+    suspend fun getOneTrackForAlbum(albumKey: String): CatalogTrackEntity?
+
     @Query("SELECT * FROM catalog_tracks WHERE artistKey = :artistKey ORDER BY album, trackNumber, title")
     suspend fun getTracksForArtist(artistKey: String): List<CatalogTrackEntity>
 

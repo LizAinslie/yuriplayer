@@ -21,7 +21,6 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Album
 import androidx.compose.material.icons.filled.Clear
 import androidx.compose.material.icons.filled.Cloud
 import androidx.compose.material.icons.filled.Search
@@ -244,13 +243,8 @@ fun ExploreScreen(
                     if (albumHits.isNotEmpty()) {
                         item { SectionHeader("Albums") }
                         items(albumHits, key = { "al-${it.name}-${it.artist}" }) { album ->
-                            ExploreEntityRow(
-                                title = album.displayName,
-                                subtitle = buildString {
-                                    append(album.displayArtist)
-                                    if (album.trackCount > 0) append(" · ${album.trackCount} tracks")
-                                },
-                                icon = Icons.Default.Album,
+                            ExploreAlbumRow(
+                                album = album,
                                 onClick = { onOpenAlbum(album) }
                             )
                         }
@@ -344,10 +338,8 @@ private fun ExploreArtistRow(
 }
 
 @Composable
-private fun ExploreEntityRow(
-    title: String,
-    subtitle: String,
-    icon: androidx.compose.ui.graphics.vector.ImageVector,
+private fun ExploreAlbumRow(
+    album: AlbumItem,
     onClick: () -> Unit
 ) {
     Row(
@@ -357,29 +349,24 @@ private fun ExploreEntityRow(
             .padding(horizontal = 16.dp, vertical = 10.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
-        Box(
-            modifier = Modifier
-                .size(48.dp)
-                .clip(RoundedCornerShape(8.dp))
-                .background(MaterialTheme.colorScheme.surfaceVariant),
-            contentAlignment = Alignment.Center
-        ) {
-            Icon(
-                icon,
-                contentDescription = null,
-                tint = MaterialTheme.colorScheme.onSurfaceVariant
-            )
-        }
+        AlbumArt(
+            song = album.songs.firstOrNull(),
+            size = 48.dp,
+            corner = 8.dp
+        )
         Spacer(modifier = Modifier.width(12.dp))
         Column(modifier = Modifier.weight(1f)) {
             Text(
-                title,
+                album.displayName,
                 style = MaterialTheme.typography.bodyLarge,
                 fontWeight = FontWeight.Medium,
                 maxLines = 1
             )
             Text(
-                subtitle,
+                buildString {
+                    append(album.displayArtist)
+                    if (album.trackCount > 0) append(" · ${album.trackCount} tracks")
+                },
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.55f),
                 maxLines = 1

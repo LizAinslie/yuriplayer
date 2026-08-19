@@ -68,11 +68,28 @@ class CatalogRepository(
             val q = query.trim()
             if (q.isEmpty()) return@withContext emptyList()
             dao.searchAlbums(q, limit).map { row ->
+                // Prefer a track that already has albumArtUri for list covers.
+                val seed = dao.getOneTrackForAlbum(row.albumKey)?.toSong()?.let { song ->
+                    when {
+                        song.albumArtUri != null -> song
+                        !row.coverUrl.isNullOrBlank() -> song.copy(
+                            albumArtUri = android.net.Uri.parse(row.coverUrl)
+                        )
+                        !row.coverPath.isNullOrBlank() -> song.copy(
+                            albumArtUri = android.net.Uri.parse(
+                                if (row.coverPath.startsWith("/") || row.coverPath.startsWith("file:"))
+                                    "file://${row.coverPath}"
+                                else row.coverPath
+                            )
+                        )
+                        else -> song
+                    }
+                }
                 AlbumItem(
                     name = row.name,
                     artist = row.artist,
                     trackCount = row.trackCount,
-                    songs = emptyList()
+                    songs = listOfNotNull(seed)
                 )
             }
         }
@@ -214,7 +231,6 @@ class CatalogRepository(
             val candidates = LinkedHashMap<String, CatalogTrackEntity>()
             exact.forEach { candidates[it.songKey] = it }
 
-            // Loose pass: same normalized title + album(+album artist), any track artist
             if (candidates.size < 2 && (title.isNotEmpty() || album.isNotEmpty())) {
                 val needle = TrackIdentity.normalizeTitle(title).ifEmpty { title }
                 val broaden = if (needle.isNotEmpty()) {
@@ -241,7 +257,6 @@ class CatalogRepository(
                     )
                 }
                 .distinctBy { "${it.sourceType.name}:${it.sourceId}:${it.song.songKey}" }
-                // LOCAL (rank 0) first, then Jellyfin / Subsonic
                 .sortedBy { it.sourceType.rank }
                 .take(limit)
 
@@ -280,7 +295,6 @@ class CatalogRepository(
         val effectiveArtist = nextAlbumArtist ?: nextArtist
         val nextAlbumKey = if (nextAlbum != null) albumKey(nextAlbum, effectiveArtist) else row.albumKey
         val nextArtistKey = artistKey(effectiveArtist) ?: row.artistKey
-        // genre intentionally unused until catalog_tracks gains a column
         @Suppress("UNUSED_VARIABLE")
         val ignoredGenre = genre
         dao.upsertTrack(
