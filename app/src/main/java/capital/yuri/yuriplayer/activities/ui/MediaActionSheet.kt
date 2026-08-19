@@ -54,6 +54,8 @@ import capital.yuri.yuriplayer.data.PlaylistRepository
 import capital.yuri.yuriplayer.data.Song
 import capital.yuri.yuriplayer.data.StuffPin
 import capital.yuri.yuriplayer.data.StuffPinKind
+import capital.yuri.yuriplayer.data.albumKey
+import capital.yuri.yuriplayer.data.artistKey
 import capital.yuri.yuriplayer.data.source.SourceOffering
 import capital.yuri.yuriplayer.player.PlayerController
 import kotlinx.coroutines.launch
@@ -232,6 +234,10 @@ fun SongContextSheet(
     var showArtistPicker by remember { mutableStateOf(false) }
     var showSourcesPicker by remember { mutableStateOf(false) }
     val artists = remember(song) { songArtistNames(song) }
+    val entries by pinStore.entries.collectAsState()
+    val inMyStuff = remember(entries, song.songKey) {
+        pinStore.contains(StuffPinKind.SONG, song.songKey)
+    }
 
     val multiSources = sourceOfferings
         ?.map { "${it.sourceType.name}:${it.sourceId}" }
@@ -334,19 +340,17 @@ fun SongContextSheet(
                 showPlaylistPicker = true
             }
         }
-        MediaSheetItem("Add to My Stuff") {
+        MediaSheetItem(if (inMyStuff) "Remove from My Stuff" else "Add to My Stuff") {
             onDismiss()
-            if (onAddToMyStuff != null) onAddToMyStuff()
-            else {
-                pinStore.addEntry(
-                    StuffPin(
-                        kind = StuffPinKind.SONG,
-                        id = song.songKey,
-                        title = song.displayTitle,
-                        subtitle = song.displayArtist
-                    )
-                )
-                Toast.makeText(context, "Added to My Stuff", Toast.LENGTH_SHORT).show()
+            if (onAddToMyStuff != null) {
+                onAddToMyStuff()
+            } else {
+                val added = pinStore.toggleSong(song)
+                Toast.makeText(
+                    context,
+                    if (added) "Added to My Stuff" else "Removed from My Stuff",
+                    Toast.LENGTH_SHORT
+                ).show()
             }
         }
         if (!hideGoToAlbum && !song.album.isNullOrBlank()) {
@@ -394,13 +398,19 @@ fun AlbumContextSheet(
     onAddToMyStuff: (() -> Unit)? = null
 ) {
     val albumNav = LocalAlbumNav.current
+    val pinStore: MyStuffPinStore = koinInject()
+    val context = LocalContext.current
     var showPlaylistPicker by remember { mutableStateOf(false) }
+    val entries by pinStore.entries.collectAsState()
+    val aKey = remember(album.name, album.artist) { albumKey(album.name, album.artist) }
+    val inMyStuff = remember(entries, aKey) {
+        pinStore.contains(StuffPinKind.ALBUM, aKey)
+    }
 
     val goToArtist = onGoToArtist ?: { albumNav.openArtist(album) }
     val editMeta = onEditMetadata ?: { albumNav.editMetadata(album) }
     val addQueue = onAddToQueue ?: { albumNav.addToQueue(album) }
     val startRadio = onStartRadio ?: { albumNav.startRadio(album) }
-    val addMyStuff = onAddToMyStuff ?: { albumNav.addToMyStuff(album) }
 
     if (showPlaylistPicker) {
         AddToPlaylistSheet(
@@ -430,9 +440,18 @@ fun AlbumContextSheet(
         MediaSheetItem("Add to playlist") {
             showPlaylistPicker = true
         }
-        MediaSheetItem("Add to My Stuff") {
+        MediaSheetItem(if (inMyStuff) "Remove from My Stuff" else "Add to My Stuff") {
             onDismiss()
-            addMyStuff()
+            if (onAddToMyStuff != null) {
+                onAddToMyStuff()
+            } else {
+                val added = pinStore.toggleAlbum(album)
+                Toast.makeText(
+                    context,
+                    if (added) "Added to My Stuff" else "Removed from My Stuff",
+                    Toast.LENGTH_SHORT
+                ).show()
+            }
         }
         if (album.artist?.isNotBlank() == true) {
             MediaSheetItem("Go to artist") {
@@ -470,10 +489,18 @@ fun ArtistContextSheet(
     onAddToMyStuff: (() -> Unit)? = null
 ) {
     val artistNav = LocalArtistNav.current
+    val pinStore: MyStuffPinStore = koinInject()
+    val context = LocalContext.current
     val name = artist.displayName
+    val entries by pinStore.entries.collectAsState()
+    val aKey = remember(artist.name, artist.displayName) {
+        artistKey(artist.name) ?: artist.displayName.lowercase()
+    }
+    val inMyStuff = remember(entries, aKey) {
+        pinStore.contains(StuffPinKind.ARTIST, aKey)
+    }
 
     val startRadio = onStartRadio ?: { artistNav.startRadio(name) }
-    val addMyStuff = onAddToMyStuff ?: { artistNav.addToMyStuff(artist) }
     val changeImage = onChangeImage ?: artistNav.changeImage?.let { fn -> { fn(name) } }
     val fetchImage = onFetchImage ?: artistNav.fetchImage?.let { fn -> { fn(name) } }
     val changeBanner = onChangeBanner ?: artistNav.changeBanner?.let { fn -> { fn(name) } }
@@ -495,9 +522,18 @@ fun ArtistContextSheet(
             onDismiss()
             startRadio()
         }
-        MediaSheetItem("Add to My Stuff") {
+        MediaSheetItem(if (inMyStuff) "Remove from My Stuff" else "Add to My Stuff") {
             onDismiss()
-            addMyStuff()
+            if (onAddToMyStuff != null) {
+                onAddToMyStuff()
+            } else {
+                val added = pinStore.toggleArtist(artist)
+                Toast.makeText(
+                    context,
+                    if (added) "Added to My Stuff" else "Removed from My Stuff",
+                    Toast.LENGTH_SHORT
+                ).show()
+            }
         }
         if (fetchImage != null) {
             MediaSheetItem("Fetch artist image") {
@@ -557,9 +593,14 @@ fun PlaylistContextSheet(
     onAddToMyStuff: (() -> Unit)? = null
 ) {
     val playlistNav = LocalPlaylistNav.current
+    val pinStore: MyStuffPinStore = koinInject()
+    val context = LocalContext.current
+    val entries by pinStore.entries.collectAsState()
+    val inMyStuff = remember(entries, playlist.id) {
+        pinStore.contains(StuffPinKind.PLAYLIST, playlist.id)
+    }
 
     val startRadio = onStartRadio ?: { playlistNav.startRadio(playlist) }
-    val addMyStuff = onAddToMyStuff ?: { playlistNav.addToMyStuff(playlist) }
     val changeCover = onChangeCover ?: playlistNav.changeCover?.let { fn -> { fn(playlist.id) } }
     val edit = onEdit ?: playlistNav.edit?.let { fn -> { fn(playlist.id) } }
     val delete = onDelete ?: playlistNav.delete?.let { fn -> { fn(playlist.id) } }
@@ -577,9 +618,24 @@ fun PlaylistContextSheet(
             onDismiss()
             startRadio()
         }
-        MediaSheetItem("Add to My Stuff") {
+        MediaSheetItem(if (inMyStuff) "Remove from My Stuff" else "Add to My Stuff") {
             onDismiss()
-            addMyStuff()
+            if (onAddToMyStuff != null) {
+                onAddToMyStuff()
+            } else {
+                val pin = StuffPin(
+                    kind = StuffPinKind.PLAYLIST,
+                    id = playlist.id,
+                    title = playlist.name,
+                    subtitle = "Playlist"
+                )
+                val added = pinStore.toggleEntry(pin)
+                Toast.makeText(
+                    context,
+                    if (added) "Added to My Stuff" else "Removed from My Stuff",
+                    Toast.LENGTH_SHORT
+                ).show()
+            }
         }
         if (changeCover != null) {
             MediaSheetItem("Change cover") {

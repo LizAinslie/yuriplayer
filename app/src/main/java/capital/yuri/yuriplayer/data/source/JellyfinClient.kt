@@ -9,6 +9,7 @@ import org.jellyfin.sdk.api.client.ApiClient
 import org.jellyfin.sdk.api.client.exception.ApiClientException
 import org.jellyfin.sdk.api.client.exception.InvalidStatusException
 import org.jellyfin.sdk.api.client.extensions.authenticateUserByName
+import org.jellyfin.sdk.api.client.extensions.instantMixApi
 import org.jellyfin.sdk.api.client.extensions.itemsApi
 import org.jellyfin.sdk.api.client.extensions.userApi
 import org.jellyfin.sdk.model.api.BaseItemDto
@@ -148,6 +149,31 @@ class JellyfinClient(
         Log.i(TAG, "listAudioItemsPaged done delivered=$delivered totalHint=$totalHint pages=$pageNum")
         delivered
     }.onFailure { Log.w(TAG, "listAudioItemsPaged failed: ${it.message}") }
+
+    /**
+     * Jellyfin Instant Mix — similar tracks from a seed item (song / album / artist id).
+     * Used by radio discovery when [RadioSourcePrefs.useJellyfinInstantMix] is on.
+     */
+    suspend fun instantMixFromItem(
+        session: Session,
+        itemId: String,
+        limit: Int = 50
+    ): Result<List<Song>> = runCatching {
+        val userId = runCatching { UUID.fromString(session.userId) }.getOrNull()
+            ?: error("Invalid Jellyfin userId")
+        val seedId = runCatching { UUID.fromString(itemId) }.getOrNull()
+            ?: error("Invalid Jellyfin itemId")
+        val result by session.api.instantMixApi.getInstantMixFromItem(
+            itemId = seedId,
+            userId = userId,
+            limit = limit.coerceIn(1, 200),
+            fields = AUDIO_FIELDS,
+            enableImages = true,
+            imageTypeLimit = 1,
+            enableImageTypes = listOf(ImageType.PRIMARY)
+        )
+        result.items.orEmpty().mapNotNull { it.toSong(session) }
+    }.onFailure { Log.w(TAG, "instantMixFromItem failed: ${it.message}") }
 
     fun streamUrl(session: Session, itemId: String): String {
         val root = session.baseUrl.trimEnd('/')
