@@ -1,5 +1,6 @@
 package capital.yuri.yuriplayer.data
 
+import android.content.Context
 import android.util.Log
 import capital.yuri.yuriplayer.data.db.CatalogSources
 import capital.yuri.yuriplayer.data.source.JellyfinClient
@@ -9,15 +10,11 @@ import capital.yuri.yuriplayer.data.source.SourceOffering
 import capital.yuri.yuriplayer.data.source.SourceResolver
 import capital.yuri.yuriplayer.data.source.SourceType
 import capital.yuri.yuriplayer.data.source.SubsonicClient
-import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.Job
-import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
-import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
@@ -25,13 +22,11 @@ import kotlinx.coroutines.withContext
 /**
  * Live, **source-tagged** music index for Explore.
  *
- * Scans run on an **app-scoped** [CoroutineScope] so leaving Explore / cancelling
- * a Compose [rememberCoroutineScope] never aborts Jellyfin paging mid-flight.
- *
- * Search is non-blocking: returns whatever is indexed so far and lets the UI
- * re-filter as [remoteOfferings] grows.
+ * Heavy remote scans are started via [LibraryScanService] (foreground dataSync)
+ * so they keep running with a live progress notification when the UI is backgrounded.
  */
 class ExploreSearchService(
+    private val context: Context,
     private val factory: LibrarySourceFactory,
     private val library: LibraryIndex,
     private val sourceResolver: SourceResolver,
@@ -39,7 +34,8 @@ class ExploreSearchService(
     private val pinStore: MyStuffPinStore,
     private val instances: SourceInstanceRepository,
     private val jellyfinClient: JellyfinClient,
-    private val subsonicClient: SubsonicClient
+    private val subsonicClient: SubsonicClient,
+    private val notifier: LibraryScanNotifier
 ) {
     data class Hit(
         val identityKey: String,
@@ -51,13 +47,8 @@ class ExploreSearchService(
         val isExplicit: Boolean get() = offerings.any { it.song.isExplicit }
     }
 
-    /** Survives UI disposal — never use Compose scopes for remote scans. */
-    private val appScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val mutex = Mutex()
-    private var scanJob: Job? = null
-
-    private val jellyfinSessions =
-        mutableMapOf<Long, JellyfinClient.Session>()
+    private val jellyfinSessions = mutableMapOf<Long, JellyfinClient.Session>()
 
     private val _remoteOfferings = MutableStateFlow<List<SourceOffering>>(emptyList())
     val remoteOfferings: StateFlow<List<SourceOffering>> = _remoteOfferings.asStateFlow()
@@ -93,36 +84,25 @@ class ExploreSearchService(
     }
 
     /**
-     * Kick a background remote scan if needed. Safe to call from any UI scope —
-     * the work is owned by [appScope].
+     * Start (or no-op) a remote scan hosted by [LibraryScanService] so work
+     * continues in the background with a live notification.
      */
     fun requestRemoteScan(force: Boolean = false) {
         val age = System.currentTimeMillis() - cacheAtMs
         if (!force && _remoteOfferings.value.isNotEmpty() && age < CACHE_TTL_MS) return
         if (!force && _isScanning.value) return
-
-        // Cancel only when forcing a full rescan; otherwise let the running job finish
-        if (force) {
-            scanJob?.cancel()
-            scanJob = null
-        } else if (scanJob?.isActive == true) {
-            return
-        }
-
-        scanJob = appScope.launch {
-            runRemoteScan(force)
-        }
+        LibraryScanService.startRemote(context.applicationContext, force)
     }
 
     suspend fun refreshRemotes() {
         requestRemoteScan(force = true)
-        // Don't join — UI observes progress. Optional: wait briefly for start.
     }
 
-    /**
-     * Non-blocking search: hydrate, start scan in background if needed, return
-     * hits from whatever is already indexed.
-     */
+    /** Called from [LibraryScanService] — runs the full remote index pass. */
+    suspend fun runRemoteScanBlocking(force: Boolean) {
+        runRemoteScan(force)
+    }
+
     suspend fun search(query: String, forceRescan: Boolean = false): List<Hit> =
         withContext(Dispatchers.IO) {
             val q = query.trim()
@@ -231,7 +211,7 @@ class ExploreSearchService(
                         it.sourceId == instanceId && it.sourceType == type
                     }
                     publish(rebuilt)
-                    _scanProgress.value = "Scanning $sourceName…"
+                    progress("Scanning $sourceName…")
 
                     when (type) {
                         SourceType.JELLYFIN -> scanJellyfin(
@@ -266,7 +246,6 @@ class ExploreSearchService(
                 cacheAtMs = System.currentTimeMillis()
                 Log.i(TAG, "remote index ready: ${cleaned.size} offerings")
             } catch (e: CancellationException) {
-                // Forced rescan or process teardown — not a user-facing error
                 Log.i(TAG, "remote scan cancelled")
                 throw e
             } catch (e: Exception) {
@@ -277,6 +256,11 @@ class ExploreSearchService(
                 _scanProgress.value = null
             }
         }
+    }
+
+    private fun progress(text: String) {
+        _scanProgress.value = text
+        notifier.update("Syncing libraries", text)
     }
 
     private suspend fun scanJellyfin(
@@ -319,10 +303,13 @@ class ExploreSearchService(
                 seenAt = seenAt
             )
             val totalPart = total?.let { " / $it" }.orEmpty()
-            _scanProgress.value = "$sourceName: ${start + page.size}$totalPart"
+            val done = start + page.size
+            progress("$sourceName: $done$totalPart")
+            if (total != null && total > 0) {
+                notifier.update("Syncing libraries", "$sourceName: $done / $total", done, total)
+            }
         }.onFailure {
             if (it is CancellationException) throw it
-            // Stale session — drop cache and surface once
             jellyfinSessions.remove(rowId)
             Log.w(TAG, "jellyfin scan failed: ${it.message}")
             _lastError.value = "$sourceName: ${it.message}"
@@ -374,8 +361,9 @@ class ExploreSearchService(
                     sourceInstanceId = instanceId,
                     seenAt = seenAt
                 )
-                _scanProgress.value =
-                    "$sourceName: ${minOf((i + 1) * 200, songs.size)} / ${songs.size}"
+                val done = minOf((i + 1) * 200, songs.size)
+                progress("$sourceName: $done / ${songs.size}")
+                notifier.update("Syncing libraries", "$sourceName: $done / ${songs.size}", done, songs.size)
             }
             catalog.pruneRemoteSource(
                 sourceType = catalogType,
