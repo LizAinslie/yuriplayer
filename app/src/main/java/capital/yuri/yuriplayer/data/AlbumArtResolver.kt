@@ -14,27 +14,35 @@ import java.net.HttpURLConnection
 import java.net.URL
 
 /**
- * Album art decode: embedded tags → folder cover → enriched file →
- * HTTP(S) remote URI (Jellyfin / Subsonic) → MediaStore / content URI.
- * Caching lives in [AlbumArtCache]; this object only decodes, subsampled to [maxSize].
+ * Album art decode: **preferred override** → embedded tags → folder cover →
+ * enriched file → HTTP(S) remote URI → MediaStore / content URI.
+ *
+ * Local is default unless [AlbumCoverPrefs] stores a user pick for the albumKey.
  */
 object AlbumArtResolver {
 
     private const val TAG = "AlbumArtResolver"
 
     suspend fun load(context: Context, song: Song, maxSize: Int = 512): Bitmap? =
-        loadUncached(context, song, maxSize)
+        loadUncached(context, song, maxSize, preferredUri = null)
 
-    suspend fun loadUncached(context: Context, song: Song, maxSize: Int = 512): Bitmap? =
+    suspend fun loadUncached(
+        context: Context,
+        song: Song,
+        maxSize: Int = 512,
+        preferredUri: String? = null
+    ): Bitmap? =
         withContext(Dispatchers.IO) {
-            val bitmap = loadEmbedded(song.path, maxSize)
+            val preferred = preferredUri?.takeIf { it.isNotBlank() }
+                ?.let { loadUri(context, Uri.parse(it), maxSize) }
+            val bitmap = preferred
+                ?: loadEmbedded(song.path, maxSize)
                 ?: loadFolderCover(song.path, maxSize)
                 ?: loadEnrichedCover(context, song, maxSize)
                 ?: loadUri(context, song.albumArtUri, maxSize)
             bitmap?.let { scaleDown(it, maxSize) }
         }
 
-    /** Download a remote cover into [dest] (JPEG). Returns true on success. */
     suspend fun downloadToFile(url: String, dest: File, maxSize: Int = 512): Boolean =
         withContext(Dispatchers.IO) {
             try {
@@ -104,7 +112,6 @@ object AlbumArtResolver {
 
     private fun loadEmbedded(path: String?, maxSize: Int): Bitmap? {
         if (path.isNullOrBlank()) return null
-        // Virtual remote keys are not filesystem paths
         if (path.startsWith("jellyfin:") || path.startsWith("subsonic:") || path.startsWith("navidrome:")) {
             return null
         }
@@ -155,6 +162,10 @@ object AlbumArtResolver {
         val scheme = uri.scheme?.lowercase()
         return when (scheme) {
             "http", "https" -> openHttp(uri.toString())?.use { decodeStreamSampled(it, maxSize) }
+            "file" -> {
+                val path = uri.path ?: return null
+                decodeFileSampled(path, maxSize)
+            }
             else -> try {
                 context.contentResolver.openInputStream(uri)?.use { input ->
                     decodeStreamSampled(input, maxSize)
