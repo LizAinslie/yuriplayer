@@ -35,7 +35,6 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.systemBars
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Favorite
-import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Settings
@@ -73,7 +72,7 @@ import capital.yuri.yuriplayer.activities.ui.ArtistDetailScreen
 import capital.yuri.yuriplayer.activities.ui.ArtistNavActions
 import capital.yuri.yuriplayer.activities.ui.EditAlbumMetadataScreen
 import capital.yuri.yuriplayer.activities.ui.EditSongMetadataScreen
-import capital.yuri.yuriplayer.activities.ui.LibraryScreen
+import capital.yuri.yuriplayer.activities.ui.ExploreScreen
 import capital.yuri.yuriplayer.activities.ui.LocalAlbumNav
 import capital.yuri.yuriplayer.activities.ui.LocalArtistNav
 import capital.yuri.yuriplayer.activities.ui.LocalPlaylistNav
@@ -82,7 +81,6 @@ import capital.yuri.yuriplayer.activities.ui.LocalStatusBarStack
 import capital.yuri.yuriplayer.activities.ui.MiniPlayerBar
 import capital.yuri.yuriplayer.activities.ui.MyStuffScreen
 import capital.yuri.yuriplayer.activities.ui.NowPlayingScreen
-import capital.yuri.yuriplayer.activities.ui.PlaceholderScreen
 import capital.yuri.yuriplayer.activities.ui.PlaylistDetailScreen
 import capital.yuri.yuriplayer.activities.ui.PlaylistNavActions
 import capital.yuri.yuriplayer.activities.ui.SettingsScreen
@@ -282,9 +280,8 @@ class MainActivity : ComponentActivity() {
 }
 
 private enum class TopTab(val label: String, val icon: ImageVector) {
-    Home("Home", Icons.Default.Home),
-    Explore("Explore", Icons.Default.Search),
-    MyStuff("My Stuff", Icons.Default.Favorite)
+    MyStuff("My Stuff", Icons.Default.Favorite),
+    Explore("Explore", Icons.Default.Search)
 }
 
 private sealed class DetailRoute {
@@ -372,7 +369,8 @@ fun YuriApp(
         )
     }
 
-    var topTab by remember { mutableStateOf(TopTab.Explore) }
+    var topTab by remember { mutableStateOf(TopTab.MyStuff) }
+    var exploreRescanKey by remember { mutableStateOf(0) }
     var playerExpanded by remember { mutableStateOf(false) }
     var detailStack by remember { mutableStateOf<List<DetailRoute>>(emptyList()) }
     var npPlaylistSong by remember { mutableStateOf<Song?>(null) }
@@ -562,8 +560,6 @@ fun YuriApp(
                 )
                 Toast.makeText(context, "Added to My Stuff", Toast.LENGTH_SHORT).show()
             }
-            // Image/banner actions stay null at root; ArtistDetailScreen can override
-            // LocalArtistNav with a nested provider that fills them in.
         ),
         LocalPlaylistNav provides PlaylistNavActions(
             openPlaylist = { id ->
@@ -589,7 +585,6 @@ fun YuriApp(
                 )
                 Toast.makeText(context, "Added to My Stuff", Toast.LENGTH_SHORT).show()
             }
-            // changeCover / edit / delete stay null at root; PlaylistDetail can override.
         )
     ) {
         ApplyStatusBarStack(statusBarStack)
@@ -632,6 +627,7 @@ fun YuriApp(
                                     val libLoading by library.isLoading.collectAsState()
                                     IconButton(onClick = {
                                         library.refresh()
+                                        exploreRescanKey++
                                         if (settings.isNetworkMetadataEnabled()) {
                                             enrichment.enrichLibraryAsync()
                                         }
@@ -789,19 +785,6 @@ fun YuriApp(
                         }
                         is DetailRoute.Settings -> SettingsScreen(onBack = { popDetail() })
                         null -> when (topTab) {
-                            TopTab.Home -> PlaceholderScreen("Home", "Pin playlists and shortcuts here later.")
-                            TopTab.Explore -> LibraryScreen(
-                                library = library,
-                                nowPlaying = currentSong,
-                                isPlaybackActive = playing,
-                                onPlay = { songs, index -> player.playSource(songs, index) },
-                                onAddToQueue = { player.addToHotQueue(it) },
-                                onAddAlbumToQueue = { player.addToHotQueue(it) },
-                                onOpenAlbum = { pushDetail(DetailRoute.Album(it)) },
-                                onOpenArtist = { pushDetail(DetailRoute.Artist(it)) },
-                                onEditSong = { pushDetail(DetailRoute.EditSong(it)) },
-                                onEditAlbum = { pushDetail(DetailRoute.EditAlbum(it)) }
-                            )
                             TopTab.MyStuff -> MyStuffScreen(
                                 library = library,
                                 nowPlaying = currentSong,
@@ -813,6 +796,13 @@ fun YuriApp(
                                 onOpenPlaylist = { pl: Playlist ->
                                     pushDetail(DetailRoute.Playlist(pl.id))
                                 }
+                            )
+                            TopTab.Explore -> ExploreScreen(
+                                nowPlaying = currentSong,
+                                isPlaybackActive = playing,
+                                onPlay = { songs, index -> player.playSource(songs, index) },
+                                onAddToQueue = { player.addToHotQueue(it) },
+                                forceRescanKey = exploreRescanKey
                             )
                         }
                     }
