@@ -10,6 +10,7 @@ import androidx.core.content.ContextCompat
 import capital.yuri.yuriplayer.data.AlbumItem
 import capital.yuri.yuriplayer.data.Song
 import capital.yuri.yuriplayer.player.radio.RadioEngine
+import capital.yuri.yuriplayer.player.radio.RadioSourcePrefs
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -125,7 +126,6 @@ class PlayerController(
         launchRadioSession(radioEngine.startPlaylistRadio(songs, playlistName))
     }
 
-    /** Song radio = artist radio seeded from the track's primary artist. */
     fun startSongRadio(song: Song) {
         val name = song.effectiveAlbumArtist ?: song.artist ?: song.displayArtist
         startArtistRadio(name)
@@ -134,6 +134,11 @@ class PlayerController(
     fun stopRadio() {
         radioEngine.stopRadio()
         queueManager.clearRadio()
+    }
+
+    /** Apply prefs for the active radio session and replan cold live. */
+    fun applyRadioPrefs(prefs: RadioSourcePrefs) {
+        runOrQueue { it.applyRadioPrefs(prefs) }
     }
 
     fun updateColdFromSource(songs: List<Song>, sourceId: String) {
