@@ -12,6 +12,7 @@ import androidx.media3.common.MediaItem
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
 import androidx.media3.common.util.UnstableApi
+import androidx.media3.datasource.DefaultDataSource
 import androidx.media3.datasource.DefaultHttpDataSource
 import androidx.media3.exoplayer.DefaultLoadControl
 import androidx.media3.exoplayer.DefaultRenderersFactory
@@ -24,10 +25,10 @@ import kotlinx.coroutines.flow.asStateFlow
 /**
  * Android [PlaybackEngine] backed by Media3 ExoPlayer.
  *
- * Supports local files and HTTP(S) streams (Jellyfin / Subsonic). Optional
- * per-item headers are applied via a shared [DefaultHttpDataSource.Factory]
- * when every item in the window shares the same header set (typical for one
- * remote library session).
+ * Supports local files (content:// / file://) and HTTP(S) streams (Jellyfin /
+ * Subsonic). [DefaultDataSource.Factory] routes local URIs to the platform
+ * sources and network URIs through a shared [DefaultHttpDataSource.Factory]
+ * so session headers still apply for remote libraries.
  */
 @OptIn(UnstableApi::class)
 class Media3PlaybackEngine(
@@ -44,8 +45,11 @@ class Media3PlaybackEngine(
         .setReadTimeoutMs(30_000)
         .setUserAgent("YuriPlayer/0.1 (Media3)")
 
+    // Local content/file first; HTTP only for network schemes.
+    private val dataSourceFactory = DefaultDataSource.Factory(appContext, httpFactory)
+
     private val mediaSourceFactory = DefaultMediaSourceFactory(appContext)
-        .setDataSourceFactory(httpFactory)
+        .setDataSourceFactory(dataSourceFactory)
 
     private val audioAttributes = AudioAttributes.Builder()
         .setUsage(C.USAGE_MEDIA)
