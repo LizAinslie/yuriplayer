@@ -95,12 +95,6 @@ class MusicService : MediaSessionService() {
         .setReadTimeoutMs(25_000)
         .setUserAgent("YuriPlayer/0.1")
 
-    /**
-     * Local content:// / file:// first; HTTP only for network schemes.
-     * Using [httpFactory] alone broke local MediaStore and filesystem playback.
-     */
-    private val dataSourceFactory = DefaultDataSource.Factory(this, httpFactory)
-
     private val _nowPlaying = MutableStateFlow<Song?>(null)
     val nowPlaying: StateFlow<Song?> = _nowPlaying.asStateFlow()
 
@@ -136,6 +130,9 @@ class MusicService : MediaSessionService() {
             .setEnableDecoderFallback(true)
             .setExtensionRendererMode(DefaultRenderersFactory.EXTENSION_RENDERER_MODE_OFF)
 
+        // Must be built after super.onCreate() — Context is not attached during field init.
+        // Local content:// / file:// first; HTTP only for network schemes.
+        val dataSourceFactory = DefaultDataSource.Factory(this, httpFactory)
         val mediaSourceFactory = DefaultMediaSourceFactory(this)
             .setDataSourceFactory(dataSourceFactory)
 
