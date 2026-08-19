@@ -19,6 +19,7 @@ import androidx.media3.common.MediaItem
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
 import androidx.media3.common.util.UnstableApi
+import androidx.media3.datasource.DefaultDataSource
 import androidx.media3.datasource.DefaultHttpDataSource
 import androidx.media3.exoplayer.DefaultLoadControl
 import androidx.media3.exoplayer.DefaultRenderersFactory
@@ -94,6 +95,12 @@ class MusicService : MediaSessionService() {
         .setReadTimeoutMs(25_000)
         .setUserAgent("YuriPlayer/0.1")
 
+    /**
+     * Local content:// / file:// first; HTTP only for network schemes.
+     * Using [httpFactory] alone broke local MediaStore and filesystem playback.
+     */
+    private val dataSourceFactory = DefaultDataSource.Factory(this, httpFactory)
+
     private val _nowPlaying = MutableStateFlow<Song?>(null)
     val nowPlaying: StateFlow<Song?> = _nowPlaying.asStateFlow()
 
@@ -130,13 +137,13 @@ class MusicService : MediaSessionService() {
             .setExtensionRendererMode(DefaultRenderersFactory.EXTENSION_RENDERER_MODE_OFF)
 
         val mediaSourceFactory = DefaultMediaSourceFactory(this)
-            .setDataSourceFactory(httpFactory)
+            .setDataSourceFactory(dataSourceFactory)
 
         player = ExoPlayer.Builder(this, renderersFactory)
             .setMediaSourceFactory(mediaSourceFactory)
             .setAudioAttributes(audioAttributes, true)
             .setHandleAudioBecomingNoisy(true)
-            // NETWORK so remote streams keep Wi‑Fi / radio awake
+            // NETWORK so remote streams keep Wi‑Fi / radio awake; local still works
             .setWakeMode(C.WAKE_MODE_NETWORK)
             .setLoadControl(loadControl)
             .setPauseAtEndOfMediaItems(false)
@@ -365,6 +372,7 @@ class MusicService : MediaSessionService() {
         Log.i(
             TAG,
             "rebufferWindow current='${current.displayTitle}' " +
+                "uri=$currentUri " +
                 "next='${if (repeatOne) "(repeat-one single)" else nextSong?.displayTitle}' " +
                 "startMs=$startPositionMs autoPlay=$autoPlay force=$forceReload remote=${isRemoteSong(current)}"
         )
@@ -377,7 +385,7 @@ class MusicService : MediaSessionService() {
             p.playWhenReady = wasPlaying
             if (wasPlaying) p.play()
         } catch (e: Exception) {
-            Log.e(TAG, "rebufferWindow failed", e)
+            Log.e(TAG, "rebufferWindow failed uri=$currentUri", e)
         }
 
         _nowPlaying.value = current
@@ -724,7 +732,7 @@ class MusicService : MediaSessionService() {
     fun peekPrevious(): Song? = queueManager.peekPrevious()
 
     fun clearHistory() = historyStore.clear()
-    fun getHistory(): List<HistoryEntry> = historyStore.entries.value
+    fun getHistory(): List<HistoryEntry> = historyStore.entries
     fun getHistoryMax(): Int = historyStore.maxEntries
     fun setHistoryMax(n: Int) {
         historyStore.maxEntries = n
