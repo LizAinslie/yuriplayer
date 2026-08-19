@@ -82,6 +82,42 @@ class CatalogRepository(
             dao.countTracksForSource(sourceType, sourceInstanceId)
         }
 
+    /**
+     * Resolve playable source offerings for one logical track (title+artist+album).
+     * Bounded SQL only — used by song rows for multi-source badge + Sources sheet.
+     */
+    suspend fun offeringsMatchingSong(song: Song, limit: Int = 12): List<SourceOffering> =
+        withContext(Dispatchers.IO) {
+            val title = song.title?.trim().orEmpty()
+            val artist = (song.effectiveAlbumArtist ?: song.artist)?.trim().orEmpty()
+            val album = song.album?.trim().orEmpty()
+            val rows = if (title.isNotEmpty() || artist.isNotEmpty() || album.isNotEmpty()) {
+                dao.findTracksMatching(title, artist, album, limit)
+            } else {
+                emptyList()
+            }
+            val fromDb = rows.map { row ->
+                SourceOffering(
+                    sourceType = SourceType.from(row.sourceType),
+                    sourceId = row.sourceInstanceId,
+                    sourceName = friendlySourceName(row.sourceType),
+                    song = row.toSong()
+                )
+            }.distinctBy { "${it.sourceType.name}:${it.sourceId}:${it.song.songKey}" }
+
+            if (fromDb.isNotEmpty()) return@withContext fromDb
+
+            // Fallback: the song itself as a single offering
+            listOf(
+                SourceOffering(
+                    sourceType = sourceTypeForSong(song),
+                    sourceId = null,
+                    sourceName = friendlySourceName(sourceTypeForSong(song).name),
+                    song = song
+                )
+            )
+        }
+
     suspend fun syncLocalLibrary(): List<Song> = withContext(Dispatchers.IO) {
         val scanned = musicRepository.scanLibrary()
         val seenAt = System.currentTimeMillis()
@@ -260,7 +296,7 @@ class CatalogRepository(
                     SourceOffering(
                         sourceType = SourceType.from(row.sourceType),
                         sourceId = row.sourceInstanceId,
-                        sourceName = row.sourceType.lowercase().replaceFirstChar { it.titlecase() },
+                        sourceName = friendlySourceName(row.sourceType),
                         song = row.toSong()
                     )
                 }
@@ -372,5 +408,21 @@ class CatalogRepository(
 
     companion object {
         private const val TAG = "CatalogRepo"
+
+        fun sourceTypeForSong(song: Song): SourceType {
+            val p = song.path.orEmpty()
+            return when {
+                p.startsWith("jellyfin:", true) -> SourceType.JELLYFIN
+                p.startsWith("navidrome:", true) -> SourceType.NAVIDROME
+                p.startsWith("subsonic:", true) -> SourceType.SUBSONIC
+                else -> SourceType.LOCAL
+            }
+        }
+
+        fun friendlySourceName(raw: String): String =
+            raw.lowercase().replaceFirstChar { it.titlecase() }
+
+        fun isMultiSource(offerings: List<SourceOffering>): Boolean =
+            offerings.map { "${it.sourceType.name}:${it.sourceId}" }.toSet().size > 1
     }
 }
