@@ -6,6 +6,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.channels.BufferOverflow
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharedFlow
@@ -16,7 +17,9 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
 /**
- * In-memory view of the **persisted** catalog for UI (local + remote rows in Room).
+ * In-memory view of the **local** device library for My Stuff / browser UI.
+ * Remote tracks live in [ExploreSearchService], not here — so cold start does
+ * not load tens of thousands of Jellyfin rows onto the main thread.
  */
 class LibraryIndex(
     private val context: Context,
@@ -26,7 +29,8 @@ class LibraryIndex(
     private val notifier: LibraryScanNotifier
 ) {
 
-    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
+    // Default dispatcher: never block Main while loading large lists
+    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
 
     private val _songs = MutableStateFlow<List<Song>>(emptyList())
     val songs: StateFlow<List<Song>> = _songs.asStateFlow()
@@ -46,32 +50,60 @@ class LibraryIndex(
     )
     val events: SharedFlow<LibraryEvent> = _events.asSharedFlow()
 
+    /**
+     * Fast path for cold start:
+     * 1. Disk cache (instant)
+     * 2. Local Room rows only
+     * 3. Full MediaStore rescan only if empty, and only after a delay so
+     *    MusicService restore + first Play win the CPU.
+     */
     fun bootstrap(staleAfterMs: Long = DEFAULT_STALE_MS) {
         scope.launch {
-            val fromDb = withContext(Dispatchers.IO) { catalog.getAllSongs() }
+            // 1) Cache first — no Room, no MediaStore
+            val cached = runCatching { cache.load() }.getOrNull()
+            if (cached != null && cached.songs.isNotEmpty()) {
+                _songs.value = cached.songs
+                _lastScannedAt.value = cached.scannedAt
+                Log.i(TAG, "bootstrap from cache: ${cached.songs.size} tracks")
+            }
+
+            // 2) Local Room rows (not the full remote catalog)
+            val fromDb = runCatching { catalog.getLocalSongs() }.getOrDefault(emptyList())
             if (fromDb.isNotEmpty()) {
                 _songs.value = fromDb
                 _lastScannedAt.value = System.currentTimeMillis()
-            } else {
-                val cached = withContext(Dispatchers.IO) { cache.load() }
-                if (cached != null && cached.songs.isNotEmpty()) {
-                    _songs.value = cached.songs
-                    _lastScannedAt.value = cached.scannedAt
-                }
+                Log.i(TAG, "bootstrap from Room local: ${fromDb.size} tracks")
             }
+
             val age = System.currentTimeMillis() - _lastScannedAt.value
-            if (_songs.value.isEmpty() || age > staleAfterMs) {
-                refresh()
+            when {
+                // Nothing at all — wait so playback restore finishes first
+                _songs.value.isEmpty() -> {
+                    delay(COLD_EMPTY_RESCAN_DELAY_MS)
+                    if (_songs.value.isEmpty() && !_isLoading.value) {
+                        Log.i(TAG, "bootstrap: empty after delay → local rescan")
+                        refresh()
+                    }
+                }
+                // Stale but we have songs — rescan much later, never block play
+                age > staleAfterMs -> {
+                    delay(STALE_RESCAN_DELAY_MS)
+                    if (!_isLoading.value) {
+                        Log.i(TAG, "bootstrap: stale (${age}ms) → deferred local rescan")
+                        refresh()
+                    }
+                }
+                else -> Log.i(TAG, "bootstrap: warm local index, skip auto-rescan")
             }
         }
     }
 
-    /** Reload every Room track (local + remote) into the in-memory index. */
+    /** Reload **local** Room tracks into the in-memory index (not remote). */
     suspend fun reloadFromCatalog() {
-        val all = withContext(Dispatchers.IO) { catalog.getAllSongs() }
-        _songs.value = all
+        val local = withContext(Dispatchers.IO) { catalog.getLocalSongs() }
+        _songs.value = local
         _lastScannedAt.value = System.currentTimeMillis()
-        Log.i(TAG, "reloadFromCatalog: ${all.size} tracks")
+        Log.i(TAG, "reloadFromCatalog (local): ${local.size} tracks")
     }
 
     fun refresh() {
@@ -221,8 +253,7 @@ class LibraryIndex(
                 if (artistKeyNorm == null) return@mapNotNull null
                 val displayName = tracks
                     .mapNotNull { it.effectiveAlbumArtist }
-                    .groupingBy { it }
-                    .eachCount()
+                    .groupingBy { it }.eachCount()
                     .maxByOrNull { it.value }
                     ?.key
                 val deduped = tracks.distinctBy {
@@ -249,6 +280,9 @@ class LibraryIndex(
     companion object {
         private const val TAG = "LibraryIndex"
         const val DEFAULT_STALE_MS = 12L * 60 * 60 * 1000
+        /** Wait so MusicService can restore + user can hit Play first. */
+        private const val COLD_EMPTY_RESCAN_DELAY_MS = 5_000L
+        private const val STALE_RESCAN_DELAY_MS = 12_000L
 
         fun normalizeKey(value: String?): String? {
             if (value == null) return null
