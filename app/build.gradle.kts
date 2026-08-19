@@ -79,15 +79,6 @@ android {
     }
 }
 
-// ---------------------------------------------------------------------------
-// NDK FFmpeg (optional, cached).
-//   ./gradlew :app:buildFfmpeg
-// Resolves NDK from (first hit wins):
-//   1) ANDROID_NDK_HOME / ANDROID_NDK env (if Gradle actually sees it)
-//   2) ANDROID_HOME/ndk/<newest>
-//   3) local.properties sdk.dir/ndk/<newest>  ← usual Android Studio path
-// Then *forwards* ANDROID_NDK_HOME into the Exec process (daemon-safe).
-// ---------------------------------------------------------------------------
 val ffmpegAbis = listOf("arm64-v8a", "armeabi-v7a", "x86_64")
 val ffmpegRoot = rootProject.file("native/ffmpeg")
 val ffmpegAssetsDir = file("src/main/assets/ffmpeg")
@@ -188,6 +179,9 @@ dependencies {
     implementation(libs.ktor.client.content.negotiation)
     implementation(libs.ktor.client.logging)
     implementation(libs.ktor.serialization.kotlinx.json)
+
+    // Official Jellyfin Kotlin SDK (auth, items, streaming helpers)
+    implementation(libs.jellyfin.core)
 
     implementation(libs.coil.compose)
     implementation(libs.coil.network.okhttp)
