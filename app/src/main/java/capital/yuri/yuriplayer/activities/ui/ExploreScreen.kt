@@ -60,6 +60,7 @@ import capital.yuri.yuriplayer.data.ExploreSearchService
 import capital.yuri.yuriplayer.data.LibraryIndex
 import capital.yuri.yuriplayer.data.Song
 import capital.yuri.yuriplayer.data.source.SourceOffering
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import org.koin.compose.koinInject
 
@@ -91,7 +92,9 @@ fun ExploreScreen(
     val allSongs by library.songs.collectAsState()
 
     LaunchedEffect(Unit) {
+        // Cheap disk hydrate first; delay network scan so cold start / NP restore stay snappy
         explore.hydrateFromCatalog()
+        delay(1_200)
         explore.requestRemoteScan(force = false)
     }
 
@@ -250,7 +253,6 @@ fun ExploreScreen(
                                 isPlaying = hit.preferred.song.isSameAs(nowPlaying),
                                 isPlaybackActive = isPlaybackActive,
                                 showHeart = true,
-                                // Spotify-style: E + cloud sit on the artist/subtitle line
                                 isExplicit = hit.isExplicit,
                                 multiSource = hit.isMultiSource,
                                 sourceOfferings = hit.offerings.takeIf { hit.isMultiSource },
@@ -330,7 +332,6 @@ private fun ExploreEntityRow(
     }
 }
 
-/** Spotify-style E + optional multi-source cloud for the artist line. */
 @Composable
 fun SongBadgeRow(
     isExplicit: Boolean,
