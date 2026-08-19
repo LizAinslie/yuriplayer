@@ -17,6 +17,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import capital.yuri.yuriplayer.data.Playlist
@@ -25,28 +26,22 @@ import capital.yuri.yuriplayer.data.PlaylistRepository
 import coil3.compose.AsyncImage
 import coil3.request.ImageRequest
 import coil3.request.crossfade
+import coil3.size.Size
 
 /**
- * Playlist cover via Coil (static + animated GIF).
- * custom image → first track art URI → placeholder.
+ * Playlist cover:
+ * - **Custom** image: Coil with explicit size + stable cache keys (no crossfade for local files)
+ * - **Track art** fallback: reuse [AlbumArt] / [AlbumArtCache] so list thumbs stay warm
+ * - Empty → placeholder icon
  */
 @Composable
 fun PlaylistCoverArt(playlist: Playlist, size: Dp = 56.dp) {
     val context = LocalContext.current
+    val density = LocalDensity.current
     val cover = remember(playlist.id, playlist.customImageUri, playlist.songs.size) {
         PlaylistRepository.coverFor(playlist)
     }
-
-    val model: Any? = remember(playlist.id, playlist.customImageUri, playlist.songs.firstOrNull()?.songKey) {
-        when (cover.mode) {
-            PlaylistCover.CoverMode.CUSTOM -> cover.customUri
-            PlaylistCover.CoverMode.SINGLE,
-            PlaylistCover.CoverMode.COLLAGE ->
-                cover.artUris.firstOrNull()
-                    ?: playlist.songs.firstOrNull()?.albumArtUri
-            PlaylistCover.CoverMode.EMPTY -> null
-        }
-    }
+    val px = with(density) { size.roundToPx().coerceAtLeast(1) }
 
     Box(
         modifier = Modifier
@@ -55,25 +50,51 @@ fun PlaylistCoverArt(playlist: Playlist, size: Dp = 56.dp) {
             .background(MaterialTheme.colorScheme.surfaceVariant),
         contentAlignment = Alignment.Center
     ) {
-        if (model != null) {
-            AsyncImage(
-                model = ImageRequest.Builder(context)
-                    .data(model)
-                    .crossfade(true)
-                    .build(),
-                contentDescription = playlist.name,
-                contentScale = ContentScale.Crop,
-                modifier = Modifier.fillMaxSize()
-            )
-        } else {
-            Icon(
-                imageVector = when (cover.mode) {
-                    PlaylistCover.CoverMode.EMPTY -> Icons.Default.Folder
-                    else -> Icons.Default.QueueMusic
-                },
-                contentDescription = null,
-                tint = MaterialTheme.colorScheme.onSurfaceVariant
-            )
+        when (cover.mode) {
+            PlaylistCover.CoverMode.CUSTOM -> {
+                val uri = cover.customUri?.toString()
+                if (uri != null) {
+                    val local = uri.startsWith("file:") || uri.startsWith("/")
+                    AsyncImage(
+                        model = ImageRequest.Builder(context)
+                            .data(uri)
+                            .size(Size(px, px))
+                            .memoryCacheKey("pl-cover:${playlist.id}:$uri")
+                            .diskCacheKey("pl-cover:${playlist.id}:$uri")
+                            .crossfade(!local)
+                            .build(),
+                        contentDescription = playlist.name,
+                        contentScale = ContentScale.Crop,
+                        modifier = Modifier.fillMaxSize()
+                    )
+                } else {
+                    PlaceholderIcon(empty = false)
+                }
+            }
+            PlaylistCover.CoverMode.SINGLE,
+            PlaylistCover.CoverMode.COLLAGE -> {
+                // Prefer the same warm AlbumArtCache path used by song rows
+                val seed = playlist.songs.firstOrNull()
+                if (seed != null) {
+                    AlbumArt(
+                        song = seed,
+                        size = size,
+                        corner = 6.dp
+                    )
+                } else {
+                    PlaceholderIcon(empty = false)
+                }
+            }
+            PlaylistCover.CoverMode.EMPTY -> PlaceholderIcon(empty = true)
         }
     }
+}
+
+@Composable
+private fun PlaceholderIcon(empty: Boolean) {
+    Icon(
+        imageVector = if (empty) Icons.Default.Folder else Icons.Default.QueueMusic,
+        contentDescription = null,
+        tint = MaterialTheme.colorScheme.onSurfaceVariant
+    )
 }
