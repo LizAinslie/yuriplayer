@@ -15,16 +15,14 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.plus
 import org.koin.android.ext.android.inject
 
 /**
  * Short-lived foreground service that hosts library scans / remote syncs so they
  * keep running when the UI is backgrounded, with a live progress notification.
  *
- * Work runs at **lowest** background priority so touch / composition keep the CPU.
- * Notification updates go through [LibraryScanNotifier] only — never re-call
- * startForeground on every progress tick.
+ * Re-entering Explore must **not** cancel an in-flight remote scan — only an
+ * explicit stop / force restart does that.
  */
 class LibraryScanService : Service() {
 
@@ -32,7 +30,6 @@ class LibraryScanService : Service() {
     private val explore: ExploreSearchService by inject()
     private val library: LibraryIndex by inject()
 
-    // Single worker — never compete with UI / playback threads for pool slots
     private val scanDispatcher = Dispatchers.IO.limitedParallelism(1)
     private val scope = CoroutineScope(SupervisorJob() + scanDispatcher)
     private var work: Job? = null
@@ -42,6 +39,30 @@ class LibraryScanService : Service() {
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         val action = intent?.action ?: ACTION_REMOTE
         val force = intent?.getBooleanExtra(EXTRA_FORCE, false) == true
+        val sourceId = intent?.getLongExtra(EXTRA_SOURCE_ID, -1L)?.takeIf { it >= 0 }
+
+        when (action) {
+            ACTION_STOP -> {
+                Log.i(TAG, "stop requested sourceId=$sourceId")
+                if (sourceId != null) explore.requestStopSource(sourceId)
+                else explore.requestStopAll()
+                // Let the worker finish cleanly via cooperative cancel flags
+                return START_NOT_STICKY
+            }
+            ACTION_PAUSE -> {
+                Log.i(TAG, "pause requested sourceId=$sourceId")
+                if (sourceId != null) explore.requestPauseSource(sourceId)
+                else explore.requestPauseAll()
+                return START_NOT_STICKY
+            }
+        }
+
+        // Already scanning remote — do not cancel / restart (this was the Explore re-entry bug)
+        if (action == ACTION_REMOTE && work?.isActive == true && !force) {
+            Log.i(TAG, "remote scan already active — ignore duplicate start")
+            startAsForeground("Syncing libraries", explore.scanProgress.value ?: "Working…")
+            return START_NOT_STICKY
+        }
 
         val title = when (action) {
             ACTION_LOCAL -> "Scanning library"
@@ -49,9 +70,10 @@ class LibraryScanService : Service() {
         }
         startAsForeground(title, "Starting…")
 
-        work?.cancel()
+        if (force) {
+            work?.cancel()
+        }
         work = scope.launch {
-            // Lowest priority: UI and audio always win scheduling
             Process.setThreadPriority(Process.THREAD_PRIORITY_LOWEST)
             try {
                 when (action) {
@@ -82,7 +104,8 @@ class LibraryScanService : Service() {
     }
 
     override fun onDestroy() {
-        work?.cancel()
+        // Do not cancel work aggressively — process death is the only hard stop here.
+        // Cooperative pause/stop is handled via ExploreSearchService flags.
         scope.cancel()
         super.onDestroy()
     }
@@ -114,7 +137,10 @@ class LibraryScanService : Service() {
         private const val TAG = "LibraryScanService"
         const val ACTION_REMOTE = "capital.yuri.yuriplayer.action.SCAN_REMOTE"
         const val ACTION_LOCAL = "capital.yuri.yuriplayer.action.SCAN_LOCAL"
+        const val ACTION_STOP = "capital.yuri.yuriplayer.action.SCAN_STOP"
+        const val ACTION_PAUSE = "capital.yuri.yuriplayer.action.SCAN_PAUSE"
         const val EXTRA_FORCE = "force"
+        const val EXTRA_SOURCE_ID = "source_id"
 
         fun startRemote(context: Context, force: Boolean = false) {
             val i = Intent(context, LibraryScanService::class.java).apply {
@@ -127,6 +153,22 @@ class LibraryScanService : Service() {
         fun startLocal(context: Context) {
             val i = Intent(context, LibraryScanService::class.java).apply {
                 action = ACTION_LOCAL
+            }
+            start(context, i)
+        }
+
+        fun pause(context: Context, sourceId: Long? = null) {
+            val i = Intent(context, LibraryScanService::class.java).apply {
+                action = ACTION_PAUSE
+                if (sourceId != null) putExtra(EXTRA_SOURCE_ID, sourceId)
+            }
+            start(context, i)
+        }
+
+        fun stop(context: Context, sourceId: Long? = null) {
+            val i = Intent(context, LibraryScanService::class.java).apply {
+                action = ACTION_STOP
+                if (sourceId != null) putExtra(EXTRA_SOURCE_ID, sourceId)
             }
             start(context, i)
         }
