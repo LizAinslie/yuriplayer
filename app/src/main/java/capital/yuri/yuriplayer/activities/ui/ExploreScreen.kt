@@ -60,8 +60,10 @@ import capital.yuri.yuriplayer.data.ExploreSearchService
 import capital.yuri.yuriplayer.data.LibraryIndex
 import capital.yuri.yuriplayer.data.Song
 import capital.yuri.yuriplayer.data.source.SourceOffering
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import org.koin.compose.koinInject
 
 @Composable
@@ -83,18 +85,23 @@ fun ExploreScreen(
 
     var query by remember { mutableStateOf("") }
 
+    // Progress only — do NOT drive search from these (avoids main-thread work on every page)
     val scanning by explore.isScanning.collectAsState()
     val scanProgress by explore.scanProgress.collectAsState()
     val indexed by explore.indexedCount.collectAsState()
-    val remoteOfferings by explore.remoteOfferings.collectAsState()
     val err by explore.lastError.collectAsState()
     val remoteSources by explore.sourceCount.collectAsState()
-    val allSongs by library.songs.collectAsState()
 
+    // Search results live in state, filled on a background dispatcher after debounce
+    var hits by remember { mutableStateOf<List<ExploreSearchService.Hit>>(emptyList()) }
+    var albumHits by remember { mutableStateOf<List<AlbumItem>>(emptyList()) }
+    var artistHits by remember { mutableStateOf<List<ArtistItem>>(emptyList()) }
+    var searchBusy by remember { mutableStateOf(false) }
+
+    // One-shot hydrate + optional background sync. Typing never starts a scan.
     LaunchedEffect(Unit) {
-        // Cheap disk hydrate first; delay network scan so cold start / NP restore stay snappy
         explore.hydrateFromCatalog()
-        delay(1_200)
+        delay(1_500)
         explore.requestRemoteScan(force = false)
     }
 
@@ -102,16 +109,40 @@ fun ExploreScreen(
         if (forceRescanKey > 0) explore.requestRemoteScan(force = true)
     }
 
-    val hits = remember(query, remoteOfferings, allSongs) {
-        explore.searchLive(query)
-    }
-    val albumHits = remember(query, allSongs) {
-        if (query.trim().isEmpty()) emptyList()
-        else library.albums(query.trim(), taggedOnly = false).take(12)
-    }
-    val artistHits = remember(query, allSongs) {
-        if (query.trim().isEmpty()) emptyList()
-        else library.artists(query.trim(), taggedOnly = false).take(12)
+    // Debounced background search — never blocks the text field
+    LaunchedEffect(query) {
+        val q = query.trim()
+        if (q.isEmpty()) {
+            hits = emptyList()
+            albumHits = emptyList()
+            artistHits = emptyList()
+            searchBusy = false
+            return@LaunchedEffect
+        }
+        searchBusy = true
+        delay(SEARCH_DEBOUNCE_MS)
+        // still the same query after debounce?
+        if (query.trim() != q) return@LaunchedEffect
+
+        val songHits = withContext(Dispatchers.Default) {
+            explore.searchLive(q).take(SONG_HIT_LIMIT)
+        }
+        if (query.trim() != q) return@LaunchedEffect
+
+        val albums = withContext(Dispatchers.Default) {
+            library.albums(q, taggedOnly = false).take(ALBUM_HIT_LIMIT)
+        }
+        if (query.trim() != q) return@LaunchedEffect
+
+        val artists = withContext(Dispatchers.Default) {
+            library.artists(q, taggedOnly = false).take(ARTIST_HIT_LIMIT)
+        }
+        if (query.trim() != q) return@LaunchedEffect
+
+        hits = songHits
+        albumHits = albums
+        artistHits = artists
+        searchBusy = false
     }
 
     Column(modifier = Modifier.fillMaxSize()) {
@@ -144,6 +175,7 @@ fun ExploreScreen(
             err != null && !scanning -> err!!
             scanning && scanProgress != null -> scanProgress!!
             scanning -> "Scanning remote libraries… ($indexed indexed)"
+            searchBusy -> "Searching…"
             query.trim().isEmpty() -> {
                 when {
                     indexed > 0 -> "Type to search · $indexed remote tracks indexed"
@@ -165,7 +197,7 @@ fun ExploreScreen(
             modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            if (scanning) {
+            if (scanning || searchBusy) {
                 CircularProgressIndicator(
                     modifier = Modifier.size(14.dp),
                     strokeWidth = 2.dp
@@ -207,7 +239,7 @@ fun ExploreScreen(
                     }
                 }
             }
-            hits.isEmpty() && albumHits.isEmpty() && artistHits.isEmpty() && !scanning -> {
+            !searchBusy && hits.isEmpty() && albumHits.isEmpty() && artistHits.isEmpty() -> {
                 Text(
                     "No matches for \"${query.trim()}\".",
                     modifier = Modifier.padding(16.dp),
@@ -275,6 +307,11 @@ fun ExploreScreen(
         }
     }
 }
+
+private const val SEARCH_DEBOUNCE_MS = 280L
+private const val SONG_HIT_LIMIT = 80
+private const val ALBUM_HIT_LIMIT = 12
+private const val ARTIST_HIT_LIMIT = 12
 
 @Composable
 private fun SectionHeader(title: String) {
