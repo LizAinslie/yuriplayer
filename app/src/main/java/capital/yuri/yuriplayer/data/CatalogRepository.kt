@@ -65,6 +65,131 @@ class CatalogRepository(
             dao.searchArtists(q, limit)
         }
 
+    /**
+     * Explore album hits from the full catalog (local + remote).
+     * Songs are not loaded here — call [albumItemForKey] / [tracksForAlbum] on open.
+     */
+    suspend fun searchAlbumsAsItems(query: String, limit: Int = 12): List<AlbumItem> =
+        withContext(Dispatchers.IO) {
+            val q = query.trim()
+            if (q.isEmpty()) return@withContext emptyList()
+            dao.searchAlbums(q, limit).map { row ->
+                AlbumItem(
+                    name = row.name,
+                    artist = row.artist,
+                    trackCount = row.trackCount,
+                    songs = emptyList()
+                )
+            }
+        }
+
+    /** Explore artist hits from the full catalog (local + remote). */
+    suspend fun searchArtistsAsItems(query: String, limit: Int = 12): List<ArtistItem> =
+        withContext(Dispatchers.IO) {
+            val q = query.trim()
+            if (q.isEmpty()) return@withContext emptyList()
+            dao.searchArtists(q, limit).map { row ->
+                ArtistItem(
+                    name = row.displayName,
+                    trackCount = row.trackCount,
+                    albumCount = row.albumCount,
+                    songs = emptyList()
+                )
+            }
+        }
+
+    suspend fun tracksForAlbum(albumKey: String): List<Song> = withContext(Dispatchers.IO) {
+        if (albumKey.isBlank()) return@withContext emptyList()
+        dao.getTracksForAlbum(albumKey).map { it.toSong() }
+    }
+
+    suspend fun tracksForArtist(artistKey: String): List<Song> = withContext(Dispatchers.IO) {
+        if (artistKey.isBlank()) return@withContext emptyList()
+        dao.getTracksForArtist(artistKey).map { it.toSong() }
+    }
+
+    /**
+     * Full [AlbumItem] for detail / play — prefers catalog tracks for the key,
+     * falls back to empty if the album row or tracks are missing.
+     */
+    suspend fun albumItemForKey(albumKey: String): AlbumItem? = withContext(Dispatchers.IO) {
+        if (albumKey.isBlank()) return@withContext null
+        val row = dao.getAlbum(albumKey)
+        val tracks = dao.getTracksForAlbum(albumKey).map { it.toSong() }
+            .sortedWith(
+                compareBy<Song> { it.discNumber ?: 1 }
+                    .thenBy { it.trackNumber ?: Int.MAX_VALUE }
+                    .thenBy(String.CASE_INSENSITIVE_ORDER) { it.displayTitle }
+            )
+        if (row == null && tracks.isEmpty()) return@withContext null
+        AlbumItem(
+            name = row?.name ?: tracks.firstOrNull()?.album,
+            artist = row?.artist ?: tracks.firstOrNull()?.effectiveAlbumArtist,
+            trackCount = if (tracks.isNotEmpty()) tracks.size else (row?.trackCount ?: 0),
+            songs = tracks
+        )
+    }
+
+    /** Full [ArtistItem] + discography albums for detail. */
+    suspend fun artistItemForKey(artistKey: String): ArtistItem? = withContext(Dispatchers.IO) {
+        if (artistKey.isBlank()) return@withContext null
+        val row = dao.getArtist(artistKey)
+        val tracks = dao.getTracksForArtist(artistKey).map { it.toSong() }
+        if (row == null && tracks.isEmpty()) return@withContext null
+        val albums = tracks.mapNotNull { normalizeAlbumName(it.album) }.toSet()
+        ArtistItem(
+            name = row?.displayName ?: tracks.firstOrNull()?.effectiveAlbumArtist,
+            trackCount = if (tracks.isNotEmpty()) tracks.size else (row?.trackCount ?: 0),
+            albumCount = if (albums.isNotEmpty()) albums.size else (row?.albumCount ?: 0),
+            songs = tracks
+        )
+    }
+
+    /** Albums for an artist key (catalog rollups + tracks loaded per album). */
+    suspend fun albumItemsForArtist(artistKey: String): List<AlbumItem> = withContext(Dispatchers.IO) {
+        if (artistKey.isBlank()) return@withContext emptyList()
+        val albumRows = dao.getAlbumsForArtist(artistKey)
+        if (albumRows.isNotEmpty()) {
+            albumRows.map { row ->
+                val tracks = dao.getTracksForAlbum(row.albumKey).map { it.toSong() }
+                    .sortedWith(
+                        compareBy<Song> { it.discNumber ?: 1 }
+                            .thenBy { it.trackNumber ?: Int.MAX_VALUE }
+                            .thenBy(String.CASE_INSENSITIVE_ORDER) { it.displayTitle }
+                    )
+                AlbumItem(
+                    name = row.name,
+                    artist = row.artist,
+                    trackCount = if (tracks.isNotEmpty()) tracks.size else row.trackCount,
+                    songs = tracks
+                )
+            }
+        } else {
+            // No rollup rows yet — group tracks directly
+            dao.getTracksForArtist(artistKey)
+                .map { it.toSong() }
+                .groupBy { albumKey(it.album, it.effectiveAlbumArtist) }
+                .map { (_, tracks) ->
+                    val sorted = tracks.sortedWith(
+                        compareBy<Song> { it.discNumber ?: 1 }
+                            .thenBy { it.trackNumber ?: Int.MAX_VALUE }
+                            .thenBy(String.CASE_INSENSITIVE_ORDER) { it.displayTitle }
+                    )
+                    AlbumItem(
+                        name = sorted.firstOrNull()?.album,
+                        artist = sorted.firstOrNull()?.effectiveAlbumArtist,
+                        trackCount = sorted.size,
+                        songs = sorted
+                    )
+                }
+                .sortedWith(
+                    compareByDescending<AlbumItem> {
+                        it.songs.mapNotNull { s -> s.year }.maxOrNull() ?: Int.MIN_VALUE
+                    }.thenBy(String.CASE_INSENSITIVE_ORDER) { it.displayName }
+                )
+        }
+    }
+
     suspend fun countRemoteTracks(): Int = withContext(Dispatchers.IO) {
         dao.countNonLocalTracks()
     }
@@ -424,5 +549,17 @@ class CatalogRepository(
 
         fun isMultiSource(offerings: List<SourceOffering>): Boolean =
             offerings.map { "${it.sourceType.name}:${it.sourceId}" }.toSet().size > 1
+
+        private fun normalizeAlbumName(value: String?): String? {
+            if (value == null) return null
+            val t = value.trim().replace(Regex("\\s+"), " ").lowercase()
+            return t.takeIf { it.isNotEmpty() }
+        }
+
+        private fun guessReleaseType(trackCount: Int): ReleaseType = when {
+            trackCount <= 3 -> ReleaseType.SINGLE
+            trackCount <= 8 -> ReleaseType.EP
+            else -> ReleaseType.ALBUM
+        }
     }
 }
