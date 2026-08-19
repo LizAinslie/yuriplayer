@@ -161,12 +161,12 @@ class CatalogRepository(
         val albumRows = dao.aggregateAlbums()
         val albums = albumRows.map { row ->
             val existing = prevAlbums[row.albumKey]
-            val artistKey = artistKey(row.artist)
+            val aKey = artistKey(row.artist)
             CatalogAlbumEntity(
                 albumKey = row.albumKey,
                 name = row.name,
                 artist = row.artist,
-                artistKey = artistKey,
+                artistKey = aKey,
                 year = row.year,
                 trackCount = row.trackCount,
                 releaseType = guessReleaseType(row.trackCount).name,
@@ -374,11 +374,3 @@ class CatalogRepository(
         private const val TAG = "CatalogRepo"
     }
 }
-
-private fun guessReleaseType(trackCount: Int): ReleaseKindGuess = when {
-    trackCount <= 1 -> ReleaseKindGuess.SINGLE
-    trackCount <= 6 -> ReleaseKindGuess.EP
-    else -> ReleaseKindGuess.ALBUM
-}
-
-private enum class ReleaseKindGuess { SINGLE, EP, ALBUM }
