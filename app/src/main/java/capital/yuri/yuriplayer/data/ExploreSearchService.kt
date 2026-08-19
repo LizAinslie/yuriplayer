@@ -216,10 +216,10 @@ class ExploreSearchService(
         }
 
     private suspend fun buildHitsFromDb(needle: String, limit: Int): List<Hit> {
-        val songs = catalog.searchSongs(needle, limit = limit * 2)
+        val songs = catalog.searchSongs(needle, limit = limit * 3)
         if (songs.isEmpty()) return emptyList()
 
-        val grouped = songs.groupBy { trackIdentity(it) }
+        val grouped = songs.groupBy { TrackIdentity.of(it) }
         val hits = ArrayList<Hit>(minOf(limit, grouped.size))
         for ((key, group) in grouped) {
             if (hits.size >= limit) break
@@ -232,7 +232,11 @@ class ExploreSearchService(
                     song = song
                 )
             }.distinctBy { "${it.sourceType.name}:${it.song.songKey}" }
-            val preferred = offerings.minByOrNull { it.sourceType.rank } ?: offerings.first()
+
+            // User override first; otherwise LOCAL rank (0) before remote.
+            val preferred = sourceResolver.prefer(SCOPE_TRACK, key, offerings)
+                ?: offerings.minByOrNull { it.sourceType.rank }
+                ?: offerings.first()
             hits += Hit(key, offerings, preferred)
         }
         hits.sortBy { it.song.displayTitle.lowercase() }
@@ -732,13 +736,8 @@ class ExploreSearchService(
         private const val CACHE_TTL_MS = 15L * 60 * 1000
         private const val WARM_SOURCE_MIN_TRACKS = 50
 
-        fun trackIdentity(song: Song): String {
-            val t = song.title?.trim()?.lowercase().orEmpty()
-            val a = (song.effectiveAlbumArtist ?: song.artist)?.trim()?.lowercase().orEmpty()
-            val al = song.album?.trim()?.lowercase().orEmpty()
-            return if (t.isNotEmpty() || a.isNotEmpty()) "$t|$a|$al"
-            else song.songKey
-        }
+        /** @deprecated Prefer [TrackIdentity.of] — kept for call sites still importing this. */
+        fun trackIdentity(song: Song): String = TrackIdentity.of(song)
 
         fun isLocalFilesystemSong(song: Song): Boolean {
             val p = song.path ?: return song.contentUri.scheme == "content" ||

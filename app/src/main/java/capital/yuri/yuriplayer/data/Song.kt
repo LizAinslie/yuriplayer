@@ -136,3 +136,90 @@ fun artistKey(name: String?): String? {
     val t = name.trim().replace(Regex("\\s+"), " ").lowercase()
     return t.takeIf { it.isNotEmpty() }
 }
+
+/**
+ * Cross-source track identity.
+ *
+ * Titles match with or without `(feat. …)` / `ft.` / `featuring …`.
+ * Track artist may differ so long as album + album artist line up — common when
+ * one source tags "Artist" and another tags featured credits differently.
+ */
+object TrackIdentity {
+    private val FEAT_IN_PARENS = Regex(
+        """(?i)[\(\[\{]\s*(feat\.?|ft\.?|featuring)\s+[^\)\]\}]+[\)\]\}]"""
+    )
+    private val FEAT_SUFFIX = Regex(
+        """(?i)\s+(feat\.?|ft\.?|featuring)\s+.+$"""
+    )
+    private val WS = Regex("\\s+")
+
+    fun normalizeTitle(title: String?): String {
+        if (title == null) return ""
+        var t = title.trim()
+        t = FEAT_IN_PARENS.replace(t, "")
+        t = FEAT_SUFFIX.replace(t, "")
+        return t.replace(WS, " ").trim().lowercase()
+    }
+
+    fun normalizeToken(value: String?): String {
+        if (value == null) return ""
+        return value.trim().replace(WS, " ").lowercase()
+    }
+
+    /** Stable key used for multi-source grouping + preferred-source overrides. */
+    fun of(song: Song): String {
+        val title = normalizeTitle(song.title)
+        val album = normalizeToken(song.album)
+        // Anchor on album artist (not track artist) so feat. credit drift is ok
+        val albumArtist = normalizeToken(song.effectiveAlbumArtist)
+        return when {
+            title.isNotEmpty() && (album.isNotEmpty() || albumArtist.isNotEmpty()) ->
+                "$title|$albumArtist|$album"
+            title.isNotEmpty() ->
+                "$title|${normalizeToken(song.artist)}|$album"
+            else -> song.songKey
+        }
+    }
+
+    fun titlesMatch(a: String?, b: String?): Boolean {
+        val na = normalizeTitle(a)
+        val nb = normalizeTitle(b)
+        return na.isNotEmpty() && na == nb
+    }
+
+    fun albumsMatch(a: String?, b: String?): Boolean {
+        val na = normalizeToken(a)
+        val nb = normalizeToken(b)
+        return na.isNotEmpty() && na == nb
+    }
+
+    fun albumArtistsMatch(a: String?, b: String?): Boolean {
+        val na = normalizeToken(a)
+        val nb = normalizeToken(b)
+        // Empty on both sides counts as match only when titles already matched
+        // and we have an album anchor; callers decide strictness.
+        return na == nb
+    }
+
+    /**
+     * True when two songs are the same logical track across sources.
+     * Requires normalized title + album; album-artist may be empty on one side;
+     * track artist is intentionally ignored when album + album artist agree.
+     */
+    fun matches(a: Song, b: Song): Boolean {
+        if (!titlesMatch(a.title, b.title)) return false
+        val albumA = normalizeToken(a.album)
+        val albumB = normalizeToken(b.album)
+        if (albumA.isNotEmpty() && albumB.isNotEmpty() && albumA != albumB) return false
+        val aaA = normalizeToken(a.effectiveAlbumArtist)
+        val aaB = normalizeToken(b.effectiveAlbumArtist)
+        if (aaA.isNotEmpty() && aaB.isNotEmpty() && aaA != aaB) return false
+        // If both album and album-artist missing, fall back to track artist
+        if (albumA.isEmpty() && albumB.isEmpty() && aaA.isEmpty() && aaB.isEmpty()) {
+            val ta = normalizeToken(a.artist)
+            val tb = normalizeToken(b.artist)
+            if (ta.isNotEmpty() && tb.isNotEmpty() && ta != tb) return false
+        }
+        return true
+    }
+}
