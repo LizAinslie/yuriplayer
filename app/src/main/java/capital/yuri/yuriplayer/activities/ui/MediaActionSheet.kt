@@ -17,6 +17,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Clear
+import androidx.compose.material.icons.filled.Cloud
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.Button
 import androidx.compose.material3.Checkbox
@@ -48,12 +49,17 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import capital.yuri.yuriplayer.data.AlbumItem
 import capital.yuri.yuriplayer.data.ArtistItem
+import capital.yuri.yuriplayer.data.MetadataEditService
 import capital.yuri.yuriplayer.data.MyStuffPinStore
 import capital.yuri.yuriplayer.data.Playlist
 import capital.yuri.yuriplayer.data.PlaylistRepository
 import capital.yuri.yuriplayer.data.Song
 import capital.yuri.yuriplayer.data.StuffPin
 import capital.yuri.yuriplayer.data.StuffPinKind
+import capital.yuri.yuriplayer.data.source.SourceOffering
+import capital.yuri.yuriplayer.data.source.isTagWritable
+import capital.yuri.yuriplayer.data.source.writableOfferings
+import capital.yuri.yuriplayer.data.source.writabilityLabel
 import capital.yuri.yuriplayer.player.PlayerController
 import kotlinx.coroutines.launch
 import org.koin.compose.koinInject
@@ -219,7 +225,12 @@ fun SongContextSheet(
     onAddToQueue: (() -> Unit)? = null,
     onStartRadio: (() -> Unit)? = null,
     onAddToPlaylist: (() -> Unit)? = null,
-    onAddToMyStuff: (() -> Unit)? = null
+    onAddToMyStuff: (() -> Unit)? = null,
+    /**
+     * All known source offerings for this identity. Always shown via Sources
+     * action; multi-source badge is a separate UI concern (only when size > 1).
+     */
+    offerings: List<SourceOffering> = emptyList()
 ) {
     val pinStore: MyStuffPinStore = koinInject()
     val player: PlayerController = koinInject()
@@ -227,7 +238,13 @@ fun SongContextSheet(
     val songNav = LocalSongNav.current
     var showPlaylistPicker by remember { mutableStateOf(false) }
     var showArtistPicker by remember { mutableStateOf(false) }
+    var showSources by remember { mutableStateOf(false) }
     val artists = remember(song) { songArtistNames(song) }
+
+    val resolvedOfferings = remember(song, offerings) {
+        if (offerings.isNotEmpty()) offerings
+        else listOf(MetadataEditService.localOffering(song))
+    }
 
     val goToAlbum = onGoToAlbum ?: { songNav.openAlbumForSong(song) }
     val goToArtist = onGoToArtist ?: { name -> songNav.openArtistByName(name) }
@@ -237,6 +254,18 @@ fun SongContextSheet(
             songs = listOf(song),
             onDismiss = {
                 showPlaylistPicker = false
+                onDismiss()
+            }
+        )
+        return
+    }
+
+    if (showSources) {
+        SourcesPickerSheet(
+            song = song,
+            offerings = resolvedOfferings,
+            onDismiss = {
+                showSources = false
                 onDismiss()
             }
         )
@@ -337,6 +366,10 @@ fun SongContextSheet(
                 }
             }
         }
+        // Always available — every song has at least one source.
+        MediaSheetItem("Sources") {
+            showSources = true
+        }
         if (onEditMetadata != null) {
             MediaSheetItem("Edit metadata") {
                 onDismiss()
@@ -344,6 +377,180 @@ fun SongContextSheet(
             }
         }
         MediaSheetBottomPad()
+    }
+}
+
+/**
+ * Lists every offering for a song. Always usable (even with a single source).
+ * Writable sources are labeled; Jellyfin / Navidrome (Subsonic) show as read-only.
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun SourcesPickerSheet(
+    song: Song,
+    offerings: List<SourceOffering>,
+    onDismiss: () -> Unit
+) {
+    val list = remember(offerings, song) {
+        if (offerings.isNotEmpty()) offerings
+        else listOf(MetadataEditService.localOffering(song))
+    }
+
+    ModalBottomSheet(
+        onDismissRequest = onDismiss,
+        sheetState = rememberModalBottomSheetState()
+    ) {
+        Text(
+            "Sources",
+            style = MaterialTheme.typography.titleMedium,
+            fontWeight = FontWeight.SemiBold,
+            modifier = Modifier.padding(horizontal = 20.dp, vertical = 8.dp)
+        )
+        Text(
+            song.displayTitle,
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.55f),
+            modifier = Modifier.padding(horizontal = 20.dp)
+        )
+        HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
+
+        list.forEach { offering ->
+            val writable = offering.isTagWritable()
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 20.dp, vertical = 10.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Icon(
+                    Icons.Default.Cloud,
+                    contentDescription = null,
+                    modifier = Modifier.size(22.dp),
+                    tint = if (writable) MaterialTheme.colorScheme.primary
+                    else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.45f)
+                )
+                Spacer(modifier = Modifier.width(12.dp))
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        offering.sourceName,
+                        style = MaterialTheme.typography.bodyLarge,
+                        fontWeight = FontWeight.Medium
+                    )
+                    Text(
+                        if (writable) "Writable · tags can be updated"
+                        else "Read-only · streaming library",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.55f)
+                    )
+                }
+            }
+        }
+
+        if (list.none { it.isTagWritable() }) {
+            Text(
+                "Metadata edits are not available for this track — only local / cloud-mount sources support tag writes.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.55f),
+                modifier = Modifier.padding(horizontal = 20.dp, vertical = 8.dp)
+            )
+        }
+        MediaSheetBottomPad()
+    }
+}
+
+/**
+ * Shown on metadata save when more than one writable offering exists.
+ * User picks which sources receive the tag write; read-only ones are never listed.
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun WriteTargetsPickerSheet(
+    title: String,
+    writableOfferings: List<SourceOffering>,
+    onConfirm: (List<SourceOffering>) -> Unit,
+    onDismiss: () -> Unit
+) {
+    val initial = remember(writableOfferings) {
+        writableOfferings.map { it.sourceName to it }.toMap().values.toList()
+    }
+    var selected by remember(initial) {
+        mutableStateOf(initial.map { it.sourceName }.toSet())
+    }
+
+    ModalBottomSheet(
+        onDismissRequest = onDismiss,
+        sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 16.dp)
+                .padding(bottom = 28.dp)
+        ) {
+            Text(
+                title,
+                style = MaterialTheme.typography.titleLarge,
+                fontWeight = FontWeight.Bold,
+                modifier = Modifier.padding(bottom = 4.dp)
+            )
+            Text(
+                "Only writable sources are listed. Jellyfin and Subsonic/Navidrome are never updated.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
+                modifier = Modifier.padding(bottom = 12.dp)
+            )
+
+            initial.forEach { offering ->
+                val checked = offering.sourceName in selected
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable {
+                            selected = if (checked) selected - offering.sourceName
+                            else selected + offering.sourceName
+                        }
+                        .padding(vertical = 8.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Checkbox(
+                        checked = checked,
+                        onCheckedChange = {
+                            selected = if (it) selected + offering.sourceName
+                            else selected - offering.sourceName
+                        }
+                    )
+                    Spacer(modifier = Modifier.width(4.dp))
+                    Column {
+                        Text(offering.sourceName, style = MaterialTheme.typography.bodyLarge)
+                        Text(
+                            offering.writabilityLabel(),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.55f)
+                        )
+                    }
+                }
+            }
+
+            Spacer(modifier = Modifier.height(12.dp))
+            Button(
+                onClick = {
+                    val chosen = initial.filter { it.sourceName in selected }
+                    onConfirm(chosen)
+                },
+                enabled = selected.isNotEmpty(),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Icon(Icons.Default.Check, contentDescription = null, modifier = Modifier.size(18.dp))
+                Spacer(modifier = Modifier.width(8.dp))
+                Text("Update selected")
+            }
+            TextButton(
+                onClick = onDismiss,
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Text("Cancel")
+            }
+        }
     }
 }
 
@@ -596,8 +803,6 @@ fun AddToPlaylistSheet(
         ready = true
     }
 
-    // Filter by name; selection is independent of visibility so filtered-out
-    // checked playlists stay selected. Checked rows always sort first.
     val visiblePlaylists = remember(playlists, query, selected) {
         val q = query.trim()
         val filtered = if (q.isEmpty()) {
