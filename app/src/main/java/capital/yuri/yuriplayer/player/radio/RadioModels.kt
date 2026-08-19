@@ -65,7 +65,12 @@ data class ReleasePoolConfig(
     val avoidRecentPerKind: Int = 1
 )
 
-/** Per radio-source preferences (artist / album / playlist station). */
+/**
+ * Per radio-source preferences (artist / album / playlist station).
+ *
+ * Discovery flags control whether external servers (Jellyfin InstantMix,
+ * future Subsonic similar, …) can inject tracks beyond the local catalog.
+ */
 @Serializable
 data class RadioSourcePrefs(
     /**
@@ -73,7 +78,16 @@ data class RadioSourcePrefs(
      * false → whole LP/EP/Single blocks until the last block reaches ≥ maxRadioQueue.
      */
     val shuffle: Boolean = false,
-    val maxRadioQueue: Int = DEFAULT_MAX_RADIO_QUEUE
+    val maxRadioQueue: Int = DEFAULT_MAX_RADIO_QUEUE,
+    /** Prefer tracks already indexed in the on-device catalog (always on by default). */
+    val useLibraryDiscovery: Boolean = true,
+    /**
+     * When true and a Jellyfin source is available for the seed, ask the server
+     * for Instant Mix / similar items and merge into the radio pool.
+     */
+    val useJellyfinInstantMix: Boolean = false,
+    /** Reserved for Subsonic / OpenSubsonic similar-songs endpoints. */
+    val useSubsonicSimilar: Boolean = false
 ) {
     companion object {
         const val DEFAULT_MAX_RADIO_QUEUE = 50
