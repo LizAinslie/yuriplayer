@@ -27,6 +27,12 @@ interface CatalogDao {
     @Query("SELECT * FROM catalog_tracks WHERE sourceType = :sourceType")
     suspend fun getTracksBySource(sourceType: String): List<CatalogTrackEntity>
 
+    @Query(
+        "SELECT COUNT(*) FROM catalog_tracks WHERE sourceType = :sourceType " +
+            "AND (sourceInstanceId IS :sourceInstanceId OR (sourceInstanceId IS NULL AND :sourceInstanceId IS NULL))"
+    )
+    suspend fun countTracksForSource(sourceType: String, sourceInstanceId: Long?): Int
+
     @Query("SELECT * FROM catalog_tracks WHERE songKey = :songKey LIMIT 1")
     suspend fun getTrack(songKey: String): CatalogTrackEntity?
 
@@ -108,7 +114,6 @@ interface CatalogDao {
         upsertAlbums(albums)
         upsertArtists(artists)
         pruneStaleTracks(CatalogSources.LOCAL, null, seenAtMs)
-        // Drop album/artist rows that no longer have any tracks
         deleteOrphanAlbums()
         deleteOrphanArtists()
     }
