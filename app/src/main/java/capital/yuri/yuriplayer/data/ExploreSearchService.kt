@@ -31,6 +31,7 @@ import java.util.concurrent.atomic.AtomicLong
  *  - per-page work is **only** Room upserts (no album/artist rollups, no StateFlow list copies)
  *  - warm sources are skipped unless [force]
  *  - one rollup + one catalog hydrate happens at the end
+ *  - remote sync pauses on metered / mobile data unless the user enables it in Settings
  */
 class ExploreSearchService(
     private val context: Context,
@@ -42,7 +43,8 @@ class ExploreSearchService(
     private val instances: SourceInstanceRepository,
     private val jellyfinClient: JellyfinClient,
     private val subsonicClient: SubsonicClient,
-    private val notifier: LibraryScanNotifier
+    private val notifier: LibraryScanNotifier,
+    private val settings: LibrarySettings
 ) {
     data class Hit(
         val identityKey: String,
@@ -105,6 +107,17 @@ class ExploreSearchService(
             return
         }
         if (!force && _isScanning.value) return
+
+        // Early network gate so we don't even start the FGS on pure mobile data
+        if (!NetworkPolicy.allowsRemoteSync(context, settings)) {
+            val reason = NetworkPolicy.blockedReason(context, settings)
+                ?: "Remote sync blocked on this network"
+            Log.i(TAG, "requestRemoteScan blocked: $reason")
+            _lastError.value = reason
+            // Still hydrate local catalog so Explore works offline / on data
+            return
+        }
+
         Log.i(
             TAG,
             "requestRemoteScan force=$force offerings=${_remoteOfferings.value.size} " +
@@ -200,6 +213,16 @@ class ExploreSearchService(
         sourceResolver.clearOverride(SCOPE_TRACK, identityKey)
     }
 
+    private fun assertSyncAllowedOrThrow(): Boolean {
+        if (NetworkPolicy.allowsRemoteSync(context, settings)) return true
+        val reason = NetworkPolicy.blockedReason(context, settings)
+            ?: "Remote sync blocked on this network"
+        _lastError.value = reason
+        progress(reason)
+        Log.i(TAG, "sync paused: $reason")
+        return false
+    }
+
     private suspend fun runRemoteScan(force: Boolean) {
         if (!mutex.tryLock()) {
             Log.i(TAG, "scan already running — skip")
@@ -209,6 +232,13 @@ class ExploreSearchService(
             val age = System.currentTimeMillis() - cacheAtMs
             if (!force && _remoteOfferings.value.isNotEmpty() && age < CACHE_TTL_MS) {
                 Log.i(TAG, "skip scan — cache warm (${_remoteOfferings.value.size})")
+                return
+            }
+
+            // Network policy — never start a multi-GB index on cellular by default
+            if (!assertSyncAllowedOrThrow()) {
+                // Catalog hydrate still helps Explore while on data
+                runCatching { hydrateFromCatalog() }
                 return
             }
 
@@ -233,8 +263,14 @@ class ExploreSearchService(
 
             var totalIngested = 0
             var anySourceScanned = false
+            var abortedForNetwork = false
 
             for (row in rows) {
+                if (!assertSyncAllowedOrThrow()) {
+                    abortedForNetwork = true
+                    break
+                }
+
                 val type = SourceType.from(row.type)
                 val sourceName = row.name
                 val instanceId = row.id
@@ -285,12 +321,32 @@ class ExploreSearchService(
                     )
                     else -> 0
                 }
+                // Negative = aborted mid-source for network policy (do not prune)
+                if (ingested < 0) {
+                    abortedForNetwork = true
+                    totalIngested += -ingested
+                    break
+                }
                 totalIngested += ingested
                 _indexedCount.value = totalIngested
             }
 
+            if (abortedForNetwork) {
+                // Keep whatever we ingested; do not prune or force a full rollup of partial data
+                progress(
+                    NetworkPolicy.blockedReason(context, settings)
+                        ?: "Paused on mobile data"
+                )
+                runCatching {
+                    val partial = catalog.getRemoteOfferings()
+                    publish(partial, force = true)
+                    library.reloadFromCatalog()
+                }
+                Log.i(TAG, "remote scan paused for network policy after $totalIngested tracks")
+                return
+            }
+
             if (!anySourceScanned && !force) {
-                // Everything was warm — just make sure UI has catalog snapshot
                 progress("Loading index…")
                 val rowsSnap = catalog.getRemoteOfferings()
                 publish(rowsSnap, force = true)
@@ -300,7 +356,6 @@ class ExploreSearchService(
                 return
             }
 
-            // Single expensive pass: rollups + in-memory index + UI snapshot
             progress("Building album / artist index…")
             runCatching { catalog.rebuildRollups() }
 
@@ -313,9 +368,11 @@ class ExploreSearchService(
             progress("Merging into library…")
             runCatching { library.reloadFromCatalog() }
 
-            // Optional cover polish — capped, never blocks indexing
-            progress("Caching covers…")
-            runCatching { cacheAlbumArtPassive(finalRows.map { it.song }) }
+            // Cover downloads also respect mobile-data policy
+            if (NetworkPolicy.allowsRemoteSync(context, settings)) {
+                progress("Caching covers…")
+                runCatching { cacheAlbumArtPassive(finalRows.map { it.song }) }
+            }
 
             Log.i(TAG, "remote index ready: ${finalRows.size} offerings")
         } catch (e: CancellationException) {
@@ -337,7 +394,8 @@ class ExploreSearchService(
     }
 
     /**
-     * @return number of tracks ingested for this source
+     * @return tracks ingested, or **negative** count if aborted mid-scan for network policy
+     * (caller must not prune in that case).
      */
     private suspend fun scanJellyfin(
         rowId: Long,
@@ -361,9 +419,15 @@ class ExploreSearchService(
             }.also { jellyfinSessions[rowId] = it }
 
         var delivered = 0
+        var aborted = false
 
         jellyfinClient.listAudioItemsPaged(session, pageSize = budget.pageSize) { page, start, total ->
-            // DB only — no StateFlow list copies, no rollups
+            if (!assertSyncAllowedOrThrow()) {
+                aborted = true
+                // Stop paging by throwing a soft cancellation the paged client will surface
+                throw CancellationException("paused for mobile data policy")
+            }
+
             catalog.ingestRemoteBatch(
                 songs = page,
                 sourceType = CatalogSources.JELLYFIN,
@@ -375,7 +439,6 @@ class ExploreSearchService(
 
             val totalPart = total?.let { " / $it" }.orEmpty()
             val done = start + page.size
-            // Progress text + notification only (no huge list publish)
             val n = pageCounter.incrementAndGet()
             if (n == 1 || n % budget.progressEveryPages == 0 || (total != null && done >= total)) {
                 progress("$sourceName: $done$totalPart")
@@ -389,10 +452,21 @@ class ExploreSearchService(
                 delay(budget.pageYieldMs * 2)
             }
         }.onFailure {
-            if (it is CancellationException) throw it
-            jellyfinSessions.remove(rowId)
-            Log.w(TAG, "jellyfin scan failed: ${it.message}")
-            _lastError.value = "$sourceName: ${it.message}"
+            if (it is CancellationException && aborted) {
+                // expected — network policy pause
+                Log.i(TAG, "jellyfin scan paused after $delivered tracks (mobile data policy)")
+            } else if (it is CancellationException) {
+                throw it
+            } else {
+                jellyfinSessions.remove(rowId)
+                Log.w(TAG, "jellyfin scan failed: ${it.message}")
+                _lastError.value = "$sourceName: ${it.message}"
+            }
+        }
+
+        if (aborted) {
+            // Do NOT prune — would delete tracks not yet re-seen this run
+            return -delivered.coerceAtLeast(1)
         }
 
         catalog.pruneRemoteSource(
@@ -404,15 +478,12 @@ class ExploreSearchService(
         return delivered
     }
 
-    /**
-     * Slow, limited cover download after the index is searchable.
-     * Never blocks page ingestion.
-     */
     private suspend fun cacheAlbumArtPassive(songs: List<Song>) {
         val coversDir = File(context.filesDir, "covers").also { it.mkdirs() }
         var attempted = 0
         val seen = mutableSetOf<String>()
         for (song in songs) {
+            if (!NetworkPolicy.allowsRemoteSync(context, settings)) break
             if (attempted >= budget.artBatchLimit) break
             val aKey = albumKey(song.album, song.effectiveAlbumArtist)
             if (aKey in seen || aKey in cachedAlbumArtKeys) continue
@@ -459,10 +530,15 @@ class ExploreSearchService(
             if (type == SourceType.NAVIDROME) CatalogSources.NAVIDROME else CatalogSources.SUBSONIC
 
         var delivered = 0
+        var aborted = false
         runCatching {
             subsonicClient.ping(session).getOrThrow()
             val songs = subsonicClient.listAllSongs(session).getOrThrow()
             songs.chunked(budget.pageSize).forEachIndexed { i, chunk ->
+                if (!assertSyncAllowedOrThrow()) {
+                    aborted = true
+                    return@forEachIndexed
+                }
                 catalog.ingestRemoteBatch(
                     songs = chunk,
                     sourceType = catalogType,
@@ -483,25 +559,22 @@ class ExploreSearchService(
                 }
                 budget.yieldBetweenPages()
             }
-            catalog.pruneRemoteSource(
-                sourceType = catalogType,
-                sourceInstanceId = instanceId,
-                beforeMs = seenAt,
-                keepSongKeys = keepKeys
-            )
+            if (!aborted) {
+                catalog.pruneRemoteSource(
+                    sourceType = catalogType,
+                    sourceInstanceId = instanceId,
+                    beforeMs = seenAt,
+                    keepSongKeys = keepKeys
+                )
+            }
         }.onFailure {
             if (it is CancellationException) throw it
             Log.w(TAG, "subsonic scan failed: ${it.message}")
             _lastError.value = "$sourceName: ${it.message}"
         }
-        return delivered
+        return if (aborted) -delivered.coerceAtLeast(1) else delivered
     }
 
-    /**
-     * @param force always push a new list snapshot (end of scan / hydrate).
-     * During a large scan we intentionally do **not** publish intermediate lists —
-     * only [indexedCount] / progress text update so the main thread stays responsive.
-     */
     private fun publish(list: List<SourceOffering>, force: Boolean) {
         _indexedCount.value = list.size
         val now = System.currentTimeMillis()
@@ -516,7 +589,6 @@ class ExploreSearchService(
         private const val TAG = "ExploreSearch"
         private const val SCOPE_TRACK = "track"
         private const val CACHE_TTL_MS = 15L * 60 * 1000
-        /** If a source already has at least this many tracks, skip non-force re-sync. */
         private const val WARM_SOURCE_MIN_TRACKS = 50
 
         fun trackIdentity(song: Song): String {
