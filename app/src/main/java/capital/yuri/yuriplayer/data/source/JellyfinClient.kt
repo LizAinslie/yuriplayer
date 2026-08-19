@@ -88,21 +88,26 @@ class JellyfinClient(
         }.onFailure { Log.w(TAG, "listAudioItems failed: ${it.message}") }
 
     /**
-     * Page through the user's audio library using **raw** server page size so
-     * mapping gaps never truncate the rest of the library.
+     * Page through the user's audio library.
+     * [startFromIndex] resumes a previous checkpoint (server startIndex cursor).
      */
     suspend fun listAudioItemsPaged(
         session: Session,
         pageSize: Int = 500,
         maxItems: Int = 50_000,
+        startFromIndex: Int = 0,
         onPage: suspend (songs: List<Song>, startIndex: Int, totalHint: Int?) -> Unit
     ): Result<Int> = runCatching {
         val userId = runCatching { UUID.fromString(session.userId) }.getOrNull()
             ?: error("Invalid Jellyfin userId")
-        var start = 0
+        var start = startFromIndex.coerceAtLeast(0)
         var delivered = 0
         var totalHint: Int? = null
         var pageNum = 0
+
+        if (start > 0) {
+            Log.i(TAG, "resume paging from startIndex=$start")
+        }
 
         while (delivered < maxItems) {
             val take = minOf(pageSize, maxItems - delivered)
