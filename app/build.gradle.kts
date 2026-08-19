@@ -6,6 +6,8 @@ plugins {
     alias(libs.plugins.kotlin.compose)
     alias(libs.plugins.kotlin.serialization)
     alias(libs.plugins.ksp)
+    alias(libs.plugins.aboutlibraries)
+    alias(libs.plugins.aboutlibraries.android)
 }
 
 fun gitCommand(vararg args: String): String {
@@ -111,6 +113,14 @@ android {
             java.srcDir("build/generated/ksp/release/java")
             java.srcDir("build/generated/ksp/release/kotlin")
         }
+    }
+}
+
+aboutLibraries {
+    // Merge duplicates; keep SPDX ids for our Settings rows
+    library {
+        duplicationMode.set(com.mikepenz.aboutlibraries.plugin.DuplicateMode.MERGE)
+        duplicationRule.set(com.mikepenz.aboutlibraries.plugin.DuplicateRule.SIMPLE)
     }
 }
 
@@ -220,6 +230,9 @@ dependencies {
     implementation(libs.coil.compose)
     implementation(libs.coil.network.okhttp)
     implementation(libs.coil.gif)
+
+    // License metadata only — UI stays our Settings rows
+    implementation(libs.aboutlibraries.core)
 
     testImplementation(libs.junit)
     androidTestImplementation(platform(libs.androidx.compose.bom))
