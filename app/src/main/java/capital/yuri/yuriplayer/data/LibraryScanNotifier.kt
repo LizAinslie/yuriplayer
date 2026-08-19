@@ -8,12 +8,11 @@ import android.content.Context
 import android.content.Intent
 import android.os.Build
 import androidx.core.app.NotificationCompat
-import capital.yuri.yuriplayer.R
+import androidx.core.app.NotificationManagerCompat
 import capital.yuri.yuriplayer.activities.MainActivity
 
 /**
- * Ongoing “live” notification while a library scan or remote sync is running.
- * Used by [LibraryScanService] (foreground) and as a plain progress notifier.
+ * Ongoing progress notification while a library scan or remote sync is running.
  */
 class LibraryScanNotifier(
     context: Context
@@ -27,19 +26,27 @@ class LibraryScanNotifier(
 
     fun ensureChannel() {
         if (Build.VERSION.SDK_INT < 26) return
+        // Recreate if we previously used IMPORTANCE_LOW (invisible on many OEMs)
         val existing = nm.getNotificationChannel(CHANNEL_ID)
-        if (existing != null) return
+        if (existing != null && existing.importance < NotificationManager.IMPORTANCE_DEFAULT) {
+            nm.deleteNotificationChannel(CHANNEL_ID)
+        }
+        if (nm.getNotificationChannel(CHANNEL_ID) != null) return
         nm.createNotificationChannel(
             NotificationChannel(
                 CHANNEL_ID,
                 "Library scan",
-                NotificationManager.IMPORTANCE_LOW
+                NotificationManager.IMPORTANCE_DEFAULT
             ).apply {
                 description = "Progress while indexing local or remote libraries"
                 setShowBadge(false)
+                setSound(null, null)
             }
         )
     }
+
+    fun areNotificationsEnabled(): Boolean =
+        NotificationManagerCompat.from(app).areNotificationsEnabled()
 
     fun build(
         title: String,
@@ -57,14 +64,16 @@ class LibraryScanNotifier(
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
         val builder = NotificationCompat.Builder(app, CHANNEL_ID)
-            .setSmallIcon(R.drawable.ic_launcher_foreground)
+            // System icon is always valid; adaptive launcher vectors often fail as smallIcon
+            .setSmallIcon(android.R.drawable.stat_sys_download)
             .setContentTitle(title)
             .setContentText(text)
             .setContentIntent(open)
             .setOnlyAlertOnce(true)
             .setOngoing(true)
             .setCategory(NotificationCompat.CATEGORY_PROGRESS)
-            .setPriority(NotificationCompat.PRIORITY_LOW)
+            .setPriority(NotificationCompat.PRIORITY_DEFAULT)
+            .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
             .setForegroundServiceBehavior(NotificationCompat.FOREGROUND_SERVICE_IMMEDIATE)
 
         when {
@@ -82,7 +91,12 @@ class LibraryScanNotifier(
         progress: Int? = null,
         max: Int? = null
     ) {
-        nm.notify(NOTIFICATION_ID, build(title, text, progress, max))
+        try {
+            nm.notify(NOTIFICATION_ID, build(title, text, progress, max))
+        } catch (e: SecurityException) {
+            // POST_NOTIFICATIONS denied — FGS may still hold the service notification
+            android.util.Log.w(TAG, "notify blocked: ${e.message}")
+        }
     }
 
     fun update(
@@ -94,18 +108,21 @@ class LibraryScanNotifier(
         show(title, text, progress, max)
     }
 
-    /** Brief completion toast-style notification, then clear ongoing state. */
     fun finish(title: String, text: String) {
-        val done = NotificationCompat.Builder(app, CHANNEL_ID)
-            .setSmallIcon(R.drawable.ic_launcher_foreground)
-            .setContentTitle(title)
-            .setContentText(text)
-            .setOnlyAlertOnce(true)
-            .setAutoCancel(true)
-            .setTimeoutAfter(4_000L)
-            .setPriority(NotificationCompat.PRIORITY_LOW)
-            .build()
-        nm.notify(NOTIFICATION_ID, done)
+        try {
+            val done = NotificationCompat.Builder(app, CHANNEL_ID)
+                .setSmallIcon(android.R.drawable.stat_sys_download_done)
+                .setContentTitle(title)
+                .setContentText(text)
+                .setOnlyAlertOnce(true)
+                .setAutoCancel(true)
+                .setTimeoutAfter(6_000L)
+                .setPriority(NotificationCompat.PRIORITY_DEFAULT)
+                .build()
+            nm.notify(NOTIFICATION_ID, done)
+        } catch (e: SecurityException) {
+            android.util.Log.w(TAG, "finish notify blocked: ${e.message}")
+        }
     }
 
     fun cancel() {
@@ -113,6 +130,7 @@ class LibraryScanNotifier(
     }
 
     companion object {
+        private const val TAG = "LibraryScanNotifier"
         const val CHANNEL_ID = "yuri_library_scan"
         const val NOTIFICATION_ID = 4201
     }
