@@ -3,6 +3,7 @@ package capital.yuri.yuriplayer.data
 import android.net.Uri
 import capital.yuri.yuriplayer.data.db.PlaylistDao
 import capital.yuri.yuriplayer.data.db.PlaylistEntity
+import capital.yuri.yuriplayer.data.db.PlaylistTrackEntity
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.combine
@@ -48,9 +49,23 @@ class PlaylistRepository(
     private val images: UserImageStore
 ) {
 
+    /**
+     * Playlist list with track counts from Room and covers from resolved library songs.
+     * (Previously hard-coded trackCount=0 / songs=empty — looked like wiped playlists.)
+     */
     fun observePlaylists(): Flow<List<Playlist>> =
-        combine(dao.observeAll(), library.songs) { entities, _ ->
+        combine(
+            dao.observeAll(),
+            dao.observeAllTracks(),
+            library.songs
+        ) { entities, allTracks, allSongs ->
+            val byKey = allSongs.associateBy { it.songKey }
+            val tracksByPlaylist = allTracks.groupBy { it.playlistId }
             entities.map { e ->
+                val ordered = tracksByPlaylist[e.id]
+                    ?.sortedBy { it.position }
+                    .orEmpty()
+                val songs = resolveSongs(ordered, byKey)
                 Playlist(
                     id = e.id,
                     name = e.name,
@@ -58,31 +73,19 @@ class PlaylistRepository(
                     customImageUri = e.customImageUri,
                     createdAtMs = e.createdAtMs,
                     updatedAtMs = e.updatedAtMs,
-                    trackCount = 0,
-                    songs = emptyList()
+                    trackCount = ordered.size,
+                    songs = songs
                 )
             }
         }
 
-    fun observePlaylistsResolved(): Flow<List<Playlist>> =
-        combine(dao.observeAll(), library.songs) { entities, _ ->
-            entities.map { e ->
-                Playlist(
-                    id = e.id,
-                    name = e.name,
-                    description = e.description,
-                    customImageUri = e.customImageUri,
-                    createdAtMs = e.createdAtMs,
-                    updatedAtMs = e.updatedAtMs
-                )
-            }
-        }
+    fun observePlaylistsResolved(): Flow<List<Playlist>> = observePlaylists()
 
     fun observePlaylist(id: String): Flow<Playlist?> =
         combine(dao.observe(id), dao.observeTracks(id), library.songs) { entity, tracks, allSongs ->
             if (entity == null) return@combine null
             val byKey = allSongs.associateBy { it.songKey }
-            val songs = tracks.mapNotNull { byKey[it.songKey] }
+            val songs = resolveSongs(tracks, byKey)
             Playlist(
                 id = entity.id,
                 name = entity.name,
@@ -90,10 +93,37 @@ class PlaylistRepository(
                 customImageUri = entity.customImageUri,
                 createdAtMs = entity.createdAtMs,
                 updatedAtMs = entity.updatedAtMs,
-                trackCount = songs.size,
+                trackCount = tracks.size,
                 songs = songs
             )
         }
+
+    /**
+     * Map playlist_tracks → library [Song]s.
+     * Prefer exact [Song.songKey]; fall back to path / contentUri substring match so
+     * older keys still resolve after minor scan path normalization.
+     */
+    private fun resolveSongs(
+        tracks: List<PlaylistTrackEntity>,
+        byKey: Map<String, Song>
+    ): List<Song> {
+        if (tracks.isEmpty()) return emptyList()
+        if (byKey.isEmpty()) return emptyList()
+        return tracks.mapNotNull { track ->
+            byKey[track.songKey]
+                ?: byKey.entries.firstOrNull { (key, _) ->
+                    key.equals(track.songKey, ignoreCase = true)
+                }?.value
+                ?: byKey.values.firstOrNull { song ->
+                    val path = song.path?.lowercase()
+                    path != null && (
+                        path == track.songKey.lowercase() ||
+                            track.songKey.lowercase().endsWith(path) ||
+                            path.endsWith(track.songKey.lowercase())
+                    )
+                }
+        }
+    }
 
     suspend fun create(name: String, description: String? = null): Playlist =
         withContext(Dispatchers.IO) {
