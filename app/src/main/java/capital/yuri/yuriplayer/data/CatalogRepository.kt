@@ -121,7 +121,11 @@ class CatalogRepository(
     suspend fun ensureTracksPresent(songs: List<Song>) = withContext(Dispatchers.IO) {
         if (songs.isEmpty()) return@withContext
         val now = System.currentTimeMillis()
-        val missing = songs.filter { dao.getTrack(it.songKey) == null }
+        // One IN query instead of N individual getTrack calls
+        val keys = songs.map { it.songKey }.distinct()
+        val existing = keys.chunked(400).flatMap { dao.getTracksByKeys(it) }
+            .map { it.songKey }.toHashSet()
+        val missing = songs.filter { it.songKey !in existing }
         if (missing.isEmpty()) return@withContext
         val entities = missing.map { song ->
             val type = when {
@@ -145,15 +149,59 @@ class CatalogRepository(
         rebuildRollupsLocked()
     }
 
+    /**
+     * Album/artist index rebuild **without** loading the full track table.
+     * Aggregates run in SQLite; we only merge prior cover/bio metadata from the
+     * (much smaller) album/artist tables.
+     */
     private suspend fun rebuildRollupsLocked() {
-        val all = dao.getAllTracks()
         val prevAlbums = dao.getAllAlbums().associateBy { it.albumKey }
         val prevArtists = dao.getAllArtists().associateBy { it.artistKey }
-        dao.upsertAlbums(buildAlbumRollups(all, prevAlbums))
-        dao.upsertArtists(buildArtistRollups(all, prevArtists))
+
+        val albumRows = dao.aggregateAlbums()
+        val albums = albumRows.map { row ->
+            val existing = prevAlbums[row.albumKey]
+            val artistKey = artistKey(row.artist)
+            CatalogAlbumEntity(
+                albumKey = row.albumKey,
+                name = row.name,
+                artist = row.artist,
+                artistKey = artistKey,
+                year = row.year,
+                trackCount = row.trackCount,
+                releaseType = guessReleaseType(row.trackCount).name,
+                mbid = existing?.mbid,
+                coverPath = existing?.coverPath,
+                coverUrl = row.coverUrl ?: existing?.coverUrl,
+                primarySourceType = row.primarySourceType.ifBlank { CatalogSources.LOCAL },
+                updatedAtMs = System.currentTimeMillis()
+            )
+        }
+        dao.upsertAlbums(albums)
+
+        val artistRows = dao.aggregateArtists()
+        val artists = artistRows.map { row ->
+            val existing = prevArtists[row.artistKey]
+            CatalogArtistEntity(
+                artistKey = row.artistKey,
+                displayName = row.displayName.ifBlank { row.artistKey },
+                trackCount = row.trackCount,
+                albumCount = row.albumCount,
+                bio = existing?.bio,
+                imageUri = existing?.imageUri,
+                websiteUrl = existing?.websiteUrl,
+                linksJson = existing?.linksJson,
+                updatedAtMs = System.currentTimeMillis()
+            )
+        }
+        dao.upsertArtists(artists)
+
         dao.deleteOrphanAlbums()
         dao.deleteOrphanArtists()
-        Log.i(TAG, "rollups rebuilt: tracks=${all.size}")
+        Log.i(
+            TAG,
+            "rollups rebuilt (SQL): albums=${albums.size} artists=${artists.size}"
+        )
     }
 
     suspend fun pruneRemoteSource(
@@ -162,32 +210,52 @@ class CatalogRepository(
         beforeMs: Long,
         keepSongKeys: Set<String>
     ) = withContext(Dispatchers.IO) {
-        val stale = dao.getTracksBySource(sourceType)
-            .filter {
-                (sourceInstanceId == null || it.sourceInstanceId == sourceInstanceId) &&
-                    it.lastSeenAtMs < beforeMs &&
-                    it.songKey !in keepSongKeys
+        val deleted = if (keepSongKeys.isEmpty()) {
+            dao.pruneStaleTracks(sourceType, sourceInstanceId, beforeMs)
+        } else {
+            // Chunk keep-keys — SQLite bind limits; rare path (end of sync only)
+            val keep = keepSongKeys.toList()
+            if (keep.size <= 400) {
+                dao.pruneStaleTracksExcept(sourceType, sourceInstanceId, beforeMs, keep)
+            } else {
+                // Fallback: only load keys for this source that are candidates
+                val stale = dao.getTracksBySource(sourceType)
+                    .asSequence()
+                    .filter {
+                        (sourceInstanceId == null || it.sourceInstanceId == sourceInstanceId) &&
+                            it.lastSeenAtMs < beforeMs &&
+                            it.songKey !in keepSongKeys
+                    }
+                    .map { it.songKey }
+                    .toList()
+                stale.forEach { dao.deleteTrack(it) }
+                stale.size
             }
-        stale.forEach { dao.deleteTrack(it.songKey) }
-        if (stale.isNotEmpty()) {
+        }
+        if (deleted > 0) {
             dao.deleteOrphanAlbums()
             dao.deleteOrphanArtists()
-            Log.i(TAG, "pruned ${stale.size} stale $sourceType rows (kept ${keepSongKeys.size} My Stuff keys)")
+            Log.i(
+                TAG,
+                "pruned $deleted stale $sourceType rows (kept ${keepSongKeys.size} My Stuff keys)"
+            )
         }
     }
 
     /**
      * Load remote offerings for a **bounded** use (e.g. art pass). Prefer
      * [searchSongs] / [countRemoteTracks] for Explore UI.
+     * LIMIT is applied in SQL — never materialize the whole remote library.
      */
-    suspend fun getRemoteOfferings(limit: Int = Int.MAX_VALUE): List<SourceOffering> =
+    suspend fun getRemoteOfferings(limit: Int = 64): List<SourceOffering> =
         withContext(Dispatchers.IO) {
-            val jelly = dao.getTracksBySource(CatalogSources.JELLYFIN)
-            val sub = dao.getTracksBySource(CatalogSources.SUBSONIC)
-            val navi = dao.getTracksBySource(CatalogSources.NAVIDROME)
+            val per = (limit.coerceAtLeast(1) / 3).coerceAtLeast(1)
+            val jelly = dao.getTracksBySourceLimited(CatalogSources.JELLYFIN, per)
+            val sub = dao.getTracksBySourceLimited(CatalogSources.SUBSONIC, per)
+            val navi = dao.getTracksBySourceLimited(CatalogSources.NAVIDROME, per)
             (jelly + sub + navi)
                 .asSequence()
-                .take(if (limit == Int.MAX_VALUE) Int.MAX_VALUE else limit)
+                .take(limit)
                 .map { row ->
                     SourceOffering(
                         sourceType = SourceType.from(row.sourceType),
@@ -302,69 +370,15 @@ class CatalogRepository(
         mimeType = mimeType
     )
 
-    private fun buildAlbumRollups(
-        tracks: List<CatalogTrackEntity>,
-        previous: Map<String, CatalogAlbumEntity> = emptyMap()
-    ): List<CatalogAlbumEntity> {
-        return tracks
-            .filter { !it.albumKey.isNullOrBlank() }
-            .groupBy { it.albumKey!! }
-            .map { (key, group) ->
-                val name = group.mapNotNull { it.album }.groupingBy { it }.eachCount()
-                    .maxByOrNull { it.value }?.key
-                val artist = group.mapNotNull { it.albumArtist ?: it.artist }
-                    .groupingBy { it }.eachCount().maxByOrNull { it.value }?.key
-                val year = group.mapNotNull { it.year }.maxOrNull()
-                val artistKey = artistKey(artist)
-                val coverUrl = group.mapNotNull { it.albumArtUri }.firstOrNull {
-                    it.startsWith("http", ignoreCase = true)
-                }
-                val existing = previous[key]
-                CatalogAlbumEntity(
-                    albumKey = key,
-                    name = name,
-                    artist = artist,
-                    artistKey = artistKey,
-                    year = year,
-                    trackCount = group.distinctBy { it.songKey }.size,
-                    releaseType = guessReleaseType(group.size).name,
-                    mbid = existing?.mbid,
-                    coverPath = existing?.coverPath,
-                    coverUrl = coverUrl ?: existing?.coverUrl,
-                    primarySourceType = group.firstOrNull()?.sourceType ?: CatalogSources.LOCAL,
-                    updatedAtMs = System.currentTimeMillis()
-                )
-            }
-    }
-
-    private fun buildArtistRollups(
-        tracks: List<CatalogTrackEntity>,
-        previous: Map<String, CatalogArtistEntity> = emptyMap()
-    ): List<CatalogArtistEntity> {
-        return tracks
-            .filter { !it.artistKey.isNullOrBlank() }
-            .groupBy { it.artistKey!! }
-            .map { (key, group) ->
-                val display = group.mapNotNull { it.albumArtist ?: it.artist }
-                    .groupingBy { it }.eachCount().maxByOrNull { it.value }?.key
-                    ?: key
-                val albums = group.mapNotNull { it.albumKey }.toSet()
-                val existing = previous[key]
-                CatalogArtistEntity(
-                    artistKey = key,
-                    displayName = display,
-                    trackCount = group.distinctBy { it.songKey }.size,
-                    albumCount = albums.size,
-                    bio = existing?.bio,
-                    imageUri = existing?.imageUri,
-                    websiteUrl = existing?.websiteUrl,
-                    linksJson = existing?.linksJson,
-                    updatedAtMs = System.currentTimeMillis()
-                )
-            }
-    }
-
     companion object {
         private const val TAG = "CatalogRepo"
     }
 }
+
+private fun guessReleaseType(trackCount: Int): ReleaseKindGuess = when {
+    trackCount <= 1 -> ReleaseKindGuess.SINGLE
+    trackCount <= 6 -> ReleaseKindGuess.EP
+    else -> ReleaseKindGuess.ALBUM
+}
+
+private enum class ReleaseKindGuess { SINGLE, EP, ALBUM }
