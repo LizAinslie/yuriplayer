@@ -38,29 +38,40 @@ class ArtistProfileRepository(
 
     suspend fun resolve(artistName: String): ArtistProfile? = withContext(Dispatchers.IO) {
         val key = artistKey(artistName) ?: return@withContext null
+        val imageCleared = images.isCleared(UserImageStore.NS_ARTISTS, key)
+
         val entity = dao.get(key)
         var merged = entity?.toProfile(
             links = parseLinks(entity.linksJson),
             genres = parseGenresJson(entity.genresJson)
         ) ?: ArtistProfile(artistKey = key, displayName = artistName.trim())
 
-        // Drop previously stored wrong-artist bio before merging so it can't win on length
+        // If the user forced a clear, strip any stored remote URI before merge
+        if (imageCleared) {
+            merged = merged.copy(imageUri = null, source = SOURCE_USER_CLEARED)
+        }
+
         if (!ArtistNameMatch.bioRelevant(artistName, merged.bio)) {
             merged = merged.copy(bio = null)
         }
 
         for (provider in providers) {
             val fetched = runCatching { provider.fetch(artistName) }.getOrNull() ?: continue
-            merged = merge(artistName, merged, fetched)
+            merged = merge(artistName, merged, fetched, imageCleared = imageCleared)
         }
         artistInfo?.let { info ->
             runCatching { info.resolveProfile(artistName) }.getOrNull()?.let {
-                merged = merge(artistName, merged, it)
+                merged = merge(artistName, merged, it, imageCleared = imageCleared)
             }
         }
 
         merged = ensureDiscoveryLinks(merged)
         merged = preferLocalImage(merged, key)
+
+        // Final hard veto: cleared always wins over any provider image
+        if (imageCleared) {
+            merged = merged.copy(imageUri = null, source = SOURCE_USER_CLEARED)
+        }
 
         merged = merged.copy(
             links = dedupeLinksPreferCanonical(merged.links),
@@ -72,11 +83,11 @@ class ArtistProfileRepository(
                 artistKey = merged.artistKey,
                 displayName = merged.displayName,
                 bio = merged.bio,
-                imageUri = merged.imageUri,
+                imageUri = if (imageCleared) null else merged.imageUri,
                 websiteUrl = merged.websiteUrl,
                 linksJson = linksToJson(merged.links),
                 genresJson = genresToJson(merged.genres),
-                source = merged.source,
+                source = if (imageCleared) SOURCE_USER_CLEARED else merged.source,
                 updatedAtMs = System.currentTimeMillis()
             )
         )
@@ -87,9 +98,11 @@ class ArtistProfileRepository(
         val key = artistKey(artistName) ?: return@withContext
         val existing = dao.get(key)
         val persisted = if (imageUri.isNullOrBlank()) {
-            images.delete(UserImageStore.NS_ARTISTS, key)
+            // Forced clear — durable marker blocks auto-set until user picks art again
+            images.markCleared(UserImageStore.NS_ARTISTS, key)
             null
         } else {
+            // persist() clears the marker automatically
             images.persist(imageUri, UserImageStore.NS_ARTISTS, key) ?: imageUri
         }
         dao.upsert(
@@ -101,7 +114,11 @@ class ArtistProfileRepository(
                 websiteUrl = existing?.websiteUrl,
                 linksJson = existing?.linksJson,
                 genresJson = existing?.genresJson,
-                source = if (persisted != null) "user" else (existing?.source ?: "local"),
+                source = when {
+                    persisted != null -> "user"
+                    imageUri.isNullOrBlank() -> SOURCE_USER_CLEARED
+                    else -> existing?.source ?: "local"
+                },
                 updatedAtMs = System.currentTimeMillis()
             )
         )
@@ -111,19 +128,36 @@ class ArtistProfileRepository(
         withContext(Dispatchers.IO) {
             val key = artistKey(artistName) ?: return@withContext null
             if (imageUri.isNullOrBlank()) {
-                images.delete(UserImageStore.NS_ARTIST_BANNERS, key)
+                images.markCleared(UserImageStore.NS_ARTIST_BANNERS, key)
                 null
             } else {
+                // persist clears the .cleared marker
                 images.persist(imageUri, UserImageStore.NS_ARTIST_BANNERS, key)
             }
         }
 
     fun bannerUri(artistName: String): String? {
         val key = artistKey(artistName) ?: return null
+        // resolve already returns null when cleared
         return images.resolve(UserImageStore.NS_ARTIST_BANNERS, key)
     }
 
+    /** True if the user explicitly cleared the profile image (no auto-restore). */
+    fun isImageCleared(artistName: String): Boolean {
+        val key = artistKey(artistName) ?: return false
+        return images.isCleared(UserImageStore.NS_ARTISTS, key)
+    }
+
+    /** True if the user explicitly cleared the banner. */
+    fun isBannerCleared(artistName: String): Boolean {
+        val key = artistKey(artistName) ?: return false
+        return images.isCleared(UserImageStore.NS_ARTIST_BANNERS, key)
+    }
+
     private fun preferLocalImage(profile: ArtistProfile, key: String): ArtistProfile {
+        if (images.isCleared(UserImageStore.NS_ARTISTS, key)) {
+            return profile.copy(imageUri = null, source = SOURCE_USER_CLEARED)
+        }
         val local = images.resolve(UserImageStore.NS_ARTISTS, key) ?: return profile
         if (profile.imageUri == local && profile.source == "user") return profile
         return profile.copy(imageUri = local, source = "user")
@@ -132,12 +166,15 @@ class ArtistProfileRepository(
     private fun merge(
         artistName: String,
         base: ArtistProfile,
-        incoming: ArtistProfile
+        incoming: ArtistProfile,
+        imageCleared: Boolean = false
     ): ArtistProfile =
         base.copy(
             displayName = incoming.displayName.ifBlank { base.displayName },
             bio = ArtistNameMatch.preferBio(artistName, base.bio, incoming.bio),
             imageUri = when {
+                imageCleared -> null
+                base.source == SOURCE_USER_CLEARED -> null
                 base.source == "user" && !base.imageUri.isNullOrBlank() -> base.imageUri
                 base.imageUri?.startsWith("file:") == true -> base.imageUri
                 else -> base.imageUri ?: incoming.imageUri
@@ -150,9 +187,13 @@ class ArtistProfileRepository(
                 .filter { it.isNotEmpty() }
                 .distinctBy { it.lowercase() },
             source = when {
+                imageCleared || base.source == SOURCE_USER_CLEARED -> SOURCE_USER_CLEARED
                 base.source == "user" -> "user"
                 else -> listOf(base.source, incoming.source)
-                    .filter { it.isNotBlank() }.distinct().joinToString(",")
+                    .filter { it.isNotBlank() && it != SOURCE_USER_CLEARED }
+                    .distinct()
+                    .joinToString(",")
+                    .ifBlank { "local" }
             }
         )
 
@@ -212,6 +253,9 @@ class ArtistProfileRepository(
     }
 
     companion object {
+        /** Profile image was explicitly removed by the user — never auto-fill. */
+        const val SOURCE_USER_CLEARED = "user_cleared"
+
         fun parseLinks(json: String?): List<ArtistLink> {
             if (json.isNullOrBlank()) return emptyList()
             return runCatching {
