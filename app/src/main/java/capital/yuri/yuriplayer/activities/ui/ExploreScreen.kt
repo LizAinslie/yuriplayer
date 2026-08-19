@@ -15,13 +15,16 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Album
 import androidx.compose.material.icons.filled.Clear
 import androidx.compose.material.icons.filled.Cloud
+import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -51,7 +54,10 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import capital.yuri.yuriplayer.data.AlbumItem
+import capital.yuri.yuriplayer.data.ArtistItem
 import capital.yuri.yuriplayer.data.ExploreSearchService
+import capital.yuri.yuriplayer.data.LibraryIndex
 import capital.yuri.yuriplayer.data.Song
 import capital.yuri.yuriplayer.data.source.SourceOffering
 import kotlinx.coroutines.launch
@@ -63,9 +69,12 @@ fun ExploreScreen(
     isPlaybackActive: Boolean = false,
     onPlay: (List<Song>, Int) -> Unit,
     onAddToQueue: (Song) -> Unit,
+    onOpenAlbum: (AlbumItem) -> Unit = {},
+    onOpenArtist: (ArtistItem) -> Unit = {},
     forceRescanKey: Int = 0
 ) {
     val explore: ExploreSearchService = koinInject()
+    val library: LibraryIndex = koinInject()
     val context = LocalContext.current
     val focusManager = LocalFocusManager.current
     val keyboard = LocalSoftwareKeyboardController.current
@@ -80,12 +89,8 @@ fun ExploreScreen(
     val remoteOfferings by explore.remoteOfferings.collectAsState()
     val err by explore.lastError.collectAsState()
     val remoteSources by explore.sourceCount.collectAsState()
-    val localSongs by explore.let {
-        // library songs change separately — re-filter via remoteOfferings + query keys
-        remember { mutableStateOf(0) }
-    }
+    val allSongs by library.songs.collectAsState()
 
-    // Hydrate + ensure a background scan once. Leaving this screen does NOT cancel it.
     LaunchedEffect(Unit) {
         explore.hydrateFromCatalog()
         explore.requestRemoteScan(force = false)
@@ -95,9 +100,16 @@ fun ExploreScreen(
         if (forceRescanKey > 0) explore.requestRemoteScan(force = true)
     }
 
-    // Pure in-memory filter — cheap, updates live as the index grows.
-    val hits = remember(query, remoteOfferings, localSongs) {
+    val hits = remember(query, remoteOfferings, allSongs) {
         explore.searchLive(query)
+    }
+    val albumHits = remember(query, allSongs) {
+        if (query.trim().isEmpty()) emptyList()
+        else library.albums(query.trim(), taggedOnly = false).take(12)
+    }
+    val artistHits = remember(query, allSongs) {
+        if (query.trim().isEmpty()) emptyList()
+        else library.artists(query.trim(), taggedOnly = false).take(12)
     }
 
     Column(modifier = Modifier.fillMaxSize()) {
@@ -137,8 +149,15 @@ fun ExploreScreen(
                     else -> "Type to search your library"
                 }
             }
-            else -> "${hits.size} result${if (hits.size == 1) "" else "s"}" +
-                if (indexed > 0) " · $indexed remote indexed" else ""
+            else -> {
+                val parts = buildList {
+                    if (artistHits.isNotEmpty()) add("${artistHits.size} artists")
+                    if (albumHits.isNotEmpty()) add("${albumHits.size} albums")
+                    add("${hits.size} songs")
+                }
+                parts.joinToString(" · ") +
+                    if (indexed > 0) " · $indexed remote indexed" else ""
+            }
         }
         Row(
             modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
@@ -178,7 +197,7 @@ fun ExploreScreen(
                             color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.55f)
                         )
                         Text(
-                            "Local + Jellyfin + Subsonic. Results update live while scanning.",
+                            "Artists, albums, and songs · local + Jellyfin + Subsonic",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.4f),
                             modifier = Modifier.padding(top = 6.dp)
@@ -186,7 +205,7 @@ fun ExploreScreen(
                     }
                 }
             }
-            hits.isEmpty() && !scanning -> {
+            hits.isEmpty() && albumHits.isEmpty() && artistHits.isEmpty() && !scanning -> {
                 Text(
                     "No matches for \"${query.trim()}\".",
                     modifier = Modifier.padding(16.dp),
@@ -196,44 +215,75 @@ fun ExploreScreen(
             else -> {
                 val songs = hits.map { it.preferred.song }
                 LazyColumn(modifier = Modifier.fillMaxSize()) {
-                    itemsIndexed(hits, key = { _, h -> h.identityKey }) { index, hit ->
-                        Column {
-                            SwipeAddSongRow(
-                                song = hit.preferred.song,
-                                onClick = { onPlay(songs, index) },
-                                onSwipeAdd = {
-                                    onAddToQueue(hit.preferred.song)
-                                    Toast.makeText(context, "Added to queue", Toast.LENGTH_SHORT).show()
-                                },
-                                showTrackNumber = false,
-                                isPlaying = hit.preferred.song.isSameAs(nowPlaying),
-                                isPlaybackActive = isPlaybackActive,
-                                showHeart = true
+                    if (artistHits.isNotEmpty()) {
+                        item {
+                            SectionHeader("Artists")
+                        }
+                        items(artistHits, key = { "ar-${it.name}" }) { artist ->
+                            ExploreEntityRow(
+                                title = artist.displayName,
+                                subtitle = "${artist.trackCount} tracks · ${artist.albumCount} albums",
+                                icon = Icons.Default.Person,
+                                onClick = { onOpenArtist(artist) }
                             )
-                            if (hit.isExplicit || hit.isMultiSource) {
-                                Row(
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .then(
-                                            if (hit.isMultiSource) Modifier.clickable { sourcesFor = hit }
-                                            else Modifier
+                        }
+                    }
+                    if (albumHits.isNotEmpty()) {
+                        item {
+                            SectionHeader("Albums")
+                        }
+                        items(albumHits, key = { "al-${it.name}-${it.artist}" }) { album ->
+                            ExploreEntityRow(
+                                title = album.displayName,
+                                subtitle = album.displayArtist,
+                                icon = Icons.Default.Album,
+                                onClick = { onOpenAlbum(album) }
+                            )
+                        }
+                    }
+                    if (hits.isNotEmpty()) {
+                        item {
+                            SectionHeader("Songs")
+                        }
+                        itemsIndexed(hits, key = { _, h -> h.identityKey }) { index, hit ->
+                            Column {
+                                SwipeAddSongRow(
+                                    song = hit.preferred.song,
+                                    onClick = { onPlay(songs, index) },
+                                    onSwipeAdd = {
+                                        onAddToQueue(hit.preferred.song)
+                                        Toast.makeText(context, "Added to queue", Toast.LENGTH_SHORT).show()
+                                    },
+                                    showTrackNumber = false,
+                                    isPlaying = hit.preferred.song.isSameAs(nowPlaying),
+                                    isPlaybackActive = isPlaybackActive,
+                                    showHeart = true
+                                )
+                                if (hit.isExplicit || hit.isMultiSource) {
+                                    Row(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .then(
+                                                if (hit.isMultiSource) Modifier.clickable { sourcesFor = hit }
+                                                else Modifier
+                                            )
+                                            .padding(start = 68.dp, end = 16.dp, bottom = 6.dp),
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                    ) {
+                                        SongBadgeRow(
+                                            isExplicit = hit.isExplicit,
+                                            multiSource = hit.isMultiSource
                                         )
-                                        .padding(start = 68.dp, end = 16.dp, bottom = 6.dp),
-                                    verticalAlignment = Alignment.CenterVertically,
-                                    horizontalArrangement = Arrangement.spacedBy(8.dp)
-                                ) {
-                                    SongBadgeRow(
-                                        isExplicit = hit.isExplicit,
-                                        multiSource = hit.isMultiSource
-                                    )
-                                    if (hit.isMultiSource) {
-                                        Text(
-                                            hit.offerings.joinToString(" · ") { it.sourceName } +
-                                                "  ·  tap to prioritize",
-                                            style = MaterialTheme.typography.labelSmall,
-                                            color = MaterialTheme.colorScheme.primary.copy(alpha = 0.85f),
-                                            maxLines = 1
-                                        )
+                                        if (hit.isMultiSource) {
+                                            Text(
+                                                hit.offerings.joinToString(" · ") { it.sourceName } +
+                                                    "  ·  tap to prioritize",
+                                                style = MaterialTheme.typography.labelSmall,
+                                                color = MaterialTheme.colorScheme.primary.copy(alpha = 0.85f),
+                                                maxLines = 1
+                                            )
+                                        }
                                     }
                                 }
                             }
@@ -256,6 +306,62 @@ fun ExploreScreen(
                 }
             }
         )
+    }
+}
+
+@Composable
+private fun SectionHeader(title: String) {
+    Text(
+        title,
+        style = MaterialTheme.typography.titleSmall,
+        fontWeight = FontWeight.SemiBold,
+        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f),
+        modifier = Modifier.padding(horizontal = 16.dp, vertical = 10.dp)
+    )
+}
+
+@Composable
+private fun ExploreEntityRow(
+    title: String,
+    subtitle: String,
+    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    onClick: () -> Unit
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onClick)
+            .padding(horizontal = 16.dp, vertical = 10.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Box(
+            modifier = Modifier
+                .size(48.dp)
+                .clip(RoundedCornerShape(8.dp))
+                .background(MaterialTheme.colorScheme.surfaceVariant),
+            contentAlignment = Alignment.Center
+        ) {
+            Icon(
+                icon,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+        Spacer(modifier = Modifier.width(12.dp))
+        Column(modifier = Modifier.weight(1f)) {
+            Text(
+                title,
+                style = MaterialTheme.typography.bodyLarge,
+                fontWeight = FontWeight.Medium,
+                maxLines = 1
+            )
+            Text(
+                subtitle,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.55f),
+                maxLines = 1
+            )
+        }
     }
 }
 
