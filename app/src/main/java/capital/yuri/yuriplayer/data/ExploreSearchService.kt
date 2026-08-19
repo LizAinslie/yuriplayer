@@ -24,10 +24,10 @@ import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicLong
 
 /**
- * Live, **source-tagged** music index for Explore.
+ * Explore search + remote sync orchestration.
  *
- * Heavy remote scans run in [LibraryScanService] with a live notification.
- * Typing in Explore **never** starts a network sync — only hydrate + local match.
+ * **Never** holds the full remote catalog in a StateFlow. A 24k-track list in
+ * memory was the root of idle ANRs. Counts come from SQL; search is Room LIKE.
  */
 class ExploreSearchService(
     private val context: Context,
@@ -60,12 +60,8 @@ class ExploreSearchService(
     private val jellyfinSessions = mutableMapOf<Long, JellyfinClient.Session>()
     private val cachedAlbumArtKeys = mutableSetOf<String>()
     private val budget = ScanBudget(context.applicationContext)
-    private val lastPublishAt = AtomicLong(0L)
     private val pageCounter = AtomicInteger(0)
     private val lastCountPublishAt = AtomicLong(0L)
-
-    private val _remoteOfferings = MutableStateFlow<List<SourceOffering>>(emptyList())
-    val remoteOfferings: StateFlow<List<SourceOffering>> = _remoteOfferings.asStateFlow()
 
     private val _indexedCount = MutableStateFlow(0)
     val indexedCount: StateFlow<Int> = _indexedCount.asStateFlow()
@@ -85,22 +81,23 @@ class ExploreSearchService(
     private var cacheAtMs: Long = 0L
     private var hydrated = false
 
+    /** SQL COUNT only — does not load track rows. */
     suspend fun hydrateFromCatalog() = withContext(Dispatchers.IO) {
-        if (hydrated && _remoteOfferings.value.isNotEmpty()) return@withContext
+        if (hydrated && _indexedCount.value > 0) return@withContext
         mutex.withLock {
-            if (hydrated && _remoteOfferings.value.isNotEmpty()) return@withLock
-            val rows = catalog.getRemoteOfferings()
-            publish(rows, force = true)
+            if (hydrated && _indexedCount.value > 0) return@withLock
+            val count = catalog.countRemoteTracks()
+            _indexedCount.value = count
             hydrated = true
-            if (rows.isNotEmpty()) cacheAtMs = System.currentTimeMillis()
-            Log.i(TAG, "hydrated ${rows.size} remote offerings from catalog")
+            if (count > 0) cacheAtMs = System.currentTimeMillis()
+            Log.i(TAG, "hydrated remote count=$count (no full list loaded)")
         }
     }
 
     fun requestRemoteScan(force: Boolean = false) {
         val age = System.currentTimeMillis() - cacheAtMs
-        if (!force && _remoteOfferings.value.isNotEmpty() && age < CACHE_TTL_MS) {
-            Log.i(TAG, "requestRemoteScan skipped — cache warm (${_remoteOfferings.value.size})")
+        if (!force && _indexedCount.value > 0 && age < CACHE_TTL_MS) {
+            Log.i(TAG, "requestRemoteScan skipped — cache warm (${_indexedCount.value})")
             return
         }
         if (!force && _isScanning.value) return
@@ -115,7 +112,7 @@ class ExploreSearchService(
 
         Log.i(
             TAG,
-            "requestRemoteScan force=$force offerings=${_remoteOfferings.value.size} " +
+            "requestRemoteScan force=$force indexed=${_indexedCount.value} " +
                 "device=${budget.deviceClass} page=${budget.pageSize}"
         )
         LibraryScanService.startRemote(context.applicationContext, force)
@@ -129,88 +126,61 @@ class ExploreSearchService(
         runRemoteScan(force)
     }
 
-    /**
-     * Background search only — **does not** start a remote scan.
-     * Callers must already have hydrated / indexed data.
-     */
+    /** Room-backed search. Never walks an in-memory catalog. */
     suspend fun search(query: String, forceRescan: Boolean = false): List<Hit> =
-        withContext(Dispatchers.Default) {
+        withContext(Dispatchers.IO) {
             val q = query.trim()
             if (q.isEmpty()) return@withContext emptyList()
-            // forceRescan is ignored here on purpose — searching must stay local/fast.
-            buildHitsRankOnly(q, limit = 120)
+            buildHitsFromDb(q, limit = 120)
         }
 
     suspend fun searchWithPrefer(query: String, forceRescan: Boolean = false): List<Hit> =
         search(query, forceRescan)
 
     /**
-     * Pure CPU match against the in-memory index. Safe on [Dispatchers.Default].
-     * Early-exits once [limit] unique track identities are found.
+     * Background-safe search entry used by Explore UI.
+     * Always hits Room — never the old in-memory list.
      */
-    fun searchLive(query: String, limit: Int = 80): List<Hit> {
-        val q = query.trim()
-        if (q.isEmpty()) return emptyList()
-        return buildHitsRankOnly(q, limit = limit)
-    }
+    suspend fun searchLive(query: String, limit: Int = 80): List<Hit> =
+        withContext(Dispatchers.IO) {
+            val q = query.trim()
+            if (q.isEmpty()) return@withContext emptyList()
+            buildHitsFromDb(q, limit = limit)
+        }
 
-    private fun buildHitsRankOnly(needle: String, limit: Int): List<Hit> {
-        val matched = collectMatched(needle, softCap = limit * 4)
-        val grouped = matched.groupBy { trackIdentity(it.song) }
+    private suspend fun buildHitsFromDb(needle: String, limit: Int): List<Hit> {
+        val songs = catalog.searchSongs(needle, limit = limit * 2)
+        if (songs.isEmpty()) return emptyList()
+
+        val grouped = songs.groupBy { trackIdentity(it) }
         val hits = ArrayList<Hit>(minOf(limit, grouped.size))
-        for ((key, offs) in grouped) {
+        for ((key, group) in grouped) {
             if (hits.size >= limit) break
-            val distinct = dedupeOfferings(offs)
-            val preferred = distinct.minByOrNull { it.sourceType.rank } ?: distinct.first()
-            hits += Hit(key, distinct, preferred)
+            val offerings = group.map { song ->
+                val type = sourceTypeForSong(song)
+                SourceOffering(
+                    sourceType = type,
+                    sourceId = null,
+                    sourceName = type.name.lowercase().replaceFirstChar { it.titlecase() },
+                    song = song
+                )
+            }.distinctBy { "${it.sourceType.name}:${it.song.songKey}" }
+            val preferred = offerings.minByOrNull { it.sourceType.rank } ?: offerings.first()
+            hits += Hit(key, offerings, preferred)
         }
         hits.sortBy { it.song.displayTitle.lowercase() }
         return hits
     }
 
-    private fun dedupeOfferings(offs: List<SourceOffering>): List<SourceOffering> =
-        offs.distinctBy { "${it.sourceType.name}:${it.sourceId}" }
-
-    /**
-     * Scan local + remote lists for substring matches. Stops after [softCap] raw hits
-     * so a short query on a 44k library doesn't walk the entire table every keystroke.
-     */
-    private fun collectMatched(needle: String, softCap: Int): List<SourceOffering> {
-        val out = ArrayList<SourceOffering>(minOf(softCap, 64))
-        val remote = _remoteOfferings.value
-        val remoteKeys = if (remote.isEmpty()) emptySet() else {
-            val locals = library.songs.value
-            if (locals.isEmpty()) emptySet()
-            else remote.asSequence().map { it.song.songKey }.toHashSet()
+    private fun sourceTypeForSong(song: Song): SourceType {
+        val p = song.path.orEmpty()
+        return when {
+            p.startsWith("jellyfin:", true) -> SourceType.JELLYFIN
+            p.startsWith("navidrome:", true) -> SourceType.NAVIDROME
+            p.startsWith("subsonic:", true) -> SourceType.SUBSONIC
+            else -> SourceType.LOCAL
         }
-
-        for (off in remote) {
-            if (out.size >= softCap) break
-            if (songMatches(off.song, needle)) out += off
-        }
-
-        if (out.size < softCap) {
-            for (song in library.songs.value) {
-                if (out.size >= softCap) break
-                if (!isLocalFilesystemSong(song)) continue
-                if (song.songKey in remoteKeys) continue
-                if (!songMatches(song, needle)) continue
-                out += SourceOffering(
-                    sourceType = SourceType.LOCAL,
-                    sourceId = null,
-                    sourceName = "This device",
-                    song = song
-                )
-            }
-        }
-        return out
     }
-
-    private fun songMatches(s: Song, needle: String): Boolean =
-        s.displayTitle.contains(needle, true) ||
-            s.displayArtist.contains(needle, true) ||
-            s.displayAlbum.contains(needle, true) ||
-            (s.path?.contains(needle, true) == true)
 
     suspend fun setPreferredSource(
         identityKey: String,
@@ -238,13 +208,10 @@ class ExploreSearchService(
         return false
     }
 
-    /** Throttled so Compose doesn't recompose on every page. */
     private fun bumpIndexedCount(count: Int, force: Boolean = false) {
         val now = System.currentTimeMillis()
         val last = lastCountPublishAt.get()
-        if (!force && now - last < budget.uiTickMinIntervalMs) {
-            return
-        }
+        if (!force && now - last < budget.uiTickMinIntervalMs) return
         if (!lastCountPublishAt.compareAndSet(last, now) && !force) return
         _indexedCount.value = count
         if (force) lastCountPublishAt.set(now)
@@ -257,8 +224,8 @@ class ExploreSearchService(
         }
         try {
             val age = System.currentTimeMillis() - cacheAtMs
-            if (!force && _remoteOfferings.value.isNotEmpty() && age < CACHE_TTL_MS) {
-                Log.i(TAG, "skip scan — cache warm (${_remoteOfferings.value.size})")
+            if (!force && _indexedCount.value > 0 && age < CACHE_TTL_MS) {
+                Log.i(TAG, "skip scan — cache warm (${_indexedCount.value})")
                 return
             }
 
@@ -359,43 +326,44 @@ class ExploreSearchService(
                     NetworkPolicy.blockedReason(context, settings)
                         ?: "Paused on mobile data"
                 )
-                runCatching {
-                    val partial = catalog.getRemoteOfferings()
-                    publish(partial, force = true)
-                    library.reloadFromCatalog()
-                }
+                val count = catalog.countRemoteTracks()
+                bumpIndexedCount(count, force = true)
+                runCatching { library.reloadFromCatalog() }
                 Log.i(TAG, "remote scan paused for network policy after $totalIngested tracks")
                 return
             }
 
             if (!anySourceScanned && !force) {
-                progress("Loading index…")
-                val rowsSnap = catalog.getRemoteOfferings()
-                publish(rowsSnap, force = true)
+                progress("Index ready")
+                val count = catalog.countRemoteTracks()
+                bumpIndexedCount(count, force = true)
                 cacheAtMs = System.currentTimeMillis()
                 runCatching { library.reloadFromCatalog() }
-                Log.i(TAG, "all sources warm — published ${rowsSnap.size} from catalog")
+                Log.i(TAG, "all sources warm — count=$count")
                 return
             }
 
             progress("Building album / artist index…")
             runCatching { catalog.rebuildRollups() }
 
-            progress("Loading index…")
-            val finalRows = catalog.getRemoteOfferings()
-            publish(finalRows, force = true)
+            val finalCount = catalog.countRemoteTracks()
+            bumpIndexedCount(finalCount, force = true)
             cacheAtMs = System.currentTimeMillis()
             hydrated = true
 
-            progress("Merging into library…")
+            progress("Merging local library…")
             runCatching { library.reloadFromCatalog() }
 
             if (NetworkPolicy.allowsRemoteSync(context, settings)) {
                 progress("Caching covers…")
-                runCatching { cacheAlbumArtPassive(finalRows.map { it.song }) }
+                // Bounded sample only — never pull 24k into RAM for art
+                runCatching {
+                    val sample = catalog.getRemoteOfferings(limit = budget.artBatchLimit * 4)
+                    cacheAlbumArtPassive(sample.map { it.song })
+                }
             }
 
-            Log.i(TAG, "remote index ready: ${finalRows.size} offerings")
+            Log.i(TAG, "remote index ready: count=$finalCount")
         } catch (e: CancellationException) {
             Log.i(TAG, "remote scan cancelled")
             throw e
@@ -587,16 +555,6 @@ class ExploreSearchService(
             _lastError.value = "$sourceName: ${it.message}"
         }
         return if (aborted) -delivered.coerceAtLeast(1) else delivered
-    }
-
-    private fun publish(list: List<SourceOffering>, force: Boolean) {
-        bumpIndexedCount(list.size, force = true)
-        val now = System.currentTimeMillis()
-        val last = lastPublishAt.get()
-        if (!force && now - last < budget.publishMinIntervalMs) return
-        if (!lastPublishAt.compareAndSet(last, now) && !force) return
-        _remoteOfferings.value = ArrayList(list)
-        if (force) lastPublishAt.set(now)
     }
 
     companion object {
