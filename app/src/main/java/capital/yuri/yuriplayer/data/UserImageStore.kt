@@ -13,6 +13,9 @@ import java.io.File
  *
  * Each persist uses a unique timestamped filename so Coil / UI models always
  * see a new URI when the user replaces an image (same stable key otherwise).
+ *
+ * Manual clears are remembered via a `.cleared` marker file so auto-fetch /
+ * provider resolve will not re-populate that slot until the user sets a new image.
  */
 class UserImageStore(private val context: Context) {
 
@@ -32,14 +35,18 @@ class UserImageStore(private val context: Context) {
     ): String? = withContext(Dispatchers.IO) {
         val src = runCatching { Uri.parse(sourceUri) }.getOrNull() ?: return@withContext null
         val dir = File(root, namespace).also { if (!it.exists()) it.mkdirs() }
-        val safeKey = key.replace(Regex("[^a-zA-Z0-9._-]"), "_")
+        val safeKey = safe(key)
 
-        // Drop previous versions for this key first
-        dir.listFiles()?.filter { it.name.startsWith("${safeKey}.") }?.forEach { it.delete() }
+        // User is choosing art again — drop any prior clear veto
+        clearedMarker(dir, safeKey).delete()
+
+        // Drop previous image versions for this key first
+        dir.listFiles()?.filter {
+            it.isFile && it.name.startsWith("$safeKey.") && !it.name.endsWith(CLEARED_SUFFIX)
+        }?.forEach { it.delete() }
 
         val ext = guessExtension(context, src)
-        // Timestamp keeps the URI unique so image loaders bust cache on replace
-        val dest = File(dir, "${safeKey}.${System.currentTimeMillis()}.$ext")
+        val dest = File(dir, "$safeKey.${System.currentTimeMillis()}.$ext")
 
         try {
             context.contentResolver.openInputStream(src)?.use { input ->
@@ -56,31 +63,76 @@ class UserImageStore(private val context: Context) {
         }
     }
 
-    /** Existing persisted file:// URI for [key], or null. */
+    /** Existing persisted file:// URI for [key], or null (ignores clear markers). */
     fun resolve(namespace: String, key: String): String? {
         val dir = File(root, namespace)
         if (!dir.isDirectory) return null
-        val safeKey = key.replace(Regex("[^a-zA-Z0-9._-]"), "_")
+        val safeKey = safe(key)
+        if (clearedMarker(dir, safeKey).isFile) return null
         val file = dir.listFiles()
-            ?.filter { it.isFile && it.name.startsWith("${safeKey}.") && it.length() > 0L }
+            ?.filter {
+                it.isFile &&
+                    it.name.startsWith("$safeKey.") &&
+                    !it.name.endsWith(CLEARED_SUFFIX) &&
+                    it.length() > 0L
+            }
             ?.maxByOrNull { it.lastModified() }
             ?: return null
         return Uri.fromFile(file).toString()
     }
 
-    /** Delete persisted image(s) for a key. */
+    /** True if the user explicitly cleared this slot (do not auto-set). */
+    fun isCleared(namespace: String, key: String): Boolean {
+        val dir = File(root, namespace)
+        if (!dir.isDirectory) return false
+        return clearedMarker(dir, safe(key)).isFile
+    }
+
+    /**
+     * Record a forced clear: delete any local image and write a durable marker
+     * so providers / auto-fetch leave the slot empty until the user sets art again.
+     */
+    suspend fun markCleared(namespace: String, key: String) = withContext(Dispatchers.IO) {
+        val dir = File(root, namespace).also { if (!it.exists()) it.mkdirs() }
+        val safeKey = safe(key)
+        dir.listFiles()?.filter {
+            it.isFile && it.name.startsWith("$safeKey.") && !it.name.endsWith(CLEARED_SUFFIX)
+        }?.forEach { it.delete() }
+        val marker = clearedMarker(dir, safeKey)
+        if (!marker.exists()) {
+            runCatching { marker.writeText("1") }
+        }
+    }
+
+    /** Remove clear marker only (used if we need to unlock without setting art). */
+    suspend fun clearClearedFlag(namespace: String, key: String) = withContext(Dispatchers.IO) {
+        val dir = File(root, namespace)
+        if (!dir.isDirectory) return@withContext
+        clearedMarker(dir, safe(key)).delete()
+    }
+
+    /** Delete persisted image(s) for a key (does not write a clear marker). */
     suspend fun delete(namespace: String, key: String) = withContext(Dispatchers.IO) {
         val dir = File(root, namespace)
         if (!dir.isDirectory) return@withContext
-        val safeKey = key.replace(Regex("[^a-zA-Z0-9._-]"), "_")
-        dir.listFiles()?.filter { it.name.startsWith("${safeKey}.") }?.forEach { it.delete() }
+        val safeKey = safe(key)
+        dir.listFiles()?.filter {
+            it.isFile && it.name.startsWith("$safeKey.") && !it.name.endsWith(CLEARED_SUFFIX)
+        }?.forEach { it.delete() }
     }
+
+    private fun clearedMarker(dir: File, safeKey: String): File =
+        File(dir, "$safeKey$CLEARED_SUFFIX")
 
     companion object {
         const val DIR = "user_images"
         const val NS_PLAYLISTS = "playlists"
         const val NS_ARTISTS = "artists"
         const val NS_ARTIST_BANNERS = "artist_banners"
+        private const val CLEARED_SUFFIX = ".cleared"
+
+        private fun safe(key: String): String =
+            key.replace(Regex("[^a-zA-Z0-9._-]"), "_")
 
         private fun guessExtension(context: Context, uri: Uri): String {
             val type = runCatching { context.contentResolver.getType(uri) }.getOrNull()
