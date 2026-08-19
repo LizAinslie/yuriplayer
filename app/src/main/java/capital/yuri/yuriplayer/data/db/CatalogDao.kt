@@ -65,6 +65,26 @@ interface CatalogDao {
     @Query("SELECT * FROM catalog_tracks WHERE songKey IN (:keys)")
     suspend fun getTracksByKeys(keys: List<String>): List<CatalogTrackEntity>
 
+    /**
+     * Bounded multi-source lookup for one logical track (title + artist + album).
+     * Used for E / multi-source badges and Sources sheet — never full-table.
+     */
+    @Query(
+        """
+        SELECT * FROM catalog_tracks
+        WHERE IFNULL(title, '') = :title COLLATE NOCASE
+          AND IFNULL(COALESCE(albumArtist, artist), '') = :artist COLLATE NOCASE
+          AND IFNULL(album, '') = :album COLLATE NOCASE
+        LIMIT :limit
+        """
+    )
+    suspend fun findTracksMatching(
+        title: String,
+        artist: String,
+        album: String,
+        limit: Int = 12
+    ): List<CatalogTrackEntity>
+
     @Query(
         "SELECT * FROM catalog_tracks WHERE " +
             "title LIKE '%' || :q || '%' COLLATE NOCASE " +
