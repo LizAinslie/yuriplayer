@@ -129,7 +129,8 @@ val appModule = module {
             instances = get(),
             jellyfinClient = get(),
             subsonicClient = get(),
-            notifier = get()
+            notifier = get(),
+            settings = get()
         )
     }
 
