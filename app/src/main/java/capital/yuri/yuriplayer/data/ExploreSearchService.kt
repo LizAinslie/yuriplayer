@@ -18,12 +18,12 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
+import java.io.File
 
 /**
  * Live, **source-tagged** music index for Explore.
  *
- * Heavy remote scans are started via [LibraryScanService] (foreground dataSync)
- * so they keep running with a live progress notification when the UI is backgrounded.
+ * Heavy remote scans run in [LibraryScanService] with a live notification.
  */
 class ExploreSearchService(
     private val context: Context,
@@ -49,6 +49,7 @@ class ExploreSearchService(
 
     private val mutex = Mutex()
     private val jellyfinSessions = mutableMapOf<Long, JellyfinClient.Session>()
+    private val cachedAlbumArtKeys = mutableSetOf<String>()
 
     private val _remoteOfferings = MutableStateFlow<List<SourceOffering>>(emptyList())
     val remoteOfferings: StateFlow<List<SourceOffering>> = _remoteOfferings.asStateFlow()
@@ -83,14 +84,12 @@ class ExploreSearchService(
         }
     }
 
-    /**
-     * Start (or no-op) a remote scan hosted by [LibraryScanService] so work
-     * continues in the background with a live notification.
-     */
     fun requestRemoteScan(force: Boolean = false) {
         val age = System.currentTimeMillis() - cacheAtMs
+        // Always scan when forced; otherwise skip only if we already have a warm index
         if (!force && _remoteOfferings.value.isNotEmpty() && age < CACHE_TTL_MS) return
         if (!force && _isScanning.value) return
+        Log.i(TAG, "requestRemoteScan force=$force offerings=${_remoteOfferings.value.size}")
         LibraryScanService.startRemote(context.applicationContext, force)
     }
 
@@ -98,7 +97,6 @@ class ExploreSearchService(
         requestRemoteScan(force = true)
     }
 
-    /** Called from [LibraryScanService] — runs the full remote index pass. */
     suspend fun runRemoteScanBlocking(force: Boolean) {
         runRemoteScan(force)
     }
@@ -154,7 +152,10 @@ class ExploreSearchService(
                 song = song
             )
         }
-        return (local + _remoteOfferings.value).filter { off ->
+        // Prefer remote offerings for jellyfin keys so we don't double-count after reload
+        val remoteKeys = _remoteOfferings.value.map { it.song.songKey }.toSet()
+        val localOnly = local.filter { it.song.songKey !in remoteKeys }
+        return (localOnly + _remoteOfferings.value).filter { off ->
             val s = off.song
             s.displayTitle.contains(needle, true) ||
                 s.displayArtist.contains(needle, true) ||
@@ -182,15 +183,20 @@ class ExploreSearchService(
     private suspend fun runRemoteScan(force: Boolean) {
         mutex.withLock {
             val age = System.currentTimeMillis() - cacheAtMs
-            if (!force && _remoteOfferings.value.isNotEmpty() && age < CACHE_TTL_MS) return
+            if (!force && _remoteOfferings.value.isNotEmpty() && age < CACHE_TTL_MS) {
+                Log.i(TAG, "skip scan — cache warm (${_remoteOfferings.value.size})")
+                return
+            }
 
             _isScanning.value = true
             _lastError.value = null
+            notifier.update("Syncing libraries", "Connecting…")
             try {
                 val rows = instances.getAll().filter { it.enabled }
                 _sourceCount.value = rows.size
                 if (rows.isEmpty()) {
                     _scanProgress.value = null
+                    progress("No remote sources enabled")
                     return
                 }
 
@@ -244,6 +250,8 @@ class ExploreSearchService(
                 }
                 publish(cleaned)
                 cacheAtMs = System.currentTimeMillis()
+                // Make album/artist detail pages see remote tracks
+                runCatching { library.reloadFromCatalog() }
                 Log.i(TAG, "remote index ready: ${cleaned.size} offerings")
             } catch (e: CancellationException) {
                 Log.i(TAG, "remote scan cancelled")
@@ -285,7 +293,7 @@ class ExploreSearchService(
                 return
             }.also { jellyfinSessions[rowId] = it }
 
-        jellyfinClient.listAudioItemsPaged(session, pageSize = 200) { page, start, total ->
+        jellyfinClient.listAudioItemsPaged(session, pageSize = 500) { page, start, total ->
             val offs = page.map { song ->
                 SourceOffering(
                     sourceType = SourceType.JELLYFIN,
@@ -302,6 +310,7 @@ class ExploreSearchService(
                 sourceInstanceId = rowId,
                 seenAt = seenAt
             )
+            cacheAlbumArtBatch(page)
             val totalPart = total?.let { " / $it" }.orEmpty()
             val done = start + page.size
             progress("$sourceName: $done$totalPart")
@@ -321,6 +330,33 @@ class ExploreSearchService(
             beforeMs = seenAt,
             keepSongKeys = keepKeys
         )
+    }
+
+    /** Download unique album covers into filesDir/covers and wire catalog coverPath. */
+    private suspend fun cacheAlbumArtBatch(songs: List<Song>) {
+        val coversDir = File(context.filesDir, "covers").also { it.mkdirs() }
+        val seen = mutableSetOf<String>()
+        for (song in songs) {
+            val aKey = albumKey(song.album, song.effectiveAlbumArtist)
+            if (aKey in seen || aKey in cachedAlbumArtKeys) continue
+            seen += aKey
+            val url = song.albumArtUri?.toString() ?: continue
+            if (!url.startsWith("http", ignoreCase = true)) continue
+            val dest = File(
+                coversDir,
+                MetadataEnrichmentService.sanitizeFileName(aKey) + ".jpg"
+            )
+            if (dest.isFile && dest.length() > 0) {
+                cachedAlbumArtKeys += aKey
+                catalog.applyAlbumCover(aKey, dest.absolutePath, url, null)
+                continue
+            }
+            val ok = AlbumArtResolver.downloadToFile(url, dest, maxSize = 512)
+            if (ok) {
+                cachedAlbumArtKeys += aKey
+                catalog.applyAlbumCover(aKey, dest.absolutePath, url, null)
+            }
+        }
     }
 
     private suspend fun scanSubsonic(
@@ -344,7 +380,7 @@ class ExploreSearchService(
         runCatching {
             subsonicClient.ping(session).getOrThrow()
             val songs = subsonicClient.listAllSongs(session).getOrThrow()
-            songs.chunked(200).forEachIndexed { i, chunk ->
+            songs.chunked(500).forEachIndexed { i, chunk ->
                 val offs = chunk.map { song ->
                     SourceOffering(
                         sourceType = type,
@@ -361,7 +397,8 @@ class ExploreSearchService(
                     sourceInstanceId = instanceId,
                     seenAt = seenAt
                 )
-                val done = minOf((i + 1) * 200, songs.size)
+                cacheAlbumArtBatch(chunk)
+                val done = minOf((i + 1) * 500, songs.size)
                 progress("$sourceName: $done / ${songs.size}")
                 notifier.update("Syncing libraries", "$sourceName: $done / ${songs.size}", done, songs.size)
             }
