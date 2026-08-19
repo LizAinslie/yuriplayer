@@ -21,6 +21,9 @@ enum class LibraryScanMode {
  *
  * Online year/art lookup is **manual by default** (album/artist "Fetch additional
  * metadata"). Users can enable automatic background enrichment in Settings.
+ *
+ * Remote library sync is **Wi‑Fi / unmetered only by default** so large Jellyfin
+ * indexes don't burn through mobile data plans.
  */
 class LibrarySettings(context: Context) {
 
@@ -106,6 +109,18 @@ class LibrarySettings(context: Context) {
         prefs.edit().putBoolean(KEY_AUTO_PLAY_RECOMMENDED, enabled).apply()
     }
 
+    /**
+     * When false (default), remote library sync / large index downloads only run
+     * on unmetered networks (typically Wi‑Fi). Playback of already-indexed remote
+     * tracks is unaffected.
+     */
+    fun isSyncOverMobileDataEnabled(): Boolean =
+        prefs.getBoolean(KEY_SYNC_OVER_MOBILE_DATA, false)
+
+    fun setSyncOverMobileDataEnabled(enabled: Boolean) {
+        prefs.edit().putBoolean(KEY_SYNC_OVER_MOBILE_DATA, enabled).apply()
+    }
+
     fun networkMetadataConsent(): Boolean? = isAutomaticMetadataEnabled()
 
     fun isNetworkMetadataEnabled(): Boolean = isAutomaticMetadataEnabled()
@@ -134,6 +149,7 @@ class LibrarySettings(context: Context) {
         private const val KEY_AUTO_METADATA = "automatic_metadata_enabled"
         private const val KEY_AUTO_PLAY_RECOMMENDED = "auto_play_recommended"
         private const val KEY_NETWORK_META = "network_metadata_enabled"
+        private const val KEY_SYNC_OVER_MOBILE_DATA = "sync_over_mobile_data"
 
         val DEFAULT_ROOTS = listOf(
             "Music",
