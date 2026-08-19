@@ -29,9 +29,10 @@ import coil3.request.crossfade
 import coil3.size.Size
 
 /**
- * Playlist cover:
+ * Playlist cover — **eager**, not deferred:
  * - **Custom** image: Coil with explicit size + stable cache keys (no crossfade for local files)
- * - **Track art** fallback: reuse [AlbumArt] / [AlbumArtCache] so list thumbs stay warm
+ * - **Track art** fallback: Coil on [PlaylistCover.artUris] / song.albumArtUri first so list
+ *   thumbs paint immediately (http + content URI). AlbumArtCache path only if no URI.
  * - Empty → placeholder icon
  */
 @Composable
@@ -73,16 +74,38 @@ fun PlaylistCoverArt(playlist: Playlist, size: Dp = 56.dp) {
             }
             PlaylistCover.CoverMode.SINGLE,
             PlaylistCover.CoverMode.COLLAGE -> {
-                // Prefer the same warm AlbumArtCache path used by song rows
-                val seed = playlist.songs.firstOrNull()
-                if (seed != null) {
-                    AlbumArt(
-                        song = seed,
-                        size = size,
-                        corner = 6.dp
+                // Prefer Coil on the resolved art URI so list rows don't wait on AlbumArtCache.
+                val artUri = cover.artUris.firstOrNull()
+                    ?: playlist.songs.firstOrNull()?.albumArtUri
+                if (artUri != null) {
+                    val uriStr = artUri.toString()
+                    val local = uriStr.startsWith("file:") ||
+                        uriStr.startsWith("/") ||
+                        uriStr.startsWith("content:")
+                    AsyncImage(
+                        model = ImageRequest.Builder(context)
+                            .data(artUri)
+                            .size(Size(px, px))
+                            .memoryCacheKey("pl-track:${playlist.id}:$uriStr")
+                            .diskCacheKey("pl-track:${playlist.id}:$uriStr")
+                            .crossfade(!local)
+                            .build(),
+                        contentDescription = playlist.name,
+                        contentScale = ContentScale.Crop,
+                        modifier = Modifier.fillMaxSize()
                     )
                 } else {
-                    PlaceholderIcon(empty = false)
+                    // No URI yet (e.g. embedded-only local) — fall back to AlbumArt decode path
+                    val seed = playlist.songs.firstOrNull()
+                    if (seed != null) {
+                        AlbumArt(
+                            song = seed,
+                            size = size,
+                            corner = 6.dp
+                        )
+                    } else {
+                        PlaceholderIcon(empty = false)
+                    }
                 }
             }
             PlaylistCover.CoverMode.EMPTY -> PlaceholderIcon(empty = true)

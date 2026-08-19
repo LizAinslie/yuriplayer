@@ -19,15 +19,20 @@ import androidx.media3.common.MediaItem
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
 import androidx.media3.common.util.UnstableApi
+import androidx.media3.datasource.DefaultHttpDataSource
 import androidx.media3.exoplayer.DefaultLoadControl
 import androidx.media3.exoplayer.DefaultRenderersFactory
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.audio.AudioSink
+import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import androidx.media3.session.MediaSession
 import androidx.media3.session.MediaSessionService
 import androidx.media3.session.MediaStyleNotificationHelper
 import capital.yuri.yuriplayer.activities.MainActivity
 import capital.yuri.yuriplayer.data.Song
+import capital.yuri.yuriplayer.player.engine.extractStreamHeaders
+import capital.yuri.yuriplayer.player.engine.isNetworkUri
+import capital.yuri.yuriplayer.player.engine.isVirtualLibraryPath
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -71,6 +76,24 @@ class MusicService : MediaSessionService() {
     private var stickySeekUntilElapsed: Long = 0L
     private var userSeekGuardUntilElapsed: Long = 0L
 
+    /**
+     * Remote (Jellyfin/Subsonic) restore is deferred so cold start never blocks on
+     * network prepare. Metadata + notification still update immediately.
+     */
+    private var pendingRemoteRestore: PendingRemoteRestore? = null
+
+    private data class PendingRemoteRestore(
+        val positionMs: Long,
+        val wasPlayWhenReady: Boolean
+    )
+
+    /** Shared HTTP factory so Jellyfin/Subsonic tokens apply to stream requests. */
+    private val httpFactory = DefaultHttpDataSource.Factory()
+        .setAllowCrossProtocolRedirects(true)
+        .setConnectTimeoutMs(12_000)
+        .setReadTimeoutMs(25_000)
+        .setUserAgent("YuriPlayer/0.1")
+
     private val _nowPlaying = MutableStateFlow<Song?>(null)
     val nowPlaying: StateFlow<Song?> = _nowPlaying.asStateFlow()
 
@@ -106,7 +129,11 @@ class MusicService : MediaSessionService() {
             .setEnableDecoderFallback(true)
             .setExtensionRendererMode(DefaultRenderersFactory.EXTENSION_RENDERER_MODE_OFF)
 
+        val mediaSourceFactory = DefaultMediaSourceFactory(this)
+            .setDataSourceFactory(httpFactory)
+
         player = ExoPlayer.Builder(this, renderersFactory)
+            .setMediaSourceFactory(mediaSourceFactory)
             .setAudioAttributes(audioAttributes, true)
             .setHandleAudioBecomingNoisy(true)
             // NETWORK so remote streams keep Wi‑Fi / radio awake
@@ -152,6 +179,12 @@ class MusicService : MediaSessionService() {
 
     private fun songUri(song: Song): Uri = MusicServicePlaybackHooks.songUri(song)
 
+    private fun isRemoteSong(song: Song?): Boolean {
+        if (song == null) return false
+        if (isVirtualLibraryPath(song.path)) return true
+        return isNetworkUri(songUri(song))
+    }
+
     private fun mediaItemUriAt(index: Int): Uri? {
         val p = player ?: return null
         if (index < 0 || index >= p.mediaItemCount) return null
@@ -170,14 +203,37 @@ class MusicService : MediaSessionService() {
         stickySeekUntilElapsed = 0L
     }
 
+    /** Apply Jellyfin/Subsonic auth headers before any network prepare. */
+    private fun applyStreamHeaders(song: Song?) {
+        if (song == null) return
+        val headers = extractStreamHeaders(song)
+        if (headers.isNotEmpty()) {
+            httpFactory.setDefaultRequestProperties(headers)
+        }
+    }
+
+    /**
+     * If a remote track was restored without preparing, do that now (on play).
+     * Returns true when a deferred prepare was kicked off.
+     */
+    private fun flushPendingRemoteRestore(autoPlay: Boolean): Boolean {
+        val pending = pendingRemoteRestore ?: return false
+        pendingRemoteRestore = null
+        Log.i(TAG, "flushPendingRemoteRestore pos=${pending.positionMs} autoPlay=$autoPlay")
+        rebufferWindow(pending.positionMs, autoPlay = autoPlay, forceReload = true)
+        return true
+    }
+
     private fun hardRestartCurrent(autoPlay: Boolean = true, startPositionMs: Long = 0L) {
         val p = player ?: return
         val current = queueManager.currentSong() ?: return
         val wasPlaying = autoPlay || p.playWhenReady
         val pos = startPositionMs.coerceAtLeast(0L)
         clearStickySeek()
+        pendingRemoteRestore = null
         Log.i(TAG, "hardRestartCurrent '${current.displayTitle}' pos=$pos gen=$loopGeneration")
         try {
+            applyStreamHeaders(current)
             p.playWhenReady = false
             p.stop()
             p.clearMediaItems()
@@ -229,6 +285,10 @@ class MusicService : MediaSessionService() {
     private fun ensurePlayerMatchesQueue(autoPlay: Boolean = true) {
         val p = player ?: return
         val current = queueManager.currentSong() ?: return
+        if (pendingRemoteRestore != null && isRemoteSong(current)) {
+            flushPendingRemoteRestore(autoPlay = autoPlay)
+            return
+        }
         val playingUri = mediaItemUriAt(p.currentMediaItemIndex)
         if (urisEqual(playingUri, songUri(current))) {
             if (!softNormalizeWindow()) {
@@ -257,11 +317,14 @@ class MusicService : MediaSessionService() {
             p.stop()
             p.clearMediaItems()
             _nowPlaying.value = null
+            pendingRemoteRestore = null
             updateForegroundNotification()
             return
         }
 
         clearStickySeek()
+        pendingRemoteRestore = null
+        applyStreamHeaders(current)
 
         val repeatOne = isRepeatOne()
         val nextSong = if (repeatOne) null else queueManager.peekNext()
@@ -303,7 +366,7 @@ class MusicService : MediaSessionService() {
             TAG,
             "rebufferWindow current='${current.displayTitle}' " +
                 "next='${if (repeatOne) "(repeat-one single)" else nextSong?.displayTitle}' " +
-                "startMs=$startPositionMs autoPlay=$autoPlay force=$forceReload"
+                "startMs=$startPositionMs autoPlay=$autoPlay force=$forceReload remote=${isRemoteSong(current)}"
         )
 
         try {
@@ -326,6 +389,10 @@ class MusicService : MediaSessionService() {
     private fun updateNextMediaItemOnly() {
         val p = player ?: return
         val current = queueManager.currentSong() ?: return
+        if (pendingRemoteRestore != null) {
+            // Window not prepared yet — next item will be attached on flush.
+            return
+        }
         val playingUri = mediaItemUriAt(p.currentMediaItemIndex)
         if (!urisEqual(playingUri, songUri(current))) {
             rebufferWindow(
@@ -355,6 +422,7 @@ class MusicService : MediaSessionService() {
 
     private fun applyAdvance(result: QueueManager.AdvanceResult, autoPlay: Boolean = true) {
         clearStickySeek()
+        pendingRemoteRestore = null
         val p = player
         when {
             result.finished -> {
@@ -438,6 +506,7 @@ class MusicService : MediaSessionService() {
         autoPlay: Boolean = true,
         source: ColdSource? = null
     ) {
+        pendingRemoteRestore = null
         queueManager.playSource(songs, startIndex, source)
         rebufferWindow(0L, autoPlay = autoPlay, forceReload = true)
     }
@@ -501,6 +570,7 @@ class MusicService : MediaSessionService() {
     }
 
     fun playQueueItem(lane: QueueLane, index: Int) {
+        pendingRemoteRestore = null
         queueManager.playItem(lane, index)
         rebufferWindow(0L, autoPlay = true, forceReload = true)
     }
@@ -524,6 +594,11 @@ class MusicService : MediaSessionService() {
     }
 
     fun play() {
+        if (flushPendingRemoteRestore(autoPlay = true)) {
+            updateForegroundNotification()
+            persistState()
+            return
+        }
         player?.play()
         updateForegroundNotification()
         persistState()
@@ -536,7 +611,12 @@ class MusicService : MediaSessionService() {
     }
 
     fun togglePlayPause() {
-        player?.let { if (it.isPlaying) it.pause() else it.play() }
+        val p = player
+        if (p != null && !p.isPlaying && pendingRemoteRestore != null) {
+            play()
+            return
+        }
+        p?.let { if (it.isPlaying) it.pause() else it.play() }
         updateForegroundNotification()
         persistState()
     }
@@ -565,6 +645,13 @@ class MusicService : MediaSessionService() {
     }
 
     fun seekTo(positionMs: Long) {
+        if (pendingRemoteRestore != null) {
+            // Seek before first prepare — just update the pending position.
+            val pending = pendingRemoteRestore!!
+            pendingRemoteRestore = pending.copy(positionMs = positionMs.coerceAtLeast(0L))
+            persistState()
+            return
+        }
         val p = player ?: return
         if (p.mediaItemCount <= 0) return
 
@@ -620,9 +707,9 @@ class MusicService : MediaSessionService() {
     }
 
     fun seekToFraction(fraction: Float) {
-        val p = player ?: return
-        val playerDuration = p.duration.takeIf { it > 0 && it != C.TIME_UNSET } ?: 0L
+        val p = player
         val metaDuration = queueManager.currentSong()?.durationMs?.takeIf { it > 0 } ?: 0L
+        val playerDuration = p?.duration?.takeIf { it > 0 && it != C.TIME_UNSET } ?: 0L
         val duration = when {
             playerDuration > 0L -> playerDuration
             metaDuration > 0L -> metaDuration
@@ -647,8 +734,10 @@ class MusicService : MediaSessionService() {
         MusicServicePlaybackHooks.toMediaItem(song, mediaIdSuffix)
 
     /**
-     * Restore queue metadata immediately so the UI can bind, then defer ExoPlayer
-     * prepare. Network streams (Jellyfin) were blocking first frames on mid-range devices.
+     * Restore queue metadata immediately so the UI can bind.
+     * Local files: short yield then prepare.
+     * Remote (Jellyfin): **do not prepare** until the user hits play — network
+     * handshake was blocking first frames on mid-range devices.
      */
     private fun restorePlaybackState() {
         if (restoredOnce) return
@@ -659,10 +748,23 @@ class MusicService : MediaSessionService() {
             val current = queueManager.currentSong()
             _nowPlaying.value = current
             updateForegroundNotification()
-            // Let Activity/Compose paint before touching the network stack
+            // Let Activity/Compose paint before any player work
             yield()
-            delay(RESTORE_PREPARE_DELAY_MS)
-            rebufferWindow(saved.positionMs, autoPlay = false, forceReload = true)
+            if (isRemoteSong(current)) {
+                pendingRemoteRestore = PendingRemoteRestore(
+                    positionMs = saved.positionMs,
+                    wasPlayWhenReady = saved.playWhenReady
+                )
+                Log.i(
+                    TAG,
+                    "restore deferred remote '${current?.displayTitle}' " +
+                        "pos=${saved.positionMs} wasPlaying=${saved.playWhenReady}"
+                )
+                // Intentionally no rebufferWindow here — play() flushes it.
+            } else {
+                delay(RESTORE_PREPARE_DELAY_MS)
+                rebufferWindow(saved.positionMs, autoPlay = false, forceReload = true)
+            }
         }
     }
 
@@ -681,6 +783,10 @@ class MusicService : MediaSessionService() {
         stallWatchJob = serviceScope.launch {
             while (isActive) {
                 delay(STALL_POLL_MS)
+                if (pendingRemoteRestore != null) {
+                    stallSamplePos = -1L
+                    continue
+                }
                 val p = player ?: continue
                 if (recoveringAudio || advancing || inUserSeekGuard()) {
                     stallSamplePos = -1L
@@ -727,10 +833,11 @@ class MusicService : MediaSessionService() {
     }
 
     private fun persistState() {
+        val pending = pendingRemoteRestore
         stateStore.save(
             snapshot = queueManager.getSnapshot(),
-            positionMs = getPositionMs(),
-            playWhenReady = player?.playWhenReady == true
+            positionMs = if (pending != null) pending.positionMs else getPositionMs(),
+            playWhenReady = if (pending != null) false else player?.playWhenReady == true
         )
     }
 
@@ -909,6 +1016,7 @@ class MusicService : MediaSessionService() {
     fun getCurrentSong(): Song? = _nowPlaying.value ?: queueManager.currentSong()
 
     fun getPositionMs(): Long {
+        pendingRemoteRestore?.let { return it.positionMs }
         val real = player?.currentPosition?.coerceAtLeast(0L) ?: 0L
         val now = SystemClock.elapsedRealtime()
         if (stickySeekTargetMs >= 0L && now < stickySeekUntilElapsed) {
@@ -923,6 +1031,9 @@ class MusicService : MediaSessionService() {
     }
 
     fun getDurationMs(): Long {
+        if (pendingRemoteRestore != null) {
+            return queueManager.currentSong()?.durationMs?.takeIf { it > 0 } ?: 0L
+        }
         val p = player ?: return 0L
         val d = p.duration
         if (d > 0L && d != C.TIME_UNSET) return d
@@ -993,7 +1104,7 @@ class MusicService : MediaSessionService() {
         private const val STICKY_SEEK_MS = 1_200L
         private const val USER_SEEK_GUARD_MS = 1_000L
         private const val SEEK_CONFIRM_MS = 600L
-        /** Delay after queue restore before Exo prepare — keeps first UI frames free. */
-        private const val RESTORE_PREPARE_DELAY_MS = 60L
+        /** Delay after local queue restore before Exo prepare — keeps first UI frames free. */
+        private const val RESTORE_PREPARE_DELAY_MS = 40L
     }
 }
