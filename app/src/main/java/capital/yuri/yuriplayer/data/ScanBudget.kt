@@ -4,10 +4,13 @@ import android.app.ActivityManager
 import android.content.Context
 import android.os.Build
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.yield
 
 /**
  * Device-aware pacing for long-running library scans so mid/low-end phones
  * (and large remote libraries) don't ANR or thrash GC while indexing.
+ *
+ * Bias toward **leaving headroom for the main thread** over raw ingest speed.
  */
 class ScanBudget(context: Context) {
 
@@ -21,6 +24,8 @@ class ScanBudget(context: Context) {
     val publishMinIntervalMs: Long
     /** Update notification / progress text every N pages (keeps main thread free). */
     val progressEveryPages: Int
+    /** Min interval between any UI-facing StateFlow writes (count / progress). */
+    val uiTickMinIntervalMs: Long
     /** How many album-art downloads to attempt in one post-scan pass. */
     val artBatchLimit: Int
     val artConcurrency: Int
@@ -41,40 +46,46 @@ class ScanBudget(context: Context) {
 
         when (deviceClass) {
             Class.LOW -> {
-                pageSize = 80
-                pageYieldMs = 150L
-                publishMinIntervalMs = 8_000L
-                progressEveryPages = 4
-                artBatchLimit = 8
+                pageSize = 40
+                pageYieldMs = 350L
+                publishMinIntervalMs = 15_000L
+                progressEveryPages = 8
+                uiTickMinIntervalMs = 2_500L
+                artBatchLimit = 4
                 artConcurrency = 1
-                artYieldMs = 250L
+                artYieldMs = 400L
             }
             Class.MID -> {
-                pageSize = 150
-                pageYieldMs = 80L
-                publishMinIntervalMs = 5_000L
-                progressEveryPages = 3
-                artBatchLimit = 16
+                pageSize = 80
+                pageYieldMs = 220L
+                publishMinIntervalMs = 10_000L
+                progressEveryPages = 6
+                uiTickMinIntervalMs = 1_800L
+                artBatchLimit = 8
                 artConcurrency = 1
-                artYieldMs = 120L
+                artYieldMs = 200L
             }
             Class.HIGH -> {
-                pageSize = 250
-                pageYieldMs = 30L
-                publishMinIntervalMs = 2_500L
-                progressEveryPages = 2
-                artBatchLimit = 32
-                artConcurrency = 2
-                artYieldMs = 40L
+                pageSize = 120
+                pageYieldMs = 120L
+                publishMinIntervalMs = 6_000L
+                progressEveryPages = 4
+                uiTickMinIntervalMs = 1_200L
+                artBatchLimit = 16
+                artConcurrency = 1
+                artYieldMs = 80L
             }
         }
     }
 
     suspend fun yieldBetweenPages() {
+        // Always yield the coroutine first so other Dispatchers.IO / Main work can run
+        yield()
         if (pageYieldMs > 0) delay(pageYieldMs)
     }
 
     suspend fun yieldBetweenArt() {
+        yield()
         if (artYieldMs > 0) delay(artYieldMs)
     }
 }
