@@ -46,6 +46,9 @@ import androidx.compose.ui.unit.dp
 import capital.yuri.yuriplayer.data.AlbumItem
 import capital.yuri.yuriplayer.data.MetadataEditService
 import capital.yuri.yuriplayer.data.Song
+import capital.yuri.yuriplayer.data.source.SourceOffering
+import capital.yuri.yuriplayer.data.source.asWritableTarget
+import capital.yuri.yuriplayer.data.source.writableOfferings
 import kotlinx.coroutines.launch
 import org.koin.compose.koinInject
 
@@ -54,7 +57,9 @@ import org.koin.compose.koinInject
 fun EditSongMetadataScreen(
     song: Song,
     onBack: () -> Unit,
-    onSaved: () -> Unit = {}
+    onSaved: () -> Unit = {},
+    /** All offerings for this song identity (writable + read-only). */
+    offerings: List<SourceOffering> = emptyList()
 ) {
     val editor: MetadataEditService = koinInject()
     val context = LocalContext.current
@@ -68,8 +73,20 @@ fun EditSongMetadataScreen(
     var cropUri by remember { mutableStateOf<Uri?>(null) }
     var saving by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf<String?>(null) }
+    var showWritePicker by remember { mutableStateOf(false) }
 
-    val canEdit = remember(song) { editor.isLocalFile(song) }
+    val resolvedOfferings = remember(song, offerings) {
+        if (offerings.isNotEmpty()) offerings
+        else listOf(MetadataEditService.localOffering(song))
+    }
+    val writableTarget = remember(song, resolvedOfferings) {
+        song.asWritableTarget(resolvedOfferings)
+    }
+    val canEdit = writableTarget != null || editor.isLocalFile(song)
+    val writableList = writableTarget?.writableOfferings
+        ?: resolvedOfferings.writableOfferings().ifEmpty {
+            if (editor.isLocalFile(song)) listOf(MetadataEditService.localOffering(song)) else emptyList()
+        }
 
     val pickImage = rememberLauncherForActivityResult(
         ActivityResultContracts.GetContent()
@@ -95,7 +112,7 @@ fun EditSongMetadataScreen(
         return
     }
 
-    fun doSave() {
+    fun performSave(targets: List<SourceOffering>) {
         saving = true
         error = null
         scope.launch {
@@ -105,7 +122,8 @@ fun EditSongMetadataScreen(
                     title = title.ifBlank { null },
                     artist = artist.ifBlank { null },
                     genre = genre.ifBlank { null }
-                )
+                ),
+                targets = targets
             )
             if (coverBytes != null && tagResult.failed == 0) {
                 val oneTrackAlbum = AlbumItem(
@@ -123,7 +141,8 @@ fun EditSongMetadataScreen(
                         genre = genre.ifBlank { null },
                         coverBytes = coverBytes,
                         coverMime = coverMime
-                    )
+                    ),
+                    targets = targets
                 )
             }
             saving = false
@@ -135,6 +154,27 @@ fun EditSongMetadataScreen(
                 error = tagResult.message
             }
         }
+    }
+
+    fun doSave() {
+        if (writableList.size > 1) {
+            showWritePicker = true
+        } else {
+            performSave(writableList)
+        }
+    }
+
+    if (showWritePicker) {
+        WriteTargetsPickerSheet(
+            title = "Update which sources?",
+            writableOfferings = writableList,
+            onConfirm = { chosen ->
+                showWritePicker = false
+                performSave(chosen)
+            },
+            onDismiss = { showWritePicker = false }
+        )
+        return
     }
 
     Scaffold(
@@ -171,7 +211,7 @@ fun EditSongMetadataScreen(
         ) {
             if (!canEdit) {
                 Text(
-                    "This track is not a writable local file. Metadata edit is only available for local music.",
+                    "This track has no writable source. Jellyfin and Subsonic/Navidrome are read-only; only local or cloud-mount files can be edited.",
                     color = MaterialTheme.colorScheme.error,
                     style = MaterialTheme.typography.bodyMedium
                 )
@@ -230,7 +270,13 @@ fun EditSongMetadataScreen(
                 enabled = canEdit && !saving,
                 modifier = Modifier.fillMaxWidth()
             ) {
-                Text(if (saving) "Saving…" else "Save to file tags")
+                Text(
+                    when {
+                        saving -> "Saving…"
+                        writableList.size > 1 -> "Save to selected sources…"
+                        else -> "Save to file tags"
+                    }
+                )
             }
         }
     }
@@ -241,7 +287,8 @@ fun EditSongMetadataScreen(
 fun EditAlbumMetadataScreen(
     album: AlbumItem,
     onBack: () -> Unit,
-    onSaved: () -> Unit = {}
+    onSaved: () -> Unit = {},
+    offerings: List<SourceOffering> = emptyList()
 ) {
     val editor: MetadataEditService = koinInject()
     val context = LocalContext.current
@@ -270,8 +317,21 @@ fun EditAlbumMetadataScreen(
     var cropUri by remember { mutableStateOf<Uri?>(null) }
     var saving by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf<String?>(null) }
+    var showWritePicker by remember { mutableStateOf(false) }
 
-    val canEdit = remember(album) { editor.isLocalAlbum(album) }
+    val resolvedOfferings = remember(album, offerings) {
+        if (offerings.isNotEmpty()) offerings
+        else album.songs.map { MetadataEditService.localOffering(it) }
+    }
+    val writableTarget = remember(album, resolvedOfferings) {
+        album.asWritableTarget(resolvedOfferings)
+    }
+    val canEdit = writableTarget != null || editor.isLocalAlbum(album)
+    val writableList = writableTarget?.writableOfferings
+        ?: resolvedOfferings.writableOfferings().ifEmpty {
+            album.songs.filter { editor.isLocalFile(it) }
+                .map { MetadataEditService.localOffering(it) }
+        }
 
     val pickImage = rememberLauncherForActivityResult(
         ActivityResultContracts.GetContent()
@@ -297,7 +357,7 @@ fun EditAlbumMetadataScreen(
         return
     }
 
-    fun doSave() {
+    fun performSave(targets: List<SourceOffering>) {
         saving = true
         error = null
         scope.launch {
@@ -311,7 +371,8 @@ fun EditAlbumMetadataScreen(
                     genre = genre.ifBlank { null },
                     coverBytes = coverBytes,
                     coverMime = coverMime
-                )
+                ),
+                targets = targets
             )
             saving = false
             if (result.ok > 0) {
@@ -322,6 +383,27 @@ fun EditAlbumMetadataScreen(
                 error = result.message
             }
         }
+    }
+
+    fun doSave() {
+        if (writableList.size > 1) {
+            showWritePicker = true
+        } else {
+            performSave(writableList)
+        }
+    }
+
+    if (showWritePicker) {
+        WriteTargetsPickerSheet(
+            title = "Update which sources?",
+            writableOfferings = writableList,
+            onConfirm = { chosen ->
+                showWritePicker = false
+                performSave(chosen)
+            },
+            onDismiss = { showWritePicker = false }
+        )
+        return
     }
 
     Scaffold(
@@ -358,7 +440,7 @@ fun EditAlbumMetadataScreen(
         ) {
             if (!canEdit) {
                 Text(
-                    "No writable local files in this album. Metadata edit is only available for local music.",
+                    "No writable sources in this album. Jellyfin and Subsonic/Navidrome are read-only.",
                     color = MaterialTheme.colorScheme.error,
                     style = MaterialTheme.typography.bodyMedium
                 )
@@ -434,11 +516,17 @@ fun EditAlbumMetadataScreen(
                 enabled = canEdit && !saving,
                 modifier = Modifier.fillMaxWidth()
             ) {
-                Text(if (saving) "Saving…" else "Save to file tags")
+                Text(
+                    when {
+                        saving -> "Saving…"
+                        writableList.size > 1 -> "Save to selected sources…"
+                        else -> "Save to file tags"
+                    }
+                )
             }
 
             Text(
-                "Changes are written into each local audio file. Folder cover.jpg is updated when you pick a new image.",
+                "Only writable sources are updated. Folder cover.jpg is written when you pick a new image on local/mount paths.",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
             )
