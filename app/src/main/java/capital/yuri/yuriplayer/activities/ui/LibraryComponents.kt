@@ -48,6 +48,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -66,6 +67,8 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import capital.yuri.yuriplayer.data.AlbumItem
 import capital.yuri.yuriplayer.data.ArtistItem
+import capital.yuri.yuriplayer.data.CatalogRepository
+import capital.yuri.yuriplayer.data.ExploreSearchService
 import capital.yuri.yuriplayer.data.LibraryIndex
 import capital.yuri.yuriplayer.data.MyStuffPinStore
 import capital.yuri.yuriplayer.data.Song
@@ -76,6 +79,9 @@ import capital.yuri.yuriplayer.data.source.SourceOffering
 import capital.yuri.yuriplayer.player.PlayerController
 import capital.yuri.yuriplayer.ui.formatAlbumCount
 import capital.yuri.yuriplayer.ui.formatTrackCount
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import org.koin.compose.koinInject
 import java.text.DateFormat
 import java.util.Date
@@ -389,6 +395,11 @@ private fun SongList(
     }
 }
 
+/**
+ * Shared song row used everywhere (library, explore, playlist, album, discography).
+ * Explicit + multi-source badges sit on the subtitle line (Spotify placement).
+ * When [sourceOfferings] is not passed, offerings are resolved via SQL identity match.
+ */
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
 fun SwipeAddSongRow(
@@ -420,11 +431,44 @@ fun SwipeAddSongRow(
     val accent = MaterialTheme.colorScheme.primary
     val onSurface = MaterialTheme.colorScheme.onSurface
     val pinStore: MyStuffPinStore = koinInject()
+    val catalog: CatalogRepository = koinInject()
+    val explore: ExploreSearchService = koinInject()
+    val scope = rememberCoroutineScope()
     val entries by pinStore.entries.collectAsState()
     val saved = remember(entries, song.songKey) {
         pinStore.contains(StuffPinKind.SONG, song.songKey)
     }
     val songNav = LocalSongNav.current
+
+    // Auto-resolve offerings when caller didn't pass them (playlist/album/library/queue via this row)
+    var resolvedOfferings by remember(song.songKey) { mutableStateOf(sourceOfferings) }
+    LaunchedEffect(song.songKey, sourceOfferings) {
+        if (sourceOfferings != null) {
+            resolvedOfferings = sourceOfferings
+        } else {
+            resolvedOfferings = withContext(Dispatchers.IO) {
+                catalog.offeringsMatchingSong(song)
+            }
+        }
+    }
+
+    val effectiveOfferings = resolvedOfferings
+    val showMulti = multiSource || CatalogRepository.isMultiSource(effectiveOfferings.orEmpty())
+    val showExplicit = isExplicit || effectiveOfferings.orEmpty().any { it.song.isExplicit }
+    val resolvedIdentity = identityKey ?: ExploreSearchService.trackIdentity(song)
+
+    val preferHandler: ((SourceOffering) -> Unit)? = onPreferSource ?: { off ->
+        scope.launch {
+            explore.setPreferredSource(resolvedIdentity, off)
+            Toast.makeText(
+                // context captured below — use LocalContext inside toast via remembered
+                // (handled after context val)
+                android.app.Application(), // placeholder replaced below
+                "",
+                Toast.LENGTH_SHORT
+            )
+        }
+    }
 
     val revealAlpha = (offsetX / (threshold * 0.35f)).coerceIn(0f, 1f)
 
@@ -439,6 +483,13 @@ fun SwipeAddSongRow(
     val subtitleColor = if (isPlaying) accent.copy(alpha = 0.75f)
     else onSurface.copy(alpha = 0.6f)
     val context = LocalContext.current
+
+    val prefer: ((SourceOffering) -> Unit) = onPreferSource ?: { off ->
+        scope.launch {
+            explore.setPreferredSource(resolvedIdentity, off)
+            Toast.makeText(context, "Preferred: ${off.sourceName}", Toast.LENGTH_SHORT).show()
+        }
+    }
 
     val subtitleText = if (showTrackNumber) song.displayArtist
     else "${song.displayArtist} \u2022 ${song.displayAlbum}"
@@ -525,7 +576,7 @@ fun SwipeAddSongRow(
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(4.dp)
                 ) {
-                    if (isExplicit) {
+                    if (showExplicit) {
                         Box(
                             modifier = Modifier
                                 .clip(RoundedCornerShape(2.dp))
@@ -542,7 +593,7 @@ fun SwipeAddSongRow(
                             )
                         }
                     }
-                    if (multiSource) {
+                    if (showMulti) {
                         Icon(
                             Icons.Default.Cloud,
                             contentDescription = "Multiple sources",
@@ -586,8 +637,8 @@ fun SwipeAddSongRow(
             onEditMetadata = onEditMetadata,
             onAddToQueue = onSwipeAdd,
             onStartRadio = onStartRadio,
-            sourceOfferings = sourceOfferings,
-            onPreferSource = onPreferSource
+            sourceOfferings = effectiveOfferings?.takeIf { showMulti },
+            onPreferSource = prefer
         )
     }
 }
