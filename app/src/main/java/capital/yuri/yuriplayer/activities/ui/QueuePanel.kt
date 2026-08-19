@@ -65,6 +65,7 @@ import capital.yuri.yuriplayer.player.HistoryEntry
 import capital.yuri.yuriplayer.player.PlaybackHistoryStore
 import capital.yuri.yuriplayer.player.QueueLane
 import capital.yuri.yuriplayer.player.QueueSnapshot
+import capital.yuri.yuriplayer.player.radio.RadioShuffleUnit
 import org.koin.compose.koinInject
 import java.text.DateFormat
 import java.util.Date
@@ -263,6 +264,7 @@ private fun QueueTabContent(
     val showHotSection = upcomingHot.isNotEmpty()
     val isRadio = snapshot.isRadio
     val radioShuffled = isRadio && snapshot.shuffleEnabled
+    val shuffleUnit = snapshot.radioSession?.prefs?.shuffleUnit ?: RadioShuffleUnit.SONGS
 
     autoScroll.onScrolled = { delta ->
         when {
@@ -351,6 +353,8 @@ private fun QueueTabContent(
                 )
                 Text(
                     when {
+                        isRadio && radioShuffled && shuffleUnit == RadioShuffleUnit.RELEASES ->
+                            "Shuffle plays whole releases at random (tracks stay in order). Drag to reorder · edges scroll."
                         isRadio && radioShuffled ->
                             "Shuffle picks random tracks from this radio pool. Drag to reorder · hold near edges to scroll."
                         isRadio ->
@@ -369,9 +373,14 @@ private fun QueueTabContent(
                 item(key = "cold-empty") {
                     Text(
                         when {
-                            radioShuffled -> "Radio will pull more random tracks from the pool as you keep listening."
-                            isRadio -> "Radio will load the next release when this one ends."
-                            else -> "Play an album or list to fill what comes next."
+                            radioShuffled && shuffleUnit == RadioShuffleUnit.RELEASES ->
+                                "Radio will load another release when this run is low."
+                            radioShuffled ->
+                                "Radio will pull more random tracks from the pool as you keep listening."
+                            isRadio ->
+                                "Radio will load the next release when this one ends."
+                            else ->
+                                "Play an album or list to fill what comes next."
                         },
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f),
