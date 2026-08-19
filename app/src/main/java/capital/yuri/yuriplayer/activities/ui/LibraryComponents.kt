@@ -30,6 +30,7 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowDropDown
 import androidx.compose.material.icons.filled.Clear
+import androidx.compose.material.icons.filled.Cloud
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
@@ -50,6 +51,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
@@ -61,6 +63,7 @@ import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import capital.yuri.yuriplayer.data.AlbumItem
 import capital.yuri.yuriplayer.data.ArtistItem
 import capital.yuri.yuriplayer.data.LibraryIndex
@@ -69,6 +72,7 @@ import capital.yuri.yuriplayer.data.Song
 import capital.yuri.yuriplayer.data.SortMode
 import capital.yuri.yuriplayer.data.StuffPinKind
 import capital.yuri.yuriplayer.data.label
+import capital.yuri.yuriplayer.data.source.SourceOffering
 import capital.yuri.yuriplayer.player.PlayerController
 import capital.yuri.yuriplayer.ui.formatAlbumCount
 import capital.yuri.yuriplayer.ui.formatTrackCount
@@ -374,6 +378,7 @@ private fun SongList(
                     isPlaying = song.isSameAs(nowPlaying),
                     isPlaybackActive = isPlaybackActive,
                     showHeart = true,
+                    isExplicit = song.isExplicit,
                     onGoToAlbum = { onGoToAlbum(song) },
                     onGoToArtist = onGoToArtist,
                     onEditMetadata = { onEditSong(song) },
@@ -397,6 +402,12 @@ fun SwipeAddSongRow(
     surfaceColor: Color? = null,
     showHeart: Boolean = true,
     hideGoToAlbum: Boolean = false,
+    /** Spotify-style: sit on the artist / subtitle line before the name. */
+    isExplicit: Boolean = song.isExplicit,
+    multiSource: Boolean = false,
+    sourceOfferings: List<SourceOffering>? = null,
+    identityKey: String? = null,
+    onPreferSource: ((SourceOffering) -> Unit)? = null,
     onGoToAlbum: (() -> Unit)? = null,
     onGoToArtist: ((String) -> Unit)? = null,
     onEditMetadata: (() -> Unit)? = null,
@@ -425,7 +436,12 @@ fun SwipeAddSongRow(
     }
     val titleColor = if (isPlaying) accent else onSurface
     val titleWeight = if (isPlaying) FontWeight.SemiBold else FontWeight.Normal
+    val subtitleColor = if (isPlaying) accent.copy(alpha = 0.75f)
+    else onSurface.copy(alpha = 0.6f)
     val context = LocalContext.current
+
+    val subtitleText = if (showTrackNumber) song.displayArtist
+    else "${song.displayArtist} \u2022 ${song.displayAlbum}"
 
     Box(modifier = Modifier.fillMaxWidth()) {
         if (revealAlpha > 0.01f) {
@@ -504,13 +520,43 @@ fun SwipeAddSongRow(
                     style = MaterialTheme.typography.bodyLarge.copy(fontWeight = titleWeight),
                     color = titleColor
                 )
-                MarqueeText(
-                    text = if (showTrackNumber) song.displayArtist
-                    else "${song.displayArtist} \u2022 ${song.displayAlbum}",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = if (isPlaying) accent.copy(alpha = 0.75f)
-                    else onSurface.copy(alpha = 0.6f)
-                )
+                // Spotify layout: badges sit on the lower (artist) line, left of the text
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(4.dp)
+                ) {
+                    if (isExplicit) {
+                        Box(
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(2.dp))
+                                .background(onSurface.copy(alpha = 0.45f))
+                                .padding(horizontal = 3.dp, vertical = 1.dp),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Text(
+                                "E",
+                                fontSize = 9.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = MaterialTheme.colorScheme.surface,
+                                lineHeight = 10.sp
+                            )
+                        }
+                    }
+                    if (multiSource) {
+                        Icon(
+                            Icons.Default.Cloud,
+                            contentDescription = "Multiple sources",
+                            modifier = Modifier.size(12.dp),
+                            tint = onSurface.copy(alpha = 0.55f)
+                        )
+                    }
+                    MarqueeText(
+                        text = subtitleText,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = subtitleColor,
+                        modifier = Modifier.weight(1f, fill = false)
+                    )
+                }
             }
             if (showHeart) {
                 MyStuffHeart(
@@ -539,7 +585,9 @@ fun SwipeAddSongRow(
             onGoToArtist = onGoToArtist ?: { name -> songNav.openArtistByName(name) },
             onEditMetadata = onEditMetadata,
             onAddToQueue = onSwipeAdd,
-            onStartRadio = onStartRadio
+            onStartRadio = onStartRadio,
+            sourceOfferings = sourceOfferings,
+            onPreferSource = onPreferSource
         )
     }
 }
