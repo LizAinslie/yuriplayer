@@ -40,8 +40,8 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.yield
 import org.koin.android.ext.android.inject
-import java.io.File
 import kotlin.math.abs
 import kotlin.math.roundToLong
 
@@ -67,11 +67,8 @@ class MusicService : MediaSessionService() {
     private var stallSamplePos = -1L
     private var stallSampleAtElapsed = 0L
 
-    /** Report this position until Exo catches up (prevents UI snap-back after scrub). */
     private var stickySeekTargetMs: Long = -1L
     private var stickySeekUntilElapsed: Long = 0L
-
-    /** Ignore AUTO / STATE_ENDED for a short window after a user scrub. */
     private var userSeekGuardUntilElapsed: Long = 0L
 
     private val _nowPlaying = MutableStateFlow<Song?>(null)
@@ -99,8 +96,9 @@ class MusicService : MediaSessionService() {
             .setContentType(C.AUDIO_CONTENT_TYPE_MUSIC)
             .build()
 
+        // Leaner buffers so first remote (Jellyfin) prepare returns sooner on mid-range devices
         val loadControl = DefaultLoadControl.Builder()
-            .setBufferDurationsMs(20_000, 60_000, 1_000, 2_000)
+            .setBufferDurationsMs(8_000, 40_000, 500, 1_500)
             .setPrioritizeTimeOverSizeThresholds(true)
             .build()
 
@@ -111,7 +109,8 @@ class MusicService : MediaSessionService() {
         player = ExoPlayer.Builder(this, renderersFactory)
             .setAudioAttributes(audioAttributes, true)
             .setHandleAudioBecomingNoisy(true)
-            .setWakeMode(C.WAKE_MODE_LOCAL)
+            // NETWORK so remote streams keep Wi‑Fi / radio awake
+            .setWakeMode(C.WAKE_MODE_NETWORK)
             .setLoadControl(loadControl)
             .setPauseAtEndOfMediaItems(false)
             .build()
@@ -151,14 +150,7 @@ class MusicService : MediaSessionService() {
     private fun inUserSeekGuard(): Boolean =
         SystemClock.elapsedRealtime() < userSeekGuardUntilElapsed
 
-    private fun songUri(song: Song): Uri {
-        val path = song.path
-        if (!path.isNullOrBlank()) {
-            val file = File(path)
-            if (file.exists() && file.canRead()) return Uri.fromFile(file)
-        }
-        return song.contentUri
-    }
+    private fun songUri(song: Song): Uri = MusicServicePlaybackHooks.songUri(song)
 
     private fun mediaItemUriAt(index: Int): Uri? {
         val p = player ?: return null
@@ -166,11 +158,7 @@ class MusicService : MediaSessionService() {
         return p.getMediaItemAt(index).localConfiguration?.uri
     }
 
-    private fun urisEqual(a: Uri?, b: Uri?): Boolean {
-        if (a == null || b == null) return false
-        if (a == b) return true
-        return a.lastPathSegment != null && a.lastPathSegment == b.lastPathSegment
-    }
+    private fun urisEqual(a: Uri?, b: Uri?): Boolean = MusicServicePlaybackHooks.urisEqual(a, b)
 
     private fun nextLoopItem(song: Song): MediaItem {
         loopGeneration++
@@ -412,7 +400,6 @@ class MusicService : MediaSessionService() {
         if (advancing) return
         if (inUserSeekGuard()) {
             Log.i(TAG, "AUTO transition ignored — inside user seek guard")
-            // Window may already be on next item incorrectly; force match queue.
             ensurePlayerMatchesQueue(autoPlay = player?.playWhenReady == true)
             return
         }
@@ -556,7 +543,6 @@ class MusicService : MediaSessionService() {
 
     fun skipToNext() {
         if (advancing) return
-        // Manual skip always clears seek guard
         userSeekGuardUntilElapsed = 0L
         clearStickySeek()
         advancing = true
@@ -578,11 +564,6 @@ class MusicService : MediaSessionService() {
         )
     }
 
-    /**
-     * Scrubber seek on the *current* item only.
-     * Uses live decoder duration; parks 1ms before EOF only when drop is at/past end.
-     * Sticky position + seek guard prevent snap-back UI and accidental next-track.
-     */
     fun seekTo(positionMs: Long) {
         val p = player ?: return
         if (p.mediaItemCount <= 0) return
@@ -602,7 +583,6 @@ class MusicService : MediaSessionService() {
             else -> positionMs
         }
 
-        // Always seek on the item that matches the current song URI when possible
         val current = queueManager.currentSong()
         val idx = when {
             current != null && urisEqual(mediaItemUriAt(0), songUri(current)) -> 0
@@ -628,7 +608,6 @@ class MusicService : MediaSessionService() {
 
         try {
             p.seekTo(idx, target)
-            // Keep playing if we were playing — seek should not pause
             if (p.playWhenReady && !p.isPlaying && p.playbackState == Player.STATE_READY) {
                 p.play()
             }
@@ -640,7 +619,6 @@ class MusicService : MediaSessionService() {
         persistState()
     }
 
-    /** Map a 0–1 scrub fraction using **live** player duration (not a stale UI poll). */
     fun seekToFraction(fraction: Float) {
         val p = player ?: return
         val playerDuration = p.duration.takeIf { it > 0 && it != C.TIME_UNSET } ?: 0L
@@ -665,29 +643,25 @@ class MusicService : MediaSessionService() {
         historyStore.maxEntries = n
     }
 
-    private fun toMediaItem(song: Song, mediaIdSuffix: String? = null): MediaItem {
-        val id = if (mediaIdSuffix != null) "${song.id}-$mediaIdSuffix" else song.id.toString()
-        return MediaItem.Builder()
-            .setUri(songUri(song))
-            .setMediaId(id)
-            .setMediaMetadata(
-                androidx.media3.common.MediaMetadata.Builder()
-                    .setTitle(song.displayTitle)
-                    .setArtist(song.displayArtist)
-                    .setAlbumTitle(song.displayAlbum)
-                    .setAlbumArtist(song.displayAlbumArtist)
-                    .setArtworkUri(song.albumArtUri)
-                    .build()
-            )
-            .build()
-    }
+    private fun toMediaItem(song: Song, mediaIdSuffix: String? = null): MediaItem =
+        MusicServicePlaybackHooks.toMediaItem(song, mediaIdSuffix)
 
+    /**
+     * Restore queue metadata immediately so the UI can bind, then defer ExoPlayer
+     * prepare. Network streams (Jellyfin) were blocking first frames on mid-range devices.
+     */
     private fun restorePlaybackState() {
         if (restoredOnce) return
         restoredOnce = true
         serviceScope.launch {
             val saved = withContext(Dispatchers.IO) { stateStore.load() } ?: return@launch
             queueManager.restore(saved.snapshot)
+            val current = queueManager.currentSong()
+            _nowPlaying.value = current
+            updateForegroundNotification()
+            // Let Activity/Compose paint before touching the network stack
+            yield()
+            delay(RESTORE_PREPARE_DELAY_MS)
             rebufferWindow(saved.positionMs, autoPlay = false, forceReload = true)
         }
     }
@@ -796,7 +770,6 @@ class MusicService : MediaSessionService() {
                 return
             }
             if (advancing) return
-            // SEEK / PLAYLIST_CHANGED transitions — keep nowPlaying aligned
             val song = queueManager.currentSong() ?: _nowPlaying.value
             if (song != null) {
                 _nowPlaying.value = song
@@ -808,7 +781,6 @@ class MusicService : MediaSessionService() {
         override fun onPlaybackStateChanged(playbackState: Int) {
             if (playbackState != Player.STATE_ENDED || advancing) return
 
-            // Near-end scrub can trip STATE_ENDED while the user is still on this track.
             if (inUserSeekGuard()) {
                 val p = player ?: return
                 val target = stickySeekTargetMs.takeIf { it >= 0L } ?: p.currentPosition
@@ -851,9 +823,6 @@ class MusicService : MediaSessionService() {
         override fun onPlayerError(error: PlaybackException) {
             Log.e(TAG, "player error code=${error.errorCode} ${error.message}", error)
             val cause = error.cause
-            // 1004 FAILED_RUNTIME_CHECK often wraps IllegalArgumentException from
-            // DefaultAudioSink.handleBuffer (bad PTS / discontinuity). Treat like
-            // the other audio-track recoveries so playback does not stay paused.
             val shouldRecover =
                 cause is AudioSink.UnexpectedDiscontinuityException ||
                     cause is IllegalArgumentException ||
@@ -939,10 +908,6 @@ class MusicService : MediaSessionService() {
     fun isPlaying(): Boolean = player?.isPlaying == true
     fun getCurrentSong(): Song? = _nowPlaying.value ?: queueManager.currentSong()
 
-    /**
-     * While a user scrub is settling, report the drop target so the UI does not
-     * snap back to the pre-seek position for ~1s.
-     */
     fun getPositionMs(): Long {
         val real = player?.currentPosition?.coerceAtLeast(0L) ?: 0L
         val now = SystemClock.elapsedRealtime()
@@ -1028,5 +993,7 @@ class MusicService : MediaSessionService() {
         private const val STICKY_SEEK_MS = 1_200L
         private const val USER_SEEK_GUARD_MS = 1_000L
         private const val SEEK_CONFIRM_MS = 600L
+        /** Delay after queue restore before Exo prepare — keeps first UI frames free. */
+        private const val RESTORE_PREPARE_DELAY_MS = 60L
     }
 }
