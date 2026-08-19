@@ -6,6 +6,7 @@ import android.content.Intent
 import android.content.pm.ServiceInfo
 import android.os.Build
 import android.os.IBinder
+import android.os.Process
 import android.util.Log
 import androidx.core.app.ServiceCompat
 import kotlinx.coroutines.CoroutineScope
@@ -13,13 +14,17 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
-import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.plus
 import org.koin.android.ext.android.inject
 
 /**
  * Short-lived foreground service that hosts library scans / remote syncs so they
  * keep running when the UI is backgrounded, with a live progress notification.
+ *
+ * Work runs at background thread priority; the notification is updated via
+ * [LibraryScanNotifier] only — we do **not** re-call startForeground on every
+ * progress tick (that was a major source of jank / ANRs on large indexes).
  */
 class LibraryScanService : Service() {
 
@@ -27,9 +32,10 @@ class LibraryScanService : Service() {
     private val explore: ExploreSearchService by inject()
     private val library: LibraryIndex by inject()
 
-    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    // Limited parallelism keeps GC pressure down on mid-range devices
+    private val scanDispatcher = Dispatchers.IO.limitedParallelism(1)
+    private val scope = CoroutineScope(SupervisorJob() + scanDispatcher)
     private var work: Job? = null
-    private var progressJob: Job? = null
 
     override fun onBind(intent: Intent?): IBinder? = null
 
@@ -41,28 +47,17 @@ class LibraryScanService : Service() {
             ACTION_LOCAL -> "Scanning library"
             else -> "Syncing libraries"
         }
+        // Promote to FGS once at start — subsequent progress is NotificationManager only
         startAsForeground(title, "Starting…")
 
         work?.cancel()
-        progressJob?.cancel()
-
-        progressJob = scope.launch {
-            explore.scanProgress.collectLatest { text ->
-                if (text != null) {
-                    notifier.update("Syncing libraries", text)
-                    // Keep FGS notification in sync
-                    startAsForeground("Syncing libraries", text)
-                }
-            }
-        }
-
         work = scope.launch {
+            // Prefer remaining responsive for touch / composition
+            Process.setThreadPriority(Process.THREAD_PRIORITY_BACKGROUND)
             try {
                 when (action) {
                     ACTION_LOCAL -> {
                         notifier.update("Scanning library", "Reading local files…")
-                        startAsForeground("Scanning library", "Reading local files…")
-                        // Trigger existing LibraryIndex refresh and wait for loading to clear
                         library.refreshAndAwait()
                         notifier.finish("Library scan", "Local library updated")
                     }
@@ -80,7 +75,6 @@ class LibraryScanService : Service() {
                 Log.e(TAG, "scan service failed", e)
                 notifier.finish("Scan failed", e.message ?: "Unknown error")
             } finally {
-                progressJob?.cancel()
                 stopForegroundCompat()
                 stopSelf(startId)
             }
@@ -90,7 +84,6 @@ class LibraryScanService : Service() {
 
     override fun onDestroy() {
         work?.cancel()
-        progressJob?.cancel()
         scope.cancel()
         super.onDestroy()
     }
@@ -104,8 +97,6 @@ class LibraryScanService : Service() {
                 notification,
                 ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC
             )
-        } else if (Build.VERSION.SDK_INT >= 29) {
-            startForeground(LibraryScanNotifier.NOTIFICATION_ID, notification)
         } else {
             startForeground(LibraryScanNotifier.NOTIFICATION_ID, notification)
         }
