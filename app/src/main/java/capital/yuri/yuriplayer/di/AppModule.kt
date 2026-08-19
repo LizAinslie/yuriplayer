@@ -45,10 +45,14 @@ import capital.yuri.yuriplayer.player.PlaybackStateStore
 import capital.yuri.yuriplayer.player.PlayerController
 import capital.yuri.yuriplayer.player.QueueEventBridge
 import capital.yuri.yuriplayer.player.QueueManager
+import capital.yuri.yuriplayer.player.SourceColdSync
 import capital.yuri.yuriplayer.player.radio.RadioEngine
 import capital.yuri.yuriplayer.player.radio.RadioPlaybackAlgorithm
 import capital.yuri.yuriplayer.player.radio.ReleasePoolAlgorithm
 import io.ktor.client.HttpClient
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.serialization.json.Json
 import org.jellyfin.sdk.createJellyfin
 import org.jellyfin.sdk.model.ClientInfo
@@ -205,6 +209,14 @@ val appModule = module {
         val auto: MusicServiceAutoPlay = get()
         qm.autoPlayHelper = auto
         QueueEventBridge(qm, auto)
+    }
+
+    single(createdAtStart = true) {
+        SourceColdSync(
+            queueManager = get(),
+            playlists = get(),
+            scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
+        ).also { it.start() }
     }
 
     single { PlaybackStateStore(androidContext()) }
