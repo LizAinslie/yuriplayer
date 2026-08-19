@@ -68,10 +68,11 @@ class CatalogRepository(
             val q = query.trim()
             if (q.isEmpty()) return@withContext emptyList()
             dao.searchAlbums(q, limit).map { row ->
-                // Prefer a track that already has albumArtUri for list covers.
+                // LOCAL-first seed so embedded / folder art wins over remote HTTP covers.
                 val seed = dao.getOneTrackForAlbum(row.albumKey)?.toSong()?.let { song ->
                     when {
                         song.albumArtUri != null -> song
+                        sourceTypeForSong(song) == SourceType.LOCAL -> song
                         !row.coverUrl.isNullOrBlank() -> song.copy(
                             albumArtUri = android.net.Uri.parse(row.coverUrl)
                         )
@@ -110,23 +111,18 @@ class CatalogRepository(
 
     suspend fun tracksForAlbum(albumKey: String): List<Song> = withContext(Dispatchers.IO) {
         if (albumKey.isBlank()) return@withContext emptyList()
-        dao.getTracksForAlbum(albumKey).map { it.toSong() }
+        dedupeLogicalTracks(dao.getTracksForAlbum(albumKey).map { it.toSong() })
     }
 
     suspend fun tracksForArtist(artistKey: String): List<Song> = withContext(Dispatchers.IO) {
         if (artistKey.isBlank()) return@withContext emptyList()
-        dao.getTracksForArtist(artistKey).map { it.toSong() }
+        dedupeLogicalTracks(dao.getTracksForArtist(artistKey).map { it.toSong() })
     }
 
     suspend fun albumItemForKey(albumKey: String): AlbumItem? = withContext(Dispatchers.IO) {
         if (albumKey.isBlank()) return@withContext null
         val row = dao.getAlbum(albumKey)
-        val tracks = dao.getTracksForAlbum(albumKey).map { it.toSong() }
-            .sortedWith(
-                compareBy<Song> { it.discNumber ?: 1 }
-                    .thenBy { it.trackNumber ?: Int.MAX_VALUE }
-                    .thenBy(String.CASE_INSENSITIVE_ORDER) { it.displayTitle }
-            )
+        val tracks = dedupeLogicalTracks(dao.getTracksForAlbum(albumKey).map { it.toSong() })
         if (row == null && tracks.isEmpty()) return@withContext null
         AlbumItem(
             name = row?.name ?: tracks.firstOrNull()?.album,
@@ -139,7 +135,7 @@ class CatalogRepository(
     suspend fun artistItemForKey(artistKey: String): ArtistItem? = withContext(Dispatchers.IO) {
         if (artistKey.isBlank()) return@withContext null
         val row = dao.getArtist(artistKey)
-        val tracks = dao.getTracksForArtist(artistKey).map { it.toSong() }
+        val tracks = dedupeLogicalTracks(dao.getTracksForArtist(artistKey).map { it.toSong() })
         if (row == null && tracks.isEmpty()) return@withContext null
         val albums = tracks.mapNotNull { normalizeAlbumName(it.album) }.toSet()
         ArtistItem(
@@ -155,12 +151,9 @@ class CatalogRepository(
         val albumRows = dao.getAlbumsForArtist(artistKey)
         if (albumRows.isNotEmpty()) {
             albumRows.map { row ->
-                val tracks = dao.getTracksForAlbum(row.albumKey).map { it.toSong() }
-                    .sortedWith(
-                        compareBy<Song> { it.discNumber ?: 1 }
-                            .thenBy { it.trackNumber ?: Int.MAX_VALUE }
-                            .thenBy(String.CASE_INSENSITIVE_ORDER) { it.displayTitle }
-                    )
+                val tracks = dedupeLogicalTracks(
+                    dao.getTracksForAlbum(row.albumKey).map { it.toSong() }
+                )
                 AlbumItem(
                     name = row.name,
                     artist = row.artist,
@@ -173,11 +166,7 @@ class CatalogRepository(
                 .map { it.toSong() }
                 .groupBy { albumKey(it.album, it.effectiveAlbumArtist) }
                 .map { (_, tracks) ->
-                    val sorted = tracks.sortedWith(
-                        compareBy<Song> { it.discNumber ?: 1 }
-                            .thenBy { it.trackNumber ?: Int.MAX_VALUE }
-                            .thenBy(String.CASE_INSENSITIVE_ORDER) { it.displayTitle }
-                    )
+                    val sorted = dedupeLogicalTracks(tracks)
                     AlbumItem(
                         name = sorted.firstOrNull()?.album,
                         artist = sorted.firstOrNull()?.effectiveAlbumArtist,
@@ -272,11 +261,6 @@ class CatalogRepository(
             )
         }
 
-    /**
-     * After embedded tag writes, keep the on-device catalog in sync without a
-     * full MediaStore rescan. Genre is written into the file but not stored as a
-     * catalog column yet — title/artist/album/year are.
-     */
     suspend fun patchTrackTags(
         songKey: String,
         title: String? = null,
@@ -602,6 +586,26 @@ class CatalogRepository(
 
         fun isMultiSource(offerings: List<SourceOffering>): Boolean =
             offerings.map { "${it.sourceType.name}:${it.sourceId}" }.toSet().size > 1
+
+        /**
+         * Collapse local + remote copies of the same logical track into one row.
+         * Prefer LOCAL for playback URI; overlay richest display tags from the group.
+         */
+        fun dedupeLogicalTracks(tracks: List<Song>): List<Song> {
+            if (tracks.isEmpty()) return emptyList()
+            return tracks
+                .groupBy { TrackIdentity.of(it) }
+                .values
+                .map { group ->
+                    val preferred = group.minByOrNull { sourceTypeForSong(it).rank } ?: group.first()
+                    TrackIdentity.withRichestDisplay(preferred, group)
+                }
+                .sortedWith(
+                    compareBy<Song> { it.discNumber ?: 1 }
+                        .thenBy { it.trackNumber ?: Int.MAX_VALUE }
+                        .thenBy(String.CASE_INSENSITIVE_ORDER) { it.displayTitle }
+                )
+        }
 
         private fun normalizeAlbumName(value: String?): String? {
             if (value == null) return null
