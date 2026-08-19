@@ -26,15 +26,11 @@ import androidx.compose.material.icons.filled.Clear
 import androidx.compose.material.icons.filled.Cloud
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
-import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -94,9 +90,6 @@ fun ExploreScreen(
     var artistHits by remember { mutableStateOf<List<ArtistItem>>(emptyList()) }
     var searchBusy by remember { mutableStateOf(false) }
 
-    // Hydrate count + checkpoint snapshot only.
-    // NEVER start or restart a remote scan on tab enter — the FGS owns that work,
-    // and re-composition used to force-rescan via a sticky forceRescanKey.
     LaunchedEffect(Unit) {
         explore.hydrateFromCatalog()
     }
@@ -114,13 +107,11 @@ fun ExploreScreen(
         delay(SEARCH_DEBOUNCE_MS)
         if (query.trim() != q) return@LaunchedEffect
 
-        // Songs: full catalog (local + remote) via ExploreSearchService
         val songHits = withContext(Dispatchers.Default) {
             explore.searchLive(q).take(SONG_HIT_LIMIT)
         }
         if (query.trim() != q) return@LaunchedEffect
 
-        // Albums / artists: catalog SQL rollups (not local LibraryIndex only)
         val albums = withContext(Dispatchers.IO) {
             catalog.searchAlbumsAsItems(q, ALBUM_HIT_LIMIT)
         }
@@ -280,9 +271,8 @@ fun ExploreScreen(
                                 showHeart = true,
                                 isExplicit = hit.isExplicit,
                                 multiSource = hit.isMultiSource,
-                                sourceOfferings = hit.offerings.takeIf { hit.isMultiSource },
-                                identityKey = hit.identityKey,
-                                onPreferSource = { off ->
+                                sourceOfferings = hit.offerings,
+                                onPreferSource = { off: SourceOffering ->
                                     scope.launch {
                                         explore.setPreferredSource(hit.identityKey, off)
                                         Toast.makeText(
@@ -317,7 +307,6 @@ private fun SectionHeader(title: String) {
     )
 }
 
-/** Artist row with circular [ArtistArt] (UserImageStore / profile / Coil cache). */
 @Composable
 private fun ExploreArtistRow(
     artist: ArtistItem,
@@ -436,48 +425,5 @@ fun SongBadgeRow(
                 tint = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.55f)
             )
         }
-    }
-}
-
-@OptIn(ExperimentalMaterial3Api::class)
-@Composable
-fun SourcesPickerSheet(
-    songTitle: String,
-    offerings: List<SourceOffering>,
-    preferred: SourceOffering? = null,
-    onDismiss: () -> Unit,
-    onPick: (SourceOffering) -> Unit
-) {
-    ModalBottomSheet(
-        onDismissRequest = onDismiss,
-        sheetState = rememberModalBottomSheetState()
-    ) {
-        Text(
-            "Sources",
-            style = MaterialTheme.typography.titleMedium,
-            fontWeight = FontWeight.SemiBold,
-            modifier = Modifier.padding(horizontal = 20.dp, vertical = 8.dp)
-        )
-        Text(
-            songTitle,
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.55f),
-            modifier = Modifier.padding(horizontal = 20.dp)
-        )
-        HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
-        offerings.forEach { off ->
-            val isPreferred = preferred != null &&
-                off.sourceId == preferred.sourceId &&
-                off.sourceType == preferred.sourceType
-            MediaSheetItem(
-                label = buildString {
-                    append(off.sourceName)
-                    append(" · ")
-                    append(off.sourceType.name.lowercase().replaceFirstChar { it.titlecase() })
-                    if (isPreferred) append("  ✓ preferred")
-                }
-            ) { onPick(off) }
-        }
-        MediaSheetBottomPad()
     }
 }
