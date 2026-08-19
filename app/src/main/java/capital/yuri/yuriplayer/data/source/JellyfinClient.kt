@@ -87,10 +87,6 @@ class JellyfinClient(
             out
         }.onFailure { Log.w(TAG, "listAudioItems failed: ${it.message}") }
 
-    /**
-     * Page through the user's audio library.
-     * [startFromIndex] resumes a previous checkpoint (server startIndex cursor).
-     */
     suspend fun listAudioItemsPaged(
         session: Session,
         pageSize: Int = 500,
@@ -167,11 +163,15 @@ class JellyfinClient(
         "${session.baseUrl.trimEnd('/')}/Items/$artistId/Images/Primary" +
             "?maxWidth=$maxWidth&quality=90&api_key=${session.accessToken}"
 
+    /** Wide banner / backdrop for artist pages. */
+    fun artistBackdropUrl(session: Session, artistId: String, maxWidth: Int = 1920): String =
+        "${session.baseUrl.trimEnd('/')}/Items/$artistId/Images/Backdrop" +
+            "?maxWidth=$maxWidth&quality=90&api_key=${session.accessToken}"
+
     private fun BaseItemDto.toSong(session: Session): Song? {
         val id = id?.toString() ?: return null
         val stream = streamUrl(session, id)
 
-        // Prefer album primary art (stable across tracks), then track primary
         val art = when {
             albumId != null && !albumPrimaryImageTag.isNullOrBlank() ->
                 Uri.parse(primaryImageUrl(session, albumId.toString()))
@@ -189,7 +189,6 @@ class JellyfinClient(
         val albumArtistName = albumArtist?.takeIf { it.isNotBlank() }
             ?: albumArtists?.mapNotNull { it.name }?.firstOrNull { !it.isNullOrBlank() }
 
-        // Prefer Jellyfin's resolved Name; fall back to path basename
         val rawTitle = name?.takeIf { it.isNotBlank() }
             ?: this.path?.substringAfterLast('/')?.substringBeforeLast('.')
         val title = cleanTrackTitle(rawTitle, indexNumber)
@@ -238,7 +237,7 @@ class JellyfinClient(
         fun cleanTrackTitle(raw: String?, trackNumber: Int?): String? {
             if (raw.isNullOrBlank()) return raw
             val trimmed = raw.trim()
-            val prefixed = Regex("""^0*(\d{1,3})\s*[\-._)]\s+(.+)$""").matchEntire(trimmed)
+            val prefixed = Regex("""^0*(\d{1,3})\s*[\\-._)]\\s+(.+)$""").matchEntire(trimmed)
             if (prefixed != null) {
                 val num = prefixed.groupValues[1].toIntOrNull()
                 val rest = prefixed.groupValues[2].trim()
