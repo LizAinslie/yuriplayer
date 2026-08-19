@@ -15,7 +15,9 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import org.jaudiotagger.audio.AudioFileIO
 import org.jaudiotagger.tag.FieldKey
-import org.jaudiotagger.tag.images.ArtworkFactory
+import org.jaudiotagger.tag.TagOptionSingleton
+import org.jaudiotagger.tag.images.AndroidArtwork
+import org.jaudiotagger.tag.images.Artwork
 import java.io.File
 import java.io.FileInputStream
 import java.io.FileOutputStream
@@ -38,6 +40,15 @@ class MetadataEditService(
     private val libraryIndex: LibraryIndex,
     private val catalog: CatalogRepository
 ) {
+
+    init {
+        // Force jaudiotagger off the desktop ImageIO path (crashes on Android).
+        runCatching {
+            TagOptionSingleton.getInstance().isAndroid = true
+        }.onFailure {
+            Log.w(TAG, "Could not set TagOptionSingleton.isAndroid", it)
+        }
+    }
 
     data class SongEdit(
         val title: String?,
@@ -393,26 +404,50 @@ class MetadataEditService(
         if (edit.genre != null) {
             setOrDelete(tag, FieldKey.GENRE, edit.genre)
         }
-        if (coverFile != null && coverFile.isFile) {
+
+        val art = when {
+            coverFile != null && coverFile.isFile ->
+                createAndroidArtworkFromFile(coverFile, edit.coverMime)
+            edit.coverBytes != null ->
+                createAndroidArtwork(edit.coverBytes, edit.coverMime ?: "image/jpeg")
+            else -> null
+        }
+        if (art != null) {
+            // Throwable: NoClassDefFoundError is an Error, not Exception
             try {
                 tag.deleteArtworkField()
-                val art = ArtworkFactory.createArtworkFromFile(coverFile)
                 tag.setField(art)
-            } catch (e: Exception) {
-                Log.w(TAG, "embedded art failed for ${file.name}", e)
-            }
-        } else if (edit.coverBytes != null) {
-            try {
-                val tmp = File.createTempFile("yp_cover_", ".jpg", context.cacheDir)
-                tmp.writeBytes(edit.coverBytes)
-                tag.deleteArtworkField()
-                tag.setField(ArtworkFactory.createArtworkFromFile(tmp))
-                tmp.delete()
-            } catch (e: Exception) {
-                Log.w(TAG, "embedded art from bytes failed", e)
+            } catch (t: Throwable) {
+                Log.w(TAG, "embedded art failed for ${file.name}: ${t.message}")
             }
         }
         audio.commit()
+    }
+
+    /**
+     * Build artwork without [org.jaudiotagger.tag.images.StandardArtwork] /
+     * javax.imageio.ImageIO (missing on Android).
+     */
+    private fun createAndroidArtwork(bytes: ByteArray, mime: String): Artwork {
+        val art = AndroidArtwork()
+        art.binaryData = bytes
+        art.mimeType = mime.ifBlank { "image/jpeg" }
+        art.description = "Cover"
+        art.pictureType = FRONT_COVER_PICTURE_TYPE
+        // Leave width/height unset — do not call setImageFromData()
+        return art
+    }
+
+    private fun createAndroidArtworkFromFile(file: File, mimeHint: String?): Artwork {
+        val bytes = file.readBytes()
+        val mime = mimeHint?.takeIf { it.isNotBlank() } ?: when (file.extension.lowercase()) {
+            "png" -> "image/png"
+            "webp" -> "image/webp"
+            "gif" -> "image/gif"
+            "bmp" -> "image/bmp"
+            else -> "image/jpeg"
+        }
+        return createAndroidArtwork(bytes, mime)
     }
 
     private fun setOrDelete(tag: org.jaudiotagger.tag.Tag, key: FieldKey, value: String?) {
@@ -481,5 +516,7 @@ class MetadataEditService(
 
     companion object {
         private const val TAG = "MetadataEdit"
+        /** ID3/FLAC picture type 3 = Front cover. */
+        private const val FRONT_COVER_PICTURE_TYPE = 3
     }
 }
