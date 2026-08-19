@@ -1,5 +1,6 @@
 package capital.yuri.yuriplayer.data
 
+import android.content.Context
 import android.util.Log
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -18,11 +19,14 @@ import kotlinx.coroutines.withContext
  * In-memory view of the **persisted** catalog for UI.
  *
  * Continuous lists → StateFlows. Discrete scan moments → [events].
+ * Heavy local rescans can be hosted by [LibraryScanService] for a live notification.
  */
 class LibraryIndex(
+    private val context: Context,
     private val repository: MusicRepository,
     private val cache: LibraryCache,
-    private val catalog: CatalogRepository
+    private val catalog: CatalogRepository,
+    private val notifier: LibraryScanNotifier
 ) {
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
@@ -65,29 +69,38 @@ class LibraryIndex(
         }
     }
 
+    /** UI entry: prefer FGS so a long local scan shows a live notification. */
     fun refresh() {
         if (_isLoading.value) return
-        scope.launch {
-            _isLoading.value = true
-            _error.value = null
-            _events.tryEmit(LibraryEvent.ScanStarted())
-            try {
-                val songs = withContext(Dispatchers.IO) {
-                    catalog.syncLocalLibrary().also { cache.save(it) }
-                }
-                _songs.value = songs
-                _lastScannedAt.value = System.currentTimeMillis()
-                _events.tryEmit(LibraryEvent.ScanCompleted(songCount = songs.size))
-            } catch (e: SecurityException) {
-                _error.value = "Storage permission required"
-                _events.tryEmit(LibraryEvent.ScanFailed("Storage permission required"))
-            } catch (e: Exception) {
-                _error.value = e.message ?: "Scan failed"
-                Log.e(TAG, "Refresh failed", e)
-                _events.tryEmit(LibraryEvent.ScanFailed(e.message ?: "Scan failed"))
-            } finally {
-                _isLoading.value = false
+        LibraryScanService.startLocal(context.applicationContext)
+    }
+
+    /** Actual work — called from [LibraryScanService] or tests. */
+    suspend fun refreshAndAwait() {
+        if (_isLoading.value) return
+        _isLoading.value = true
+        _error.value = null
+        _events.tryEmit(LibraryEvent.ScanStarted())
+        notifier.update("Scanning library", "Reading local files…")
+        try {
+            val songs = withContext(Dispatchers.IO) {
+                catalog.syncLocalLibrary().also { cache.save(it) }
             }
+            _songs.value = songs
+            _lastScannedAt.value = System.currentTimeMillis()
+            _events.tryEmit(LibraryEvent.ScanCompleted(songCount = songs.size))
+            notifier.finish("Library scan", "${songs.size} tracks on this device")
+        } catch (e: SecurityException) {
+            _error.value = "Storage permission required"
+            _events.tryEmit(LibraryEvent.ScanFailed("Storage permission required"))
+            notifier.finish("Library scan", "Storage permission required")
+        } catch (e: Exception) {
+            _error.value = e.message ?: "Scan failed"
+            Log.e(TAG, "Refresh failed", e)
+            _events.tryEmit(LibraryEvent.ScanFailed(e.message ?: "Scan failed"))
+            notifier.finish("Library scan", e.message ?: "Scan failed")
+        } finally {
+            _isLoading.value = false
         }
     }
 
