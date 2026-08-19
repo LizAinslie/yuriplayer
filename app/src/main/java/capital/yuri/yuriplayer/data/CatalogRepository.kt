@@ -12,6 +12,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.withContext
+import java.io.File
 
 class CatalogRepository(
     private val dao: CatalogDao,
@@ -29,12 +30,10 @@ class CatalogRepository(
         dao.getAllTracks().map { it.toSong() }
     }
 
-    /** Device library only — used for fast cold-start of [LibraryIndex]. */
     suspend fun getLocalSongs(): List<Song> = withContext(Dispatchers.IO) {
         dao.getTracksBySource(CatalogSources.LOCAL).map { it.toSong() }
     }
 
-    /** Ordered lookup for playlist resolution (local + remote keys). */
     suspend fun getSongsByKeys(keys: List<String>): List<Song> = withContext(Dispatchers.IO) {
         if (keys.isEmpty()) return@withContext emptyList()
         keys.chunked(400).flatMap { chunk ->
@@ -67,32 +66,17 @@ class CatalogRepository(
         withContext(Dispatchers.IO) {
             val q = query.trim()
             if (q.isEmpty()) return@withContext emptyList()
-            dao.searchAlbums(q, limit).map { row ->
-                // LOCAL-first seed so embedded / folder art wins over remote HTTP covers.
-                val seed = dao.getOneTrackForAlbum(row.albumKey)?.toSong()?.let { song ->
-                    when {
-                        song.albumArtUri != null -> song
-                        sourceTypeForSong(song) == SourceType.LOCAL -> song
-                        !row.coverUrl.isNullOrBlank() -> song.copy(
-                            albumArtUri = android.net.Uri.parse(row.coverUrl)
-                        )
-                        !row.coverPath.isNullOrBlank() -> song.copy(
-                            albumArtUri = android.net.Uri.parse(
-                                if (row.coverPath.startsWith("/") || row.coverPath.startsWith("file:"))
-                                    "file://${row.coverPath}"
-                                else row.coverPath
-                            )
-                        )
-                        else -> song
-                    }
-                }
-                AlbumItem(
-                    name = row.name,
-                    artist = row.artist,
-                    trackCount = row.trackCount,
-                    songs = listOfNotNull(seed)
-                )
+            // Search rows may fragment local vs remote keys — expand each.
+            val rows = dao.searchAlbums(q, limit)
+            val seen = LinkedHashSet<String>()
+            val out = ArrayList<AlbumItem>(rows.size)
+            for (row in rows) {
+                val item = albumItemForKeyLocked(row.albumKey) ?: continue
+                val mergeKey = albumKey(item.name, item.artist)
+                if (!seen.add(mergeKey)) continue
+                out += item
             }
+            out.take(limit)
         }
 
     suspend fun searchArtistsAsItems(query: String, limit: Int = 12): List<ArtistItem> =
@@ -111,7 +95,7 @@ class CatalogRepository(
 
     suspend fun tracksForAlbum(albumKey: String): List<Song> = withContext(Dispatchers.IO) {
         if (albumKey.isBlank()) return@withContext emptyList()
-        dedupeLogicalTracks(dao.getTracksForAlbum(albumKey).map { it.toSong() })
+        expandAlbumTracksLocked(albumKey)
     }
 
     suspend fun tracksForArtist(artistKey: String): List<Song> = withContext(Dispatchers.IO) {
@@ -120,11 +104,15 @@ class CatalogRepository(
     }
 
     suspend fun albumItemForKey(albumKey: String): AlbumItem? = withContext(Dispatchers.IO) {
-        if (albumKey.isBlank()) return@withContext null
+        albumItemForKeyLocked(albumKey)
+    }
+
+    private suspend fun albumItemForKeyLocked(albumKey: String): AlbumItem? {
+        if (albumKey.isBlank()) return null
         val row = dao.getAlbum(albumKey)
-        val tracks = dedupeLogicalTracks(dao.getTracksForAlbum(albumKey).map { it.toSong() })
-        if (row == null && tracks.isEmpty()) return@withContext null
-        AlbumItem(
+        val tracks = expandAlbumTracksLocked(albumKey)
+        if (row == null && tracks.isEmpty()) return null
+        return AlbumItem(
             name = row?.name ?: tracks.firstOrNull()?.album,
             artist = row?.artist ?: tracks.firstOrNull()?.effectiveAlbumArtist,
             trackCount = if (tracks.isNotEmpty()) tracks.size else (row?.trackCount ?: 0),
@@ -132,12 +120,57 @@ class CatalogRepository(
         )
     }
 
+    /**
+     * Pull every track that belongs to this release even when local and remote
+     * rows landed under slightly different albumKey strings (stylized artist,
+     * album artist vs track artist, etc.).
+     */
+    private suspend fun expandAlbumTracksLocked(albumKey: String): List<Song> {
+        val direct = dao.getTracksForAlbum(albumKey)
+        val row = dao.getAlbum(albumKey)
+        val albumName = row?.name
+            ?: direct.firstOrNull()?.album
+            ?: albumKey.substringAfter('|', missingDelimiterValue = "").takeIf { it.isNotBlank() }
+        val artistName = row?.artist
+            ?: direct.firstOrNull()?.let { it.albumArtist ?: it.artist }
+            ?: albumKey.substringBefore('|').takeIf { it.isNotBlank() }
+
+        val candidates = LinkedHashMap<String, CatalogTrackEntity>()
+        direct.forEach { candidates[it.songKey] = it }
+
+        if (!albumName.isNullOrBlank()) {
+            val needle = albumName.trim().take(64)
+            if (needle.isNotEmpty()) {
+                val broaden = dao.searchTracks(needle, limit = 300)
+                for (t in broaden) {
+                    if (candidates.size >= 500) break
+                    if (!TrackIdentity.albumsMatch(t.album, albumName)) continue
+                    val trackAa = t.albumArtist ?: t.artist
+                    val aaA = TrackIdentity.normalizeToken(trackAa)
+                    val aaB = TrackIdentity.normalizeToken(artistName)
+                    if (aaA.isNotEmpty() && aaB.isNotEmpty() && aaA != aaB) continue
+                    candidates.putIfAbsent(t.songKey, t)
+                }
+            }
+        }
+
+        // Also pull exact folded key if the stored key used pre-fold tokens
+        if (!albumName.isNullOrBlank()) {
+            val folded = albumKey(albumName, artistName)
+            if (folded != albumKey) {
+                dao.getTracksForAlbum(folded).forEach { candidates.putIfAbsent(it.songKey, it) }
+            }
+        }
+
+        return dedupeLogicalTracks(candidates.values.map { it.toSong() })
+    }
+
     suspend fun artistItemForKey(artistKey: String): ArtistItem? = withContext(Dispatchers.IO) {
         if (artistKey.isBlank()) return@withContext null
         val row = dao.getArtist(artistKey)
         val tracks = dedupeLogicalTracks(dao.getTracksForArtist(artistKey).map { it.toSong() })
         if (row == null && tracks.isEmpty()) return@withContext null
-        val albums = tracks.mapNotNull { normalizeAlbumName(it.album) }.toSet()
+        val albums = tracks.mapNotNull { TrackIdentity.normalizeToken(it.album).takeIf { n -> n.isNotEmpty() } }.toSet()
         ArtistItem(
             name = row?.displayName ?: tracks.firstOrNull()?.effectiveAlbumArtist,
             trackCount = if (tracks.isNotEmpty()) tracks.size else (row?.trackCount ?: 0),
@@ -149,18 +182,8 @@ class CatalogRepository(
     suspend fun albumItemsForArtist(artistKey: String): List<AlbumItem> = withContext(Dispatchers.IO) {
         if (artistKey.isBlank()) return@withContext emptyList()
         val albumRows = dao.getAlbumsForArtist(artistKey)
-        if (albumRows.isNotEmpty()) {
-            albumRows.map { row ->
-                val tracks = dedupeLogicalTracks(
-                    dao.getTracksForAlbum(row.albumKey).map { it.toSong() }
-                )
-                AlbumItem(
-                    name = row.name,
-                    artist = row.artist,
-                    trackCount = if (tracks.isNotEmpty()) tracks.size else row.trackCount,
-                    songs = tracks
-                )
-            }
+        val raw = if (albumRows.isNotEmpty()) {
+            albumRows.mapNotNull { row -> albumItemForKeyLocked(row.albumKey) }
         } else {
             dao.getTracksForArtist(artistKey)
                 .map { it.toSong() }
@@ -174,13 +197,125 @@ class CatalogRepository(
                         songs = sorted
                     )
                 }
-                .sortedWith(
-                    compareByDescending<AlbumItem> {
-                        it.songs.mapNotNull { s -> s.year }.maxOrNull() ?: Int.MIN_VALUE
-                    }.thenBy(String.CASE_INSENSITIVE_ORDER) { it.displayName }
-                )
         }
+        // Merge Clancy-from-local + Clancy-from-JF that still differ only by source key
+        raw
+            .groupBy { albumKey(it.name, it.artist) }
+            .map { (_, group) ->
+                if (group.size == 1) group.first()
+                else {
+                    val mergedSongs = dedupeLogicalTracks(group.flatMap { it.songs })
+                    val bestName = group.mapNotNull { it.name }.maxByOrNull { it.length }
+                    val bestArtist = group.mapNotNull { it.artist }.maxByOrNull { it.length }
+                    AlbumItem(
+                        name = bestName,
+                        artist = bestArtist,
+                        trackCount = mergedSongs.size,
+                        songs = mergedSongs
+                    )
+                }
+            }
+            .sortedWith(
+                compareByDescending<AlbumItem> {
+                    it.songs.mapNotNull { s -> s.year }.maxOrNull() ?: Int.MIN_VALUE
+                }.thenBy(String.CASE_INSENSITIVE_ORDER) { it.displayName }
+            )
     }
+
+    /**
+     * Cover options for an album: local embedded/folder first, then remote URLs.
+     * Used by the album-cover picker; preference is stored in [AlbumCoverPrefs].
+     */
+    suspend fun coverCandidatesForAlbum(albumKey: String, tracks: List<Song> = emptyList()): List<CoverCandidate> =
+        withContext(Dispatchers.IO) {
+            val songs = tracks.ifEmpty { expandAlbumTracksLocked(albumKey) }
+            val row = dao.getAlbum(albumKey)
+            val out = LinkedHashMap<String, CoverCandidate>()
+
+            fun add(c: CoverCandidate) {
+                out.putIfAbsent(c.id, c)
+            }
+
+            // Local files — embedded / folder art via seed song
+            songs.filter { sourceTypeForSong(it) == SourceType.LOCAL }.forEach { song ->
+                val path = song.path
+                if (!path.isNullOrBlank() && !path.contains("://")) {
+                    add(
+                        CoverCandidate(
+                            id = "local:${song.songKey}",
+                            label = "Local file",
+                            uri = song.albumArtUri?.toString()
+                                ?: "file://$path",
+                            seedSong = song,
+                            isLocal = true
+                        )
+                    )
+                    val parent = File(path).parentFile
+                    if (parent != null) {
+                        for (name in listOf("cover.jpg", "cover.png", "folder.jpg", "AlbumArt.jpg")) {
+                            val f = File(parent, name)
+                            if (f.isFile && f.length() > 0) {
+                                add(
+                                    CoverCandidate(
+                                        id = "folder:${f.absolutePath}",
+                                        label = "Folder cover",
+                                        uri = "file://${f.absolutePath}",
+                                        seedSong = song,
+                                        isLocal = true
+                                    )
+                                )
+                                break
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Catalog enriched path
+            row?.coverPath?.takeIf { it.isNotBlank() }?.let { path ->
+                val uri = if (path.startsWith("/") || path.startsWith("file:")) {
+                    if (path.startsWith("file:")) path else "file://$path"
+                } else path
+                add(
+                    CoverCandidate(
+                        id = "enriched:$path",
+                        label = "Saved cover",
+                        uri = uri,
+                        isLocal = true
+                    )
+                )
+            }
+
+            // Remote albumArtUri on tracks
+            songs.forEach { song ->
+                val uri = song.albumArtUri?.toString() ?: return@forEach
+                if (!uri.startsWith("http", ignoreCase = true)) return@forEach
+                val type = sourceTypeForSong(song)
+                add(
+                    CoverCandidate(
+                        id = "remote:${type.name}:$uri",
+                        label = "${friendlySourceName(type.name)} cover",
+                        uri = uri,
+                        seedSong = song,
+                        isLocal = false
+                    )
+                )
+            }
+
+            row?.coverUrl?.takeIf { it.startsWith("http", ignoreCase = true) }?.let { url ->
+                add(
+                    CoverCandidate(
+                        id = "catalog:$url",
+                        label = "Catalog cover",
+                        uri = url,
+                        isLocal = false
+                    )
+                )
+            }
+
+            // Local first, then remote
+            out.values.sortedBy { if (it.isLocal) 0 else 1 }
+        }
 
     suspend fun countRemoteTracks(): Int = withContext(Dispatchers.IO) {
         dao.countNonLocalTracks()
@@ -199,12 +334,6 @@ class CatalogRepository(
             dao.countTracksForSource(sourceType, sourceInstanceId)
         }
 
-    /**
-     * Multi-source offerings for one logical track.
-     * Exact SQL first; if thin, broaden via album search + [TrackIdentity] so
-     * feat. title variants and track-artist drift still group when album +
-     * album artist match. Results ordered local → remote.
-     */
     suspend fun offeringsMatchingSong(song: Song, limit: Int = 12): List<SourceOffering> =
         withContext(Dispatchers.IO) {
             val title = song.title?.trim().orEmpty()
@@ -482,8 +611,10 @@ class CatalogRepository(
         if (year !in 1000..2100) return@withContext
         val album = dao.getAlbum(albumKey) ?: return@withContext
         dao.upsertAlbum(album.copy(year = year, updatedAtMs = System.currentTimeMillis()))
-        val tracks = dao.getTracksForAlbum(albumKey).map { t ->
-            if (t.year == null || t.year <= 0) t.copy(year = year) else t
+        val tracks = expandAlbumTracksLocked(albumKey).mapNotNull { song ->
+            dao.getTrack(song.songKey)?.let { t ->
+                if (t.year == null || t.year <= 0) t.copy(year = year) else t
+            }
         }
         if (tracks.isNotEmpty()) dao.upsertTracks(tracks)
     }
@@ -587,10 +718,6 @@ class CatalogRepository(
         fun isMultiSource(offerings: List<SourceOffering>): Boolean =
             offerings.map { "${it.sourceType.name}:${it.sourceId}" }.toSet().size > 1
 
-        /**
-         * Collapse local + remote copies of the same logical track into one row.
-         * Prefer LOCAL for playback URI; overlay richest display tags from the group.
-         */
         fun dedupeLogicalTracks(tracks: List<Song>): List<Song> {
             if (tracks.isEmpty()) return emptyList()
             return tracks
@@ -605,12 +732,6 @@ class CatalogRepository(
                         .thenBy { it.trackNumber ?: Int.MAX_VALUE }
                         .thenBy(String.CASE_INSENSITIVE_ORDER) { it.displayTitle }
                 )
-        }
-
-        private fun normalizeAlbumName(value: String?): String? {
-            if (value == null) return null
-            val t = value.trim().replace(Regex("\\s+"), " ").lowercase()
-            return t.takeIf { it.isNotEmpty() }
         }
 
         private fun guessReleaseType(trackCount: Int): ReleaseType = when {
