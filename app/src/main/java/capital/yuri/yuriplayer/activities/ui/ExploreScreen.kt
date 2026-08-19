@@ -74,6 +74,7 @@ fun ExploreScreen(
     onAddToQueue: (Song) -> Unit,
     onOpenAlbum: (AlbumItem) -> Unit = {},
     onOpenArtist: (ArtistItem) -> Unit = {},
+    /** Explicit user force-rescan only — never auto-fires on tab enter. */
     forceRescanKey: Int = 0
 ) {
     val explore: ExploreSearchService = koinInject()
@@ -85,31 +86,27 @@ fun ExploreScreen(
 
     var query by remember { mutableStateOf("") }
 
-    // Progress only — do NOT drive search from these (avoids main-thread work on every page)
     val scanning by explore.isScanning.collectAsState()
     val scanProgress by explore.scanProgress.collectAsState()
     val indexed by explore.indexedCount.collectAsState()
     val err by explore.lastError.collectAsState()
     val remoteSources by explore.sourceCount.collectAsState()
 
-    // Search results live in state, filled on a background dispatcher after debounce
     var hits by remember { mutableStateOf<List<ExploreSearchService.Hit>>(emptyList()) }
     var albumHits by remember { mutableStateOf<List<AlbumItem>>(emptyList()) }
     var artistHits by remember { mutableStateOf<List<ArtistItem>>(emptyList()) }
     var searchBusy by remember { mutableStateOf(false) }
 
-    // One-shot hydrate + optional background sync. Typing never starts a scan.
+    // Hydrate count only. Do NOT start/restart a remote scan when entering Explore —
+    // the FGS owns that, and re-entry used to cancel in-flight work.
     LaunchedEffect(Unit) {
         explore.hydrateFromCatalog()
-        delay(1_500)
-        explore.requestRemoteScan(force = false)
     }
 
     LaunchedEffect(forceRescanKey) {
         if (forceRescanKey > 0) explore.requestRemoteScan(force = true)
     }
 
-    // Debounced background search — never blocks the text field
     LaunchedEffect(query) {
         val q = query.trim()
         if (q.isEmpty()) {
@@ -121,7 +118,6 @@ fun ExploreScreen(
         }
         searchBusy = true
         delay(SEARCH_DEBOUNCE_MS)
-        // still the same query after debounce?
         if (query.trim() != q) return@LaunchedEffect
 
         val songHits = withContext(Dispatchers.Default) {
