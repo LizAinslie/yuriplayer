@@ -7,6 +7,8 @@ import capital.yuri.yuriplayer.data.db.PlaylistTrackEntity
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.flowOn
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.withContext
 import java.util.UUID
 
@@ -43,29 +45,24 @@ data class PlaylistCover(
     enum class CoverMode { CUSTOM, COLLAGE, SINGLE, EMPTY }
 }
 
+/**
+ * Playlists resolve tracks from the **catalog** (local + remote), never by
+ * scanning [LibraryIndex] on the collector thread.
+ *
+ * List observation is deliberately cheap: entity + SQL COUNT only. Full song
+ * resolution only happens for a single playlist detail.
+ */
 class PlaylistRepository(
     private val dao: PlaylistDao,
-    private val library: LibraryIndex,
+    private val catalog: CatalogRepository,
     private val images: UserImageStore
 ) {
 
-    /**
-     * Playlist list with track counts from Room and covers from resolved library songs.
-     * (Previously hard-coded trackCount=0 / songs=empty — looked like wiped playlists.)
-     */
+    /** Cheap list for sheets / My Stuff — no song resolution, no Main work. */
     fun observePlaylists(): Flow<List<Playlist>> =
-        combine(
-            dao.observeAll(),
-            dao.observeAllTracks(),
-            library.songs
-        ) { entities, allTracks, allSongs ->
-            val byKey = allSongs.associateBy { it.songKey }
-            val tracksByPlaylist = allTracks.groupBy { it.playlistId }
+        combine(dao.observeAll(), dao.observeTrackCounts()) { entities, counts ->
+            val countMap = counts.associate { it.playlistId to it.trackCount }
             entities.map { e ->
-                val ordered = tracksByPlaylist[e.id]
-                    ?.sortedBy { it.position }
-                    .orEmpty()
-                val songs = resolveSongs(ordered, byKey)
                 Playlist(
                     id = e.id,
                     name = e.name,
@@ -73,19 +70,21 @@ class PlaylistRepository(
                     customImageUri = e.customImageUri,
                     createdAtMs = e.createdAtMs,
                     updatedAtMs = e.updatedAtMs,
-                    trackCount = ordered.size,
-                    songs = songs
+                    trackCount = countMap[e.id] ?: 0,
+                    songs = emptyList()
                 )
             }
-        }
+        }.flowOn(Dispatchers.Default)
 
     fun observePlaylistsResolved(): Flow<List<Playlist>> = observePlaylists()
 
+    /** Full resolve for one playlist (detail screen / play). Runs off Main. */
     fun observePlaylist(id: String): Flow<Playlist?> =
-        combine(dao.observe(id), dao.observeTracks(id), library.songs) { entity, tracks, allSongs ->
-            if (entity == null) return@combine null
-            val byKey = allSongs.associateBy { it.songKey }
-            val songs = resolveSongs(tracks, byKey)
+        combine(dao.observe(id), dao.observeTracks(id)) { entity, tracks ->
+            entity to tracks
+        }.map { (entity, tracks) ->
+            if (entity == null) return@map null
+            val songs = resolveSongs(tracks)
             Playlist(
                 id = entity.id,
                 name = entity.name,
@@ -96,33 +95,15 @@ class PlaylistRepository(
                 trackCount = tracks.size,
                 songs = songs
             )
-        }
+        }.flowOn(Dispatchers.IO)
 
-    /**
-     * Map playlist_tracks → library [Song]s.
-     * Prefer exact [Song.songKey]; fall back to path / contentUri substring match so
-     * older keys still resolve after minor scan path normalization.
-     */
-    private fun resolveSongs(
-        tracks: List<PlaylistTrackEntity>,
-        byKey: Map<String, Song>
-    ): List<Song> {
+    /** Exact songKey match against the full catalog (local + Jellyfin/etc). */
+    private suspend fun resolveSongs(tracks: List<PlaylistTrackEntity>): List<Song> {
         if (tracks.isEmpty()) return emptyList()
-        if (byKey.isEmpty()) return emptyList()
-        return tracks.mapNotNull { track ->
-            byKey[track.songKey]
-                ?: byKey.entries.firstOrNull { (key, _) ->
-                    key.equals(track.songKey, ignoreCase = true)
-                }?.value
-                ?: byKey.values.firstOrNull { song ->
-                    val path = song.path?.lowercase()
-                    path != null && (
-                        path == track.songKey.lowercase() ||
-                            track.songKey.lowercase().endsWith(path) ||
-                            path.endsWith(track.songKey.lowercase())
-                    )
-                }
-        }
+        val keys = tracks.map { it.songKey }
+        val byKey = catalog.getSongsByKeys(keys).associateBy { it.songKey }
+        // Preserve playlist order; skip missing keys (deleted files)
+        return tracks.mapNotNull { byKey[it.songKey] }
     }
 
     suspend fun create(name: String, description: String? = null): Playlist =
@@ -158,10 +139,6 @@ class PlaylistRepository(
             )
         }
 
-    /**
-     * Persist user cover: copy into app files, store file:// path in DB.
-     * Pass null to clear.
-     */
     suspend fun setCustomImage(id: String, uri: String?) =
         withContext(Dispatchers.IO) {
             val existing = dao.get(id) ?: return@withContext
@@ -186,9 +163,15 @@ class PlaylistRepository(
             dao.delete(id)
         }
 
+    /**
+     * Add songs by songKey. Works for local **and** Jellyfin/Subsonic keys
+     * because resolution goes through the catalog, not LibraryIndex.
+     */
     suspend fun addSongs(id: String, songs: List<Song>) =
         withContext(Dispatchers.IO) {
             if (songs.isEmpty()) return@withContext
+            // Ensure remote tracks exist in catalog so they resolve later
+            catalog.ensureTracksPresent(songs)
             val existing = dao.getTracks(id).map { it.songKey }.toMutableList()
             songs.forEach { s ->
                 val k = s.songKey
@@ -198,7 +181,6 @@ class PlaylistRepository(
             touch(id)
         }
 
-    /** Remove these songs from the playlist and re-index positions. */
     suspend fun removeSongs(id: String, songs: List<Song>) =
         withContext(Dispatchers.IO) {
             if (songs.isEmpty()) return@withContext
@@ -208,10 +190,6 @@ class PlaylistRepository(
             touch(id)
         }
 
-    /**
-     * Playlists that already contain the first song (exact membership for the
-     * common single-song sheet; multi-song uses the same heuristic).
-     */
     suspend fun playlistsContaining(songs: List<Song>): Set<String> =
         withContext(Dispatchers.IO) {
             if (songs.isEmpty()) return@withContext emptySet()

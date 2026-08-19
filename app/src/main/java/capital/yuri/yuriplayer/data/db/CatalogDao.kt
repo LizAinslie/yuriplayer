@@ -8,10 +8,8 @@ import androidx.room.Transaction
 import kotlinx.coroutines.flow.Flow
 
 /**
- * Persistent catalog = **local library** + anything the user put in **My Stuff**.
- *
- * External Explore results (Jellyfin / Navidrome / …) stay ephemeral in memory
- * until the user saves them; then they land here with their source fields set.
+ * Persistent catalog = local library + remote-indexed tracks (Jellyfin / Subsonic).
+ * Search and key lookups must stay SQL — never load the full table onto Main.
  */
 @Dao
 interface CatalogDao {
@@ -33,8 +31,24 @@ interface CatalogDao {
     )
     suspend fun countTracksForSource(sourceType: String, sourceInstanceId: Long?): Int
 
+    @Query("SELECT COUNT(*) FROM catalog_tracks WHERE sourceType != :localType")
+    suspend fun countNonLocalTracks(localType: String = CatalogSources.LOCAL): Int
+
     @Query("SELECT * FROM catalog_tracks WHERE songKey = :songKey LIMIT 1")
     suspend fun getTrack(songKey: String): CatalogTrackEntity?
+
+    @Query("SELECT * FROM catalog_tracks WHERE songKey IN (:keys)")
+    suspend fun getTracksByKeys(keys: List<String>): List<CatalogTrackEntity>
+
+    @Query(
+        "SELECT * FROM catalog_tracks WHERE " +
+            "title LIKE '%' || :q || '%' COLLATE NOCASE " +
+            "OR artist LIKE '%' || :q || '%' COLLATE NOCASE " +
+            "OR albumArtist LIKE '%' || :q || '%' COLLATE NOCASE " +
+            "OR album LIKE '%' || :q || '%' COLLATE NOCASE " +
+            "LIMIT :limit"
+    )
+    suspend fun searchTracks(q: String, limit: Int): List<CatalogTrackEntity>
 
     @Query("SELECT * FROM catalog_tracks WHERE albumKey = :albumKey ORDER BY discNumber, trackNumber, title")
     suspend fun getTracksForAlbum(albumKey: String): List<CatalogTrackEntity>
@@ -72,6 +86,14 @@ interface CatalogDao {
     @Query("SELECT * FROM catalog_albums WHERE artistKey = :artistKey ORDER BY year DESC, name COLLATE NOCASE")
     suspend fun getAlbumsForArtist(artistKey: String): List<CatalogAlbumEntity>
 
+    @Query(
+        "SELECT * FROM catalog_albums WHERE " +
+            "name LIKE '%' || :q || '%' COLLATE NOCASE " +
+            "OR artist LIKE '%' || :q || '%' COLLATE NOCASE " +
+            "LIMIT :limit"
+    )
+    suspend fun searchAlbums(q: String, limit: Int): List<CatalogAlbumEntity>
+
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun upsertAlbum(album: CatalogAlbumEntity)
 
@@ -91,6 +113,13 @@ interface CatalogDao {
 
     @Query("SELECT * FROM catalog_artists WHERE artistKey = :artistKey LIMIT 1")
     suspend fun getArtist(artistKey: String): CatalogArtistEntity?
+
+    @Query(
+        "SELECT * FROM catalog_artists WHERE " +
+            "displayName LIKE '%' || :q || '%' COLLATE NOCASE " +
+            "LIMIT :limit"
+    )
+    suspend fun searchArtists(q: String, limit: Int): List<CatalogArtistEntity>
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun upsertArtist(artist: CatalogArtistEntity)
