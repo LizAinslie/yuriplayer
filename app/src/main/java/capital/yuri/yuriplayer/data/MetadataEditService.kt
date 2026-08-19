@@ -4,19 +4,39 @@ import android.content.ContentValues
 import android.content.Context
 import android.media.MediaScannerConnection
 import android.net.Uri
+import android.os.Build
+import android.os.ParcelFileDescriptor
 import android.provider.MediaStore
 import android.util.Log
+import capital.yuri.yuriplayer.data.source.SourceType
+import capital.yuri.yuriplayer.player.engine.isNetworkUri
+import capital.yuri.yuriplayer.player.engine.isVirtualLibraryPath
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import org.jaudiotagger.audio.AudioFileIO
 import org.jaudiotagger.tag.FieldKey
 import org.jaudiotagger.tag.images.ArtworkFactory
 import java.io.File
+import java.io.FileInputStream
 import java.io.FileOutputStream
 
+/**
+ * Writes embedded tags into **writable** audio sources.
+ *
+ * Writable today:
+ * - Local filesystem / MediaStore files
+ * - SAF document trees (manual library mode)
+ *
+ * Writable later (same path once we have a real file or content URI):
+ * - OneDrive / Dropbox / Google Drive / Nextcloud / WebDAV mounts
+ *
+ * Not writable:
+ * - Jellyfin / Subsonic / Navidrome streams (server-owned metadata)
+ */
 class MetadataEditService(
     private val context: Context,
-    private val libraryIndex: LibraryIndex
+    private val libraryIndex: LibraryIndex,
+    private val catalog: CatalogRepository
 ) {
 
     data class SongEdit(
@@ -42,27 +62,70 @@ class MetadataEditService(
         val message: String
     )
 
-    fun isLocalFile(song: Song): Boolean {
-        val path = resolveWritablePath(song) ?: return false
-        return File(path).isFile
+    /** Where we can open a mutable audio payload. */
+    sealed class WritableTarget {
+        data class FilePath(val file: File) : WritableTarget()
+        data class ContentUri(val uri: Uri) : WritableTarget()
     }
 
-    fun isLocalAlbum(album: AlbumItem): Boolean =
-        album.songs.any { isLocalFile(it) }
+    fun isWritableSong(song: Song): Boolean = resolveWritableTarget(song) != null
+
+    /** @deprecated Prefer [isWritableSong] — kept for call sites. */
+    fun isLocalFile(song: Song): Boolean = isWritableSong(song)
+
+    fun isWritableAlbum(album: AlbumItem): Boolean =
+        album.songs.any { isWritableSong(it) }
+
+    /** @deprecated Prefer [isWritableAlbum]. */
+    fun isLocalAlbum(album: AlbumItem): Boolean = isWritableAlbum(album)
+
+    /**
+     * True for source types that can accept embedded tag writes.
+     * Remote media servers keep their own catalog; cloud file backends are file-like.
+     */
+    fun sourceTypeAllowsTagWrites(type: SourceType): Boolean = when (type) {
+        SourceType.LOCAL -> true
+        SourceType.WEBDAV -> true
+        // Future: OneDrive / Dropbox / Drive / Nextcloud map to OTHER or dedicated types
+        SourceType.OTHER -> true
+        SourceType.JELLYFIN,
+        SourceType.SUBSONIC,
+        SourceType.NAVIDROME -> false
+    }
 
     suspend fun saveSong(song: Song, edit: SongEdit): Result = withContext(Dispatchers.IO) {
-        val path = resolveWritablePath(song)
-            ?: return@withContext Result(0, 1, "Not a local file path (cannot write tags)")
+        val target = resolveWritableTarget(song)
+            ?: return@withContext Result(
+                0,
+                1,
+                notWritableMessage(song)
+            )
         try {
-            val file = File(path)
-            if (!file.canWrite()) runCatching { file.setWritable(true) }
-            writeSongTags(file, edit)
+            when (target) {
+                is WritableTarget.FilePath -> {
+                    val file = target.file
+                    if (!file.canWrite()) runCatching { file.setWritable(true) }
+                    writeSongTags(file, edit)
+                    scanPaths(listOf(file.absolutePath))
+                }
+                is WritableTarget.ContentUri -> {
+                    writeViaContentUri(target.uri) { tmp -> writeSongTags(tmp, edit) }
+                }
+            }
             updateMediaStoreSong(song, edit)
-            scanPaths(listOf(path))
-            libraryIndex.refresh()
+            catalog.patchTrackTags(
+                songKey = song.songKey,
+                title = edit.title,
+                artist = edit.artist,
+                album = null,
+                albumArtist = null,
+                year = null,
+                genre = edit.genre
+            )
+            libraryIndex.reloadFromCatalog()
             Result(1, 0, "Saved")
         } catch (e: Exception) {
-            Log.e(TAG, "saveSong failed path=$path", e)
+            Log.e(TAG, "saveSong failed key=${song.songKey}", e)
             Result(0, 1, e.message ?: "Write failed — need storage permission?")
         }
     }
@@ -71,9 +134,19 @@ class MetadataEditService(
         var ok = 0
         var failed = 0
         val scanned = mutableListOf<String>()
+
+        val writableSongs = album.songs.mapNotNull { s ->
+            resolveWritableTarget(s)?.let { s to it }
+        }
+        if (writableSongs.isEmpty()) {
+            return@withContext Result(0, album.songs.size, "No writable files in this album")
+        }
+
         val coverFile = edit.coverBytes?.let { bytes ->
-            val firstPath = album.songs.firstNotNullOfOrNull { resolveWritablePath(it) }
-            val dir = firstPath?.let { File(it).parentFile }
+            val firstFile = writableSongs.firstNotNullOfOrNull { (_, t) ->
+                (t as? WritableTarget.FilePath)?.file
+            }
+            val dir = firstFile?.parentFile
             if (dir != null && dir.isDirectory) {
                 val out = File(dir, "cover.jpg")
                 try {
@@ -87,25 +160,46 @@ class MetadataEditService(
             } else null
         }
 
-        for (song in album.songs) {
-            val path = resolveWritablePath(song) ?: run {
-                failed++
-                continue
-            }
+        for ((song, target) in writableSongs) {
             try {
-                val file = File(path)
-                if (!file.canWrite()) runCatching { file.setWritable(true) }
-                writeAlbumTags(file, edit, coverFile)
+                when (target) {
+                    is WritableTarget.FilePath -> {
+                        val file = target.file
+                        if (!file.canWrite()) runCatching { file.setWritable(true) }
+                        writeAlbumTags(file, edit, coverFile)
+                        scanned += file.absolutePath
+                    }
+                    is WritableTarget.ContentUri -> {
+                        writeViaContentUri(target.uri) { tmp ->
+                            writeAlbumTags(tmp, edit, coverFile)
+                        }
+                    }
+                }
                 updateMediaStoreAlbumFields(song, edit)
-                scanned += path
+                catalog.patchTrackTags(
+                    songKey = song.songKey,
+                    title = null,
+                    artist = null,
+                    album = edit.albumName,
+                    albumArtist = edit.albumArtist,
+                    year = edit.year,
+                    genre = edit.genre
+                )
                 ok++
             } catch (e: Exception) {
-                Log.e(TAG, "saveAlbum track failed path=$path", e)
+                Log.e(TAG, "saveAlbum track failed key=${song.songKey}", e)
                 failed++
             }
         }
+
+        // Count non-writable members as failed for the message
+        failed += album.songs.size - writableSongs.size
+
         if (scanned.isNotEmpty()) scanPaths(scanned)
-        if (ok > 0) libraryIndex.refresh()
+        if (ok > 0) {
+            runCatching { catalog.rebuildRollups() }
+            libraryIndex.reloadFromCatalog()
+        }
         Result(
             ok = ok,
             failed = failed,
@@ -115,6 +209,168 @@ class MetadataEditService(
                 else -> "Saved $ok, failed $failed"
             }
         )
+    }
+
+    private fun notWritableMessage(song: Song): String {
+        val path = song.path.orEmpty()
+        return when {
+            isVirtualLibraryPath(path) || isNetworkUri(song.contentUri) ->
+                "This track is from a streaming server (e.g. Jellyfin). " +
+                    "Edit metadata on a local or cloud file copy."
+            else ->
+                "No writable file for this track. Metadata edit needs a local file, " +
+                    "SAF folder, or a cloud drive mount."
+        }
+    }
+
+    /**
+     * Prefer a real [File], else a content URI we can open for read (and ideally write).
+     * Remote virtual keys never resolve.
+     */
+    fun resolveWritableTarget(song: Song): WritableTarget? {
+        val path = song.path
+        if (isVirtualLibraryPath(path)) return null
+        if (isNetworkUri(song.contentUri)) return null
+
+        // Explicit filesystem path (MediaStore DATA or scanner)
+        if (!path.isNullOrBlank() && !path.contains("://")) {
+            val f = File(path)
+            if (f.isFile) return WritableTarget.FilePath(f)
+        }
+
+        // file:// contentUri
+        if (song.contentUri.scheme.equals("file", ignoreCase = true)) {
+            val p = song.contentUri.path
+            if (!p.isNullOrBlank()) {
+                val f = File(p)
+                if (f.isFile) return WritableTarget.FilePath(f)
+            }
+        }
+
+        // MediaStore DATA column (may be null on modern Android)
+        if (song.contentUri.scheme.equals("content", ignoreCase = true)) {
+            queryMediaStorePath(song.contentUri)?.let { dataPath ->
+                val f = File(dataPath)
+                if (f.isFile) return WritableTarget.FilePath(f)
+            }
+            // SAF / MediaStore — openable content URI
+            if (canOpenContent(song.contentUri)) {
+                return WritableTarget.ContentUri(song.contentUri)
+            }
+        }
+
+        return null
+    }
+
+    /** Legacy helper used by older call sites. */
+    fun resolveWritablePath(song: Song): String? =
+        (resolveWritableTarget(song) as? WritableTarget.FilePath)?.file?.absolutePath
+
+    private fun queryMediaStorePath(uri: Uri): String? =
+        try {
+            context.contentResolver.query(
+                uri,
+                arrayOf(MediaStore.MediaColumns.DATA),
+                null,
+                null,
+                null
+            )?.use { c ->
+                if (!c.moveToFirst()) return@use null
+                val idx = c.getColumnIndex(MediaStore.MediaColumns.DATA)
+                if (idx < 0) return@use null
+                c.getString(idx)?.takeIf { it.isNotBlank() && File(it).isFile }
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "DATA query failed for $uri", e)
+            null
+        }
+
+    private fun canOpenContent(uri: Uri): Boolean {
+        // Prefer rw; fall back to read-only (we'll try write-back via wt later)
+        val modes = arrayOf("rw", "r")
+        for (mode in modes) {
+            try {
+                context.contentResolver.openFileDescriptor(uri, mode)?.use {
+                    return true
+                }
+            } catch (_: SecurityException) {
+                // try next mode
+            } catch (_: Exception) {
+                // try next mode
+            }
+        }
+        return try {
+            context.contentResolver.openInputStream(uri)?.use { true } ?: false
+        } catch (_: Exception) {
+            false
+        }
+    }
+
+    private fun writeViaContentUri(uri: Uri, mutate: (File) -> Unit) {
+        val ext = guessExtension(uri)
+        val tmp = File.createTempFile("yp_tag_", ".$ext", context.cacheDir)
+        try {
+            context.contentResolver.openInputStream(uri)?.use { input ->
+                FileOutputStream(tmp).use { output -> input.copyTo(output) }
+            } ?: error("Cannot read audio from $uri")
+
+            mutate(tmp)
+
+            val written = writeBytesToContentUri(uri, tmp)
+            if (!written) error("Cannot write audio back to $uri")
+        } finally {
+            runCatching { tmp.delete() }
+        }
+    }
+
+    private fun writeBytesToContentUri(uri: Uri, file: File): Boolean {
+        // "wt" truncates; "rwt" via PFD is more reliable on some providers
+        try {
+            context.contentResolver.openOutputStream(uri, "wt")?.use { out ->
+                FileInputStream(file).use { it.copyTo(out) }
+                return true
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "openOutputStream wt failed for $uri: ${e.message}")
+        }
+        try {
+            context.contentResolver.openFileDescriptor(uri, "rwt")?.use { pfd ->
+                FileOutputStream(pfd.fileDescriptor).use { out ->
+                    FileInputStream(file).use { it.copyTo(out) }
+                }
+                return true
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "openFileDescriptor rwt failed for $uri: ${e.message}")
+        }
+        try {
+            context.contentResolver.openFileDescriptor(uri, "rw")?.use { pfd ->
+                // Truncate then write
+                ParcelFileDescriptor.AutoCloseOutputStream(pfd).use { out ->
+                    FileInputStream(file).use { it.copyTo(out) }
+                }
+                return true
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "openFileDescriptor rw failed for $uri: ${e.message}")
+        }
+        return false
+    }
+
+    private fun guessExtension(uri: Uri): String {
+        val fromPath = uri.lastPathSegment
+            ?.substringAfterLast('.', "")
+            ?.lowercase()
+            ?.takeIf { it.length in 2..5 && it.all { ch -> ch.isLetterOrDigit() } }
+        if (fromPath != null) return fromPath
+        val mime = runCatching { context.contentResolver.getType(uri) }.getOrNull()
+        return when (mime) {
+            "audio/flac" -> "flac"
+            "audio/mpeg", "audio/mp3" -> "mp3"
+            "audio/mp4", "audio/aac" -> "m4a"
+            "audio/ogg", "audio/opus" -> "ogg"
+            else -> "audio"
+        }
     }
 
     private fun writeSongTags(file: File, edit: SongEdit) {
@@ -171,36 +427,14 @@ class MetadataEditService(
         }
     }
 
-    fun resolveWritablePath(song: Song): String? {
-        song.path?.takeIf { it.isNotBlank() }?.let { p ->
-            val f = File(p)
-            if (f.isFile) return f.absolutePath
-        }
-        return try {
-            context.contentResolver.query(
-                song.contentUri,
-                arrayOf(MediaStore.MediaColumns.DATA),
-                null,
-                null,
-                null
-            )?.use { c ->
-                if (c.moveToFirst()) {
-                    val idx = c.getColumnIndex(MediaStore.MediaColumns.DATA)
-                    if (idx >= 0) c.getString(idx)?.takeIf { File(it).isFile }
-                    else null
-                } else null
-            }
-        } catch (e: Exception) {
-            Log.w(TAG, "DATA query failed for ${song.contentUri}", e)
-            null
-        }
-    }
-
     private fun updateMediaStoreSong(song: Song, edit: SongEdit) {
+        if (!song.contentUri.scheme.equals("content", ignoreCase = true)) return
         val values = ContentValues().apply {
             edit.title?.let { put(MediaStore.Audio.Media.TITLE, it) }
             edit.artist?.let { put(MediaStore.Audio.Media.ARTIST, it) }
-            edit.genre?.let { put(MediaStore.Audio.Media.GENRE, it) }
+            if (Build.VERSION.SDK_INT >= 30 && edit.genre != null) {
+                put(MediaStore.Audio.Media.GENRE, edit.genre)
+            }
         }
         if (values.size() == 0) return
         runCatching {
@@ -209,10 +443,13 @@ class MetadataEditService(
     }
 
     private fun updateMediaStoreAlbumFields(song: Song, edit: AlbumEdit) {
+        if (!song.contentUri.scheme.equals("content", ignoreCase = true)) return
         val values = ContentValues().apply {
             edit.albumName?.let { put(MediaStore.Audio.Media.ALBUM, it) }
             edit.year?.let { put(MediaStore.Audio.Media.YEAR, it) }
-            edit.genre?.let { put(MediaStore.Audio.Media.GENRE, it) }
+            if (Build.VERSION.SDK_INT >= 30 && edit.genre != null) {
+                put(MediaStore.Audio.Media.GENRE, edit.genre)
+            }
         }
         if (values.size() == 0) return
         runCatching {
@@ -224,7 +461,7 @@ class MetadataEditService(
         if (paths.isEmpty()) return
         MediaScannerConnection.scanFile(
             context,
-            paths.toTypedArray(),
+            paths.distinct().toTypedArray(),
             null,
             null
         )
