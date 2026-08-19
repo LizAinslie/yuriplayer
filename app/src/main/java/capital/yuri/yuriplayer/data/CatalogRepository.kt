@@ -46,8 +46,10 @@ class CatalogRepository(
         dao.pruneStaleTracks(CatalogSources.LOCAL, null, seenAt)
 
         val allTracks = dao.getAllTracks()
-        dao.upsertAlbums(buildAlbumRollups(allTracks))
-        dao.upsertArtists(buildArtistRollups(allTracks))
+        val prevAlbums = dao.getAllAlbums().associateBy { it.albumKey }
+        val prevArtists = dao.getAllArtists().associateBy { it.artistKey }
+        dao.upsertAlbums(buildAlbumRollups(allTracks, prevAlbums))
+        dao.upsertArtists(buildArtistRollups(allTracks, prevArtists))
         dao.deleteOrphanAlbums()
         dao.deleteOrphanArtists()
 
@@ -72,8 +74,10 @@ class CatalogRepository(
         }
         dao.upsertTracks(entities)
         val all = dao.getAllTracks()
-        dao.upsertAlbums(buildAlbumRollups(all))
-        dao.upsertArtists(buildArtistRollups(all))
+        val prevAlbums = dao.getAllAlbums().associateBy { it.albumKey }
+        val prevArtists = dao.getAllArtists().associateBy { it.artistKey }
+        dao.upsertAlbums(buildAlbumRollups(all, prevAlbums))
+        dao.upsertArtists(buildArtistRollups(all, prevArtists))
     }
 
     suspend fun pruneRemoteSource(
@@ -120,8 +124,10 @@ class CatalogRepository(
             )
             dao.upsertTrack(entity)
             val all = dao.getAllTracks()
-            dao.upsertAlbums(buildAlbumRollups(all))
-            dao.upsertArtists(buildArtistRollups(all))
+            val prevAlbums = dao.getAllAlbums().associateBy { it.albumKey }
+            val prevArtists = dao.getAllArtists().associateBy { it.artistKey }
+            dao.upsertAlbums(buildAlbumRollups(all, prevAlbums))
+            dao.upsertArtists(buildArtistRollups(all, prevArtists))
             Log.i(TAG, "imported to My Stuff: ${entity.songKey} from $sourceType")
         }
 
@@ -215,7 +221,10 @@ class CatalogRepository(
         mimeType = mimeType
     )
 
-    private fun buildAlbumRollups(tracks: List<CatalogTrackEntity>): List<CatalogAlbumEntity> {
+    private fun buildAlbumRollups(
+        tracks: List<CatalogTrackEntity>,
+        previous: Map<String, CatalogAlbumEntity> = emptyMap()
+    ): List<CatalogAlbumEntity> {
         return tracks
             .filter { !it.albumKey.isNullOrBlank() }
             .groupBy { it.albumKey!! }
@@ -226,8 +235,10 @@ class CatalogRepository(
                     .groupingBy { it }.eachCount().maxByOrNull { it.value }?.key
                 val year = group.mapNotNull { it.year }.maxOrNull()
                 val artistKey = artistKey(artist)
-                val coverUrl = group.mapNotNull { it.albumArtUri }.firstOrNull { it.startsWith("http") }
-                val existing = runCatching { dao.getAlbum(key) }.getOrNull()
+                val coverUrl = group.mapNotNull { it.albumArtUri }.firstOrNull {
+                    it.startsWith("http", ignoreCase = true)
+                }
+                val existing = previous[key]
                 CatalogAlbumEntity(
                     albumKey = key,
                     name = name,
@@ -245,7 +256,10 @@ class CatalogRepository(
             }
     }
 
-    private fun buildArtistRollups(tracks: List<CatalogTrackEntity>): List<CatalogArtistEntity> {
+    private fun buildArtistRollups(
+        tracks: List<CatalogTrackEntity>,
+        previous: Map<String, CatalogArtistEntity> = emptyMap()
+    ): List<CatalogArtistEntity> {
         return tracks
             .filter { !it.artistKey.isNullOrBlank() }
             .groupBy { it.artistKey!! }
@@ -254,7 +268,7 @@ class CatalogRepository(
                     .groupingBy { it }.eachCount().maxByOrNull { it.value }?.key
                     ?: key
                 val albums = group.mapNotNull { it.albumKey }.toSet()
-                val existing = runCatching { dao.getArtist(key) }.getOrNull()
+                val existing = previous[key]
                 CatalogArtistEntity(
                     artistKey = key,
                     displayName = display,
