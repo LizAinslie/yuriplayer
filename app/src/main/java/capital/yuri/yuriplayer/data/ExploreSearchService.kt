@@ -20,14 +20,16 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import java.io.File
+import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicLong
 
 /**
  * Explore search + remote sync orchestration.
  *
- * **Never** holds the full remote catalog in a StateFlow. A 24k-track list in
- * memory was the root of idle ANRs. Counts come from SQL; search is Room LIKE.
+ * Scans run in [LibraryScanService] (FGS). Leaving Explore never cancels work.
+ * Per-source progress is checkpointed so pause/stop/resume pick up the cursor.
  */
 class ExploreSearchService(
     private val context: Context,
@@ -40,7 +42,8 @@ class ExploreSearchService(
     private val jellyfinClient: JellyfinClient,
     private val subsonicClient: SubsonicClient,
     private val notifier: LibraryScanNotifier,
-    private val settings: LibrarySettings
+    private val settings: LibrarySettings,
+    private val checkpoints: ScanCheckpointStore
 ) {
     data class Hit(
         val identityKey: String,
@@ -63,6 +66,11 @@ class ExploreSearchService(
     private val pageCounter = AtomicInteger(0)
     private val lastCountPublishAt = AtomicLong(0L)
 
+    private val pauseAll = AtomicBoolean(false)
+    private val stopAll = AtomicBoolean(false)
+    private val pausedSources = ConcurrentHashMap.newKeySet<Long>()
+    private val stoppedSources = ConcurrentHashMap.newKeySet<Long>()
+
     private val _indexedCount = MutableStateFlow(0)
     val indexedCount: StateFlow<Int> = _indexedCount.asStateFlow()
 
@@ -78,10 +86,55 @@ class ExploreSearchService(
     private val _sourceCount = MutableStateFlow(0)
     val sourceCount: StateFlow<Int> = _sourceCount.asStateFlow()
 
+    private val _checkpoints = MutableStateFlow<List<SourceScanCheckpoint>>(emptyList())
+    val sourceCheckpoints: StateFlow<List<SourceScanCheckpoint>> = _checkpoints.asStateFlow()
+
     private var cacheAtMs: Long = 0L
     private var hydrated = false
 
-    /** SQL COUNT only — does not load track rows. */
+    init {
+        refreshCheckpointSnapshot()
+    }
+
+    private fun refreshCheckpointSnapshot() {
+        _checkpoints.value = checkpoints.all()
+    }
+
+    fun requestPauseAll() {
+        pauseAll.set(true)
+        Log.i(TAG, "pause all requested")
+    }
+
+    fun requestStopAll() {
+        stopAll.set(true)
+        pauseAll.set(true)
+        Log.i(TAG, "stop all requested")
+    }
+
+    fun requestPauseSource(sourceInstanceId: Long) {
+        pausedSources.add(sourceInstanceId)
+        Log.i(TAG, "pause source $sourceInstanceId")
+    }
+
+    fun requestStopSource(sourceInstanceId: Long) {
+        stoppedSources.add(sourceInstanceId)
+        pausedSources.add(sourceInstanceId)
+        Log.i(TAG, "stop source $sourceInstanceId")
+    }
+
+    fun clearControlFlags() {
+        pauseAll.set(false)
+        stopAll.set(false)
+        pausedSources.clear()
+        stoppedSources.clear()
+    }
+
+    private fun shouldAbortSource(sourceInstanceId: Long): Boolean =
+        stopAll.get() || stoppedSources.contains(sourceInstanceId)
+
+    private fun shouldPauseSource(sourceInstanceId: Long): Boolean =
+        pauseAll.get() || pausedSources.contains(sourceInstanceId)
+
     suspend fun hydrateFromCatalog() = withContext(Dispatchers.IO) {
         if (hydrated && _indexedCount.value > 0) return@withContext
         mutex.withLock {
@@ -90,17 +143,31 @@ class ExploreSearchService(
             _indexedCount.value = count
             hydrated = true
             if (count > 0) cacheAtMs = System.currentTimeMillis()
+            refreshCheckpointSnapshot()
             Log.i(TAG, "hydrated remote count=$count (no full list loaded)")
         }
     }
 
+    /**
+     * Start (or resume) remote indexing in the FGS. Safe to call from UI —
+     * never cancels an in-flight scan unless [force].
+     */
     fun requestRemoteScan(force: Boolean = false) {
-        val age = System.currentTimeMillis() - cacheAtMs
-        if (!force && _indexedCount.value > 0 && age < CACHE_TTL_MS) {
-            Log.i(TAG, "requestRemoteScan skipped — cache warm (${_indexedCount.value})")
+        if (!force && _isScanning.value) {
+            Log.i(TAG, "requestRemoteScan ignored — already scanning")
             return
         }
-        if (!force && _isScanning.value) return
+        val age = System.currentTimeMillis() - cacheAtMs
+        if (!force && _indexedCount.value > 0 && age < CACHE_TTL_MS) {
+            // Still allow resume of paused checkpoints
+            val hasPaused = checkpoints.all().any {
+                it.status == SourceScanStatus.PAUSED || it.status == SourceScanStatus.STOPPED
+            }
+            if (!hasPaused) {
+                Log.i(TAG, "requestRemoteScan skipped — cache warm (${_indexedCount.value})")
+                return
+            }
+        }
 
         if (!NetworkPolicy.allowsRemoteSync(context, settings)) {
             val reason = NetworkPolicy.blockedReason(context, settings)
@@ -110,12 +177,17 @@ class ExploreSearchService(
             return
         }
 
-        Log.i(
-            TAG,
-            "requestRemoteScan force=$force indexed=${_indexedCount.value} " +
-                "device=${budget.deviceClass} page=${budget.pageSize}"
-        )
+        if (force) clearControlFlags()
+        Log.i(TAG, "requestRemoteScan force=$force indexed=${_indexedCount.value}")
         LibraryScanService.startRemote(context.applicationContext, force)
+    }
+
+    fun pauseScan(sourceId: Long? = null) {
+        LibraryScanService.pause(context.applicationContext, sourceId)
+    }
+
+    fun stopScan(sourceId: Long? = null) {
+        LibraryScanService.stop(context.applicationContext, sourceId)
     }
 
     suspend fun refreshRemotes() {
@@ -126,7 +198,6 @@ class ExploreSearchService(
         runRemoteScan(force)
     }
 
-    /** Room-backed search. Never walks an in-memory catalog. */
     suspend fun search(query: String, forceRescan: Boolean = false): List<Hit> =
         withContext(Dispatchers.IO) {
             val q = query.trim()
@@ -137,10 +208,6 @@ class ExploreSearchService(
     suspend fun searchWithPrefer(query: String, forceRescan: Boolean = false): List<Hit> =
         search(query, forceRescan)
 
-    /**
-     * Background-safe search entry used by Explore UI.
-     * Always hits Room — never the old in-memory list.
-     */
     suspend fun searchLive(query: String, limit: Int = 80): List<Hit> =
         withContext(Dispatchers.IO) {
             val q = query.trim()
@@ -223,12 +290,7 @@ class ExploreSearchService(
             return
         }
         try {
-            val age = System.currentTimeMillis() - cacheAtMs
-            if (!force && _indexedCount.value > 0 && age < CACHE_TTL_MS) {
-                Log.i(TAG, "skip scan — cache warm (${_indexedCount.value})")
-                return
-            }
-
+            clearControlFlags()
             if (!assertSyncAllowedOrThrow()) {
                 runCatching { hydrateFromCatalog() }
                 return
@@ -238,7 +300,7 @@ class ExploreSearchService(
             _lastError.value = null
             pageCounter.set(0)
             notifier.update("Syncing libraries", "Connecting…")
-            Log.i(TAG, "remote scan start force=$force device=${budget.deviceClass} page=${budget.pageSize}")
+            Log.i(TAG, "remote scan start force=$force")
 
             val rows = instances.getAll().filter { it.enabled }
             _sourceCount.value = rows.size
@@ -258,6 +320,7 @@ class ExploreSearchService(
             var abortedForNetwork = false
 
             for (row in rows) {
+                if (stopAll.get()) break
                 if (!assertSyncAllowedOrThrow()) {
                     abortedForNetwork = true
                     break
@@ -267,8 +330,27 @@ class ExploreSearchService(
                 val sourceName = row.name
                 val instanceId = row.id
                 val seenAt = System.currentTimeMillis()
+                val cp = checkpoints.get(instanceId)
 
-                if (!force) {
+                // Skip fully done sources unless force
+                if (!force && cp?.status == SourceScanStatus.DONE) {
+                    val existing = catalog.countTracksForSource(
+                        when (type) {
+                            SourceType.JELLYFIN -> CatalogSources.JELLYFIN
+                            SourceType.NAVIDROME -> CatalogSources.NAVIDROME
+                            SourceType.SUBSONIC -> CatalogSources.SUBSONIC
+                            else -> CatalogSources.LOCAL
+                        },
+                        instanceId
+                    )
+                    progress("$sourceName: done ($existing)")
+                    totalIngested += existing
+                    bumpIndexedCount(totalIngested, force = true)
+                    continue
+                }
+
+                // Skip warm complete sources on non-force when no checkpoint needs resume
+                if (!force && (cp == null || cp.status == SourceScanStatus.IDLE)) {
                     val catalogType = when (type) {
                         SourceType.JELLYFIN -> CatalogSources.JELLYFIN
                         SourceType.NAVIDROME -> CatalogSources.NAVIDROME
@@ -278,7 +360,7 @@ class ExploreSearchService(
                     if (catalogType != null) {
                         val existing = catalog.countTracksForSource(catalogType, instanceId)
                         if (existing >= WARM_SOURCE_MIN_TRACKS) {
-                            Log.i(TAG, "skip $sourceName — already indexed $existing tracks (use force to re-sync)")
+                            checkpoints.markDone(instanceId, sourceName, existing, existing)
                             progress("$sourceName: already indexed ($existing)")
                             totalIngested += existing
                             bumpIndexedCount(totalIngested, force = true)
@@ -288,7 +370,12 @@ class ExploreSearchService(
                 }
 
                 anySourceScanned = true
-                progress("Scanning $sourceName…")
+                val resumeFrom = if (force) 0 else (cp?.startIndex ?: 0)
+                val priorDelivered = if (force) 0 else (cp?.delivered ?: 0)
+                progress(
+                    if (resumeFrom > 0) "Resuming $sourceName from $resumeFrom…"
+                    else "Scanning $sourceName…"
+                )
 
                 val ingested = when (type) {
                     SourceType.JELLYFIN -> scanJellyfin(
@@ -298,7 +385,9 @@ class ExploreSearchService(
                         username = row.username,
                         secret = row.secret,
                         seenAt = seenAt,
-                        keepKeys = keepKeys
+                        keepKeys = keepKeys,
+                        startFrom = resumeFrom,
+                        priorDelivered = priorDelivered
                     )
                     SourceType.SUBSONIC, SourceType.NAVIDROME -> scanSubsonic(
                         type = type,
@@ -313,13 +402,17 @@ class ExploreSearchService(
                     else -> 0
                 }
                 if (ingested < 0) {
-                    abortedForNetwork = true
+                    // negative = paused/stopped/network; magnitude is delivered this session
                     totalIngested += -ingested
-                    break
+                    if (abortedForNetwork || stopAll.get() || pauseAll.get()) break
+                    // per-source pause/stop — continue other sources
+                    continue
                 }
                 totalIngested += ingested
                 bumpIndexedCount(totalIngested, force = true)
             }
+
+            refreshCheckpointSnapshot()
 
             if (abortedForNetwork) {
                 progress(
@@ -329,7 +422,14 @@ class ExploreSearchService(
                 val count = catalog.countRemoteTracks()
                 bumpIndexedCount(count, force = true)
                 runCatching { library.reloadFromCatalog() }
-                Log.i(TAG, "remote scan paused for network policy after $totalIngested tracks")
+                return
+            }
+
+            if (stopAll.get() || pauseAll.get()) {
+                progress(if (stopAll.get()) "Stopped" else "Paused")
+                val count = catalog.countRemoteTracks()
+                bumpIndexedCount(count, force = true)
+                runCatching { library.reloadFromCatalog() }
                 return
             }
 
@@ -339,7 +439,6 @@ class ExploreSearchService(
                 bumpIndexedCount(count, force = true)
                 cacheAtMs = System.currentTimeMillis()
                 runCatching { library.reloadFromCatalog() }
-                Log.i(TAG, "all sources warm — count=$count")
                 return
             }
 
@@ -356,7 +455,6 @@ class ExploreSearchService(
 
             if (NetworkPolicy.allowsRemoteSync(context, settings)) {
                 progress("Caching covers…")
-                // Bounded sample only — never pull 24k into RAM for art
                 runCatching {
                     val sample = catalog.getRemoteOfferings(limit = budget.artBatchLimit * 4)
                     cacheAlbumArtPassive(sample.map { it.song })
@@ -373,6 +471,7 @@ class ExploreSearchService(
         } finally {
             _isScanning.value = false
             _scanProgress.value = null
+            refreshCheckpointSnapshot()
             mutex.unlock()
         }
     }
@@ -389,7 +488,9 @@ class ExploreSearchService(
         username: String?,
         secret: String?,
         seenAt: Long,
-        keepKeys: Set<String>
+        keepKeys: Set<String>,
+        startFrom: Int,
+        priorDelivered: Int
     ): Int {
         val url = baseUrl ?: return 0
         val user = username ?: return 0
@@ -403,12 +504,29 @@ class ExploreSearchService(
                 return 0
             }.also { jellyfinSessions[rowId] = it }
 
-        var delivered = 0
+        var delivered = priorDelivered
+        var cursor = startFrom
+        var totalHint: Int? = checkpoints.get(rowId)?.totalHint
         var aborted = false
+        var paused = false
 
-        jellyfinClient.listAudioItemsPaged(session, pageSize = budget.pageSize) { page, start, total ->
-            if (!assertSyncAllowedOrThrow()) {
+        checkpoints.markRunning(rowId, sourceName, cursor, delivered, totalHint)
+
+        jellyfinClient.listAudioItemsPaged(
+            session = session,
+            pageSize = budget.pageSize,
+            startFromIndex = startFrom
+        ) { page, start, total ->
+            if (shouldAbortSource(rowId) || stopAll.get()) {
                 aborted = true
+                throw CancellationException("stopped by user")
+            }
+            if (shouldPauseSource(rowId)) {
+                paused = true
+                throw CancellationException("paused by user")
+            }
+            if (!assertSyncAllowedOrThrow()) {
+                paused = true
                 throw CancellationException("paused for mobile data policy")
             }
 
@@ -419,35 +537,54 @@ class ExploreSearchService(
                 seenAt = seenAt
             )
             delivered += page.size
+            cursor = start + page.size
+            totalHint = total ?: totalHint
             bumpIndexedCount(delivered)
 
-            val totalPart = total?.let { " / $it" }.orEmpty()
-            val done = start + page.size
+            checkpoints.markRunning(rowId, sourceName, cursor, delivered, totalHint)
+            refreshCheckpointSnapshot()
+
+            val totalPart = totalHint?.let { " / $it" }.orEmpty()
             val n = pageCounter.incrementAndGet()
-            if (n == 1 || n % budget.progressEveryPages == 0 || (total != null && done >= total)) {
-                progress("$sourceName: $done$totalPart")
-                if (total != null && total > 0) {
-                    notifier.update("Syncing libraries", "$sourceName: $done / $total", done, total)
+            if (n == 1 || n % budget.progressEveryPages == 0 ||
+                (totalHint != null && cursor >= totalHint!!)
+            ) {
+                progress("$sourceName: $delivered$totalPart")
+                if (totalHint != null && totalHint!! > 0) {
+                    notifier.update(
+                        "Syncing libraries",
+                        "$sourceName: $delivered / $totalHint",
+                        delivered,
+                        totalHint!!
+                    )
                 }
             }
 
             budget.yieldBetweenPages()
-            if (budget.deviceClass != ScanBudget.Class.HIGH && done % 2_000 == 0) {
+            if (budget.deviceClass != ScanBudget.Class.HIGH && delivered % 2_000 == 0) {
                 delay(budget.pageYieldMs * 2)
             }
         }.onFailure {
-            if (it is CancellationException && aborted) {
-                Log.i(TAG, "jellyfin scan paused after $delivered tracks (mobile data policy)")
-            } else if (it is CancellationException) {
-                throw it
-            } else {
-                jellyfinSessions.remove(rowId)
-                Log.w(TAG, "jellyfin scan failed: ${it.message}")
-                _lastError.value = "$sourceName: ${it.message}"
+            when {
+                it is CancellationException && paused -> {
+                    checkpoints.markPaused(rowId, sourceName, cursor, delivered, totalHint)
+                    Log.i(TAG, "jellyfin paused $sourceName at cursor=$cursor delivered=$delivered")
+                }
+                it is CancellationException && aborted -> {
+                    checkpoints.markStopped(rowId, sourceName, cursor, delivered, totalHint)
+                    Log.i(TAG, "jellyfin stopped $sourceName at cursor=$cursor")
+                }
+                it is CancellationException -> throw it
+                else -> {
+                    jellyfinSessions.remove(rowId)
+                    Log.w(TAG, "jellyfin scan failed: ${it.message}")
+                    _lastError.value = "$sourceName: ${it.message}"
+                }
             }
         }
 
-        if (aborted) {
+        if (paused || aborted) {
+            refreshCheckpointSnapshot()
             return -delivered.coerceAtLeast(1)
         }
 
@@ -457,6 +594,8 @@ class ExploreSearchService(
             beforeMs = seenAt,
             keepSongKeys = keepKeys
         )
+        checkpoints.markDone(rowId, sourceName, delivered, totalHint)
+        refreshCheckpointSnapshot()
         return delivered
     }
 
@@ -513,10 +652,15 @@ class ExploreSearchService(
 
         var delivered = 0
         var aborted = false
+        checkpoints.markRunning(instanceId, sourceName, 0, 0, null)
         runCatching {
             subsonicClient.ping(session).getOrThrow()
             val songs = subsonicClient.listAllSongs(session).getOrThrow()
             songs.chunked(budget.pageSize).forEachIndexed { i, chunk ->
+                if (shouldAbortSource(instanceId) || stopAll.get() || shouldPauseSource(instanceId)) {
+                    aborted = true
+                    return@forEachIndexed
+                }
                 if (!assertSyncAllowedOrThrow()) {
                     aborted = true
                     return@forEachIndexed
@@ -529,6 +673,7 @@ class ExploreSearchService(
                 )
                 delivered += chunk.size
                 bumpIndexedCount(delivered)
+                checkpoints.markRunning(instanceId, sourceName, delivered, delivered, songs.size)
                 val done = minOf((i + 1) * budget.pageSize, songs.size)
                 if (i == 0 || (i + 1) % budget.progressEveryPages == 0 || done >= songs.size) {
                     progress("$sourceName: $done / ${songs.size}")
@@ -548,12 +693,18 @@ class ExploreSearchService(
                     beforeMs = seenAt,
                     keepSongKeys = keepKeys
                 )
+                checkpoints.markDone(instanceId, sourceName, delivered, songs.size)
+            } else if (shouldAbortSource(instanceId) || stopAll.get()) {
+                checkpoints.markStopped(instanceId, sourceName, delivered, delivered, null)
+            } else {
+                checkpoints.markPaused(instanceId, sourceName, delivered, delivered, null)
             }
         }.onFailure {
             if (it is CancellationException) throw it
             Log.w(TAG, "subsonic scan failed: ${it.message}")
             _lastError.value = "$sourceName: ${it.message}"
         }
+        refreshCheckpointSnapshot()
         return if (aborted) -delivered.coerceAtLeast(1) else delivered
     }
 
