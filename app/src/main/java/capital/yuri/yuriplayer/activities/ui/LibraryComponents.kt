@@ -59,6 +59,7 @@ import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import capital.yuri.yuriplayer.data.AlbumItem
@@ -434,6 +435,10 @@ fun SwipeAddSongRow(
     val titleColor = if (isPlaying) accent else onSurface
     val titleWeight = if (isPlaying) FontWeight.SemiBold else FontWeight.Normal
     val context = LocalContext.current
+    val subtitleColor = if (isPlaying) accent.copy(alpha = 0.75f)
+    else onSurface.copy(alpha = 0.6f)
+    val subtitleText = if (showTrackNumber) song.displayArtist
+    else "${song.displayArtist} · ${song.displayAlbum}"
 
     Box(modifier = Modifier.fillMaxWidth()) {
         if (revealAlpha > 0.01f) {
@@ -512,13 +517,19 @@ fun SwipeAddSongRow(
                     style = MaterialTheme.typography.bodyLarge.copy(fontWeight = titleWeight),
                     color = titleColor
                 )
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    MarqueeText(
-                        text = if (showTrackNumber) song.displayArtist
-                        else "${song.displayArtist} · ${song.displayAlbum}",
+                // Spotify-style: E + cloud sit immediately after the artist line,
+                // not pushed to the far edge of the row (MarqueeText's fillMaxWidth
+                // was forcing that).
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Text(
+                        text = subtitleText,
                         style = MaterialTheme.typography.bodySmall,
-                        color = if (isPlaying) accent.copy(alpha = 0.75f)
-                        else onSurface.copy(alpha = 0.6f),
+                        color = subtitleColor,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
                         modifier = Modifier.weight(1f, fill = false)
                     )
                     if (showE || showMulti) {
