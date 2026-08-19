@@ -65,41 +65,41 @@ data class ReleasePoolConfig(
     val avoidRecentPerKind: Int = 1
 )
 
+/** How shuffle fills the radio cold queue. */
+@Serializable
+enum class RadioShuffleUnit {
+    /** Random tracks from the whole pool (default). */
+    SONGS,
+    /** Random order of whole LP/EP/Single blocks; tracks stay in release order. */
+    RELEASES
+}
+
 /**
  * Per radio-source preferences (artist / album / playlist station).
  *
- * Discovery flags control whether external servers can inject similar
- * artists / songs / genres beyond the on-device catalog.
+ * Defaults: shuffle ON with [RadioShuffleUnit.SONGS]. Ordered whole-release
+ * mode remains available by turning shuffle off.
  *
- * - Library discovery is always the baseline (local + already-scanned sources).
- * - Jellyfin Instant Mix uses the official SDK InstantMix endpoint when a
- *   matching item exists on an enabled Jellyfin instance.
- * - Subsonic/OpenSubsonic similar-songs is reserved.
- * - Monochrome (monochrome.tf / community hifi-api) is recommendation-oriented
- *   (Tidal metadata + /recommendations, /artist/similar, /mix) — not a library
- *   store. Flag reserved for a thin discovery client later.
+ * Discovery flags: combine any set of sources for similar artists/songs.
  */
 @Serializable
 data class RadioSourcePrefs(
     /**
-     * true  → random songs; restock cold to [maxRadioQueue] as tracks finish.
-     * false → whole LP/EP/Single blocks until the last block reaches ≥ maxRadioQueue.
+     * true  → use [shuffleUnit] to fill cold up to [maxRadioQueue].
+     * false → whole LP/EP/Single blocks in year-desc order (legacy ordered mode).
      */
-    val shuffle: Boolean = false,
+    val shuffle: Boolean = true,
+    val shuffleUnit: RadioShuffleUnit = RadioShuffleUnit.SONGS,
     val maxRadioQueue: Int = DEFAULT_MAX_RADIO_QUEUE,
-    /** Prefer tracks already indexed in the on-device catalog (always on by default). */
+    /** On-device catalog / already-scanned sources. */
     val useLibraryDiscovery: Boolean = true,
-    /**
-     * When true and a Jellyfin source is available for the seed, ask the server
-     * for Instant Mix / similar items and merge into the radio pool.
-     */
+    /** Jellyfin Instant Mix when a matching item exists on an enabled server. */
     val useJellyfinInstantMix: Boolean = false,
-    /** Reserved for Subsonic / OpenSubsonic getSimilarSongs / getSimilarArtists. */
+    /** Subsonic / OpenSubsonic similar-songs / similar-artists. */
     val useSubsonicSimilar: Boolean = false,
     /**
-     * Reserved: monochrome.tf community hifi-api recommendations
-     * (`/recommendations`, `/artist/similar`, `/album/similar`, `/mix`).
-     * Discovery only — not a primary library source.
+     * monochrome.tf community hifi-api recommendations
+     * (`/recommendations`, `/artist/similar`, `/mix`) — discovery only.
      */
     val useMonochromeDiscovery: Boolean = false
 ) {
