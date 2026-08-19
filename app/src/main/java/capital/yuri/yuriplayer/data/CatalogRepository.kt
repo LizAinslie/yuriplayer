@@ -29,6 +29,11 @@ class CatalogRepository(
         dao.getAllTracks().map { it.toSong() }
     }
 
+    /** Device library only — used for fast cold-start of [LibraryIndex]. */
+    suspend fun getLocalSongs(): List<Song> = withContext(Dispatchers.IO) {
+        dao.getTracksBySource(CatalogSources.LOCAL).map { it.toSong() }
+    }
+
     suspend fun getAlbum(albumKey: String): CatalogAlbumEntity? = withContext(Dispatchers.IO) {
         dao.getAlbum(albumKey)
     }
@@ -37,7 +42,6 @@ class CatalogRepository(
         dao.getArtist(artistKey)
     }
 
-    /** How many tracks we already have for a remote instance (used to skip warm re-syncs). */
     suspend fun countTracksForSource(sourceType: String, sourceInstanceId: Long?): Int =
         withContext(Dispatchers.IO) {
             dao.countTracksForSource(sourceType, sourceInstanceId)
@@ -51,18 +55,15 @@ class CatalogRepository(
         dao.upsertTracks(trackEntities)
         dao.pruneStaleTracks(CatalogSources.LOCAL, null, seenAt)
 
+        // Rollups are expensive — only rebuild when the local set actually changed size a lot,
+        // or always once at end of local scan (still cheaper than per-page remote).
         rebuildRollupsLocked()
 
-        val allTracks = dao.getAllTracks()
-        Log.i(TAG, "local sync: ${trackEntities.size} local tracks, catalog total=${allTracks.size}")
-        allTracks.map { it.toSong() }
+        val local = dao.getTracksBySource(CatalogSources.LOCAL).map { it.toSong() }
+        Log.i(TAG, "local sync: ${local.size} local tracks")
+        local
     }
 
-    /**
-     * Cheap path used during multi-thousand-track remote pages.
-     * Only upserts the batch — **does not** rebuild album/artist rollups.
-     * Call [rebuildRollups] once after the full source scan finishes.
-     */
     suspend fun ingestRemoteBatch(
         songs: List<Song>,
         sourceType: String,
