@@ -19,16 +19,6 @@ import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import java.io.File
 
-/**
- * Fills gaps in local tags using MusicBrainz (year) and Cover Art Archive (art).
- *
- * Manual fetch always runs; automatic only when Settings allows it.
- * New covers invalidate [AlbumArtCache] / [ThemeService] and bump [coverGeneration]
- * so UI reloads art **and** Material You colors.
- *
- * Auto-enrich stays sequential (MusicBrainz ~1 req/s) but avoids expensive local I/O
- * (no per-track MediaMetadataRetriever scans in the bulk queue).
- */
 class MetadataEnrichmentService(
     private val context: Context,
     private val dao: AlbumMetadataDao,
@@ -45,7 +35,6 @@ class MetadataEnrichmentService(
     private val _busy = MutableStateFlow(false)
     val busy: StateFlow<Boolean> = _busy.asStateFlow()
 
-    /** Bumped when a cover file is written so Compose can reload art + colors. */
     private val _coverGeneration = MutableStateFlow(0L)
     val coverGeneration: StateFlow<Long> = _coverGeneration.asStateFlow()
 
@@ -54,6 +43,12 @@ class MetadataEnrichmentService(
 
     private val coverDir: File
         get() = File(context.filesDir, "covers").also { it.mkdirs() }
+
+    /** Force UI art/theme reload after a user cover preference change. */
+    fun bumpCoverGeneration() {
+        _coverGeneration.value = System.currentTimeMillis()
+        themeService.invalidateAll()
+    }
 
     suspend fun applyCachedToLibrary() = withContext(Dispatchers.IO) {
         val all = dao.getAll()
@@ -75,7 +70,6 @@ class MetadataEnrichmentService(
                 _statusMessage.value = "Looking up metadata…"
                 try {
                     applyCachedToLibrary()
-                    // Cheap filter only — no embedded-art probing (that was the lag).
                     val albums = library.albums(taggedOnly = false)
                         .filter { needsWorkCheap(it) }
                         .take(maxAlbums)
@@ -146,10 +140,6 @@ class MetadataEnrichmentService(
     fun coverFileForAlbumKey(key: String): File =
         File(coverDir, sanitizeFileName(key) + ".jpg")
 
-    /**
-     * Bulk auto-fetch gate: year from tags / Room, cover from folder file or cached download.
-     * Does **not** open MediaMetadataRetriever (very slow across a whole library).
-     */
     private fun needsWorkCheap(album: AlbumItem): Boolean {
         val key = albumKey(album.name, album.artist)
         if (key in inFlight) return false
@@ -189,7 +179,6 @@ class MetadataEnrichmentService(
             }
 
             Log.i(TAG, "lookup \"${album.displayName}\" / \"${album.displayArtist}\" force=$force")
-            // Skip tags include on search when we only need year/cover — one fewer MB round-trip.
             var hit = client.searchRelease(
                 artist = album.artist,
                 album = album.name,
