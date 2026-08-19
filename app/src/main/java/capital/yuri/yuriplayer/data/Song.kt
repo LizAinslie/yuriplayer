@@ -28,7 +28,9 @@ data class Song(
     /** Genre tag (may be semicolon-separated). */
     val genre: String? = null,
     val path: String? = null,
-    val mimeType: String? = null
+    val mimeType: String? = null,
+    /** Explicit content flag when known from tags / remote metadata. */
+    val explicit: Boolean = false
 ) {
     val displayTitle: String
         get() = title?.takeIf { it.isNotBlank() }
@@ -75,6 +77,18 @@ data class Song(
     val hasAlbum: Boolean get() = album.isMeaningfulTag()
     val hasArtist: Boolean get() = artist.isMeaningfulTag() || albumArtist.isMeaningfulTag()
     val hasTitle: Boolean get() = title.isMeaningfulTag()
+
+    /** Spotify-style explicit: flag or common title/genre markers. */
+    val isExplicit: Boolean
+        get() {
+            if (explicit) return true
+            val t = title.orEmpty()
+            val g = genre.orEmpty()
+            return t.contains("explicit", ignoreCase = true) ||
+                t.contains("[e]", ignoreCase = true) ||
+                Regex("\\(e\\)", RegexOption.IGNORE_CASE).containsMatchIn(t) ||
+                g.contains("explicit", ignoreCase = true)
+        }
 
     val songKey: String
         get() = path?.lowercase() ?: contentUri.toString()
