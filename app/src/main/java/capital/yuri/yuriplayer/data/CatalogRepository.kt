@@ -6,6 +6,8 @@ import capital.yuri.yuriplayer.data.db.CatalogArtistEntity
 import capital.yuri.yuriplayer.data.db.CatalogDao
 import capital.yuri.yuriplayer.data.db.CatalogSources
 import capital.yuri.yuriplayer.data.db.CatalogTrackEntity
+import capital.yuri.yuriplayer.data.source.SourceOffering
+import capital.yuri.yuriplayer.data.source.SourceType
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
@@ -16,15 +18,12 @@ import kotlinx.coroutines.withContext
  *
  * ## What lives in Room
  * - **Local files** — full scan upserted on every library refresh
- * - **My Stuff** — tracks/albums/artists the user explicitly saved from an
- *   external Explore source (Jellyfin, Navidrome, …)
+ * - **Remote libraries** — source-tagged rows from Jellyfin / Subsonic scans
+ *   (progressive ingest). Stale remote rows are pruned after a scan unless the
+ *   songKey is kept for My Stuff.
+ * - **My Stuff** — explicit saves; protected from remote prune
  *
- * ## What does *not* live in Room
- * - Browsing an external server in Explore is **ephemeral**. Results stay in
- *   memory for the session. Only [importToMyStuff] copies rows into the DB.
- *
- * Enrichment (MusicBrainz year / cover) updates existing local/My-Stuff rows;
- * it never invents catalog entries for remote-only browse results.
+ * Enrichment (MusicBrainz year / cover) updates existing rows.
  */
 class CatalogRepository(
     private val dao: CatalogDao,
@@ -44,18 +43,13 @@ class CatalogRepository(
 
     /**
      * Full local rescan → replace LOCAL rows in Room and rebuild album/artist
-     * rollups for those tracks. Remote My-Stuff rows are left alone.
+     * rollups. Remote rows are left alone.
      */
     suspend fun syncLocalLibrary(): List<Song> = withContext(Dispatchers.IO) {
         val scanned = musicRepository.scanLibrary()
         val seenAt = System.currentTimeMillis()
         val trackEntities = scanned.map { it.toLocalTrackEntity(seenAt) }
 
-        val albums = buildAlbumRollups(trackEntities)
-        val artists = buildArtistRollups(trackEntities)
-
-        // Keep remote My-Stuff tracks; only rebuild rollups from *all* tracks
-        // after local upsert + prune.
         dao.upsertTracks(trackEntities)
         dao.pruneStaleTracks(CatalogSources.LOCAL, null, seenAt)
 
@@ -70,10 +64,71 @@ class CatalogRepository(
     }
 
     /**
-     * Persist an external Explore item into My Stuff / catalog.
-     * Call this when the user favorites, adds to a playlist, or explicitly
-     * "Save to library". Until then, remote browse data must not hit Room.
+     * Upsert a page of remote songs into the catalog (source-tagged).
+     * Called live during progressive scans.
      */
+    suspend fun ingestRemoteBatch(
+        songs: List<Song>,
+        sourceType: String,
+        sourceInstanceId: Long?,
+        seenAt: Long = System.currentTimeMillis()
+    ) = withContext(Dispatchers.IO) {
+        if (songs.isEmpty()) return@withContext
+        val entities = songs.map { song ->
+            song.toTrackEntity(
+                sourceType = sourceType,
+                sourceInstanceId = sourceInstanceId,
+                externalId = song.path ?: song.contentUri.toString(),
+                seenAt = seenAt
+            )
+        }
+        dao.upsertTracks(entities)
+        // Cheap rollup refresh for this batch only would miss merges; periodic full
+        // rebuild is fine for Explore — do a light album upsert from batch keys.
+        val all = dao.getAllTracks()
+        dao.upsertAlbums(buildAlbumRollups(all))
+        dao.upsertArtists(buildArtistRollups(all))
+    }
+
+    /**
+     * After a remote scan, drop rows for that source that were not seen,
+     * **except** songKeys the user has in My Stuff (those stay indexed without
+     * requiring the remote still list them).
+     */
+    suspend fun pruneRemoteSource(
+        sourceType: String,
+        sourceInstanceId: Long?,
+        beforeMs: Long,
+        keepSongKeys: Set<String>
+    ) = withContext(Dispatchers.IO) {
+        val stale = dao.getTracksBySource(sourceType)
+            .filter {
+                (sourceInstanceId == null || it.sourceInstanceId == sourceInstanceId) &&
+                    it.lastSeenAtMs < beforeMs &&
+                    it.songKey !in keepSongKeys
+            }
+        stale.forEach { dao.deleteTrack(it.songKey) }
+        if (stale.isNotEmpty()) {
+            dao.deleteOrphanAlbums()
+            dao.deleteOrphanArtists()
+            Log.i(TAG, "pruned ${stale.size} stale $sourceType rows (kept ${keepSongKeys.size} My Stuff keys)")
+        }
+    }
+
+    /** Rebuild live Explore offerings from persisted non-local catalog rows. */
+    suspend fun getRemoteOfferings(): List<SourceOffering> = withContext(Dispatchers.IO) {
+        dao.getAllTracks()
+            .filter { it.sourceType != CatalogSources.LOCAL }
+            .map { row ->
+                SourceOffering(
+                    sourceType = SourceType.from(row.sourceType),
+                    sourceId = row.sourceInstanceId,
+                    sourceName = row.sourceType.lowercase().replaceFirstChar { it.titlecase() },
+                    song = row.toSong()
+                )
+            }
+    }
+
     suspend fun importToMyStuff(song: Song, sourceType: String, sourceInstanceId: Long?, externalId: String?) =
         withContext(Dispatchers.IO) {
             val now = System.currentTimeMillis()
@@ -84,14 +139,12 @@ class CatalogRepository(
                 seenAt = now
             )
             dao.upsertTrack(entity)
-            // Refresh rollups for this album/artist so Explore + My Stuff see them
             val all = dao.getAllTracks()
             dao.upsertAlbums(buildAlbumRollups(all))
             dao.upsertArtists(buildArtistRollups(all))
             Log.i(TAG, "imported to My Stuff: ${entity.songKey} from $sourceType")
         }
 
-    /** Apply MusicBrainz (or other) year onto a persisted album + its tracks. */
     suspend fun applyAlbumYear(albumKey: String, year: Int) = withContext(Dispatchers.IO) {
         if (year !in 1000..2100) return@withContext
         val album = dao.getAlbum(albumKey) ?: return@withContext
@@ -102,7 +155,6 @@ class CatalogRepository(
         if (tracks.isNotEmpty()) dao.upsertTracks(tracks)
     }
 
-    /** Apply downloaded cover path onto a persisted album. */
     suspend fun applyAlbumCover(albumKey: String, coverPath: String?, coverUrl: String?, mbid: String?) =
         withContext(Dispatchers.IO) {
             val album = dao.getAlbum(albumKey) ?: return@withContext
@@ -118,8 +170,6 @@ class CatalogRepository(
 
     suspend fun coverPathForAlbum(albumKey: String): String? =
         dao.getAlbum(albumKey)?.coverPath
-
-    // ── mapping helpers ─────────────────────────────────────────────────
 
     private fun Song.toLocalTrackEntity(seenAt: Long) = toTrackEntity(
         sourceType = CatalogSources.LOCAL,
