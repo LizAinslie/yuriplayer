@@ -108,7 +108,18 @@ val appModule = module {
     single { LibrarySourceRegistry(get()) }
 
     single { SourceResolver(get()) }
-    single { ExploreSearchService(get(), get(), get()) }
+    single {
+        ExploreSearchService(
+            factory = get(),
+            library = get(),
+            sourceResolver = get(),
+            catalog = get(),
+            pinStore = get(),
+            instances = get(),
+            jellyfinClient = get(),
+            subsonicClient = get()
+        )
+    }
 
     single { PlaylistRepository(get(), get(), get()) }
     single { MusicBrainzClient(get<HttpClient>()) }
