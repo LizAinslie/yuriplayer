@@ -46,8 +46,13 @@ import capital.yuri.yuriplayer.player.radio.RadioPlaybackAlgorithm
 import capital.yuri.yuriplayer.player.radio.ReleasePoolAlgorithm
 import io.ktor.client.HttpClient
 import kotlinx.serialization.json.Json
+import org.jellyfin.sdk.api.client.HttpClientOptions
+import org.jellyfin.sdk.createJellyfin
+import org.jellyfin.sdk.model.ClientInfo
+import org.jellyfin.sdk.model.DeviceInfo
 import org.koin.android.ext.koin.androidContext
 import org.koin.dsl.module
+import kotlin.time.Duration.Companion.seconds
 
 val appModule = module {
     single { LibrarySettings(androidContext()) }
@@ -73,13 +78,23 @@ val appModule = module {
     single { LibraryIndex(get(), get(), get()) }
 
     single { SourceInstanceRepository(get()) }
+
     single {
-        JellyfinClient(
-            http = get(),
-            json = get(),
-            deviceId = JellyfinClient.stableDeviceId(androidContext())
-        )
+        val context = androidContext()
+        createJellyfin {
+            clientInfo = ClientInfo(
+                name = "YuriPlayer",
+                version = "0.1.0"
+            )
+            deviceInfo = DeviceInfo(
+                id = JellyfinClient.stableDeviceId(context),
+                name = "Android"
+            )
+            this.context = context
+        }
     }
+    single { JellyfinClient(jellyfin = get()) }
+
     single { SubsonicClient(get<HttpClient>(), get<Json>()) }
     single { LocalLibrarySource(get(), get()) }
     single {
