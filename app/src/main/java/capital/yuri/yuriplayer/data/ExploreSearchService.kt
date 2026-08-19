@@ -138,7 +138,6 @@ class ExploreSearchService(
             val q = query.trim()
             if (q.isEmpty()) return@withContext emptyList()
             // forceRescan is ignored here on purpose — searching must stay local/fast.
-            // Explicit resync is only via requestRemoteScan / refresh button.
             buildHitsRankOnly(q, limit = 120)
         }
 
@@ -180,19 +179,16 @@ class ExploreSearchService(
         val out = ArrayList<SourceOffering>(minOf(softCap, 64))
         val remote = _remoteOfferings.value
         val remoteKeys = if (remote.isEmpty()) emptySet() else {
-            // Only build the key set if we also have local rows to de-dupe against
             val locals = library.songs.value
             if (locals.isEmpty()) emptySet()
             else remote.asSequence().map { it.song.songKey }.toHashSet()
         }
 
-        // Prefer remote index first (usually the large set)
         for (off in remote) {
             if (out.size >= softCap) break
             if (songMatches(off.song, needle)) out += off
         }
 
-        // Local-only tracks
         if (out.size < softCap) {
             for (song in library.songs.value) {
                 if (out.size >= softCap) break
@@ -246,7 +242,7 @@ class ExploreSearchService(
     private fun bumpIndexedCount(count: Int, force: Boolean = false) {
         val now = System.currentTimeMillis()
         val last = lastCountPublishAt.get()
-        if (!force && now - last < budget.countPublishMinIntervalMs) {
+        if (!force && now - last < budget.uiTickMinIntervalMs) {
             return
         }
         if (!lastCountPublishAt.compareAndSet(last, now) && !force) return
