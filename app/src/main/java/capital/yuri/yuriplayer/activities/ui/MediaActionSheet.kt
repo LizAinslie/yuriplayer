@@ -54,6 +54,7 @@ import capital.yuri.yuriplayer.data.PlaylistRepository
 import capital.yuri.yuriplayer.data.Song
 import capital.yuri.yuriplayer.data.StuffPin
 import capital.yuri.yuriplayer.data.StuffPinKind
+import capital.yuri.yuriplayer.data.source.SourceOffering
 import capital.yuri.yuriplayer.player.PlayerController
 import kotlinx.coroutines.launch
 import org.koin.compose.koinInject
@@ -128,7 +129,6 @@ fun PlaylistSheetHeader(
     HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
 }
 
-/** Artist sheet header — circular profile art (no album-cover fallback). */
 @Composable
 fun ArtistSheetHeader(
     artistName: String,
@@ -219,7 +219,10 @@ fun SongContextSheet(
     onAddToQueue: (() -> Unit)? = null,
     onStartRadio: (() -> Unit)? = null,
     onAddToPlaylist: (() -> Unit)? = null,
-    onAddToMyStuff: (() -> Unit)? = null
+    onAddToMyStuff: (() -> Unit)? = null,
+    /** When multiple sources exist, show a Sources option that opens a priority picker. */
+    sourceOfferings: List<SourceOffering>? = null,
+    onPreferSource: ((SourceOffering) -> Unit)? = null
 ) {
     val pinStore: MyStuffPinStore = koinInject()
     val player: PlayerController = koinInject()
@@ -227,7 +230,14 @@ fun SongContextSheet(
     val songNav = LocalSongNav.current
     var showPlaylistPicker by remember { mutableStateOf(false) }
     var showArtistPicker by remember { mutableStateOf(false) }
+    var showSourcesPicker by remember { mutableStateOf(false) }
     val artists = remember(song) { songArtistNames(song) }
+
+    val multiSources = sourceOfferings
+        ?.map { "${it.sourceType.name}:${it.sourceId}" }
+        ?.toSet()
+        ?.size
+        ?.let { it > 1 } == true
 
     val goToAlbum = onGoToAlbum ?: { songNav.openAlbumForSong(song) }
     val goToArtist = onGoToArtist ?: { name -> songNav.openArtistByName(name) }
@@ -273,6 +283,24 @@ fun SongContextSheet(
             }
             MediaSheetBottomPad()
         }
+        return
+    }
+
+    if (showSourcesPicker && sourceOfferings != null) {
+        SourcesPickerSheet(
+            songTitle = song.displayTitle,
+            offerings = sourceOfferings,
+            preferred = sourceOfferings.firstOrNull(),
+            onDismiss = {
+                showSourcesPicker = false
+                onDismiss()
+            },
+            onPick = { off ->
+                onPreferSource?.invoke(off)
+                showSourcesPicker = false
+                onDismiss()
+            }
+        )
         return
     }
 
@@ -337,6 +365,11 @@ fun SongContextSheet(
                 }
             }
         }
+        if (multiSources && onPreferSource != null) {
+            MediaSheetItem("Sources") {
+                showSourcesPicker = true
+            }
+        }
         if (onEditMetadata != null) {
             MediaSheetItem("Edit metadata") {
                 onDismiss()
@@ -347,7 +380,6 @@ fun SongContextSheet(
     }
 }
 
-/** Shared album sheet — defaults from [LocalAlbumNav]. */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun AlbumContextSheet(
@@ -421,7 +453,6 @@ fun AlbumContextSheet(
     }
 }
 
-/** Shared artist sheet — defaults from [LocalArtistNav], including optional image/links. */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun ArtistContextSheet(
@@ -513,7 +544,6 @@ fun ArtistContextSheet(
     }
 }
 
-/** Shared playlist sheet — defaults from [LocalPlaylistNav]. Uses playlist cover art. */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun PlaylistContextSheet(
@@ -596,8 +626,6 @@ fun AddToPlaylistSheet(
         ready = true
     }
 
-    // Filter by name; selection is independent of visibility so filtered-out
-    // checked playlists stay selected. Checked rows always sort first.
     val visiblePlaylists = remember(playlists, query, selected) {
         val q = query.trim()
         val filtered = if (q.isEmpty()) {
