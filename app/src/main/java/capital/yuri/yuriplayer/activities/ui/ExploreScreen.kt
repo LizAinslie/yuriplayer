@@ -80,43 +80,46 @@ fun ExploreScreen(
     var sourcesFor by remember { mutableStateOf<ExploreSearchService.Hit?>(null) }
 
     val scanning by explore.isScanning.collectAsState()
+    val scanProgress by explore.scanProgress.collectAsState()
+    val indexed by explore.indexedCount.collectAsState()
+    val remoteOfferings by explore.remoteOfferings.collectAsState()
     val err by explore.lastError.collectAsState()
     val remoteSources by explore.sourceCount.collectAsState()
+
+    LaunchedEffect(Unit) {
+        explore.hydrateFromCatalog()
+    }
 
     LaunchedEffect(forceRescanKey) {
         if (forceRescanKey > 0) {
             explore.refreshRemotes()
-            if (query.trim().isNotEmpty()) {
-                searching = true
-                hits = explore.search(query, forceRescan = false)
-                searching = false
-            }
         }
     }
 
-    fun runSearch(q: String) {
-        searchJob?.cancel()
-        searchJob = scope.launch {
-            val trimmed = q.trim()
-            if (trimmed.isEmpty()) {
-                hits = emptyList()
-                searching = false
-                return@launch
-            }
-            delay(280)
-            searching = true
-            hits = explore.search(trimmed)
-            searching = false
+    // Kick off remote index when the user actually searches
+    LaunchedEffect(query) {
+        val q = query.trim()
+        if (q.isEmpty()) {
+            hits = emptyList()
+            return@LaunchedEffect
         }
+        delay(280)
+        searching = true
+        hits = explore.searchWithPrefer(q, forceRescan = false)
+        searching = false
+    }
+
+    // Live-refresh results as Jellyfin pages land in the index
+    LaunchedEffect(remoteOfferings, query) {
+        val q = query.trim()
+        if (q.isEmpty()) return@LaunchedEffect
+        hits = explore.searchWithPrefer(q, forceRescan = false)
     }
 
     Column(modifier = Modifier.fillMaxSize()) {
         OutlinedTextField(
             value = query,
-            onValueChange = {
-                query = it
-                runSearch(it)
-            },
+            onValueChange = { query = it },
             modifier = Modifier
                 .fillMaxWidth()
                 .padding(horizontal = 12.dp, vertical = 8.dp),
@@ -138,20 +141,24 @@ fun ExploreScreen(
                 onSearch = {
                     focusManager.clearFocus()
                     keyboard?.hide()
-                    runSearch(query)
                 }
             )
         )
 
         val status = when {
-            err != null -> err!!
-            scanning -> "Scanning remote libraries…"
+            err != null && !scanning -> err!!
+            scanning && scanProgress != null -> scanProgress!!
+            scanning -> "Scanning remote libraries… ($indexed indexed)"
             query.trim().isEmpty() -> {
-                if (remoteSources > 0) "Type to search local + $remoteSources remote source(s)"
-                else "Type to search your library"
+                when {
+                    indexed > 0 -> "Type to search · $indexed remote tracks indexed"
+                    remoteSources > 0 -> "Type to search local + $remoteSources remote source(s)"
+                    else -> "Type to search your library"
+                }
             }
             searching -> "Searching…"
-            else -> "${hits.size} result${if (hits.size == 1) "" else "s"}"
+            else -> "${hits.size} result${if (hits.size == 1) "" else "s"}" +
+                if (indexed > 0) " · $indexed remote indexed" else ""
         }
         Row(
             modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
@@ -191,7 +198,7 @@ fun ExploreScreen(
                             color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.55f)
                         )
                         Text(
-                            "Local files, Jellyfin, Subsonic — results appear as you type.",
+                            "Local + Jellyfin + Subsonic. Results update live while scanning.",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.4f),
                             modifier = Modifier.padding(top = 6.dp)
@@ -264,7 +271,7 @@ fun ExploreScreen(
             onPick = { off ->
                 scope.launch {
                     explore.setPreferredSource(hit.identityKey, off)
-                    hits = explore.search(query)
+                    hits = explore.searchWithPrefer(query)
                     sourcesFor = null
                     Toast.makeText(context, "Preferred: ${off.sourceName}", Toast.LENGTH_SHORT).show()
                 }
