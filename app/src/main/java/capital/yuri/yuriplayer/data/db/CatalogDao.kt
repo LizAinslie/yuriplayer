@@ -98,10 +98,14 @@ interface CatalogDao {
     @Query("SELECT * FROM catalog_tracks WHERE albumKey = :albumKey ORDER BY discNumber, trackNumber, title")
     suspend fun getTracksForAlbum(albumKey: String): List<CatalogTrackEntity>
 
-    /** Single seed track for list cover art — avoids loading the full album. */
+    /**
+     * Single seed track for list / hero cover art.
+     * Prefer LOCAL (embedded tags / folder art), then any row that already has art.
+     */
     @Query(
         "SELECT * FROM catalog_tracks WHERE albumKey = :albumKey " +
-            "ORDER BY CASE WHEN albumArtUri IS NOT NULL AND albumArtUri != '' THEN 0 ELSE 1 END, " +
+            "ORDER BY CASE WHEN sourceType = 'LOCAL' THEN 0 ELSE 1 END, " +
+            "CASE WHEN albumArtUri IS NOT NULL AND albumArtUri != '' THEN 0 ELSE 1 END, " +
             "discNumber, trackNumber LIMIT 1"
     )
     suspend fun getOneTrackForAlbum(albumKey: String): CatalogTrackEntity?
@@ -122,10 +126,6 @@ interface CatalogDao {
     )
     suspend fun pruneStaleTracks(sourceType: String, sourceInstanceId: Long?, beforeMs: Long): Int
 
-    /**
-     * Prune one remote source without loading rows into the app process.
-     * [keepKeys] is typically My Stuff song pins (small).
-     */
     @Query(
         "DELETE FROM catalog_tracks WHERE sourceType = :sourceType " +
             "AND (sourceInstanceId IS :sourceInstanceId OR (sourceInstanceId IS NULL AND :sourceInstanceId IS NULL)) " +
@@ -144,13 +144,19 @@ interface CatalogDao {
 
     // ── SQL rollups (never SELECT * tracks into Kotlin) ─────────────────
 
+    /**
+     * Logical track count: same title + disc + track # across sources counts once
+     * (local + Jellyfin copies of Trench no longer double the album length).
+     */
     @Query(
         """
         SELECT albumKey AS albumKey,
                MAX(album) AS name,
                MAX(COALESCE(albumArtist, artist)) AS artist,
                MAX(year) AS year,
-               COUNT(DISTINCT songKey) AS trackCount,
+               COUNT(DISTINCT lower(IFNULL(title, '')) || '|' ||
+                     IFNULL(CAST(trackNumber AS TEXT), '') || '|' ||
+                     IFNULL(CAST(discNumber AS TEXT), '1')) AS trackCount,
                MAX(CASE WHEN albumArtUri LIKE 'http%' THEN albumArtUri ELSE NULL END) AS coverUrl,
                MIN(sourceType) AS primarySourceType
         FROM catalog_tracks
@@ -164,7 +170,9 @@ interface CatalogDao {
         """
         SELECT artistKey AS artistKey,
                MAX(COALESCE(albumArtist, artist, artistKey)) AS displayName,
-               COUNT(DISTINCT songKey) AS trackCount,
+               COUNT(DISTINCT lower(IFNULL(title, '')) || '|' ||
+                     IFNULL(CAST(trackNumber AS TEXT), '') || '|' ||
+                     lower(IFNULL(album, ''))) AS trackCount,
                COUNT(DISTINCT albumKey) AS albumCount
         FROM catalog_tracks
         WHERE artistKey IS NOT NULL AND artistKey != ''
