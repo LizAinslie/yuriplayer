@@ -8,6 +8,32 @@ plugins {
     alias(libs.plugins.ksp)
 }
 
+fun gitCommand(vararg args: String): String {
+    return try {
+        val proc = ProcessBuilder("git", *args)
+            .directory(rootProject.projectDir)
+            .redirectErrorStream(true)
+            .start()
+        val out = proc.inputStream.bufferedReader().readText().trim()
+        proc.waitFor()
+        if (proc.exitValue() == 0 && out.isNotBlank()) out else "unknown"
+    } catch (_: Exception) {
+        "unknown"
+    }
+}
+
+val gitCommit: String = gitCommand("rev-parse", "HEAD")
+val gitCommitShort: String = gitCommand("rev-parse", "--short", "HEAD")
+val gitBranch: String = gitCommand("rev-parse", "--abbrev-ref", "HEAD")
+val gitDescribe: String = gitCommand("describe", "--tags", "--always", "--dirty")
+val gitTag: String = run {
+    val exact = gitCommand("describe", "--tags", "--exact-match")
+    if (exact != "unknown") exact else ""
+}
+val gitDirty: Boolean = gitCommand("status", "--porcelain").let {
+    it != "unknown" && it.isNotBlank()
+}
+
 android {
     namespace = "capital.yuri.yuriplayer"
     compileSdk {
@@ -22,6 +48,14 @@ android {
         versionName = "0.1.0-local"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+
+        buildConfigField("String", "GIT_COMMIT", "\"$gitCommit\"")
+        buildConfigField("String", "GIT_COMMIT_SHORT", "\"$gitCommitShort\"")
+        buildConfigField("String", "GIT_BRANCH", "\"$gitBranch\"")
+        buildConfigField("String", "GIT_DESCRIBE", "\"$gitDescribe\"")
+        buildConfigField("String", "GIT_TAG", "\"$gitTag\"")
+        buildConfigField("boolean", "GIT_DIRTY", "$gitDirty")
+        buildConfigField("String", "REPO_URL", "\"https://github.com/LizAinslie/yuriplayer\"")
     }
 
     val keystorePropsFile = rootProject.file("keystore.properties")
@@ -65,6 +99,7 @@ android {
     }
     buildFeatures {
         compose = true
+        buildConfig = true
     }
 
     sourceSets {
@@ -180,7 +215,6 @@ dependencies {
     implementation(libs.ktor.client.logging)
     implementation(libs.ktor.serialization.kotlinx.json)
 
-    // Official Jellyfin Kotlin SDK (auth, items, streaming helpers)
     implementation(libs.jellyfin.core)
 
     implementation(libs.coil.compose)
