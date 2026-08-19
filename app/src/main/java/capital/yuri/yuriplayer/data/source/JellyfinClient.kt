@@ -21,8 +21,6 @@ import java.util.UUID
 
 /**
  * Thin YuriPlayer wrapper around the official [Jellyfin] Kotlin SDK.
- * Prefer SDK APIs for anything new; only add hand-rolled calls if the SDK
- * cannot do it, then upstream a patch when practical.
  */
 class JellyfinClient(
     private val jellyfin: Jellyfin
@@ -32,7 +30,6 @@ class JellyfinClient(
         val userId: String,
         val accessToken: String,
         val serverName: String? = null,
-        /** Live SDK client already holding the access token. */
         val api: ApiClient
     )
 
@@ -90,10 +87,6 @@ class JellyfinClient(
             out
         }.onFailure { Log.w(TAG, "listAudioItems failed: ${it.message}") }
 
-    /**
-     * Page through the user's audio library. Pagination uses the **raw** server
-     * item count so unmappable rows never truncate the rest of the library.
-     */
     suspend fun listAudioItemsPaged(
         session: Session,
         pageSize: Int = 500,
@@ -137,9 +130,7 @@ class JellyfinClient(
                 delivered += page.size
             }
 
-            // Always advance by what the server returned, not by mapped count
             start += raw.size
-
             if (raw.size < take) break
             if (totalHint != null && start >= totalHint) break
         }
@@ -148,8 +139,16 @@ class JellyfinClient(
         delivered
     }.onFailure { Log.w(TAG, "listAudioItemsPaged failed: ${it.message}") }
 
-    fun streamUrl(session: Session, itemId: String): String =
-        "${session.baseUrl.trimEnd('/')}/Audio/$itemId/stream?static=true&api_key=${session.accessToken}"
+    /**
+     * Direct static stream. Path ends with `/{itemId}` so Media3 / MusicService
+     * URI equality (which compares lastPathSegment) stays unique per track.
+     */
+    fun streamUrl(session: Session, itemId: String): String {
+        val root = session.baseUrl.trimEnd('/')
+        // Include item id in the path so lastPathSegment ≠ "stream" for every track
+        return "$root/Audio/$itemId/stream/$itemId" +
+            "?static=true&api_key=${session.accessToken}"
+    }
 
     fun primaryImageUrl(session: Session, itemId: String, maxWidth: Int = 512): String =
         "${session.baseUrl.trimEnd('/')}/Items/$itemId/Images/Primary?maxWidth=$maxWidth&api_key=${session.accessToken}"
@@ -192,6 +191,7 @@ class JellyfinClient(
             trackNumber = indexNumber,
             discNumber = parentIndexNumber,
             year = productionYear,
+            // Catalog key only — not a filesystem path (MusicService must not File() this)
             path = "jellyfin:$id",
             mimeType = null
         )
@@ -213,10 +213,6 @@ class JellyfinClient(
             ItemFields.OVERVIEW
         )
 
-        /**
-         * Strip leading "01 - " / "1. " style prefixes when the server stored the
-         * filename as the title.
-         */
         fun cleanTrackTitle(raw: String?, trackNumber: Int?): String? {
             if (raw.isNullOrBlank()) return raw
             val trimmed = raw.trim()
