@@ -13,18 +13,6 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.withContext
 
-/**
- * Persistent music catalog.
- *
- * ## What lives in Room
- * - **Local files** — full scan upserted on every library refresh
- * - **Remote libraries** — source-tagged rows from Jellyfin / Subsonic scans
- *   (progressive ingest). Stale remote rows are pruned after a scan unless the
- *   songKey is kept for My Stuff.
- * - **My Stuff** — explicit saves; protected from remote prune
- *
- * Enrichment (MusicBrainz year / cover) updates existing rows.
- */
 class CatalogRepository(
     private val dao: CatalogDao,
     private val musicRepository: MusicRepository
@@ -41,10 +29,14 @@ class CatalogRepository(
         dao.getAllTracks().map { it.toSong() }
     }
 
-    /**
-     * Full local rescan → replace LOCAL rows in Room and rebuild album/artist
-     * rollups. Remote rows are left alone.
-     */
+    suspend fun getAlbum(albumKey: String): CatalogAlbumEntity? = withContext(Dispatchers.IO) {
+        dao.getAlbum(albumKey)
+    }
+
+    suspend fun getArtist(artistKey: String): CatalogArtistEntity? = withContext(Dispatchers.IO) {
+        dao.getArtist(artistKey)
+    }
+
     suspend fun syncLocalLibrary(): List<Song> = withContext(Dispatchers.IO) {
         val scanned = musicRepository.scanLibrary()
         val seenAt = System.currentTimeMillis()
@@ -63,10 +55,6 @@ class CatalogRepository(
         allTracks.map { it.toSong() }
     }
 
-    /**
-     * Upsert a page of remote songs into the catalog (source-tagged).
-     * Called live during progressive scans.
-     */
     suspend fun ingestRemoteBatch(
         songs: List<Song>,
         sourceType: String,
@@ -83,18 +71,11 @@ class CatalogRepository(
             )
         }
         dao.upsertTracks(entities)
-        // Cheap rollup refresh for this batch only would miss merges; periodic full
-        // rebuild is fine for Explore — do a light album upsert from batch keys.
         val all = dao.getAllTracks()
         dao.upsertAlbums(buildAlbumRollups(all))
         dao.upsertArtists(buildArtistRollups(all))
     }
 
-    /**
-     * After a remote scan, drop rows for that source that were not seen,
-     * **except** songKeys the user has in My Stuff (those stay indexed without
-     * requiring the remote still list them).
-     */
     suspend fun pruneRemoteSource(
         sourceType: String,
         sourceInstanceId: Long?,
@@ -115,7 +96,6 @@ class CatalogRepository(
         }
     }
 
-    /** Rebuild live Explore offerings from persisted non-local catalog rows. */
     suspend fun getRemoteOfferings(): List<SourceOffering> = withContext(Dispatchers.IO) {
         dao.getAllTracks()
             .filter { it.sourceType != CatalogSources.LOCAL }
@@ -167,6 +147,14 @@ class CatalogRepository(
                 )
             )
         }
+
+    suspend fun applyArtistImage(artistKey: String, imageUri: String?) = withContext(Dispatchers.IO) {
+        val artist = dao.getArtist(artistKey) ?: return@withContext
+        if (imageUri.isNullOrBlank()) return@withContext
+        dao.upsertArtist(
+            artist.copy(imageUri = imageUri, updatedAtMs = System.currentTimeMillis())
+        )
+    }
 
     suspend fun coverPathForAlbum(albumKey: String): String? =
         dao.getAlbum(albumKey)?.coverPath
@@ -238,6 +226,8 @@ class CatalogRepository(
                     .groupingBy { it }.eachCount().maxByOrNull { it.value }?.key
                 val year = group.mapNotNull { it.year }.maxOrNull()
                 val artistKey = artistKey(artist)
+                val coverUrl = group.mapNotNull { it.albumArtUri }.firstOrNull { it.startsWith("http") }
+                val existing = runCatching { dao.getAlbum(key) }.getOrNull()
                 CatalogAlbumEntity(
                     albumKey = key,
                     name = name,
@@ -246,6 +236,9 @@ class CatalogRepository(
                     year = year,
                     trackCount = group.distinctBy { it.songKey }.size,
                     releaseType = guessReleaseType(group.size).name,
+                    mbid = existing?.mbid,
+                    coverPath = existing?.coverPath,
+                    coverUrl = coverUrl ?: existing?.coverUrl,
                     primarySourceType = group.firstOrNull()?.sourceType ?: CatalogSources.LOCAL,
                     updatedAtMs = System.currentTimeMillis()
                 )
@@ -261,11 +254,16 @@ class CatalogRepository(
                     .groupingBy { it }.eachCount().maxByOrNull { it.value }?.key
                     ?: key
                 val albums = group.mapNotNull { it.albumKey }.toSet()
+                val existing = runCatching { dao.getArtist(key) }.getOrNull()
                 CatalogArtistEntity(
                     artistKey = key,
                     displayName = display,
                     trackCount = group.distinctBy { it.songKey }.size,
                     albumCount = albums.size,
+                    bio = existing?.bio,
+                    imageUri = existing?.imageUri,
+                    websiteUrl = existing?.websiteUrl,
+                    linksJson = existing?.linksJson,
                     updatedAtMs = System.currentTimeMillis()
                 )
             }
