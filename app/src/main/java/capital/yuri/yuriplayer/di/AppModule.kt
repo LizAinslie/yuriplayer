@@ -3,6 +3,7 @@ package capital.yuri.yuriplayer.di
 import capital.yuri.yuriplayer.data.AlbumArtCache
 import capital.yuri.yuriplayer.data.ArtistProfileRepository
 import capital.yuri.yuriplayer.data.CatalogRepository
+import capital.yuri.yuriplayer.data.ExploreSearchService
 import capital.yuri.yuriplayer.data.LibraryCache
 import capital.yuri.yuriplayer.data.LibraryIndex
 import capital.yuri.yuriplayer.data.LibrarySettings
@@ -106,6 +107,9 @@ val appModule = module {
     single<List<LibrarySource>> { listOf(get<LocalLibrarySource>()) }
     single { LibrarySourceRegistry(get()) }
 
+    single { SourceResolver(get()) }
+    single { ExploreSearchService(get(), get(), get()) }
+
     single { PlaylistRepository(get(), get(), get()) }
     single { MusicBrainzClient(get<HttpClient>()) }
     single { BandsintownClient(get<HttpClient>()) }
@@ -133,7 +137,6 @@ val appModule = module {
             artistInfo = get()
         )
     }
-    single { SourceResolver(get()) }
 
     single { AlbumArtCache(androidContext()) }
     single { ThemeService(get()) }
