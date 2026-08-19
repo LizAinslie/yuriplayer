@@ -4,6 +4,18 @@ import android.content.Context
 import android.os.Environment
 import java.io.File
 
+/** How local files are discovered. */
+enum class LibraryScanMode {
+    /** Android MediaStore (+ filesystem fill for roots MediaStore missed). */
+    MEDIASTORE,
+
+    /**
+     * User-selected SAF trees only. Walks granted folders with our tag reader;
+     * does not depend on the system media scanner.
+     */
+    MANUAL
+}
+
 /**
  * User-configurable library roots + metadata / playback preferences.
  *
@@ -14,6 +26,22 @@ class LibrarySettings(context: Context) {
 
     private val prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
 
+    // ── local scan mode ───────────────────────────────────────────────────
+
+    fun getScanMode(): LibraryScanMode {
+        val raw = prefs.getString(KEY_SCAN_MODE, LibraryScanMode.MEDIASTORE.name)
+        return runCatching { LibraryScanMode.valueOf(raw!!) }
+            .getOrDefault(LibraryScanMode.MEDIASTORE)
+    }
+
+    fun setScanMode(mode: LibraryScanMode) {
+        prefs.edit().putString(KEY_SCAN_MODE, mode.name).apply()
+    }
+
+    /**
+     * Legacy relative path roots used by [LibraryScanMode.MEDIASTORE] filesystem fill
+     * (and as a fallback hint). Prefer absolute paths under external storage.
+     */
     fun getScanRoots(): List<File> {
         val stored = prefs.getStringSet(KEY_ROOTS, null)
         val relative = if (stored.isNullOrEmpty()) DEFAULT_ROOTS else stored.toList()
@@ -29,15 +57,41 @@ class LibrarySettings(context: Context) {
     }
 
     fun addScanRoot(relativePath: String) {
-        val current = prefs.getStringSet(KEY_ROOTS, DEFAULT_ROOTS.toSet())?.toMutableSet() ?: mutableSetOf()
+        val current = prefs.getStringSet(KEY_ROOTS, DEFAULT_ROOTS.toSet())?.toMutableSet()
+            ?: mutableSetOf()
         current += relativePath.trim().trimStart('/')
         prefs.edit().putStringSet(KEY_ROOTS, current).apply()
     }
 
     /**
-     * When true, missing years/covers are fetched in the background after scans.
-     * Default **false** — use the manual "Fetch additional metadata" action instead.
+     * Persistable SAF tree URIs for [LibraryScanMode.MANUAL].
+     * Caller must [android.content.ContentResolver.takePersistableUriPermission] first.
      */
+    fun getManualTreeUris(): List<String> =
+        prefs.getStringSet(KEY_MANUAL_TREES, emptySet())?.toList()?.sorted().orEmpty()
+
+    fun setManualTreeUris(uris: Collection<String>) {
+        prefs.edit().putStringSet(
+            KEY_MANUAL_TREES,
+            uris.map { it.trim() }.filter { it.isNotEmpty() }.toSet()
+        ).apply()
+    }
+
+    fun addManualTreeUri(uri: String) {
+        val u = uri.trim()
+        if (u.isEmpty()) return
+        val current = prefs.getStringSet(KEY_MANUAL_TREES, emptySet())?.toMutableSet() ?: mutableSetOf()
+        current += u
+        prefs.edit().putStringSet(KEY_MANUAL_TREES, current).apply()
+    }
+
+    fun removeManualTreeUri(uri: String) {
+        val current = prefs.getStringSet(KEY_MANUAL_TREES, emptySet())?.toMutableSet() ?: return
+        if (current.remove(uri)) {
+            prefs.edit().putStringSet(KEY_MANUAL_TREES, current).apply()
+        }
+    }
+
     fun isAutomaticMetadataEnabled(): Boolean =
         prefs.getBoolean(KEY_AUTO_METADATA, false)
 
@@ -45,11 +99,6 @@ class LibrarySettings(context: Context) {
         prefs.edit().putBoolean(KEY_AUTO_METADATA, enabled).apply()
     }
 
-    /**
-     * When true and Repeat is Off, ending a cold queue auto-starts another album
-     * from the same artist (random, excluding the album that just finished and
-     * the one before that). Singles/EPs are included.
-     */
     fun isAutoPlayRecommendedEnabled(): Boolean =
         prefs.getBoolean(KEY_AUTO_PLAY_RECOMMENDED, false)
 
@@ -57,9 +106,6 @@ class LibrarySettings(context: Context) {
         prefs.edit().putBoolean(KEY_AUTO_PLAY_RECOMMENDED, enabled).apply()
     }
 
-    // ── legacy aliases (MainActivity / older builds) ─────────────────────
-
-    /** Always non-null so the old launch consent dialog never shows again. */
     fun networkMetadataConsent(): Boolean? = isAutomaticMetadataEnabled()
 
     fun isNetworkMetadataEnabled(): Boolean = isAutomaticMetadataEnabled()
@@ -83,9 +129,11 @@ class LibrarySettings(context: Context) {
     companion object {
         private const val PREFS = "library_settings"
         private const val KEY_ROOTS = "scan_roots"
+        private const val KEY_SCAN_MODE = "scan_mode"
+        private const val KEY_MANUAL_TREES = "manual_tree_uris"
         private const val KEY_AUTO_METADATA = "automatic_metadata_enabled"
         private const val KEY_AUTO_PLAY_RECOMMENDED = "auto_play_recommended"
-        private const val KEY_NETWORK_META = "network_metadata_enabled" // legacy
+        private const val KEY_NETWORK_META = "network_metadata_enabled"
 
         val DEFAULT_ROOTS = listOf(
             "Music",
