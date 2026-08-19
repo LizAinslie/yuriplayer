@@ -25,6 +25,9 @@ import java.io.File
  * Manual fetch always runs; automatic only when Settings allows it.
  * New covers invalidate [AlbumArtCache] / [ThemeService] and bump [coverGeneration]
  * so UI reloads art **and** Material You colors.
+ *
+ * Auto-enrich stays sequential (MusicBrainz ~1 req/s) but avoids expensive local I/O
+ * (no per-track MediaMetadataRetriever scans in the bulk queue).
  */
 class MetadataEnrichmentService(
     private val context: Context,
@@ -61,7 +64,7 @@ class MetadataEnrichmentService(
         }
     }
 
-    fun enrichLibraryAsync(maxAlbums: Int = 60) {
+    fun enrichLibraryAsync(maxAlbums: Int = 80) {
         if (!settings.isAutomaticMetadataEnabled()) {
             Log.i(TAG, "skip auto enrich — automatic metadata disabled")
             return
@@ -72,14 +75,24 @@ class MetadataEnrichmentService(
                 _statusMessage.value = "Looking up metadata…"
                 try {
                     applyCachedToLibrary()
+                    // Cheap filter only — no embedded-art probing (that was the lag).
                     val albums = library.albums(taggedOnly = false)
-                        .filter { needsWork(it) }
+                        .filter { needsWorkCheap(it) }
                         .take(maxAlbums)
                     Log.i(TAG, "auto enrich queue size=${albums.size}")
+                    var done = 0
                     for (album in albums) {
-                        enrichAlbum(album, force = false)
+                        if (!settings.isAutomaticMetadataEnabled()) {
+                            Log.i(TAG, "auto enrich cancelled mid-run")
+                            break
+                        }
+                        enrichAlbum(album, force = false, probeEmbeddedArt = false)
+                        done++
+                        if (done % 5 == 0) {
+                            _statusMessage.value = "Metadata $done / ${albums.size}…"
+                        }
                     }
-                    _statusMessage.value = null
+                    _statusMessage.value = if (done > 0) "Updated $done releases" else null
                 } catch (e: Exception) {
                     Log.e(TAG, "enrichLibrary failed", e)
                     _statusMessage.value = "Metadata lookup failed"
@@ -95,7 +108,7 @@ class MetadataEnrichmentService(
             _busy.value = true
             _statusMessage.value = "Fetching metadata for ${album.displayName}…"
             try {
-                enrichAlbum(album, force = force)
+                enrichAlbum(album, force = force, probeEmbeddedArt = true)
                 _statusMessage.value = "Done: ${album.displayName}"
             } catch (e: Exception) {
                 Log.w(TAG, "enrichAlbum failed ${album.displayName}", e)
@@ -114,7 +127,7 @@ class MetadataEnrichmentService(
                 _statusMessage.value = "Fetching metadata for ${albums.size} releases…"
                 try {
                     for (album in albums) {
-                        enrichAlbum(album, force = force)
+                        enrichAlbum(album, force = force, probeEmbeddedArt = true)
                     }
                     _statusMessage.value = "Fetched metadata for ${albums.size} releases"
                 } catch (e: Exception) {
@@ -133,16 +146,24 @@ class MetadataEnrichmentService(
     fun coverFileForAlbumKey(key: String): File =
         File(coverDir, sanitizeFileName(key) + ".jpg")
 
-    private fun needsWork(album: AlbumItem): Boolean {
+    /**
+     * Bulk auto-fetch gate: year from tags / Room, cover from folder file or cached download.
+     * Does **not** open MediaMetadataRetriever (very slow across a whole library).
+     */
+    private fun needsWorkCheap(album: AlbumItem): Boolean {
         val key = albumKey(album.name, album.artist)
         if (key in inFlight) return false
-        val hasYear = album.songs.any { it.year != null && it.year > 0 }
-        val hasRealArt = album.songs.any { hasEmbeddedOrFolderArt(it.path) } ||
-            coverFileForAlbumKey(key).isFile
-        return !hasYear || !hasRealArt
+        val hasYear = album.songs.any { it.year != null && it.year!! > 0 }
+        val hasArt = coverFileForAlbumKey(key).isFile ||
+            album.songs.any { folderCoverExists(it.path) }
+        return !hasYear || !hasArt
     }
 
-    private suspend fun enrichAlbum(album: AlbumItem, force: Boolean) {
+    private suspend fun enrichAlbum(
+        album: AlbumItem,
+        force: Boolean,
+        probeEmbeddedArt: Boolean
+    ) {
         val key = albumKey(album.name, album.artist)
         if (!inFlight.add(key)) return
         try {
@@ -152,10 +173,15 @@ class MetadataEnrichmentService(
                 return
             }
 
-            val needYear = album.songs.none { it.year != null && it.year > 0 } &&
+            val hasEmbedded = if (probeEmbeddedArt) {
+                album.songs.any { hasEmbeddedOrFolderArt(it.path) }
+            } else {
+                album.songs.any { folderCoverExists(it.path) }
+            }
+
+            val needYear = album.songs.none { it.year != null && it.year!! > 0 } &&
                 existing?.year == null
-            val needArt = !coverFileForAlbumKey(key).isFile &&
-                album.songs.none { hasEmbeddedOrFolderArt(it.path) }
+            val needArt = !coverFileForAlbumKey(key).isFile && !hasEmbedded
 
             if (!force && !needYear && !needArt) {
                 existing?.year?.let { library.applyAlbumYear(key, it) }
@@ -163,13 +189,18 @@ class MetadataEnrichmentService(
             }
 
             Log.i(TAG, "lookup \"${album.displayName}\" / \"${album.displayArtist}\" force=$force")
-            var hit = client.searchRelease(album.artist, album.name)
+            // Skip tags include on search when we only need year/cover — one fewer MB round-trip.
+            var hit = client.searchRelease(
+                artist = album.artist,
+                album = album.name,
+                includeTags = false
+            )
             if (hit == null) {
                 val trackArtist = album.songs.firstOrNull()?.artist
                 if (!trackArtist.isNullOrBlank() &&
                     !trackArtist.equals(album.artist, ignoreCase = true)
                 ) {
-                    hit = client.searchRelease(trackArtist, album.name)
+                    hit = client.searchRelease(trackArtist, album.name, includeTags = false)
                 }
             }
 
@@ -236,7 +267,6 @@ class MetadataEnrichmentService(
         }
 
         if (coverChanged) {
-            // Drop stale bitmaps / palettes keyed by the old "no cover" identity.
             runCatching { artCache.invalidateAlbum(key) }
             runCatching { artCache.invalidateAllMemory() }
             themeService.invalidateAll()
