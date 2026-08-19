@@ -13,8 +13,8 @@ import capital.yuri.yuriplayer.data.db.CatalogTrackEntity
  * Strategy:
  *  1. rows for the exact albumKey
  *  2. all rows with the same album tag (any source / key)
- *  3. folded albumKey variant
- *  4. soft LIKE broaden
+ *  3. LIKE search on album name + soft artist filter
+ *  4. folded albumKey variant
  * then [CatalogRepository.dedupeLogicalTracks] (local preferred).
  */
 suspend fun expandAlbumTracks(
@@ -32,45 +32,65 @@ suspend fun expandAlbumTracks(
         ?: direct.firstOrNull()?.let { it.albumArtist ?: it.artist }
         ?: albumKey.substringBefore('|').takeIf { it.isNotBlank() }
 
+    return expandAlbumTracksByName(dao, albumName, artistName, seedKey = albumKey, seedRows = direct)
+}
+
+/**
+ * Name-first expand used by album pages when the navigation seed only has one track
+ * but the header trackCount says otherwise.
+ */
+suspend fun expandAlbumTracksByName(
+    dao: CatalogDao,
+    albumName: String?,
+    artistName: String?,
+    seedKey: String? = null,
+    seedRows: List<CatalogTrackEntity> = emptyList()
+): List<Song> {
     val candidates = LinkedHashMap<String, CatalogTrackEntity>()
-    direct.forEach { candidates[it.songKey] = it }
+    seedRows.forEach { candidates[it.songKey] = it }
+
+    if (!seedKey.isNullOrBlank()) {
+        dao.getTracksForAlbum(seedKey).forEach { candidates.putIfAbsent(it.songKey, it) }
+    }
 
     if (!albumName.isNullOrBlank()) {
-        // Primary Clancy fix: exact album tag, ignore fragmented albumKey
+        // Exact album tag across every source/key
         dao.getTracksByAlbumName(albumName.trim(), limit = 500).forEach { t ->
             candidates.putIfAbsent(t.songKey, t)
         }
 
-        val artistFolded = TrackIdentity.normalizeToken(artistName)
-        // Only filter by artist when the title match set is huge (ambiguous titles)
-        if (artistFolded.isNotEmpty() && candidates.size > 60) {
-            val filtered = candidates.values.filter { t ->
-                val aa = TrackIdentity.normalizeToken(t.albumArtist ?: t.artist)
-                aa.isEmpty() || aa == artistFolded ||
-                    TrackIdentity.normalizeToken(t.artist) == artistFolded
-            }
-            if (filtered.size >= 2) {
-                candidates.clear()
-                filtered.forEach { candidates[it.songKey] = it }
-            }
-        }
-
+        // LIKE broaden — catches trailing spaces / slight variants
         val needle = albumName.trim().take(64)
         if (needle.isNotEmpty()) {
-            dao.searchTracks(needle, limit = 300).forEach { t ->
-                if (candidates.size >= 500) return@forEach
-                if (!TrackIdentity.albumsMatch(t.album, albumName)) return@forEach
+            dao.searchTracks(needle, limit = 400).forEach { t ->
+                if (candidates.size >= 600) return@forEach
+                if (!TrackIdentity.albumsMatch(t.album, albumName) &&
+                    !t.album.equals(albumName, ignoreCase = true)
+                ) return@forEach
                 candidates.putIfAbsent(t.songKey, t)
             }
         }
 
         val folded = albumKey(albumName, artistName)
-        if (folded != albumKey) {
+        if (folded != seedKey) {
             dao.getTracksForAlbum(folded).forEach { candidates.putIfAbsent(it.songKey, it) }
         }
     }
 
-    return CatalogRepository.dedupeLogicalTracks(candidates.values.map { it.toSong() })
+    // Soft artist filter only when the set is huge (ambiguous album titles)
+    val artistFolded = TrackIdentity.normalizeToken(artistName)
+    val filtered = if (artistFolded.isNotEmpty() && candidates.size > 80) {
+        val match = candidates.values.filter { t ->
+            val aa = TrackIdentity.normalizeToken(t.albumArtist ?: t.artist)
+            aa.isEmpty() || aa == artistFolded ||
+                TrackIdentity.normalizeToken(t.artist) == artistFolded
+        }
+        if (match.size >= 2) match else candidates.values
+    } else {
+        candidates.values
+    }
+
+    return CatalogRepository.dedupeLogicalTracks(filtered.map { it.toSong() })
 }
 
 private fun CatalogTrackEntity.toSong(): Song = Song(
