@@ -61,6 +61,48 @@ class Media3PlaybackEngine(
         .setEnableDecoderFallback(true)
         .setExtensionRendererMode(DefaultRenderersFactory.EXTENSION_RENDERER_MODE_OFF)
 
+    private val playerListener = object : Player.Listener {
+        override fun onIsPlayingChanged(isPlaying: Boolean) {
+            _isPlaying.value = isPlaying
+            dispatch { onIsPlayingChanged(isPlaying) }
+        }
+
+        override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) {
+            _currentUri.value = mediaItem?.localConfiguration?.uri
+            val r = when (reason) {
+                Player.MEDIA_ITEM_TRANSITION_REASON_AUTO -> PlaybackEngine.TransitionReason.AUTO
+                Player.MEDIA_ITEM_TRANSITION_REASON_SEEK -> PlaybackEngine.TransitionReason.SEEK
+                Player.MEDIA_ITEM_TRANSITION_REASON_PLAYLIST_CHANGED -> PlaybackEngine.TransitionReason.PLAYLIST
+                Player.MEDIA_ITEM_TRANSITION_REASON_REPEAT -> PlaybackEngine.TransitionReason.REPEAT
+                else -> PlaybackEngine.TransitionReason.OTHER
+            }
+            dispatch { onMediaTransition(r) }
+        }
+
+        override fun onPlaybackStateChanged(playbackState: Int) {
+            val state = when (playbackState) {
+                Player.STATE_IDLE -> PlaybackEngine.PlaybackState.IDLE
+                Player.STATE_BUFFERING -> PlaybackEngine.PlaybackState.BUFFERING
+                Player.STATE_READY -> PlaybackEngine.PlaybackState.READY
+                Player.STATE_ENDED -> PlaybackEngine.PlaybackState.ENDED
+                else -> PlaybackEngine.PlaybackState.IDLE
+            }
+            dispatch { onPlaybackStateChanged(state) }
+            if (playbackState == Player.STATE_ENDED) dispatch { onEnded() }
+        }
+
+        override fun onPlayerError(error: PlaybackException) {
+            Log.e(TAG, "player error code=${error.errorCode} ${error.message}", error)
+            val recoverable =
+                error.errorCode == PlaybackException.ERROR_CODE_IO_NETWORK_CONNECTION_FAILED ||
+                        error.errorCode == PlaybackException.ERROR_CODE_IO_NETWORK_CONNECTION_TIMEOUT ||
+                        error.errorCode == PlaybackException.ERROR_CODE_IO_BAD_HTTP_STATUS ||
+                        error.errorCode == PlaybackException.ERROR_CODE_AUDIO_TRACK_INIT_FAILED ||
+                        error.errorCode == PlaybackException.ERROR_CODE_AUDIO_TRACK_WRITE_FAILED
+            dispatch { onError(error.message ?: "Playback error", recoverable) }
+        }
+    }
+
     private val player: ExoPlayer = ExoPlayer.Builder(appContext, renderersFactory)
         .setMediaSourceFactory(mediaSourceFactory)
         .setAudioAttributes(audioAttributes, true)
@@ -77,11 +119,11 @@ class Media3PlaybackEngine(
 
     /** Exposed for MediaSession on Android. */
     fun exoPlayer(): ExoPlayer = player
-
     private val _isPlaying = MutableStateFlow(false)
-    override val isPlaying: StateFlow<Boolean> = _isPlaying.asStateFlow()
 
+    override val isPlaying: StateFlow<Boolean> = _isPlaying.asStateFlow()
     private val _currentUri = MutableStateFlow<Uri?>(null)
+
     override val currentUri: StateFlow<Uri?> = _currentUri.asStateFlow()
 
     override fun setWindow(items: List<PlaybackMedia>, startIndex: Int, startPositionMs: Long) {
@@ -181,49 +223,7 @@ class Media3PlaybackEngine(
             )
             .build()
 
-    private val playerListener = object : Player.Listener {
-        override fun onIsPlayingChanged(isPlaying: Boolean) {
-            _isPlaying.value = isPlaying
-            dispatch { onIsPlayingChanged(isPlaying) }
-        }
-
-        override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) {
-            _currentUri.value = mediaItem?.localConfiguration?.uri
-            val r = when (reason) {
-                Player.MEDIA_ITEM_TRANSITION_REASON_AUTO -> PlaybackEngine.TransitionReason.AUTO
-                Player.MEDIA_ITEM_TRANSITION_REASON_SEEK -> PlaybackEngine.TransitionReason.SEEK
-                Player.MEDIA_ITEM_TRANSITION_REASON_PLAYLIST_CHANGED -> PlaybackEngine.TransitionReason.PLAYLIST
-                Player.MEDIA_ITEM_TRANSITION_REASON_REPEAT -> PlaybackEngine.TransitionReason.REPEAT
-                else -> PlaybackEngine.TransitionReason.OTHER
-            }
-            dispatch { onMediaTransition(r) }
-        }
-
-        override fun onPlaybackStateChanged(playbackState: Int) {
-            val state = when (playbackState) {
-                Player.STATE_IDLE -> PlaybackEngine.PlaybackState.IDLE
-                Player.STATE_BUFFERING -> PlaybackEngine.PlaybackState.BUFFERING
-                Player.STATE_READY -> PlaybackEngine.PlaybackState.READY
-                Player.STATE_ENDED -> PlaybackEngine.PlaybackState.ENDED
-                else -> PlaybackEngine.PlaybackState.IDLE
-            }
-            dispatch { onPlaybackStateChanged(state) }
-            if (playbackState == Player.STATE_ENDED) dispatch { onEnded() }
-        }
-
-        override fun onPlayerError(error: PlaybackException) {
-            Log.e(TAG, "player error code=${error.errorCode} ${error.message}", error)
-            val recoverable =
-                error.errorCode == PlaybackException.ERROR_CODE_IO_NETWORK_CONNECTION_FAILED ||
-                    error.errorCode == PlaybackException.ERROR_CODE_IO_NETWORK_CONNECTION_TIMEOUT ||
-                    error.errorCode == PlaybackException.ERROR_CODE_IO_BAD_HTTP_STATUS ||
-                    error.errorCode == PlaybackException.ERROR_CODE_AUDIO_TRACK_INIT_FAILED ||
-                    error.errorCode == PlaybackException.ERROR_CODE_AUDIO_TRACK_WRITE_FAILED
-            dispatch { onError(error.message ?: "Playback error", recoverable) }
-        }
-    }
-
-    private inline fun dispatch(block: PlaybackEngine.Listener.() -> Unit) {
+    private inline fun dispatch(crossinline block: PlaybackEngine.Listener.() -> Unit) {
         val copy = listeners.toList()
         mainHandler.post {
             copy.forEach { runCatching { it.block() } }
