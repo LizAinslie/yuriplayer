@@ -11,6 +11,8 @@ import androidx.room.PrimaryKey
 object CatalogSources {
     const val LOCAL = "LOCAL"
     const val JELLYFIN = "JELLYFIN"
+    const val SUBSONIC = "SUBSONIC"
+    /** Legacy alias — treat as [SUBSONIC] protocol. */
     const val NAVIDROME = "NAVIDROME"
     const val WEBDAV = "WEBDAV"
     const val MUSICBRAINZ = "MUSICBRAINZ" // enrichment-only, not a playable source
@@ -38,7 +40,7 @@ data class CatalogTrackEntity(
     @PrimaryKey(autoGenerate = true) val id: Long = 0,
     /** Stable identity: lowercase path, or content URI, or "source:externalId". */
     val songKey: String,
-    /** LOCAL | JELLYFIN | NAVIDROME | … */
+    /** LOCAL | JELLYFIN | SUBSONIC | … */
     val sourceType: String,
     /** FK-ish to source_instances.id; null for built-in local scanner. */
     val sourceInstanceId: Long? = null,
