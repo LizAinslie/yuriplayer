@@ -4,34 +4,34 @@ import android.content.Context
 import android.net.Uri
 import android.util.Log
 import capital.yuri.yuriplayer.data.Song
-import io.ktor.client.HttpClient
-import io.ktor.client.request.get
-import io.ktor.client.request.header
-import io.ktor.client.request.parameter
-import io.ktor.client.request.post
-import io.ktor.client.request.setBody
-import io.ktor.client.statement.bodyAsText
-import io.ktor.http.ContentType
-import io.ktor.http.contentType
-import io.ktor.http.isSuccess
-import kotlinx.serialization.Serializable
-import kotlinx.serialization.json.Json
+import org.jellyfin.sdk.Jellyfin
+import org.jellyfin.sdk.api.client.ApiClient
+import org.jellyfin.sdk.api.client.exception.ApiClientException
+import org.jellyfin.sdk.api.client.exception.InvalidStatusException
+import org.jellyfin.sdk.api.client.extensions.itemsApi
+import org.jellyfin.sdk.api.client.extensions.userApi
+import org.jellyfin.sdk.model.api.BaseItemDto
+import org.jellyfin.sdk.model.api.BaseItemKind
+import org.jellyfin.sdk.model.api.ItemFields
+import org.jellyfin.sdk.model.api.ItemSortBy
+import org.jellyfin.sdk.model.api.SortOrder
 import java.util.UUID
 
 /**
- * Minimal Jellyfin REST client (Emby-compatible headers).
- * Auth → AccessToken; browse Audio items; build stream URLs for ExoPlayer.
+ * Thin YuriPlayer wrapper around the official [Jellyfin] Kotlin SDK.
+ * Prefer SDK APIs for anything new; only add hand-rolled calls if the SDK
+ * cannot do it, then upstream a patch when practical.
  */
 class JellyfinClient(
-    private val http: HttpClient,
-    private val json: Json,
-    private val deviceId: String
+    private val jellyfin: Jellyfin
 ) {
     data class Session(
         val baseUrl: String,
         val userId: String,
         val accessToken: String,
-        val serverName: String? = null
+        val serverName: String? = null,
+        /** Live SDK client already holding the access token. */
+        val api: ApiClient
     )
 
     suspend fun authenticate(
@@ -43,181 +43,102 @@ class JellyfinClient(
         val user = username.trim()
         require(user.isNotEmpty()) { "Username is empty" }
 
-        Log.i(TAG, "authenticate → POST $root/Users/AuthenticateByName user=$user deviceId=${deviceId.take(8)}…")
+        Log.i(TAG, "authenticate → $root user=$user (official SDK)")
 
-        val response = http.post("$root/Users/AuthenticateByName") {
-            contentType(ContentType.Application.Json)
-            // Jellyfin 10.8+ prefers Authorization; older builds still read X-Emby-Authorization.
-            val ident = clientIdentification(token = null)
-            header("Authorization", ident)
-            header("X-Emby-Authorization", ident)
-            setBody(
-                AuthRequest(
-                    Username = user,
-                    // Jellyfin accepts either; some reverse proxies / older builds prefer Password.
-                    Pw = password,
-                    Password = password
-                )
+        val api = jellyfin.createApi(baseUrl = root)
+        try {
+            val authenticationResult by api.userApi.authenticateUserByName(
+                username = user,
+                password = password
             )
-        }
+            val token = authenticationResult.accessToken
+                ?: error("No accessToken in authentication result")
+            val userId = authenticationResult.user?.id?.toString()
+                ?: error("No user id in authentication result")
 
-        val raw = response.bodyAsText()
-        if (!response.status.isSuccess()) {
-            val detail = jellyfinErrorMessage(raw) ?: raw.take(240)
-            Log.w(TAG, "auth HTTP ${response.status.value}: $detail")
-            error("Jellyfin auth failed: HTTP ${response.status.value} — $detail")
-        }
+            api.update(accessToken = token)
 
-        val body = json.decodeFromString<AuthResponse>(raw)
-        val token = body.AccessToken ?: error("No AccessToken in auth response")
-        val userId = body.User?.Id ?: error("No User.Id in auth response")
-        Log.i(TAG, "auth ok server=${body.ServerName} userId=${userId.take(8)}…")
-        Session(
-            baseUrl = root,
-            userId = userId,
-            accessToken = token,
-            serverName = body.ServerName
-        )
+            Log.i(
+                TAG,
+                "auth ok server=${authenticationResult.serverId} userId=${userId.take(8)}…"
+            )
+            Session(
+                baseUrl = root,
+                userId = userId,
+                accessToken = token,
+                serverName = null,
+                api = api
+            )
+        } catch (e: InvalidStatusException) {
+            if (e.status == 401) {
+                error("Invalid username or password (HTTP 401)")
+            }
+            throw e
+        } catch (e: ApiClientException) {
+            error(e.message ?: "Jellyfin API error")
+        }
     }.onFailure { Log.w(TAG, "authenticate failed: ${it.message}") }
 
     /**
-     * Lists audio items the user can play. Paged; returns up to [limit] tracks.
+     * Lists audio items the user can play (up to [limit]).
      */
     suspend fun listAudioItems(session: Session, limit: Int = 10_000): Result<List<Song>> =
         runCatching {
-            val ident = clientIdentification(session.accessToken)
-            val response = http.get("${session.baseUrl}/Users/${session.userId}/Items") {
-                header("Authorization", ident)
-                header("X-Emby-Authorization", ident)
-                header("X-Emby-Token", session.accessToken)
-                parameter("IncludeItemTypes", "Audio")
-                parameter("Recursive", true)
-                parameter(
-                    "Fields",
-                    "Path,MediaSources,AlbumArtist,Album,Artists,IndexNumber,ParentIndexNumber,ProductionYear,RunTimeTicks,ImageTags"
-                )
-                parameter("SortBy", "Album,IndexNumber")
-                parameter("SortOrder", "Ascending")
-                parameter("Limit", limit)
-            }
-            if (!response.status.isSuccess()) {
-                val raw = response.bodyAsText()
-                error("Items failed: HTTP ${response.status.value} — ${jellyfinErrorMessage(raw) ?: raw.take(160)}")
-            }
-            val page = json.decodeFromString<ItemsResponse>(response.bodyAsText())
-            page.Items.orEmpty().mapNotNull { it.toSong(session) }
+            val userId = runCatching { UUID.fromString(session.userId) }.getOrNull()
+            val result by session.api.itemsApi.getItems(
+                userId = userId,
+                recursive = true,
+                includeItemTypes = listOf(BaseItemKind.AUDIO),
+                fields = listOf(
+                    ItemFields.PATH,
+                    ItemFields.MEDIA_SOURCES,
+                    ItemFields.PRIMARY_IMAGE_ASPECT_RATIO
+                ),
+                sortBy = listOf(ItemSortBy.ALBUM, ItemSortBy.INDEX_NUMBER),
+                sortOrder = listOf(SortOrder.ASCENDING),
+                limit = limit
+            )
+            result.items.orEmpty().mapNotNull { it.toSong(session) }
         }.onFailure { Log.w(TAG, "listAudioItems failed: ${it.message}") }
 
     fun streamUrl(session: Session, itemId: String): String =
-        "${session.baseUrl}/Audio/$itemId/stream?static=true&api_key=${session.accessToken}"
+        "${session.baseUrl.trimEnd('/')}/Audio/$itemId/stream?static=true&api_key=${session.accessToken}"
 
     fun primaryImageUrl(session: Session, itemId: String, maxWidth: Int = 512): String =
-        "${session.baseUrl}/Items/$itemId/Images/Primary?maxWidth=$maxWidth&api_key=${session.accessToken}"
+        "${session.baseUrl.trimEnd('/')}/Items/$itemId/Images/Primary?maxWidth=$maxWidth&api_key=${session.accessToken}"
 
-    private fun JellyfinItem.toSong(session: Session): Song? {
-        val id = Id ?: return null
+    private fun BaseItemDto.toSong(session: Session): Song? {
+        val id = id?.toString() ?: return null
         val stream = streamUrl(session, id)
-        val art = if (ImageTags?.Primary != null) {
+        val art = if (imageTags?.containsKey(
+                org.jellyfin.sdk.model.api.ImageType.PRIMARY
+            ) == true
+        ) {
             Uri.parse(primaryImageUrl(session, id))
         } else null
-        val durationMs = RunTimeTicks?.let { ticks -> ticks / 10_000L }?.takeIf { it > 0 }
-        val artists = Artists?.filter { it.isNotBlank() }.orEmpty()
-        val albumArtists = AlbumArtist?.takeIf { it.isNotBlank() }
-            ?: AlbumArtists?.firstOrNull()?.takeIf { it.isNotBlank() }
+
+        // RunTimeTicks is 100-ns units → ms
+        val durationMs = runTimeTicks?.let { it / 10_000L }?.takeIf { it > 0 }
+        val artists = artists?.filter { it.isNotBlank() }.orEmpty()
+        val albumArtists = albumArtist?.takeIf { it.isNotBlank() }
+            ?: albumArtists?.mapNotNull { it.name }?.firstOrNull()?.takeIf { it.isNotBlank() }
+
         return Song(
             id = id.hashCode().toLong(),
-            title = Name,
+            title = name,
             artist = artists.firstOrNull() ?: albumArtists,
             albumArtist = albumArtists,
-            album = Album,
+            album = album,
             durationMs = durationMs,
             contentUri = Uri.parse(stream),
             albumArtUri = art,
-            trackNumber = IndexNumber,
-            discNumber = ParentIndexNumber,
-            year = ProductionYear,
-            path = Path,
+            trackNumber = indexNumber,
+            discNumber = parentIndexNumber,
+            year = productionYear,
+            path = path,
             mimeType = null
         )
     }
-
-    /**
-     * Jellyfin client identification string.
-     * Format: MediaBrowser Client="…", Device="…", DeviceId="…", Version="…"[, Token="…"]
-     */
-    private fun clientIdentification(token: String?): String {
-        val parts = buildList {
-            add("MediaBrowser Client=\"YuriPlayer\"")
-            add("Device=\"Android\"")
-            add("DeviceId=\"$deviceId\"")
-            add("Version=\"1.0.0\"")
-            if (!token.isNullOrBlank()) add("Token=\"$token\"")
-        }
-        return parts.joinToString(", ")
-    }
-
-    private fun jellyfinErrorMessage(raw: String): String? {
-        if (raw.isBlank()) return null
-        return runCatching {
-            val err = json.decodeFromString<JellyfinError>(raw)
-            listOfNotNull(err.Message, err.error, err.title)
-                .firstOrNull { it.isNotBlank() }
-        }.getOrNull()
-    }
-
-    @Serializable
-    private data class AuthRequest(
-        val Username: String,
-        val Pw: String,
-        val Password: String
-    )
-
-    @Serializable
-    private data class AuthResponse(
-        val AccessToken: String? = null,
-        val ServerName: String? = null,
-        val User: JellyfinUser? = null
-    )
-
-    @Serializable
-    private data class JellyfinUser(
-        val Id: String? = null,
-        val Name: String? = null
-    )
-
-    @Serializable
-    private data class JellyfinError(
-        val Message: String? = null,
-        val error: String? = null,
-        val title: String? = null
-    )
-
-    @Serializable
-    private data class ItemsResponse(
-        val Items: List<JellyfinItem>? = null,
-        val TotalRecordCount: Int? = null
-    )
-
-    @Serializable
-    private data class JellyfinItem(
-        val Id: String? = null,
-        val Name: String? = null,
-        val Album: String? = null,
-        val AlbumArtist: String? = null,
-        val AlbumArtists: List<String>? = null,
-        val Artists: List<String>? = null,
-        val IndexNumber: Int? = null,
-        val ParentIndexNumber: Int? = null,
-        val ProductionYear: Int? = null,
-        val RunTimeTicks: Long? = null,
-        val Path: String? = null,
-        val ImageTags: ImageTags? = null
-    )
-
-    @Serializable
-    private data class ImageTags(
-        val Primary: String? = null
-    )
 
     companion object {
         private const val TAG = "JellyfinClient"
