@@ -23,11 +23,15 @@ import androidx.compose.material.icons.filled.Clear
 import androidx.compose.material.icons.filled.Cloud
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
+import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -72,6 +76,7 @@ fun ExploreScreen(
     var hits by remember { mutableStateOf<List<ExploreSearchService.Hit>>(emptyList()) }
     var searching by remember { mutableStateOf(false) }
     var searchJob by remember { mutableStateOf<Job?>(null) }
+    var sourcesFor by remember { mutableStateOf<ExploreSearchService.Hit?>(null) }
 
     val scanning by explore.isScanning.collectAsState()
     val err by explore.lastError.collectAsState()
@@ -156,7 +161,7 @@ fun ExploreScreen(
                     modifier = Modifier.size(14.dp),
                     strokeWidth = 2.dp
                 )
-                Spacer(Modifier = Modifier.width(8.dp))
+                Spacer(modifier = Modifier.width(8.dp))
             }
             Text(
                 status,
@@ -201,38 +206,109 @@ fun ExploreScreen(
                 )
             }
             else -> {
-                val songs = hits.map { it.song }
+                val songs = hits.map { it.preferred.song }
                 LazyColumn(modifier = Modifier.fillMaxSize()) {
                     itemsIndexed(hits, key = { _, h -> h.identityKey }) { index, hit ->
-                        SwipeAddSongRow(
-                            song = hit.song,
-                            onClick = { onPlay(songs, index) },
-                            onSwipeAdd = {
-                                onAddToQueue(hit.song)
-                                Toast.makeText(context, "Added to queue", Toast.LENGTH_SHORT).show()
-                            },
-                            showTrackNumber = false,
-                            isPlaying = hit.song.isSameAs(nowPlaying),
-                            isPlaybackActive = isPlaybackActive,
-                            showHeart = true,
-                            sourceOfferings = hit.offerings,
-                            identityKey = hit.identityKey,
-                            onPreferredSource = { off ->
-                                scope.launch {
-                                    explore.setPreferredSource(hit.identityKey, off)
-                                    hits = explore.search(query)
-                                    Toast.makeText(
-                                        context,
-                                        "Preferred: ${off.sourceName}",
-                                        Toast.LENGTH_SHORT
-                                    ).show()
+                        Column {
+                            SwipeAddSongRow(
+                                song = hit.preferred.song,
+                                onClick = { onPlay(songs, index) },
+                                onSwipeAdd = {
+                                    onAddToQueue(hit.preferred.song)
+                                    Toast.makeText(context, "Added to queue", Toast.LENGTH_SHORT).show()
+                                },
+                                showTrackNumber = false,
+                                isPlaying = hit.preferred.song.isSameAs(nowPlaying),
+                                isPlaybackActive = isPlaybackActive,
+                                showHeart = true,
+                                onEditMetadata = if (hit.isMultiSource) {
+                                    { sourcesFor = hit }
+                                } else null
+                            )
+                            if (hit.isExplicit || hit.isMultiSource) {
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(start = 68.dp, end = 16.dp, bottom = 6.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                ) {
+                                    SongBadgeRow(
+                                        isExplicit = hit.isExplicit,
+                                        multiSource = hit.isMultiSource
+                                    )
+                                    if (hit.isMultiSource) {
+                                        Text(
+                                            hit.offerings.joinToString(" · ") { it.sourceName },
+                                            style = MaterialTheme.typography.labelSmall,
+                                            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f),
+                                            maxLines = 1
+                                        )
+                                    }
                                 }
                             }
-                        )
+                        }
                     }
                 }
             }
         }
+    }
+
+    sourcesFor?.let { hit ->
+        SourcesPickerSheet(
+            hit = hit,
+            onDismiss = { sourcesFor = null },
+            onPick = { off ->
+                scope.launch {
+                    explore.setPreferredSource(hit.identityKey, off)
+                    hits = explore.search(query)
+                    sourcesFor = null
+                    Toast.makeText(context, "Preferred: ${off.sourceName}", Toast.LENGTH_SHORT).show()
+                }
+            }
+        )
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun SourcesPickerSheet(
+    hit: ExploreSearchService.Hit,
+    onDismiss: () -> Unit,
+    onPick: (SourceOffering) -> Unit
+) {
+    ModalBottomSheet(
+        onDismissRequest = onDismiss,
+        sheetState = rememberModalBottomSheetState()
+    ) {
+        Text(
+            "Sources",
+            style = MaterialTheme.typography.titleMedium,
+            fontWeight = FontWeight.SemiBold,
+            modifier = Modifier.padding(horizontal = 20.dp, vertical = 8.dp)
+        )
+        Text(
+            hit.song.displayTitle,
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.55f),
+            modifier = Modifier.padding(horizontal = 20.dp)
+        )
+        HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
+        hit.offerings.forEach { off ->
+            val preferred = off === hit.preferred ||
+                (off.sourceId == hit.preferred.sourceId &&
+                    off.sourceType == hit.preferred.sourceType &&
+                    off.song.songKey == hit.preferred.song.songKey)
+            MediaSheetItem(
+                label = buildString {
+                    append(off.sourceName)
+                    append(" · ")
+                    append(off.sourceType.name.lowercase().replaceFirstChar { it.titlecase() })
+                    if (preferred) append("  ✓ preferred")
+                }
+            ) { onPick(off) }
+        }
+        MediaSheetBottomPad()
     }
 }
 
