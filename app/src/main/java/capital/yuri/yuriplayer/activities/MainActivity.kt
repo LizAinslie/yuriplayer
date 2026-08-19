@@ -144,10 +144,11 @@ class MainActivity : ComponentActivity() {
         return ContextCompat.checkSelfPermission(this, read) == PackageManager.PERMISSION_GRANTED
     }
 
-    private fun requiredStoragePermissions(): Array<String> {
+    private fun requiredPermissions(): Array<String> {
         val perms = mutableListOf<String>()
         if (Build.VERSION.SDK_INT >= 33) {
             perms += Manifest.permission.READ_MEDIA_AUDIO
+            perms += Manifest.permission.POST_NOTIFICATIONS
         } else {
             perms += Manifest.permission.READ_EXTERNAL_STORAGE
             perms += Manifest.permission.WRITE_EXTERNAL_STORAGE
@@ -155,8 +156,8 @@ class MainActivity : ComponentActivity() {
         return perms.toTypedArray()
     }
 
-    private fun ensureStoragePermissions() {
-        val needed = requiredStoragePermissions().filter {
+    private fun ensurePermissions() {
+        val needed = requiredPermissions().filter {
             ContextCompat.checkSelfPermission(this, it) != PackageManager.PERMISSION_GRANTED
         }
         if (needed.isEmpty()) {
@@ -202,7 +203,7 @@ class MainActivity : ComponentActivity() {
                 intent?.getBooleanExtra("car_mode", false) == true
         openPlayerState.value = intent?.getBooleanExtra(EXTRA_OPEN_PLAYER, false) == true
 
-        ensureStoragePermissions()
+        ensurePermissions()
 
         title = "YuriPlayer"
         enableEdgeToEdge()
@@ -447,7 +448,7 @@ fun YuriApp(
 
     fun resolveArtist(name: String): ArtistItem {
         val key = artistKey(name)
-        val found = library.artists().firstOrNull {
+        val found = library.artists(taggedOnly = false).firstOrNull {
             artistKey(it.name) == key
         }
         if (found != null) return found
@@ -466,14 +467,27 @@ fun YuriApp(
 
     fun openAlbumForSong(song: Song) {
         val key = albumKey(song.album, song.effectiveAlbumArtist)
-        val found = library.albums().firstOrNull {
+        val found = library.albums(taggedOnly = false).firstOrNull {
             albumKey(it.name, it.artist) == key
-        } ?: library.albums().firstOrNull {
+        } ?: library.albums(taggedOnly = false).firstOrNull {
             it.name.equals(song.album, ignoreCase = true)
         }
         if (found != null) {
             playerExpanded = false
             pushDetail(DetailRoute.Album(found))
+        } else if (song.hasAlbum) {
+            // Synthetic album from the single track (e.g. remote-only before full reload)
+            playerExpanded = false
+            pushDetail(
+                DetailRoute.Album(
+                    AlbumItem(
+                        name = song.album,
+                        artist = song.effectiveAlbumArtist,
+                        trackCount = 1,
+                        songs = listOf(song)
+                    )
+                )
+            )
         } else {
             Toast.makeText(context, "Album not found in library", Toast.LENGTH_SHORT).show()
         }
@@ -669,7 +683,7 @@ fun YuriApp(
                     when (val d = detail) {
                         is DetailRoute.Album -> {
                             val key = albumKey(d.album.name, d.album.artist)
-                            val liveAlbum = library.albums().firstOrNull {
+                            val liveAlbum = library.albums(taggedOnly = false).firstOrNull {
                                 albumKey(it.name, it.artist) == key
                             } ?: d.album
                             LaunchedEffect(liveAlbum.songs.size, key) {
@@ -701,7 +715,7 @@ fun YuriApp(
                             )
                         }
                         is DetailRoute.Artist -> {
-                            val albums = library.albums().filter {
+                            val albums = library.albums(taggedOnly = false).filter {
                                 it.artist.equals(d.artist.name, ignoreCase = true)
                             }
                             LaunchedEffect(d.artist.name, albums.size) {
@@ -802,6 +816,14 @@ fun YuriApp(
                                 isPlaybackActive = playing,
                                 onPlay = { songs, index -> player.playSource(songs, index) },
                                 onAddToQueue = { player.addToHotQueue(it) },
+                                onOpenAlbum = { album ->
+                                    playerExpanded = false
+                                    pushDetail(DetailRoute.Album(album))
+                                },
+                                onOpenArtist = { artist ->
+                                    playerExpanded = false
+                                    pushDetail(DetailRoute.Artist(artist))
+                                },
                                 forceRescanKey = exploreRescanKey
                             )
                         }
