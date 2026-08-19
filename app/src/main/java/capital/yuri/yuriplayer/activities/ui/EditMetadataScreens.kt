@@ -69,7 +69,7 @@ fun EditSongMetadataScreen(
     var saving by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf<String?>(null) }
 
-    val canEdit = remember(song) { editor.isLocalFile(song) }
+    val canEdit = remember(song.songKey) { editor.isWritableSong(song) }
 
     val pickImage = rememberLauncherForActivityResult(
         ActivityResultContracts.GetContent()
@@ -171,7 +171,9 @@ fun EditSongMetadataScreen(
         ) {
             if (!canEdit) {
                 Text(
-                    "This track is not a writable local file. Metadata edit is only available for local music.",
+                    "This track isn’t from a writable file source. " +
+                        "Tag editing works for local files, SAF folders, and future cloud drives " +
+                        "(OneDrive, Dropbox, Drive, Nextcloud). Jellyfin / Subsonic streams stay server-side.",
                     color = MaterialTheme.colorScheme.error,
                     style = MaterialTheme.typography.bodyMedium
                 )
@@ -271,7 +273,10 @@ fun EditAlbumMetadataScreen(
     var saving by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf<String?>(null) }
 
-    val canEdit = remember(album) { editor.isLocalAlbum(album) }
+    val canEdit = remember(album.songs.map { it.songKey }) { editor.isWritableAlbum(album) }
+    val writableCount = remember(album.songs.map { it.songKey }) {
+        album.songs.count { editor.isWritableSong(it) }
+    }
 
     val pickImage = rememberLauncherForActivityResult(
         ActivityResultContracts.GetContent()
@@ -358,7 +363,8 @@ fun EditAlbumMetadataScreen(
         ) {
             if (!canEdit) {
                 Text(
-                    "No writable local files in this album. Metadata edit is only available for local music.",
+                    "No writable files in this album. Tag editing needs local / SAF / cloud file " +
+                        "copies — not Jellyfin or Subsonic streams alone.",
                     color = MaterialTheme.colorScheme.error,
                     style = MaterialTheme.typography.bodyMedium
                 )
@@ -373,7 +379,11 @@ fun EditAlbumMetadataScreen(
                 Spacer(modifier = Modifier.width(16.dp))
                 Column {
                     Text(
-                        "${album.songs.size} tracks will be updated",
+                        if (canEdit) {
+                            "$writableCount of ${album.songs.size} tracks are writable"
+                        } else {
+                            "${album.songs.size} tracks — none writable"
+                        },
                         style = MaterialTheme.typography.bodyMedium
                     )
                     Spacer(modifier = Modifier.height(8.dp))
@@ -419,7 +429,7 @@ fun EditAlbumMetadataScreen(
                 modifier = Modifier.fillMaxWidth(),
                 label = { Text("Genre") },
                 supportingText = {
-                    Text("Written to every track in the album")
+                    Text("Written to every writable track in the album")
                 },
                 singleLine = true,
                 enabled = canEdit && !saving
@@ -438,7 +448,8 @@ fun EditAlbumMetadataScreen(
             }
 
             Text(
-                "Changes are written into each local audio file. Folder cover.jpg is updated when you pick a new image.",
+                "Changes are written into each writable audio file. Folder cover.jpg is updated when you pick a new image. " +
+                    "Streaming-only copies (Jellyfin / Subsonic) are skipped.",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
             )
