@@ -73,7 +73,13 @@ val appModule = module {
     single { LibraryIndex(get(), get(), get()) }
 
     single { SourceInstanceRepository(get()) }
-    single { JellyfinClient(get<HttpClient>(), get<Json>()) }
+    single {
+        JellyfinClient(
+            http = get(),
+            json = get(),
+            deviceId = JellyfinClient.stableDeviceId(androidContext())
+        )
+    }
     single { SubsonicClient(get<HttpClient>(), get<Json>()) }
     single { LocalLibrarySource(get(), get()) }
     single {
