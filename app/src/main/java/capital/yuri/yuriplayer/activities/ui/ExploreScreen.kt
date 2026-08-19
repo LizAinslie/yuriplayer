@@ -81,7 +81,6 @@ fun ExploreScreen(
     val scope = rememberCoroutineScope()
 
     var query by remember { mutableStateOf("") }
-    var sourcesFor by remember { mutableStateOf<ExploreSearchService.Hit?>(null) }
 
     val scanning by explore.isScanning.collectAsState()
     val scanProgress by explore.scanProgress.collectAsState()
@@ -216,9 +215,7 @@ fun ExploreScreen(
                 val songs = hits.map { it.preferred.song }
                 LazyColumn(modifier = Modifier.fillMaxSize()) {
                     if (artistHits.isNotEmpty()) {
-                        item {
-                            SectionHeader("Artists")
-                        }
+                        item { SectionHeader("Artists") }
                         items(artistHits, key = { "ar-${it.name}" }) { artist ->
                             ExploreEntityRow(
                                 title = artist.displayName,
@@ -229,9 +226,7 @@ fun ExploreScreen(
                         }
                     }
                     if (albumHits.isNotEmpty()) {
-                        item {
-                            SectionHeader("Albums")
-                        }
+                        item { SectionHeader("Albums") }
                         items(albumHits, key = { "al-${it.name}-${it.artist}" }) { album ->
                             ExploreEntityRow(
                                 title = album.displayName,
@@ -242,70 +237,40 @@ fun ExploreScreen(
                         }
                     }
                     if (hits.isNotEmpty()) {
-                        item {
-                            SectionHeader("Songs")
-                        }
+                        item { SectionHeader("Songs") }
                         itemsIndexed(hits, key = { _, h -> h.identityKey }) { index, hit ->
-                            Column {
-                                SwipeAddSongRow(
-                                    song = hit.preferred.song,
-                                    onClick = { onPlay(songs, index) },
-                                    onSwipeAdd = {
-                                        onAddToQueue(hit.preferred.song)
-                                        Toast.makeText(context, "Added to queue", Toast.LENGTH_SHORT).show()
-                                    },
-                                    showTrackNumber = false,
-                                    isPlaying = hit.preferred.song.isSameAs(nowPlaying),
-                                    isPlaybackActive = isPlaybackActive,
-                                    showHeart = true
-                                )
-                                if (hit.isExplicit || hit.isMultiSource) {
-                                    Row(
-                                        modifier = Modifier
-                                            .fillMaxWidth()
-                                            .then(
-                                                if (hit.isMultiSource) Modifier.clickable { sourcesFor = hit }
-                                                else Modifier
-                                            )
-                                            .padding(start = 68.dp, end = 16.dp, bottom = 6.dp),
-                                        verticalAlignment = Alignment.CenterVertically,
-                                        horizontalArrangement = Arrangement.spacedBy(8.dp)
-                                    ) {
-                                        SongBadgeRow(
-                                            isExplicit = hit.isExplicit,
-                                            multiSource = hit.isMultiSource
-                                        )
-                                        if (hit.isMultiSource) {
-                                            Text(
-                                                hit.offerings.joinToString(" · ") { it.sourceName } +
-                                                    "  ·  tap to prioritize",
-                                                style = MaterialTheme.typography.labelSmall,
-                                                color = MaterialTheme.colorScheme.primary.copy(alpha = 0.85f),
-                                                maxLines = 1
-                                            )
-                                        }
+                            SwipeAddSongRow(
+                                song = hit.preferred.song,
+                                onClick = { onPlay(songs, index) },
+                                onSwipeAdd = {
+                                    onAddToQueue(hit.preferred.song)
+                                    Toast.makeText(context, "Added to queue", Toast.LENGTH_SHORT).show()
+                                },
+                                showTrackNumber = false,
+                                isPlaying = hit.preferred.song.isSameAs(nowPlaying),
+                                isPlaybackActive = isPlaybackActive,
+                                showHeart = true,
+                                // Spotify-style: E + cloud sit on the artist/subtitle line
+                                isExplicit = hit.isExplicit,
+                                multiSource = hit.isMultiSource,
+                                sourceOfferings = hit.offerings.takeIf { hit.isMultiSource },
+                                identityKey = hit.identityKey,
+                                onPreferSource = { off ->
+                                    scope.launch {
+                                        explore.setPreferredSource(hit.identityKey, off)
+                                        Toast.makeText(
+                                            context,
+                                            "Preferred: ${off.sourceName}",
+                                            Toast.LENGTH_SHORT
+                                        ).show()
                                     }
                                 }
-                            }
+                            )
                         }
                     }
                 }
             }
         }
-    }
-
-    sourcesFor?.let { hit ->
-        SourcesPickerSheet(
-            hit = hit,
-            onDismiss = { sourcesFor = null },
-            onPick = { off ->
-                scope.launch {
-                    explore.setPreferredSource(hit.identityKey, off)
-                    sourcesFor = null
-                    Toast.makeText(context, "Preferred: ${off.sourceName}", Toast.LENGTH_SHORT).show()
-                }
-            }
-        )
     }
 }
 
@@ -365,48 +330,7 @@ private fun ExploreEntityRow(
     }
 }
 
-@OptIn(ExperimentalMaterial3Api::class)
-@Composable
-private fun SourcesPickerSheet(
-    hit: ExploreSearchService.Hit,
-    onDismiss: () -> Unit,
-    onPick: (SourceOffering) -> Unit
-) {
-    ModalBottomSheet(
-        onDismissRequest = onDismiss,
-        sheetState = rememberModalBottomSheetState()
-    ) {
-        Text(
-            "Sources",
-            style = MaterialTheme.typography.titleMedium,
-            fontWeight = FontWeight.SemiBold,
-            modifier = Modifier.padding(horizontal = 20.dp, vertical = 8.dp)
-        )
-        Text(
-            hit.song.displayTitle,
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.55f),
-            modifier = Modifier.padding(horizontal = 20.dp)
-        )
-        HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
-        hit.offerings.forEach { off ->
-            val preferred =
-                off.sourceId == hit.preferred.sourceId &&
-                    off.sourceType == hit.preferred.sourceType &&
-                    off.song.songKey == hit.preferred.song.songKey
-            MediaSheetItem(
-                label = buildString {
-                    append(off.sourceName)
-                    append(" · ")
-                    append(off.sourceType.name.lowercase().replaceFirstChar { it.titlecase() })
-                    if (preferred) append("  ✓ preferred")
-                }
-            ) { onPick(off) }
-        }
-        MediaSheetBottomPad()
-    }
-}
-
+/** Spotify-style E + optional multi-source cloud for the artist line. */
 @Composable
 fun SongBadgeRow(
     isExplicit: Boolean,
@@ -440,9 +364,52 @@ fun SongBadgeRow(
             Icon(
                 Icons.Default.Cloud,
                 contentDescription = "Multiple sources",
-                modifier = Modifier.size(14.dp),
-                tint = MaterialTheme.colorScheme.primary.copy(alpha = 0.85f)
+                modifier = Modifier.size(12.dp),
+                tint = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.55f)
             )
         }
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun SourcesPickerSheet(
+    songTitle: String,
+    offerings: List<SourceOffering>,
+    preferred: SourceOffering? = null,
+    onDismiss: () -> Unit,
+    onPick: (SourceOffering) -> Unit
+) {
+    ModalBottomSheet(
+        onDismissRequest = onDismiss,
+        sheetState = rememberModalBottomSheetState()
+    ) {
+        Text(
+            "Sources",
+            style = MaterialTheme.typography.titleMedium,
+            fontWeight = FontWeight.SemiBold,
+            modifier = Modifier.padding(horizontal = 20.dp, vertical = 8.dp)
+        )
+        Text(
+            songTitle,
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.55f),
+            modifier = Modifier.padding(horizontal = 20.dp)
+        )
+        HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
+        offerings.forEach { off ->
+            val isPreferred = preferred != null &&
+                off.sourceId == preferred.sourceId &&
+                off.sourceType == preferred.sourceType
+            MediaSheetItem(
+                label = buildString {
+                    append(off.sourceName)
+                    append(" · ")
+                    append(off.sourceType.name.lowercase().replaceFirstChar { it.titlecase() })
+                    if (isPreferred) append("  ✓ preferred")
+                }
+            ) { onPick(off) }
+        }
+        MediaSheetBottomPad()
     }
 }
