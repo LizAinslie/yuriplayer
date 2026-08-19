@@ -132,14 +132,14 @@ fun foldTagToken(value: String): String {
     var t = value.trim().replace(Regex("\\s+"), " ").lowercase()
     t = Normalizer.normalize(t, Normalizer.Form.NFKD)
         .replace(Regex("\\p{M}+"), "")
-    // Letters that often survive NFKD unchanged in tag data
+    // Multi-char replacements MUST be Strings (Char literals only hold one code unit).
     t = t
         .replace('ø', 'o')
-        .replace('æ', 'ae')
-        .replace('œ', 'oe')
+        .replace("æ", "ae")
+        .replace("œ", "oe")
         .replace('ł', 'l')
         .replace('đ', 'd')
-        .replace('ß', 'ss')
+        .replace("ß", "ss")
     return t
 }
 
