@@ -159,7 +159,6 @@ class ExploreSearchService(
         }
         val age = System.currentTimeMillis() - cacheAtMs
         if (!force && _indexedCount.value > 0 && age < CACHE_TTL_MS) {
-            // Still allow resume of paused checkpoints
             val hasPaused = checkpoints.all().any {
                 it.status == SourceScanStatus.PAUSED || it.status == SourceScanStatus.STOPPED
             }
@@ -233,10 +232,18 @@ class ExploreSearchService(
                 )
             }.distinctBy { "${it.sourceType.name}:${it.song.songKey}" }
 
-            // User override first; otherwise LOCAL rank (0) before remote.
-            val preferred = sourceResolver.prefer(SCOPE_TRACK, key, offerings)
+            // Playback source: user override first, else LOCAL before remote.
+            val preferredBase = sourceResolver.prefer(SCOPE_TRACK, key, offerings)
                 ?: offerings.minByOrNull { it.sourceType.rank }
                 ?: offerings.first()
+            // Display tags: richest across offerings ("Song (feat. X)" > "Song").
+            // URI/path stay on preferredBase so local still plays when available.
+            val preferred = preferredBase.copy(
+                song = TrackIdentity.withRichestDisplay(
+                    preferredBase.song,
+                    offerings.map { it.song }
+                )
+            )
             hits += Hit(key, offerings, preferred)
         }
         hits.sortBy { it.song.displayTitle.lowercase() }
@@ -288,7 +295,6 @@ class ExploreSearchService(
         if (force) lastCountPublishAt.set(now)
     }
 
-    /** Always refresh album/artist counts when we have catalog tracks. */
     private suspend fun rebuildRollupsSafe(reason: String) {
         progress("Building album / artist index…")
         runCatching {
@@ -347,7 +353,6 @@ class ExploreSearchService(
                 val seenAt = System.currentTimeMillis()
                 val cp = checkpoints.get(instanceId)
 
-                // Skip fully done sources unless force
                 if (!force && cp?.status == SourceScanStatus.DONE) {
                     val existing = catalog.countTracksForSource(
                         when (type) {
@@ -364,7 +369,6 @@ class ExploreSearchService(
                     continue
                 }
 
-                // Skip warm complete sources on non-force when no checkpoint needs resume
                 if (!force && (cp == null || cp.status == SourceScanStatus.IDLE)) {
                     val catalogType = when (type) {
                         SourceType.JELLYFIN -> CatalogSources.JELLYFIN
@@ -417,15 +421,12 @@ class ExploreSearchService(
                     else -> 0
                 }
                 if (ingested < 0) {
-                    // negative = paused/stopped/network; magnitude is delivered this session
                     totalIngested += -ingested
                     if (abortedForNetwork || stopAll.get() || pauseAll.get()) break
-                    // per-source pause/stop — continue other sources
                     continue
                 }
                 totalIngested += ingested
                 bumpIndexedCount(totalIngested, force = true)
-                // Refresh rollups after each completed source so counts stay current
                 if (ingested > 0) {
                     runCatching { catalog.rebuildRollups() }
                 }
@@ -458,7 +459,6 @@ class ExploreSearchService(
                 progress("Index ready")
                 val count = catalog.countRemoteTracks()
                 bumpIndexedCount(count, force = true)
-                // Warm skip path: still ensure album/artist rollups exist
                 if (count > 0) rebuildRollupsSafe("warm skip")
                 cacheAtMs = System.currentTimeMillis()
                 runCatching { library.reloadFromCatalog() }
@@ -736,7 +736,6 @@ class ExploreSearchService(
         private const val CACHE_TTL_MS = 15L * 60 * 1000
         private const val WARM_SOURCE_MIN_TRACKS = 50
 
-        /** @deprecated Prefer [TrackIdentity.of] — kept for call sites still importing this. */
         fun trackIdentity(song: Song): String = TrackIdentity.of(song)
 
         fun isLocalFilesystemSong(song: Song): Boolean {
