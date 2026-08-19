@@ -50,6 +50,12 @@ interface PlaylistPrefsDao {
     suspend fun upsert(entity: PlaylistPrefsEntity): Long
 }
 
+/** Row from GROUP BY count query. */
+data class PlaylistTrackCount(
+    val playlistId: String,
+    val trackCount: Int
+)
+
 @Dao
 interface PlaylistDao {
     @Query("SELECT * FROM playlists ORDER BY updatedAtMs DESC")
@@ -72,6 +78,12 @@ interface PlaylistDao {
 
     @Query("SELECT * FROM playlist_tracks WHERE playlistId = :playlistId ORDER BY position ASC")
     suspend fun getTracks(playlistId: String): List<PlaylistTrackEntity>
+
+    @Query("SELECT playlistId, COUNT(*) AS trackCount FROM playlist_tracks GROUP BY playlistId")
+    fun observeTrackCounts(): Flow<List<PlaylistTrackCount>>
+
+    @Query("SELECT * FROM playlist_tracks")
+    fun observeAllTracks(): Flow<List<PlaylistTrackEntity>>
 
     @Query("SELECT playlistId FROM playlist_tracks WHERE songKey = :songKey")
     suspend fun playlistIdsContaining(songKey: String): List<String>
