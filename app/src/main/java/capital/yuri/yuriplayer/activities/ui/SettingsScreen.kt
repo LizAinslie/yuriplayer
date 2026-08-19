@@ -14,6 +14,7 @@ import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Code
 import androidx.compose.material.icons.filled.ColorLens
 import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.History
@@ -23,6 +24,7 @@ import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Storage
 import androidx.compose.material.icons.filled.Sync
 import androidx.compose.material.icons.outlined.CloudDownload
+import androidx.compose.material.icons.outlined.Gavel
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -31,6 +33,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
+import capital.yuri.yuriplayer.BuildConfig
 import capital.yuri.yuriplayer.data.LibraryIndex
 import capital.yuri.yuriplayer.data.LibraryScanMode
 import capital.yuri.yuriplayer.data.LibrarySettings
@@ -45,6 +48,8 @@ private sealed class SettingsPage {
         val id: Long?,
         val createType: SourceType?
     ) : SettingsPage()
+    data object OpenSourceLicenses : SettingsPage()
+    data object VersionInfo : SettingsPage()
 }
 
 /**
@@ -70,7 +75,9 @@ fun SettingsScreen(onBack: () -> Unit) {
         SettingsPage.Hub -> SettingsHubScreen(
             onBack = onBack,
             onOpenProviders = { push(SettingsPage.Providers) },
-            onOpenLocalLibrary = { push(SettingsPage.LocalLibrary) }
+            onOpenLocalLibrary = { push(SettingsPage.LocalLibrary) },
+            onOpenLicenses = { push(SettingsPage.OpenSourceLicenses) },
+            onOpenVersion = { push(SettingsPage.VersionInfo) }
         )
         SettingsPage.Providers -> ProvidersSettingsScreen(
             onBack = { pop() },
@@ -84,6 +91,8 @@ fun SettingsScreen(onBack: () -> Unit) {
             createType = p.createType,
             onBack = { pop() }
         )
+        SettingsPage.OpenSourceLicenses -> OpenSourceLicensesScreen(onBack = { pop() })
+        SettingsPage.VersionInfo -> VersionInfoScreen(onBack = { pop() })
     }
 }
 
@@ -91,7 +100,9 @@ fun SettingsScreen(onBack: () -> Unit) {
 private fun SettingsHubScreen(
     onBack: () -> Unit,
     onOpenProviders: () -> Unit,
-    onOpenLocalLibrary: () -> Unit
+    onOpenLocalLibrary: () -> Unit,
+    onOpenLicenses: () -> Unit,
+    onOpenVersion: () -> Unit
 ) {
     val settings: LibrarySettings = koinInject()
     var autoMetadata by remember {
@@ -101,6 +112,15 @@ private fun SettingsHubScreen(
         mutableStateOf(settings.isAutoPlayRecommendedEnabled())
     }
     val scanMode = settings.getScanMode()
+    val versionSubtitle = buildString {
+        append(BuildConfig.VERSION_NAME)
+        val short = BuildConfig.GIT_COMMIT_SHORT
+        if (short != "unknown") {
+            append(" · ")
+            append(short)
+            if (BuildConfig.GIT_DIRTY) append("*")
+        }
+    }
 
     Column(
         modifier = Modifier
@@ -187,13 +207,27 @@ private fun SettingsHubScreen(
             )
         }
 
-        SettingsSectionTitle("Miscellaneous")
+        SettingsSectionTitle("Developer")
         SettingsGroup {
             SettingsNavRow(
-                title = "About",
-                subtitle = "YuriPlayer 0.1.0-local",
+                title = "Version",
+                subtitle = versionSubtitle,
                 icon = Icons.Default.Info,
-                onClick = {}
+                onClick = onOpenVersion
+            )
+            SettingsNavRow(
+                title = "Open source licenses",
+                subtitle = "Libraries and AGPL application license",
+                icon = Icons.Outlined.Gavel,
+                onClick = onOpenLicenses
+            )
+            SettingsNavRow(
+                title = "Source repository",
+                subtitle = "github.com/LizAinslie/yuriplayer",
+                icon = Icons.Default.Code,
+                onClick = {
+                    // opened from Version screen too; hub shortcut
+                }
             )
         }
 
