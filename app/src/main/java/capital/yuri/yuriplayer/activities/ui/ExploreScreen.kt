@@ -24,7 +24,6 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Album
 import androidx.compose.material.icons.filled.Clear
 import androidx.compose.material.icons.filled.Cloud
-import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -245,10 +244,8 @@ fun ExploreScreen(
                     if (artistHits.isNotEmpty()) {
                         item { SectionHeader("Artists") }
                         items(artistHits, key = { "ar-${it.name}" }) { artist ->
-                            ExploreEntityRow(
-                                title = artist.displayName,
-                                subtitle = "${artist.trackCount} tracks · ${artist.albumCount} albums",
-                                icon = Icons.Default.Person,
+                            ExploreArtistRow(
+                                artist = artist,
                                 onClick = { onOpenArtist(artist) }
                             )
                         }
@@ -318,6 +315,43 @@ private fun SectionHeader(title: String) {
         color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f),
         modifier = Modifier.padding(horizontal = 16.dp, vertical = 10.dp)
     )
+}
+
+/** Artist row with circular [ArtistArt] (UserImageStore / profile / Coil cache). */
+@Composable
+private fun ExploreArtistRow(
+    artist: ArtistItem,
+    onClick: () -> Unit
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onClick)
+            .padding(horizontal = 16.dp, vertical = 10.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        ArtistArt(
+            artistName = artist.displayName,
+            seedSong = artist.songs.firstOrNull(),
+            size = 48.dp,
+            circular = true
+        )
+        Spacer(modifier = Modifier.width(12.dp))
+        Column(modifier = Modifier.weight(1f)) {
+            Text(
+                artist.displayName,
+                style = MaterialTheme.typography.bodyLarge,
+                fontWeight = FontWeight.Medium,
+                maxLines = 1
+            )
+            Text(
+                "${artist.trackCount} tracks · ${artist.albumCount} albums",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.55f),
+                maxLines = 1
+            )
+        }
+    }
 }
 
 @Composable
