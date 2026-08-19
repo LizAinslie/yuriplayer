@@ -2,6 +2,7 @@ package capital.yuri.yuriplayer.activities.ui
 
 import android.widget.Toast
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -220,15 +221,16 @@ fun ExploreScreen(
                                 showTrackNumber = false,
                                 isPlaying = hit.preferred.song.isSameAs(nowPlaying),
                                 isPlaybackActive = isPlaybackActive,
-                                showHeart = true,
-                                onEditMetadata = if (hit.isMultiSource) {
-                                    { sourcesFor = hit }
-                                } else null
+                                showHeart = true
                             )
                             if (hit.isExplicit || hit.isMultiSource) {
                                 Row(
                                     modifier = Modifier
                                         .fillMaxWidth()
+                                        .then(
+                                            if (hit.isMultiSource) Modifier.clickable { sourcesFor = hit }
+                                            else Modifier
+                                        )
                                         .padding(start = 68.dp, end = 16.dp, bottom = 6.dp),
                                     verticalAlignment = Alignment.CenterVertically,
                                     horizontalArrangement = Arrangement.spacedBy(8.dp)
@@ -239,9 +241,10 @@ fun ExploreScreen(
                                     )
                                     if (hit.isMultiSource) {
                                         Text(
-                                            hit.offerings.joinToString(" · ") { it.sourceName },
+                                            hit.offerings.joinToString(" · ") { it.sourceName } +
+                                                "  ·  tap to prioritize",
                                             style = MaterialTheme.typography.labelSmall,
-                                            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f),
+                                            color = MaterialTheme.colorScheme.primary.copy(alpha = 0.85f),
                                             maxLines = 1
                                         )
                                     }
@@ -295,10 +298,10 @@ private fun SourcesPickerSheet(
         )
         HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
         hit.offerings.forEach { off ->
-            val preferred = off === hit.preferred ||
-                (off.sourceId == hit.preferred.sourceId &&
+            val preferred =
+                off.sourceId == hit.preferred.sourceId &&
                     off.sourceType == hit.preferred.sourceType &&
-                    off.song.songKey == hit.preferred.song.songKey)
+                    off.song.songKey == hit.preferred.song.songKey
             MediaSheetItem(
                 label = buildString {
                     append(off.sourceName)
