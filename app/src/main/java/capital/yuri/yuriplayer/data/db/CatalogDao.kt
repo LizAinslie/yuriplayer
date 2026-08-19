@@ -7,9 +7,30 @@ import androidx.room.Query
 import androidx.room.Transaction
 import kotlinx.coroutines.flow.Flow
 
+/** Light album rollup row produced entirely in SQLite (no full-track load). */
+data class AlbumAggregateRow(
+    val albumKey: String,
+    val name: String?,
+    val artist: String?,
+    val year: Int?,
+    val trackCount: Int,
+    val coverUrl: String?,
+    val primarySourceType: String
+)
+
+/** Light artist rollup row produced entirely in SQLite. */
+data class ArtistAggregateRow(
+    val artistKey: String,
+    val displayName: String,
+    val trackCount: Int,
+    val albumCount: Int
+)
+
 /**
  * Persistent catalog = local library + remote-indexed tracks (Jellyfin / Subsonic).
  * Search and key lookups must stay SQL — never load the full table onto Main.
+ *
+ * Rollups are rebuilt via GROUP BY aggregates, not by pulling every track into RAM.
  */
 @Dao
 interface CatalogDao {
@@ -24,6 +45,10 @@ interface CatalogDao {
 
     @Query("SELECT * FROM catalog_tracks WHERE sourceType = :sourceType")
     suspend fun getTracksBySource(sourceType: String): List<CatalogTrackEntity>
+
+    /** Bounded sample for art pass / diagnostics — never load a whole remote library. */
+    @Query("SELECT * FROM catalog_tracks WHERE sourceType = :sourceType LIMIT :limit")
+    suspend fun getTracksBySourceLimited(sourceType: String, limit: Int): List<CatalogTrackEntity>
 
     @Query(
         "SELECT COUNT(*) FROM catalog_tracks WHERE sourceType = :sourceType " +
@@ -69,8 +94,56 @@ interface CatalogDao {
     )
     suspend fun pruneStaleTracks(sourceType: String, sourceInstanceId: Long?, beforeMs: Long): Int
 
+    /**
+     * Prune one remote source without loading rows into the app process.
+     * [keepKeys] is typically My Stuff song pins (small).
+     */
+    @Query(
+        "DELETE FROM catalog_tracks WHERE sourceType = :sourceType " +
+            "AND (sourceInstanceId IS :sourceInstanceId OR (sourceInstanceId IS NULL AND :sourceInstanceId IS NULL)) " +
+            "AND lastSeenAtMs < :beforeMs " +
+            "AND songKey NOT IN (:keepKeys)"
+    )
+    suspend fun pruneStaleTracksExcept(
+        sourceType: String,
+        sourceInstanceId: Long?,
+        beforeMs: Long,
+        keepKeys: List<String>
+    ): Int
+
     @Query("DELETE FROM catalog_tracks WHERE songKey = :songKey")
     suspend fun deleteTrack(songKey: String)
+
+    // ── SQL rollups (never SELECT * tracks into Kotlin) ─────────────────
+
+    @Query(
+        """
+        SELECT albumKey AS albumKey,
+               MAX(album) AS name,
+               MAX(COALESCE(albumArtist, artist)) AS artist,
+               MAX(year) AS year,
+               COUNT(DISTINCT songKey) AS trackCount,
+               MAX(CASE WHEN albumArtUri LIKE 'http%' THEN albumArtUri ELSE NULL END) AS coverUrl,
+               MIN(sourceType) AS primarySourceType
+        FROM catalog_tracks
+        WHERE albumKey IS NOT NULL AND albumKey != ''
+        GROUP BY albumKey
+        """
+    )
+    suspend fun aggregateAlbums(): List<AlbumAggregateRow>
+
+    @Query(
+        """
+        SELECT artistKey AS artistKey,
+               MAX(COALESCE(albumArtist, artist, artistKey)) AS displayName,
+               COUNT(DISTINCT songKey) AS trackCount,
+               COUNT(DISTINCT albumKey) AS albumCount
+        FROM catalog_tracks
+        WHERE artistKey IS NOT NULL AND artistKey != ''
+        GROUP BY artistKey
+        """
+    )
+    suspend fun aggregateArtists(): List<ArtistAggregateRow>
 
     // ── Albums ──────────────────────────────────────────────────────────
 
