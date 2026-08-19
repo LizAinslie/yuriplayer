@@ -14,6 +14,7 @@ import capital.yuri.yuriplayer.data.MusicRepository
 import capital.yuri.yuriplayer.data.MyStuffPinStore
 import capital.yuri.yuriplayer.data.PlayerThemeStore
 import capital.yuri.yuriplayer.data.PlaylistRepository
+import capital.yuri.yuriplayer.data.ScanCheckpointStore
 import capital.yuri.yuriplayer.data.UserImageStore
 import capital.yuri.yuriplayer.data.db.YuriDatabase
 import capital.yuri.yuriplayer.data.source.ArtistInfoService
@@ -62,6 +63,7 @@ val appModule = module {
     single { UserImageStore(androidContext()) }
     single { FfmpegService(androidContext()) }
     single { LibraryScanNotifier(androidContext()) }
+    single { ScanCheckpointStore(androidContext()) }
 
     single { YuriDatabase.create(androidContext()) }
     single { get<YuriDatabase>().albumPrefs() }
@@ -130,7 +132,8 @@ val appModule = module {
             jellyfinClient = get(),
             subsonicClient = get(),
             notifier = get(),
-            settings = get()
+            settings = get(),
+            checkpoints = get()
         )
     }
 
