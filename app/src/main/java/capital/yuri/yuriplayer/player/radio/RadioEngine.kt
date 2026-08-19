@@ -15,8 +15,8 @@ import kotlin.random.Random
  * Plans the radio cold queue (visible on the queue page) and restocks it.
  *
  * Shuffle OFF: whole LP/EP/Single blocks until ≥ maxRadioQueue (may exceed);
- *   restock appends the next release only when cold size < max - 1.
- * Shuffle ON + SONGS: random tracks up to maxRadioQueue; restock tops cold.
+ *   restock appends the next release only when cold size < max.
+ * Shuffle ON + SONGS: random tracks up to maxRadioQueue; restock tops cold every time.
  * Shuffle ON + RELEASES: shuffled whole releases (tracks ordered within);
  *   restock appends the next shuffled release when under target.
  */
@@ -26,7 +26,8 @@ class RadioEngine(
     private val playbackAlgo: RadioPlaybackAlgorithm = RadioPlaybackAlgorithm(),
     private val poolAlgo: ReleasePoolAlgorithm = ReleasePoolAlgorithm()
 ) {
-    private val catalog = ReleaseCatalog { library.albums(taggedOnly = true) }
+    /** Prefer the full local library; tagged-only was starving restock. */
+    private val catalog = ReleaseCatalog { library.albums(taggedOnly = false) }
     private val memory = RecentReleaseMemory()
 
     @Volatile
@@ -81,6 +82,36 @@ class RadioEngine(
         session = withPrefs
         Log.i(TAG, "playlist radio '${withPrefs.displayName}'")
         return withPrefs
+    }
+
+    /**
+     * Re-attach a session that was persisted on the queue but lost from this
+     * in-memory engine (e.g. after process death). Rebuilds the release pool.
+     */
+    fun adoptSession(sess: RadioSession) {
+        if (!sess.active) return
+        session = sess
+        activeAlgorithm = sess.algorithmId
+        when (sess.kind) {
+            RadioSessionKind.ARTIST -> {
+                val name = sess.seedTitle
+                    ?: sess.displayName.removePrefix("Radio · ").trim()
+                poolReleases = releasesForArtist(name)
+            }
+            RadioSessionKind.ALBUM,
+            RadioSessionKind.PLAYLIST,
+            RadioSessionKind.CUSTOM -> {
+                // Fall back to full catalog; seed-specific pool is best-effort.
+                if (poolReleases.isEmpty()) {
+                    poolReleases = catalog.albums().filter { it.songs.isNotEmpty() }
+                }
+            }
+        }
+        Log.i(
+            TAG,
+            "adoptSession '${sess.displayName}' kind=${sess.kind} " +
+                "pool=${poolReleases.size} shuffle=${sess.prefs.shuffle}"
+        )
     }
 
     fun ensureAutoPlaySession(seedSong: Song?, finishedSource: ColdSource?): RadioSession {
@@ -170,7 +201,7 @@ class RadioEngine(
         Log.i(
             TAG,
             "planBatch '${sess.displayName}' songs=${songs.size} " +
-                "shuffle=${prefs.shuffle} unit=${prefs.shuffleUnit} max=$max"
+                "shuffle=${prefs.shuffle} unit=${prefs.shuffleUnit} max=$max pool=${releases.size}"
         )
         return RadioBatch(
             songs = songs,
@@ -193,22 +224,28 @@ class RadioEngine(
             if (need <= 0) return emptyList()
             val pool = songPool(availableReleases(emptySet()))
                 .filter { songKey(it) !in alreadyQueuedKeys }
-            if (pool.isEmpty()) return emptyList()
+            if (pool.isEmpty()) {
+                Log.i(TAG, "restock songs: empty pool (cold=$currentColdSize max=$max)")
+                return emptyList()
+            }
             val pick = pool.shuffled(Random(System.nanoTime())).take(need)
             Log.i(TAG, "restock songs +${pick.size} (cold was $currentColdSize / $max)")
             return pick
         }
 
-        // Ordered or RELEASES shuffle: hysteresis — next whole release when under target
-        if (currentColdSize >= max - 1) return emptyList()
+        // Ordered or RELEASES: pull next whole release whenever under max
+        if (currentColdSize >= max) return emptyList()
 
         val next = if (prefs.shuffle && prefs.shuffleUnit == RadioShuffleUnit.RELEASES) {
             nextShuffledRelease(alreadyQueuedKeys)
         } else {
             nextOrderedRelease(alreadyQueuedKeys)
-        } ?: return emptyList()
+        } ?: run {
+            Log.i(TAG, "restock release: no candidate (cold=$currentColdSize max=$max)")
+            return emptyList()
+        }
 
-        val tracks = sortedTracks(next)
+        val tracks = sortedTracks(next).filter { songKey(it) !in alreadyQueuedKeys }
         if (tracks.isEmpty()) return emptyList()
         memory.note(ReleaseClassifier.releaseKey(next), ReleaseClassifier.kindOf(next))
         Log.i(
@@ -228,12 +265,6 @@ class RadioEngine(
         if (!radioActive && !settings.isAutoPlayRecommendedEnabled()) {
             Log.d(TAG, "skip — no session & auto-play off")
             return null
-        }
-        if (repeatMode != RepeatMode.OFF && repeatMode != RepeatMode.ONE) {
-            if (repeatMode != RepeatMode.OFF) {
-                Log.d(TAG, "skip plan — repeatMode=$repeatMode")
-                return null
-            }
         }
         if (repeatMode != RepeatMode.OFF) return null
 
@@ -257,7 +288,6 @@ class RadioEngine(
         return pool.shuffled(Random(System.nanoTime())).take(max)
     }
 
-    /** Shuffle release order; keep track order inside each release. */
     private fun planShuffledReleases(
         releases: List<AlbumItem>,
         max: Int,

@@ -8,6 +8,7 @@ import capital.yuri.yuriplayer.player.radio.RadioSession
 /**
  * Thin adapter: [QueueManager] ↔ [RadioEngine].
  * Exhaust path loads a full [RadioBatch] into cold queue.
+ * Restock keeps cold topped up while radio is active.
  */
 class MusicServiceAutoPlay(
     private val engine: RadioEngine
@@ -29,13 +30,26 @@ class MusicServiceAutoPlay(
             songs = batch.songs,
             source = batch.source,
             session = batch.session,
-            upcoming = emptyList() // batch itself is the visible cold queue
+            upcoming = emptyList()
         )
     }
 
-    /** Top-up songs for shuffle radio after a track is consumed. */
-    fun restock(currentColdSize: Int, alreadyQueuedKeys: Set<String>): List<Song> =
-        engine.restockSongs(currentColdSize, alreadyQueuedKeys)
+    /**
+     * Top-up songs for the active radio session.
+     * If the engine lost its in-memory session (process restore) but the queue
+     * still has an active [queueSession], rehydrate first so restock can run.
+     */
+    fun restock(
+        currentColdSize: Int,
+        alreadyQueuedKeys: Set<String>,
+        queueSession: RadioSession? = null
+    ): List<Song> {
+        val live = queueSession?.takeIf { it.active }
+        if (live != null && engine.session?.active != true) {
+            engine.adoptSession(live)
+        }
+        return engine.restockSongs(currentColdSize, alreadyQueuedKeys)
+    }
 
     fun currentSession(): RadioSession? = engine.session
 
