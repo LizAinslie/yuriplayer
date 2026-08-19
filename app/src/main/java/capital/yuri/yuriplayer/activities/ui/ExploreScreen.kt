@@ -56,8 +56,8 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import capital.yuri.yuriplayer.data.AlbumItem
 import capital.yuri.yuriplayer.data.ArtistItem
+import capital.yuri.yuriplayer.data.CatalogRepository
 import capital.yuri.yuriplayer.data.ExploreSearchService
-import capital.yuri.yuriplayer.data.LibraryIndex
 import capital.yuri.yuriplayer.data.Song
 import capital.yuri.yuriplayer.data.source.SourceOffering
 import kotlinx.coroutines.Dispatchers
@@ -76,7 +76,7 @@ fun ExploreScreen(
     onOpenArtist: (ArtistItem) -> Unit = {}
 ) {
     val explore: ExploreSearchService = koinInject()
-    val library: LibraryIndex = koinInject()
+    val catalog: CatalogRepository = koinInject()
     val context = LocalContext.current
     val focusManager = LocalFocusManager.current
     val keyboard = LocalSoftwareKeyboardController.current
@@ -115,18 +115,20 @@ fun ExploreScreen(
         delay(SEARCH_DEBOUNCE_MS)
         if (query.trim() != q) return@LaunchedEffect
 
+        // Songs: full catalog (local + remote) via ExploreSearchService
         val songHits = withContext(Dispatchers.Default) {
             explore.searchLive(q).take(SONG_HIT_LIMIT)
         }
         if (query.trim() != q) return@LaunchedEffect
 
-        val albums = withContext(Dispatchers.Default) {
-            library.albums(q, taggedOnly = false).take(ALBUM_HIT_LIMIT)
+        // Albums / artists: catalog SQL rollups (not local LibraryIndex only)
+        val albums = withContext(Dispatchers.IO) {
+            catalog.searchAlbumsAsItems(q, ALBUM_HIT_LIMIT)
         }
         if (query.trim() != q) return@LaunchedEffect
 
-        val artists = withContext(Dispatchers.Default) {
-            library.artists(q, taggedOnly = false).take(ARTIST_HIT_LIMIT)
+        val artists = withContext(Dispatchers.IO) {
+            catalog.searchArtistsAsItems(q, ARTIST_HIT_LIMIT)
         }
         if (query.trim() != q) return@LaunchedEffect
 
@@ -256,7 +258,10 @@ fun ExploreScreen(
                         items(albumHits, key = { "al-${it.name}-${it.artist}" }) { album ->
                             ExploreEntityRow(
                                 title = album.displayName,
-                                subtitle = album.displayArtist,
+                                subtitle = buildString {
+                                    append(album.displayArtist)
+                                    if (album.trackCount > 0) append(" · ${album.trackCount} tracks")
+                                },
                                 icon = Icons.Default.Album,
                                 onClick = { onOpenAlbum(album) }
                             )
