@@ -45,7 +45,6 @@ fun findLocalAlbum(
         it.name.equals(name, ignoreCase = true) &&
             (artist.isNullOrBlank() || it.artist.equals(artist, ignoreCase = true))
     } ?: library.albums(taggedOnly = false).firstOrNull {
-        // Last resort: album title only (handles Ø vs O artist tag mismatch pre-fold)
         it.name.equals(name, ignoreCase = true)
     }
 }
