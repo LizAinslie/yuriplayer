@@ -6,6 +6,7 @@ import capital.yuri.yuriplayer.data.CatalogRepository
 import capital.yuri.yuriplayer.data.ExploreSearchService
 import capital.yuri.yuriplayer.data.LibraryCache
 import capital.yuri.yuriplayer.data.LibraryIndex
+import capital.yuri.yuriplayer.data.LibraryScanNotifier
 import capital.yuri.yuriplayer.data.LibrarySettings
 import capital.yuri.yuriplayer.data.MetadataEditService
 import capital.yuri.yuriplayer.data.MetadataEnrichmentService
@@ -60,6 +61,7 @@ val appModule = module {
     single { MyStuffPinStore(androidContext()) }
     single { UserImageStore(androidContext()) }
     single { FfmpegService(androidContext()) }
+    single { LibraryScanNotifier(androidContext()) }
 
     single { YuriDatabase.create(androidContext()) }
     single { get<YuriDatabase>().albumPrefs() }
@@ -74,7 +76,15 @@ val appModule = module {
     single { get<YuriDatabase>().scrobblers() }
 
     single { CatalogRepository(get(), get()) }
-    single { LibraryIndex(get(), get(), get()) }
+    single {
+        LibraryIndex(
+            context = androidContext(),
+            repository = get(),
+            cache = get(),
+            catalog = get(),
+            notifier = get()
+        )
+    }
 
     single { SourceInstanceRepository(get()) }
 
@@ -110,6 +120,7 @@ val appModule = module {
     single { SourceResolver(get()) }
     single {
         ExploreSearchService(
+            context = androidContext(),
             factory = get(),
             library = get(),
             sourceResolver = get(),
@@ -117,7 +128,8 @@ val appModule = module {
             pinStore = get(),
             instances = get(),
             jellyfinClient = get(),
-            subsonicClient = get()
+            subsonicClient = get(),
+            notifier = get()
         )
     }
 
