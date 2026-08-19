@@ -365,7 +365,8 @@ fun SongContextSheet(
                 }
             }
         }
-        if (multiSources && onPreferSource != null) {
+        // Sources always available when multi-source — prefer handler optional
+        if (multiSources) {
             MediaSheetItem("Sources") {
                 showSourcesPicker = true
             }
