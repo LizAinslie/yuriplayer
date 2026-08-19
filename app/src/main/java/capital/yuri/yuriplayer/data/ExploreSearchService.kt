@@ -10,6 +10,7 @@ import capital.yuri.yuriplayer.data.source.SourceOffering
 import capital.yuri.yuriplayer.data.source.SourceResolver
 import capital.yuri.yuriplayer.data.source.SourceType
 import capital.yuri.yuriplayer.data.source.SubsonicClient
+import capital.yuri.yuriplayer.player.engine.isVirtualLibraryPath
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -43,7 +44,12 @@ class ExploreSearchService(
         val preferred: SourceOffering
     ) {
         val song: Song get() = preferred.song
-        val isMultiSource: Boolean get() = offerings.size > 1
+        /** True only when two or more *distinct* source instances provide this track. */
+        val isMultiSource: Boolean
+            get() = offerings
+                .map { "${it.sourceType.name}:${it.sourceId}" }
+                .toSet()
+                .size > 1
         val isExplicit: Boolean get() = offerings.any { it.song.isExplicit }
     }
 
@@ -86,7 +92,6 @@ class ExploreSearchService(
 
     fun requestRemoteScan(force: Boolean = false) {
         val age = System.currentTimeMillis() - cacheAtMs
-        // Always scan when forced; otherwise skip only if we already have a warm index
         if (!force && _remoteOfferings.value.isNotEmpty() && age < CACHE_TTL_MS) return
         if (!force && _isScanning.value) return
         Log.i(TAG, "requestRemoteScan force=$force offerings=${_remoteOfferings.value.size}")
@@ -122,9 +127,7 @@ class ExploreSearchService(
     private suspend fun buildHitsPrefer(needle: String): List<Hit> {
         val matched = collectMatched(needle)
         return matched.groupBy { trackIdentity(it.song) }.map { (key, offs) ->
-            val distinct = offs.distinctBy {
-                "${it.sourceType}:${it.sourceId}:${it.song.songKey}"
-            }
+            val distinct = dedupeOfferings(offs)
             val preferred = sourceResolver.prefer(SCOPE_TRACK, key, distinct)
                 ?: distinct.minByOrNull { it.sourceType.rank }
                 ?: distinct.first()
@@ -135,24 +138,32 @@ class ExploreSearchService(
     private fun buildHitsRankOnly(needle: String): List<Hit> {
         val matched = collectMatched(needle)
         return matched.groupBy { trackIdentity(it.song) }.map { (key, offs) ->
-            val distinct = offs.distinctBy {
-                "${it.sourceType}:${it.sourceId}:${it.song.songKey}"
-            }
+            val distinct = dedupeOfferings(offs)
             val preferred = distinct.minByOrNull { it.sourceType.rank } ?: distinct.first()
             Hit(key, distinct, preferred)
         }.sortedBy { it.song.displayTitle.lowercase() }
     }
 
+    /** One row per source instance (not per duplicate catalog row). */
+    private fun dedupeOfferings(offs: List<SourceOffering>): List<SourceOffering> =
+        offs.distinctBy { "${it.sourceType.name}:${it.sourceId}" }
+
     private fun collectMatched(needle: String): List<SourceOffering> {
-        val local = library.songs.value.map { song ->
-            SourceOffering(
-                sourceType = SourceType.LOCAL,
-                sourceId = null,
-                sourceName = "This device",
-                song = song
-            )
-        }
-        // Prefer remote offerings for jellyfin keys so we don't double-count after reload
+        // Only treat real local filesystem tracks as LOCAL — virtual remote keys
+        // that landed in LibraryIndex after reload must not become a second source.
+        val local = library.songs.value
+            .filter { song ->
+                !isVirtualLibraryPath(song.path) &&
+                    song.path?.contains("://") != true
+            }
+            .map { song ->
+                SourceOffering(
+                    sourceType = SourceType.LOCAL,
+                    sourceId = null,
+                    sourceName = "This device",
+                    song = song
+                )
+            }
         val remoteKeys = _remoteOfferings.value.map { it.song.songKey }.toSet()
         val localOnly = local.filter { it.song.songKey !in remoteKeys }
         return (localOnly + _remoteOfferings.value).filter { off ->
@@ -250,7 +261,6 @@ class ExploreSearchService(
                 }
                 publish(cleaned)
                 cacheAtMs = System.currentTimeMillis()
-                // Make album/artist detail pages see remote tracks
                 runCatching { library.reloadFromCatalog() }
                 Log.i(TAG, "remote index ready: ${cleaned.size} offerings")
             } catch (e: CancellationException) {
@@ -332,7 +342,6 @@ class ExploreSearchService(
         )
     }
 
-    /** Download unique album covers into filesDir/covers and wire catalog coverPath. */
     private suspend fun cacheAlbumArtBatch(songs: List<Song>) {
         val coversDir = File(context.filesDir, "covers").also { it.mkdirs() }
         val seen = mutableSetOf<String>()
