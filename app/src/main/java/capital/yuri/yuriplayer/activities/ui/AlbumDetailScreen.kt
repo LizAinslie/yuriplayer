@@ -2,7 +2,7 @@ package capital.yuri.yuriplayer.activities.ui
 
 import android.widget.Toast
 import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -72,8 +72,10 @@ import capital.yuri.yuriplayer.data.MyStuffPinStore
 import capital.yuri.yuriplayer.data.Song
 import capital.yuri.yuriplayer.data.StuffPinKind
 import capital.yuri.yuriplayer.data.albumKey
+import capital.yuri.yuriplayer.data.db.CatalogDao
 import capital.yuri.yuriplayer.data.findLocalAlbum
 import capital.yuri.yuriplayer.data.mergeAlbumSources
+import capital.yuri.yuriplayer.data.resolveAlbumItem
 import capital.yuri.yuriplayer.data.theme.ThemeService
 import capital.yuri.yuriplayer.ui.formatTrackCount
 import kotlinx.coroutines.Dispatchers
@@ -116,7 +118,7 @@ private fun CircularPlayButton(
     }
 }
 
-@OptIn(ExperimentalMaterial3Api::class)
+@OptIn(ExperimentalMaterial3Api::class, androidx.compose.foundation.ExperimentalFoundationApi::class)
 @Composable
 fun AlbumDetailScreen(
     album: AlbumItem,
@@ -141,12 +143,14 @@ fun AlbumDetailScreen(
     val enrichment: MetadataEnrichmentService = koinInject()
     val pinStore: MyStuffPinStore = koinInject()
     val catalog: CatalogRepository = koinInject()
+    val catalogDao: CatalogDao = koinInject()
     val library: LibraryIndex = koinInject()
     val entries by pinStore.entries.collectAsState()
     val coverGen by enrichment.coverGeneration.collectAsState()
     val base = MaterialTheme.colorScheme
     var themeColors by remember { mutableStateOf(fallbackPlayerColors(base)) }
     var showMenu by remember { mutableStateOf(false) }
+    var showCoverPicker by remember { mutableStateOf(false) }
     val listState = rememberLazyListState()
     val density = LocalDensity.current
 
@@ -155,14 +159,27 @@ fun AlbumDetailScreen(
         pinStore.contains(StuffPinKind.ALBUM, albumKeyStr)
     }
 
-    // Always expand from catalog + local — navigation seed alone is often a single JF track.
+    // Name-first expand — navigation seed is often a single JF track while
+    // catalog has the full release under other albumKeys.
     var liveAlbum by remember(albumKeyStr) { mutableStateOf(album) }
-    LaunchedEffect(albumKeyStr, album.songs.size) {
+    LaunchedEffect(albumKeyStr, album.name, album.artist) {
+        val resolved = withContext(Dispatchers.IO) {
+            resolveAlbumItem(
+                dao = catalogDao,
+                name = album.name,
+                artist = album.artist,
+                seedSongs = album.songs
+            )
+        }
         val fromCatalog = withContext(Dispatchers.IO) {
             catalog.albumItemForKey(albumKeyStr)
         }
         val fromLocal = findLocalAlbum(library, album.name, album.artist)
-        liveAlbum = mergeAlbumSources(album, fromCatalog, fromLocal)
+        liveAlbum = mergeAlbumSources(
+            seed = resolved ?: album,
+            fromCatalog = fromCatalog,
+            fromLocal = fromLocal
+        )
     }
 
     val collapseRangePx = with(density) { (ExpandedHeaderBody - CollapsedBarHeight).toPx() }
@@ -219,11 +236,11 @@ fun AlbumDetailScreen(
     val releaseYear = remember(liveAlbum.songs, coverGen) {
         liveAlbum.songs.mapNotNull { it.year }.maxOrNull()
     }
-    val releaseType = guessReleaseType(liveAlbum.trackCount)
+    val releaseType = guessReleaseType(liveAlbum.trackCount.coerceAtLeast(liveAlbum.songs.size))
     val metaLine = buildString {
         append(releaseType)
         if (releaseYear != null) append(" · $releaseYear")
-        append(" · ${formatTrackCount(liveAlbum.trackCount)}")
+        append(" · ${formatTrackCount(liveAlbum.songs.size.coerceAtLeast(liveAlbum.trackCount))}")
     }
 
     val showPause = isSourceActive && isPlaying
@@ -313,7 +330,8 @@ fun AlbumDetailScreen(
                                     onFavorite()
                                 },
                                 onMore = { showMenu = true },
-                                onOpenArtist = onOpenArtist
+                                onOpenArtist = onOpenArtist,
+                                onCoverLongPress = { showCoverPicker = true }
                             )
                         }
 
@@ -408,10 +426,18 @@ fun AlbumDetailScreen(
                     }
                 )
             }
+
+            if (showCoverPicker) {
+                AlbumCoverPickerHost(
+                    album = liveAlbum,
+                    onDismiss = { showCoverPicker = false }
+                )
+            }
         }
     }
 }
 
+@OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
 @Composable
 private fun SpotifyAlbumHero(
     album: AlbumItem,
@@ -423,7 +449,8 @@ private fun SpotifyAlbumHero(
     onToggleShuffle: () -> Unit,
     onFavorite: () -> Unit,
     onMore: () -> Unit,
-    onOpenArtist: () -> Unit
+    onOpenArtist: () -> Unit,
+    onCoverLongPress: () -> Unit = {}
 ) {
     Column(
         modifier = Modifier
@@ -432,11 +459,18 @@ private fun SpotifyAlbumHero(
             .padding(top = 36.dp, bottom = 20.dp),
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
-        AlbumArt(
-            song = album.songs.firstOrNull(),
-            size = 200.dp,
-            corner = 8.dp
-        )
+        Box(
+            modifier = Modifier.combinedClickable(
+                onClick = {},
+                onLongClick = onCoverLongPress
+            )
+        ) {
+            AlbumArt(
+                song = album.songs.firstOrNull(),
+                size = 200.dp,
+                corner = 8.dp
+            )
+        }
 
         Spacer(modifier = Modifier.height(16.dp))
 
@@ -460,7 +494,7 @@ private fun SpotifyAlbumHero(
                 verticalAlignment = Alignment.CenterVertically,
                 modifier = Modifier
                     .clip(RoundedCornerShape(20.dp))
-                    .clickable(onClick = onOpenArtist)
+                    .combinedClickable(onClick = onOpenArtist, onLongClick = {})
                     .padding(vertical = 2.dp)
             ) {
                 AlbumArt(
