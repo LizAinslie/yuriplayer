@@ -36,18 +36,21 @@
     <!--
       Network
       Justification: optional metadata enrichment (MusicBrainz year, Cover Art
-      Archive images) and future remote library / scrobbler connections.
-      External Explore results are not bulk-downloaded into the DB.
+      Archive images) and remote library / scrobbler connections.
     -->
     <uses-permission android:name="android.permission.INTERNET" />
 
     <!--
-      Foreground playback service
-      Justification: keep music playing with media controls when the app is
-      backgrounded or the screen is off (car / pocket use).
+      Foreground playback + library sync
+      mediaPlayback: keep music playing with controls when backgrounded.
+      dataSync: long local / Jellyfin / Subsonic library scans with a live notification.
     -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
+
+    <!-- API 33+ notifications for scan progress -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 
     <!--
       Wake lock
@@ -92,6 +95,11 @@
             android:name=".player.MusicService"
             android:exported="false"
             android:foregroundServiceType="mediaPlayback" />
+
+        <service
+            android:name=".data.LibraryScanService"
+            android:exported="false"
+            android:foregroundServiceType="dataSync" />
 
     </application>
 
