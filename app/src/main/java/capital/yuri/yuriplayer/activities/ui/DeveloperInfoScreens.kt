@@ -17,97 +17,49 @@ import androidx.compose.material.icons.filled.OpenInNew
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import capital.yuri.yuriplayer.BuildConfig
+import capital.yuri.yuriplayer.R
+import com.mikepenz.aboutlibraries.Libs
+import com.mikepenz.aboutlibraries.entity.Library
 
-private data class OssLicense(
-    val name: String,
-    val license: String,
-    /** Public license text / repo license page (prefer GitHub). */
-    val url: String,
-    val note: String? = null
-)
+/**
+ * Prefer public project / license URLs (GitHub, SPDX, homepage) over embedding full text.
+ */
+private fun Library.openUrl(): String? {
+    website?.takeIf { it.startsWith("http") }?.let { return it }
+    scm?.url?.takeIf { it.startsWith("http") }?.let { return it }
+    licenses.firstOrNull()?.url?.takeIf { it.startsWith("http") }?.let { return it }
+    return null
+}
 
-/** Major third-party components — links to public license pages, not bundled text. */
-private val OSS_LICENSES = listOf(
-    OssLicense(
-        name = "YuriPlayer",
-        license = "AGPL-3.0",
-        url = "https://github.com/LizAinslie/yuriplayer",
-        note = "This application"
-    ),
-    OssLicense(
-        name = "AndroidX / Jetpack",
-        license = "Apache-2.0",
-        url = "https://github.com/androidx/androidx/blob/androidx-main/LICENSE.txt"
-    ),
-    OssLicense(
-        name = "Jetpack Compose",
-        license = "Apache-2.0",
-        url = "https://github.com/androidx/androidx/blob/androidx-main/LICENSE.txt"
-    ),
-    OssLicense(
-        name = "Kotlin",
-        license = "Apache-2.0",
-        url = "https://github.com/JetBrains/kotlin/blob/master/license/LICENSE.txt"
-    ),
-    OssLicense(
-        name = "Kotlin Coroutines",
-        license = "Apache-2.0",
-        url = "https://github.com/Kotlin/kotlinx.coroutines/blob/master/LICENSE.txt"
-    ),
-    OssLicense(
-        name = "kotlinx.serialization",
-        license = "Apache-2.0",
-        url = "https://github.com/Kotlin/kotlinx.serialization/blob/master/LICENSE.txt"
-    ),
-    OssLicense(
-        name = "Media3 (ExoPlayer)",
-        license = "Apache-2.0",
-        url = "https://github.com/androidx/media/blob/release/LICENSE"
-    ),
-    OssLicense(
-        name = "Ktor",
-        license = "Apache-2.0",
-        url = "https://github.com/ktorio/ktor/blob/main/LICENSE"
-    ),
-    OssLicense(
-        name = "Koin",
-        license = "Apache-2.0",
-        url = "https://github.com/InsertKoinIO/koin/blob/main/LICENSE"
-    ),
-    OssLicense(
-        name = "Room",
-        license = "Apache-2.0",
-        url = "https://github.com/androidx/androidx/blob/androidx-main/LICENSE.txt"
-    ),
-    OssLicense(
-        name = "Coil",
-        license = "Apache-2.0",
-        url = "https://github.com/coil-kt/coil/blob/main/LICENSE.txt"
-    ),
-    OssLicense(
-        name = "Jellyfin Kotlin SDK",
-        license = "LGPL-3.0",
-        url = "https://github.com/jellyfin/jellyfin-sdk-kotlin/blob/master/LICENSE"
-    ),
-    OssLicense(
-        name = "jaudiotagger",
-        license = "LGPL-2.1-or-later",
-        url = "https://github.com/ijabz/jaudiotagger/blob/master/license.txt"
-    ),
-    OssLicense(
-        name = "Material Components",
-        license = "Apache-2.0",
-        url = "https://github.com/material-components/material-components-android/blob/master/LICENSE"
-    )
-)
+private fun Library.licenseLabel(): String {
+    val ids = licenses.mapNotNull { lic ->
+        lic.spdxId?.takeIf { it.isNotBlank() } ?: lic.name.takeIf { it.isNotBlank() }
+    }.distinct()
+    return when {
+        ids.isEmpty() -> "License unknown"
+        ids.size == 1 -> ids.first()
+        else -> ids.joinToString(", ")
+    }
+}
 
 @Composable
 fun OpenSourceLicensesScreen(onBack: () -> Unit) {
     val context = LocalContext.current
+
+    val libraries = remember {
+        runCatching {
+            Libs.Builder()
+                .withJson(context, R.raw.aboutlibraries)
+                .build()
+                .libraries
+                .sortedBy { it.name.lowercase() }
+        }.getOrElse { emptyList() }
+    }
 
     fun openUrl(url: String) {
         runCatching {
@@ -127,7 +79,7 @@ fun OpenSourceLicensesScreen(onBack: () -> Unit) {
         SettingsTopBar(title = "Open source licenses", onBack = onBack)
 
         Text(
-            "YuriPlayer is free software. Tap a row to open the project’s public license page.",
+            "Generated from declared Gradle dependencies. Tap a row to open the project or license page.",
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
             modifier = Modifier.padding(horizontal = 20.dp, vertical = 8.dp)
@@ -135,25 +87,41 @@ fun OpenSourceLicensesScreen(onBack: () -> Unit) {
 
         SettingsSectionTitle("Application")
         SettingsGroup {
-            val app = OSS_LICENSES.first()
             SettingsNavRow(
-                title = app.name,
-                subtitle = listOfNotNull(app.license, app.note).joinToString(" · "),
+                title = "YuriPlayer",
+                subtitle = "AGPL-3.0 · this application",
                 icon = Icons.Default.Code,
                 trailing = "GitHub",
-                onClick = { openUrl(app.url) }
+                onClick = { openUrl(BuildConfig.REPO_URL) }
             )
         }
 
-        SettingsSectionTitle("Libraries")
+        SettingsSectionTitle("Libraries (${libraries.size})")
         SettingsGroup {
-            OSS_LICENSES.drop(1).forEach { lib ->
+            if (libraries.isEmpty()) {
                 SettingsNavRow(
-                    title = lib.name,
-                    subtitle = lib.license,
-                    icon = Icons.Default.OpenInNew,
-                    onClick = { openUrl(lib.url) }
+                    title = "No license metadata",
+                    subtitle = "Rebuild so AboutLibraries can generate R.raw.aboutlibraries",
+                    onClick = {}
                 )
+            } else {
+                libraries.forEach { lib ->
+                    val url = lib.openUrl()
+                    val version = lib.artifactVersion?.takeIf { it.isNotBlank() }
+                    val subtitle = buildString {
+                        append(lib.licenseLabel())
+                        if (version != null) {
+                            append(" · ")
+                            append(version)
+                        }
+                    }
+                    SettingsNavRow(
+                        title = lib.name.ifBlank { lib.uniqueId },
+                        subtitle = subtitle,
+                        icon = if (url != null) Icons.Default.OpenInNew else null,
+                        onClick = { if (url != null) openUrl(url) }
+                    )
+                }
             }
         }
 
