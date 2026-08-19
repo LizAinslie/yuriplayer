@@ -1,6 +1,7 @@
 package capital.yuri.yuriplayer.di
 
 import capital.yuri.yuriplayer.data.AlbumArtCache
+import capital.yuri.yuriplayer.data.AlbumCoverPrefs
 import capital.yuri.yuriplayer.data.ArtistProfileRepository
 import capital.yuri.yuriplayer.data.CatalogRepository
 import capital.yuri.yuriplayer.data.ExploreSearchService
@@ -66,6 +67,7 @@ val appModule = module {
     single { MusicRepository(androidContext(), get()) }
     single { MyStuffPinStore(androidContext()) }
     single { UserImageStore(androidContext()) }
+    single { AlbumCoverPrefs(androidContext()) }
     single { FfmpegService(androidContext()) }
     single { LibraryScanNotifier(androidContext()) }
     single { ScanCheckpointStore(androidContext()) }
@@ -172,7 +174,7 @@ val appModule = module {
         )
     }
 
-    single { AlbumArtCache(androidContext()) }
+    single { AlbumArtCache(androidContext(), get()) }
     single { ThemeService(get()) }
     single { PlayerThemeStore(get(), get()) }
 
