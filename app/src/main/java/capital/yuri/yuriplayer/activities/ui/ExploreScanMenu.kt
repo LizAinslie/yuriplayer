@@ -19,7 +19,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
-import androidx.compose.ui.Modifier.modifier
+import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import capital.yuri.yuriplayer.data.ExploreSearchService
@@ -174,7 +174,6 @@ fun ExploreScanMenu() {
                                 text = { Text("  Re-scan ${cp.sourceName}") },
                                 onClick = {
                                     expanded = false
-                                    // Force clears DONE markers and restarts from zero
                                     explore.requestRemoteScan(force = true)
                                 }
                             )

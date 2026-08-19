@@ -31,15 +31,12 @@ import androidx.compose.foundation.layout.WindowInsetsSides
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.only
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.systemBars
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Favorite
-import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -72,6 +69,7 @@ import capital.yuri.yuriplayer.activities.ui.ArtistDetailScreen
 import capital.yuri.yuriplayer.activities.ui.ArtistNavActions
 import capital.yuri.yuriplayer.activities.ui.EditAlbumMetadataScreen
 import capital.yuri.yuriplayer.activities.ui.EditSongMetadataScreen
+import capital.yuri.yuriplayer.activities.ui.ExploreScanMenu
 import capital.yuri.yuriplayer.activities.ui.ExploreScreen
 import capital.yuri.yuriplayer.activities.ui.LocalAlbumNav
 import capital.yuri.yuriplayer.activities.ui.LocalArtistNav
@@ -378,7 +376,6 @@ fun YuriApp(
     }
 
     var topTab by remember { mutableStateOf(TopTab.MyStuff) }
-    var exploreRescanKey by remember { mutableStateOf(0) }
     var playerExpanded by remember { mutableStateOf(false) }
     var detailStack by remember { mutableStateOf<List<DetailRoute>>(emptyList()) }
     var npPlaylistSong by remember { mutableStateOf<Song?>(null) }
@@ -483,7 +480,6 @@ fun YuriApp(
             playerExpanded = false
             pushDetail(DetailRoute.Album(found))
         } else if (song.hasAlbum) {
-            // Synthetic album from the single track (e.g. remote-only before full reload)
             playerExpanded = false
             pushDetail(
                 DetailRoute.Album(
@@ -645,23 +641,9 @@ fun YuriApp(
                             },
                             actions = {
                                 if (topTab == TopTab.Explore) {
-                                    val libLoading by library.isLoading.collectAsState()
-                                    IconButton(onClick = {
-                                        library.refresh()
-                                        exploreRescanKey++
-                                        if (settings.isNetworkMetadataEnabled()) {
-                                            enrichment.enrichLibraryAsync()
-                                        }
-                                    }) {
-                                        if (libLoading) {
-                                            CircularProgressIndicator(
-                                                modifier = Modifier.size(20.dp),
-                                                strokeWidth = 2.dp
-                                            )
-                                        } else {
-                                            Icon(Icons.Default.Refresh, contentDescription = "Refresh library")
-                                        }
-                                    }
+                                    // TravelExplore dropdown: scan / pause / stop per source.
+                                    // Never auto-starts on tab enter — only explicit menu actions.
+                                    ExploreScanMenu()
                                 }
                                 IconButton(onClick = { pushDetail(DetailRoute.Settings) }) {
                                     Icon(Icons.Default.Settings, contentDescription = "Settings")
@@ -830,8 +812,7 @@ fun YuriApp(
                                 onOpenArtist = { artist ->
                                     playerExpanded = false
                                     pushDetail(DetailRoute.Artist(artist))
-                                },
-                                forceRescanKey = exploreRescanKey
+                                }
                             )
                         }
                     }
