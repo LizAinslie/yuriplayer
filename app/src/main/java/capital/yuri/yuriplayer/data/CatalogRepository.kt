@@ -34,6 +34,41 @@ class CatalogRepository(
         dao.getTracksBySource(CatalogSources.LOCAL).map { it.toSong() }
     }
 
+    /** Ordered lookup for playlist resolution (local + remote keys). */
+    suspend fun getSongsByKeys(keys: List<String>): List<Song> = withContext(Dispatchers.IO) {
+        if (keys.isEmpty()) return@withContext emptyList()
+        // Room IN has a practical bind limit; chunk large playlists
+        keys.chunked(400).flatMap { chunk ->
+            dao.getTracksByKeys(chunk).map { it.toSong() }
+        }
+    }
+
+    /** SQL search — never walk an in-memory 24k list. */
+    suspend fun searchSongs(query: String, limit: Int = 80): List<Song> =
+        withContext(Dispatchers.IO) {
+            val q = query.trim()
+            if (q.isEmpty()) return@withContext emptyList()
+            dao.searchTracks(q, limit).map { it.toSong() }
+        }
+
+    suspend fun searchAlbumRows(query: String, limit: Int = 12): List<CatalogAlbumEntity> =
+        withContext(Dispatchers.IO) {
+            val q = query.trim()
+            if (q.isEmpty()) return@withContext emptyList()
+            dao.searchAlbums(q, limit)
+        }
+
+    suspend fun searchArtistRows(query: String, limit: Int = 12): List<CatalogArtistEntity> =
+        withContext(Dispatchers.IO) {
+            val q = query.trim()
+            if (q.isEmpty()) return@withContext emptyList()
+            dao.searchArtists(q, limit)
+        }
+
+    suspend fun countRemoteTracks(): Int = withContext(Dispatchers.IO) {
+        dao.countNonLocalTracks()
+    }
+
     suspend fun getAlbum(albumKey: String): CatalogAlbumEntity? = withContext(Dispatchers.IO) {
         dao.getAlbum(albumKey)
     }
@@ -54,9 +89,6 @@ class CatalogRepository(
 
         dao.upsertTracks(trackEntities)
         dao.pruneStaleTracks(CatalogSources.LOCAL, null, seenAt)
-
-        // Rollups are expensive — only rebuild when the local set actually changed size a lot,
-        // or always once at end of local scan (still cheaper than per-page remote).
         rebuildRollupsLocked()
 
         val local = dao.getTracksBySource(CatalogSources.LOCAL).map { it.toSong() }
@@ -80,6 +112,33 @@ class CatalogRepository(
             )
         }
         dao.upsertTracks(entities)
+    }
+
+    /**
+     * Ensure playlist / My Stuff targets exist as catalog rows so they resolve
+     * after restart. No-ops for keys already present.
+     */
+    suspend fun ensureTracksPresent(songs: List<Song>) = withContext(Dispatchers.IO) {
+        if (songs.isEmpty()) return@withContext
+        val now = System.currentTimeMillis()
+        val missing = songs.filter { dao.getTrack(it.songKey) == null }
+        if (missing.isEmpty()) return@withContext
+        val entities = missing.map { song ->
+            val type = when {
+                song.path?.startsWith("jellyfin:", true) == true -> CatalogSources.JELLYFIN
+                song.path?.startsWith("subsonic:", true) == true -> CatalogSources.SUBSONIC
+                song.path?.startsWith("navidrome:", true) == true -> CatalogSources.NAVIDROME
+                else -> CatalogSources.LOCAL
+            }
+            song.toTrackEntity(
+                sourceType = type,
+                sourceInstanceId = null,
+                externalId = song.path ?: song.contentUri.toString(),
+                seenAt = now
+            )
+        }
+        dao.upsertTracks(entities)
+        Log.i(TAG, "ensureTracksPresent: upserted ${entities.size}")
     }
 
     suspend fun rebuildRollups() = withContext(Dispatchers.IO) {
@@ -117,18 +176,28 @@ class CatalogRepository(
         }
     }
 
-    suspend fun getRemoteOfferings(): List<SourceOffering> = withContext(Dispatchers.IO) {
-        dao.getAllTracks()
-            .filter { it.sourceType != CatalogSources.LOCAL }
-            .map { row ->
-                SourceOffering(
-                    sourceType = SourceType.from(row.sourceType),
-                    sourceId = row.sourceInstanceId,
-                    sourceName = row.sourceType.lowercase().replaceFirstChar { it.titlecase() },
-                    song = row.toSong()
-                )
-            }
-    }
+    /**
+     * Load remote offerings for a **bounded** use (e.g. art pass). Prefer
+     * [searchSongs] / [countRemoteTracks] for Explore UI.
+     */
+    suspend fun getRemoteOfferings(limit: Int = Int.MAX_VALUE): List<SourceOffering> =
+        withContext(Dispatchers.IO) {
+            val jelly = dao.getTracksBySource(CatalogSources.JELLYFIN)
+            val sub = dao.getTracksBySource(CatalogSources.SUBSONIC)
+            val navi = dao.getTracksBySource(CatalogSources.NAVIDROME)
+            (jelly + sub + navi)
+                .asSequence()
+                .take(if (limit == Int.MAX_VALUE) Int.MAX_VALUE else limit)
+                .map { row ->
+                    SourceOffering(
+                        sourceType = SourceType.from(row.sourceType),
+                        sourceId = row.sourceInstanceId,
+                        sourceName = row.sourceType.lowercase().replaceFirstChar { it.titlecase() },
+                        song = row.toSong()
+                    )
+                }
+                .toList()
+        }
 
     suspend fun importToMyStuff(song: Song, sourceType: String, sourceInstanceId: Long?, externalId: String?) =
         withContext(Dispatchers.IO) {
@@ -140,11 +209,6 @@ class CatalogRepository(
                 seenAt = now
             )
             dao.upsertTrack(entity)
-            val all = dao.getAllTracks()
-            val prevAlbums = dao.getAllAlbums().associateBy { it.albumKey }
-            val prevArtists = dao.getAllArtists().associateBy { it.artistKey }
-            dao.upsertAlbums(buildAlbumRollups(all, prevAlbums))
-            dao.upsertArtists(buildArtistRollups(all, prevArtists))
             Log.i(TAG, "imported to My Stuff: ${entity.songKey} from $sourceType")
         }
 
