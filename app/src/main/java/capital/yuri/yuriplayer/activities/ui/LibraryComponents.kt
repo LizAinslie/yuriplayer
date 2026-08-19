@@ -519,14 +519,15 @@ fun SwipeAddSongRow(
                     color = titleColor
                 )
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    MarqueeText(
-                        text = if (showTrackNumber) song.displayArtist
-                        else "${song.displayArtist} · ${song.displayAlbum}",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = if (isPlaying) accent.copy(alpha = 0.75f)
-                        else onSurface.copy(alpha = 0.6f),
-                        modifier = Modifier.weight(1f, fill = false)
-                    )
+                    Box(modifier = Modifier.weight(1f)) {
+                        MarqueeText(
+                            text = if (showTrackNumber) song.displayArtist
+                            else "${song.displayArtist} · ${song.displayAlbum}",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = if (isPlaying) accent.copy(alpha = 0.75f)
+                            else onSurface.copy(alpha = 0.6f)
+                        )
+                    }
                     // Multi-source badge only — single source never shows the icon.
                     if (showMultiSourceIcon) {
                         Spacer(modifier = Modifier.width(4.dp))
