@@ -20,6 +20,7 @@ import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.LibraryMusic
 import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.SignalCellularAlt
 import androidx.compose.material.icons.filled.Storage
 import androidx.compose.material.icons.filled.Sync
 import androidx.compose.material.icons.outlined.CloudDownload
@@ -111,6 +112,9 @@ private fun SettingsHubScreen(
     var autoPlayRecommended by remember {
         mutableStateOf(settings.isAutoPlayRecommendedEnabled())
     }
+    var syncOverMobile by remember {
+        mutableStateOf(settings.isSyncOverMobileDataEnabled())
+    }
     val scanMode = settings.getScanMode()
     val versionSubtitle = buildString {
         append(BuildConfig.VERSION_NAME)
@@ -147,6 +151,16 @@ private fun SettingsHubScreen(
                 },
                 icon = Icons.Default.Folder,
                 onClick = onOpenLocalLibrary
+            )
+            SettingsSwitchRow(
+                title = "Sync over mobile data",
+                subtitle = "Allow large remote library indexes on cellular. Off by default to protect your plan.",
+                icon = Icons.Default.SignalCellularAlt,
+                checked = syncOverMobile,
+                onCheckedChange = { enabled ->
+                    syncOverMobile = enabled
+                    settings.setSyncOverMobileDataEnabled(enabled)
+                }
             )
             SettingsNavRow(
                 title = "Offline, cache, and download",
