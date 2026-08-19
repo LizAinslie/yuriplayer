@@ -26,6 +26,8 @@ class ScanBudget(context: Context) {
     val progressEveryPages: Int
     /** Min interval between any UI-facing StateFlow writes (count / progress). */
     val uiTickMinIntervalMs: Long
+    /** Alias used by ExploreSearchService for indexedCount throttling. */
+    val countPublishMinIntervalMs: Long get() = uiTickMinIntervalMs
     /** How many album-art downloads to attempt in one post-scan pass. */
     val artBatchLimit: Int
     val artConcurrency: Int
@@ -79,7 +81,6 @@ class ScanBudget(context: Context) {
     }
 
     suspend fun yieldBetweenPages() {
-        // Always yield the coroutine first so other Dispatchers.IO / Main work can run
         yield()
         if (pageYieldMs > 0) delay(pageYieldMs)
     }
