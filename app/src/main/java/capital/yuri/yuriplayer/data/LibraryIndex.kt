@@ -16,10 +16,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
 /**
- * In-memory view of the **persisted** catalog for UI.
- *
- * Continuous lists → StateFlows. Discrete scan moments → [events].
- * Heavy local rescans can be hosted by [LibraryScanService] for a live notification.
+ * In-memory view of the **persisted** catalog for UI (local + remote rows in Room).
  */
 class LibraryIndex(
     private val context: Context,
@@ -69,13 +66,19 @@ class LibraryIndex(
         }
     }
 
-    /** UI entry: prefer FGS so a long local scan shows a live notification. */
+    /** Reload every Room track (local + remote) into the in-memory index. */
+    suspend fun reloadFromCatalog() {
+        val all = withContext(Dispatchers.IO) { catalog.getAllSongs() }
+        _songs.value = all
+        _lastScannedAt.value = System.currentTimeMillis()
+        Log.i(TAG, "reloadFromCatalog: ${all.size} tracks")
+    }
+
     fun refresh() {
         if (_isLoading.value) return
         LibraryScanService.startLocal(context.applicationContext)
     }
 
-    /** Actual work — called from [LibraryScanService] or tests. */
     suspend fun refreshAndAwait() {
         if (_isLoading.value) return
         _isLoading.value = true
