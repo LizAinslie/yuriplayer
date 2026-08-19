@@ -37,13 +37,11 @@ class CatalogRepository(
     /** Ordered lookup for playlist resolution (local + remote keys). */
     suspend fun getSongsByKeys(keys: List<String>): List<Song> = withContext(Dispatchers.IO) {
         if (keys.isEmpty()) return@withContext emptyList()
-        // Room IN has a practical bind limit; chunk large playlists
         keys.chunked(400).flatMap { chunk ->
             dao.getTracksByKeys(chunk).map { it.toSong() }
         }
     }
 
-    /** SQL search — never walk an in-memory 24k list. */
     suspend fun searchSongs(query: String, limit: Int = 80): List<Song> =
         withContext(Dispatchers.IO) {
             val q = query.trim()
@@ -65,10 +63,6 @@ class CatalogRepository(
             dao.searchArtists(q, limit)
         }
 
-    /**
-     * Explore album hits from the full catalog (local + remote).
-     * Songs are not loaded here — call [albumItemForKey] / [tracksForAlbum] on open.
-     */
     suspend fun searchAlbumsAsItems(query: String, limit: Int = 12): List<AlbumItem> =
         withContext(Dispatchers.IO) {
             val q = query.trim()
@@ -83,7 +77,6 @@ class CatalogRepository(
             }
         }
 
-    /** Explore artist hits from the full catalog (local + remote). */
     suspend fun searchArtistsAsItems(query: String, limit: Int = 12): List<ArtistItem> =
         withContext(Dispatchers.IO) {
             val q = query.trim()
@@ -108,10 +101,6 @@ class CatalogRepository(
         dao.getTracksForArtist(artistKey).map { it.toSong() }
     }
 
-    /**
-     * Full [AlbumItem] for detail / play — prefers catalog tracks for the key,
-     * falls back to empty if the album row or tracks are missing.
-     */
     suspend fun albumItemForKey(albumKey: String): AlbumItem? = withContext(Dispatchers.IO) {
         if (albumKey.isBlank()) return@withContext null
         val row = dao.getAlbum(albumKey)
@@ -130,7 +119,6 @@ class CatalogRepository(
         )
     }
 
-    /** Full [ArtistItem] + discography albums for detail. */
     suspend fun artistItemForKey(artistKey: String): ArtistItem? = withContext(Dispatchers.IO) {
         if (artistKey.isBlank()) return@withContext null
         val row = dao.getArtist(artistKey)
@@ -145,7 +133,6 @@ class CatalogRepository(
         )
     }
 
-    /** Albums for an artist key (catalog rollups + tracks loaded per album). */
     suspend fun albumItemsForArtist(artistKey: String): List<AlbumItem> = withContext(Dispatchers.IO) {
         if (artistKey.isBlank()) return@withContext emptyList()
         val albumRows = dao.getAlbumsForArtist(artistKey)
@@ -165,7 +152,6 @@ class CatalogRepository(
                 )
             }
         } else {
-            // No rollup rows yet — group tracks directly
             dao.getTracksForArtist(artistKey)
                 .map { it.toSong() }
                 .groupBy { albumKey(it.album, it.effectiveAlbumArtist) }
@@ -207,10 +193,6 @@ class CatalogRepository(
             dao.countTracksForSource(sourceType, sourceInstanceId)
         }
 
-    /**
-     * Resolve playable source offerings for one logical track (title+artist+album).
-     * Bounded SQL only — used by song rows for multi-source badge + Sources sheet.
-     */
     suspend fun offeringsMatchingSong(song: Song, limit: Int = 12): List<SourceOffering> =
         withContext(Dispatchers.IO) {
             val title = song.title?.trim().orEmpty()
@@ -232,7 +214,6 @@ class CatalogRepository(
 
             if (fromDb.isNotEmpty()) return@withContext fromDb
 
-            // Fallback: the song itself as a single offering
             listOf(
                 SourceOffering(
                     sourceType = sourceTypeForSong(song),
@@ -242,6 +223,48 @@ class CatalogRepository(
                 )
             )
         }
+
+    /**
+     * After embedded tag writes, keep the on-device catalog in sync without a
+     * full MediaStore rescan. Genre is written into the file but not stored as a
+     * catalog column yet — title/artist/album/year are.
+     */
+    suspend fun patchTrackTags(
+        songKey: String,
+        title: String? = null,
+        artist: String? = null,
+        album: String? = null,
+        albumArtist: String? = null,
+        year: Int? = null,
+        genre: String? = null
+    ) = withContext(Dispatchers.IO) {
+        val row = dao.getTrack(songKey) ?: return@withContext
+        val nextTitle = title?.trim()?.takeIf { it.isNotEmpty() } ?: row.title
+        val nextArtist = artist?.trim()?.takeIf { it.isNotEmpty() } ?: row.artist
+        val nextAlbumArtist = albumArtist?.trim()?.takeIf { it.isNotEmpty() } ?: row.albumArtist
+        val nextAlbum = album?.trim()?.takeIf { it.isNotEmpty() } ?: row.album
+        val nextYear = year?.takeIf { it in 1000..2100 } ?: row.year
+        val effectiveArtist = nextAlbumArtist ?: nextArtist
+        val nextAlbumKey = if (nextAlbum != null) albumKey(nextAlbum, effectiveArtist) else row.albumKey
+        val nextArtistKey = artistKey(effectiveArtist) ?: row.artistKey
+        // genre intentionally unused until catalog_tracks gains a column
+        @Suppress("UNUSED_VARIABLE")
+        val ignoredGenre = genre
+        dao.upsertTrack(
+            row.copy(
+                title = nextTitle,
+                artist = nextArtist,
+                albumArtist = nextAlbumArtist,
+                album = nextAlbum,
+                year = nextYear,
+                albumKey = nextAlbumKey,
+                artistKey = nextArtistKey,
+                isTagged = true,
+                updatedAtMs = System.currentTimeMillis()
+            )
+        )
+        Log.i(TAG, "patchTrackTags $songKey")
+    }
 
     suspend fun syncLocalLibrary(): List<Song> = withContext(Dispatchers.IO) {
         val scanned = musicRepository.scanLibrary()
@@ -275,14 +298,9 @@ class CatalogRepository(
         dao.upsertTracks(entities)
     }
 
-    /**
-     * Ensure playlist / My Stuff targets exist as catalog rows so they resolve
-     * after restart. No-ops for keys already present.
-     */
     suspend fun ensureTracksPresent(songs: List<Song>) = withContext(Dispatchers.IO) {
         if (songs.isEmpty()) return@withContext
         val now = System.currentTimeMillis()
-        // One IN query instead of N individual getTrack calls
         val keys = songs.map { it.songKey }.distinct()
         val existing = keys.chunked(400).flatMap { dao.getTracksByKeys(it) }
             .map { it.songKey }.toHashSet()
@@ -310,11 +328,6 @@ class CatalogRepository(
         rebuildRollupsLocked()
     }
 
-    /**
-     * Album/artist index rebuild **without** loading the full track table.
-     * Aggregates run in SQLite; we only merge prior cover/bio metadata from the
-     * (much smaller) album/artist tables.
-     */
     private suspend fun rebuildRollupsLocked() {
         val prevAlbums = dao.getAllAlbums().associateBy { it.albumKey }
         val prevArtists = dao.getAllArtists().associateBy { it.artistKey }
@@ -374,12 +387,10 @@ class CatalogRepository(
         val deleted = if (keepSongKeys.isEmpty()) {
             dao.pruneStaleTracks(sourceType, sourceInstanceId, beforeMs)
         } else {
-            // Chunk keep-keys — SQLite bind limits; rare path (end of sync only)
             val keep = keepSongKeys.toList()
             if (keep.size <= 400) {
                 dao.pruneStaleTracksExcept(sourceType, sourceInstanceId, beforeMs, keep)
             } else {
-                // Fallback: only load keys for this source that are candidates
                 val stale = dao.getTracksBySource(sourceType)
                     .asSequence()
                     .filter {
@@ -403,11 +414,6 @@ class CatalogRepository(
         }
     }
 
-    /**
-     * Load remote offerings for a **bounded** use (e.g. art pass). Prefer
-     * [searchSongs] / [countRemoteTracks] for Explore UI.
-     * LIMIT is applied in SQL — never materialize the whole remote library.
-     */
     suspend fun getRemoteOfferings(limit: Int = 64): List<SourceOffering> =
         withContext(Dispatchers.IO) {
             val per = (limit.coerceAtLeast(1) / 3).coerceAtLeast(1)
