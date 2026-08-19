@@ -47,7 +47,6 @@ fun AlbumCoverPickerHost(
     fun apply(uri: String?) {
         scope.launch {
             coverPrefs.setPreferredUri(aKey, uri)
-            // Mirror into catalog row when we have a remote URL
             if (uri != null && uri.startsWith("http", ignoreCase = true)) {
                 catalog.applyAlbumCover(aKey, coverPath = null, coverUrl = uri, mbid = null)
             }
