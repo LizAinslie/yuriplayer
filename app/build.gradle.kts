@@ -3,6 +3,7 @@ import java.io.FileInputStream
 import org.gradle.api.provider.ValueSource
 import org.gradle.api.provider.ValueSourceParameters
 import org.gradle.process.ExecOperations
+import java.io.ByteArrayOutputStream
 import javax.inject.Inject
 
 plugins {
@@ -28,12 +29,12 @@ abstract class GitCommandValueSource : ValueSource<String, GitCommandValueSource
     abstract val execOperations: ExecOperations
 
     override fun obtain(): String {
-        val out = java.io.ByteArrayOutputStream()
+        val out = ByteArrayOutputStream()
         val result = execOperations.exec {
             commandLine(listOf("git") + parameters.args.get())
             workingDir(parameters.workingDir.get().asFile)
             standardOutput = out
-            errorOutput = java.io.ByteArrayOutputStream()
+            errorOutput = ByteArrayOutputStream()
             isIgnoreExitValue = true
         }
         val text = out.toString(Charsets.UTF_8).trim()

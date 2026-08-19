@@ -25,6 +25,7 @@ import capital.yuri.yuriplayer.BuildConfig
 import capital.yuri.yuriplayer.R
 import com.mikepenz.aboutlibraries.Libs
 import com.mikepenz.aboutlibraries.entity.Library
+import com.mikepenz.aboutlibraries.util.withJson
 
 /**
  * Prefer public project / license URLs (GitHub, SPDX, homepage) over embedding full text.
