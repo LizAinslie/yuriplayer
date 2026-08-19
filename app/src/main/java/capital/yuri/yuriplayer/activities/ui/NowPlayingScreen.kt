@@ -25,6 +25,7 @@ import androidx.compose.material.icons.filled.RepeatOne
 import androidx.compose.material.icons.filled.Shuffle
 import androidx.compose.material.icons.filled.SkipNext
 import androidx.compose.material.icons.filled.SkipPrevious
+import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -56,6 +57,7 @@ import androidx.compose.ui.unit.dp
 import capital.yuri.yuriplayer.data.PlayerThemeStore
 import capital.yuri.yuriplayer.data.Song
 import capital.yuri.yuriplayer.player.ColdSourceType
+import capital.yuri.yuriplayer.player.PlayerController
 import capital.yuri.yuriplayer.player.QueueLane
 import capital.yuri.yuriplayer.player.QueueSnapshot
 import capital.yuri.yuriplayer.player.RepeatMode
@@ -101,6 +103,7 @@ fun NowPlayingScreen(
 ) {
     val context = LocalContext.current
     val themeStore: PlayerThemeStore = koinInject()
+    val player: PlayerController = koinInject()
     val baseScheme = MaterialTheme.colorScheme
     val density = LocalDensity.current
 
@@ -117,6 +120,7 @@ fun NowPlayingScreen(
 
     var showQueue by remember { mutableStateOf(false) }
     var showSongMenu by remember { mutableStateOf(false) }
+    var showRadioSettings by remember { mutableStateOf(false) }
     var sliderPosition by remember { mutableFloatStateOf(0f) }
     var sliding by remember { mutableStateOf(false) }
     var hFrac by remember { mutableFloatStateOf(0f) }
@@ -130,6 +134,7 @@ fun NowPlayingScreen(
 
     val canSwipePrev = peekPrevSong != null
     val buttonGoesToPrevTrack = positionMs <= PREV_RESTART_MS && canSwipePrev
+    val isRadio = snapshot.isRadio
 
     fun requestSkipNext() {
         skipDirection = -1
@@ -171,7 +176,6 @@ fun NowPlayingScreen(
         lerpPlayerColors(playerColors, blendTarget, blendT)
     } else playerColors
 
-    // Full NP: page background from album art. Mini-player uses app default instead.
     val scheme = playerColorScheme(shownColors, baseScheme, useArtBackground = true)
     ThemedStatusBar(color = scheme.background, enabled = true)
 
@@ -479,10 +483,21 @@ fun NowPlayingScreen(
                             )
                         }
 
+                        if (isRadio) {
+                            IconButton(onClick = { showRadioSettings = true }) {
+                                Icon(
+                                    Icons.Default.Tune,
+                                    contentDescription = "Radio settings",
+                                    tint = scheme.primary
+                                )
+                            }
+                        }
+
                         Text(
                             buildString {
                                 append(repeatLabel(snapshot.repeatMode))
                                 if (snapshot.shuffleEnabled) append(" · Shuffle")
+                                if (isRadio) append(" · Radio")
                             },
                             style = MaterialTheme.typography.labelSmall,
                             color = scheme.onBackground.copy(alpha = 0.55f),
@@ -540,6 +555,19 @@ fun NowPlayingScreen(
                         }
                     )
                     MediaSheetBottomPad()
+                }
+            }
+
+            if (showRadioSettings) {
+                val session = snapshot.radioSession
+                if (session != null) {
+                    RadioSettingsSheet(
+                        session = session,
+                        onApply = { prefs -> player.applyRadioPrefs(prefs) },
+                        onDismiss = { showRadioSettings = false }
+                    )
+                } else {
+                    showRadioSettings = false
                 }
             }
         }
