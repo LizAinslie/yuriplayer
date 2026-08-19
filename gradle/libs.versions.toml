@@ -21,7 +21,7 @@ jaudiotagger = "2.2.7"
 ktor = "3.1.1"
 coil = "3.1.0"
 documentfile = "1.0.1"
-jellyfinSdk = "1.6.8"
+jellyfinSdk = "1.8.11"
 aboutLibraries = "14.2.0"
 
 [libraries]
