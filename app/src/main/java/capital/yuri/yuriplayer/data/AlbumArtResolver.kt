@@ -17,10 +17,8 @@ import java.net.URL
  * Album art decode: **preferred override** → embedded tags → folder cover →
  * enriched file → HTTP(S) remote URI → MediaStore / content URI.
  *
- * SAF / manual-scan tracks store a content:// [Song.contentUri] and often a
- * non-file [Song.path]. Embedded art must use [MediaMetadataRetriever] with
- * a Context + Uri — plain setDataSource(path) fails for those and was why
- * local covers disappeared after switching off MediaStore.
+ * Preferred URIs may be bare absolute paths (custom upload into filesDir),
+ * file://, content://, or http(s).
  */
 object AlbumArtResolver {
 
@@ -37,7 +35,7 @@ object AlbumArtResolver {
     ): Bitmap? =
         withContext(Dispatchers.IO) {
             val preferred = preferredUri?.takeIf { it.isNotBlank() }
-                ?.let { loadUri(context, Uri.parse(it), maxSize) }
+                ?.let { loadAnyUri(context, it, maxSize) }
             val bitmap = preferred
                 ?: loadEmbedded(context, song, maxSize)
                 ?: loadFolderCover(song.path, maxSize)
@@ -113,10 +111,6 @@ object AlbumArtResolver {
         return decodeFileSampled(f.absolutePath, maxSize)
     }
 
-    /**
-     * Pull embedded picture from the audio file.
-     * Tries real filesystem path first, then content:// / file:// via Context.
-     */
     private fun loadEmbedded(context: Context, song: Song, maxSize: Int): Bitmap? {
         val path = song.path
         if (path != null && isVirtualLibraryPath(path)) return null
@@ -124,7 +118,6 @@ object AlbumArtResolver {
         val retriever = MediaMetadataRetriever()
         return try {
             var opened = false
-            // 1) Plain filesystem path
             if (!path.isNullOrBlank() && !path.contains("://") && File(path).canRead()) {
                 try {
                     retriever.setDataSource(path)
@@ -133,7 +126,6 @@ object AlbumArtResolver {
                     Log.d(TAG, "embedded path open failed: ${e.message}")
                 }
             }
-            // 2) content:// / file:// on path string
             if (!opened && !path.isNullOrBlank() && path.contains("://")) {
                 try {
                     retriever.setDataSource(context, Uri.parse(path))
@@ -142,7 +134,6 @@ object AlbumArtResolver {
                     Log.d(TAG, "embedded path-uri open failed: ${e.message}")
                 }
             }
-            // 3) Song.contentUri (SAF document / MediaStore)
             if (!opened) {
                 val uri = song.contentUri
                 val scheme = uri.scheme?.lowercase()
@@ -200,10 +191,25 @@ object AlbumArtResolver {
         return null
     }
 
+    /** Preferred / stored URI string: bare path, file://, content://, http(s). */
+    private fun loadAnyUri(context: Context, raw: String, maxSize: Int): Bitmap? {
+        val trimmed = raw.trim()
+        if (trimmed.isEmpty()) return null
+        // Custom upload saves absolute path without scheme
+        if (trimmed.startsWith("/") && !trimmed.contains("://")) {
+            return decodeFileSampled(trimmed, maxSize)
+        }
+        return loadUri(context, Uri.parse(trimmed), maxSize)
+    }
+
     private fun loadUri(context: Context, uri: Uri?, maxSize: Int): Bitmap? {
         if (uri == null) return null
         val scheme = uri.scheme?.lowercase()
         return when (scheme) {
+            null, "" -> {
+                val path = uri.path ?: uri.toString()
+                if (path.startsWith("/")) decodeFileSampled(path, maxSize) else null
+            }
             "http", "https" -> openHttp(uri.toString())?.use { decodeStreamSampled(it, maxSize) }
             "file" -> {
                 val path = uri.path ?: return null
@@ -213,7 +219,8 @@ object AlbumArtResolver {
                 context.contentResolver.openInputStream(uri)?.use { input ->
                     decodeStreamSampled(input, maxSize)
                 }
-            } catch (_: Exception) {
+            } catch (e: Exception) {
+                Log.d(TAG, "loadUri content failed: ${e.message}")
                 null
             }
         }
