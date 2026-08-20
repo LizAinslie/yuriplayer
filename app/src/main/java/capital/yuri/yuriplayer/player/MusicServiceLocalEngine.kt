@@ -68,15 +68,16 @@ class MusicServiceLocalEngine(
             add(song.toPlaybackMedia())
             if (next != null) add(next.toPlaybackMedia())
         }
+        Log.i(
+            TAG,
+            "playWindow engine=$engineId '${song.displayTitle}' " +
+                "uri=${items.firstOrNull()?.uri} scheme=${items.firstOrNull()?.uri?.scheme} " +
+                "autoPlay=$autoPlay pos=$startPositionMs"
+        )
         engine.setPlayWhenReady(autoPlay)
         engine.setWindow(items, 0, startPositionMs)
         if (autoPlay) engine.play()
         sessionBridge.updateMetadata(song)
-        Log.i(
-            TAG,
-            "playWindow engine=$engineId '${song.displayTitle}' " +
-                "autoPlay=$autoPlay pos=$startPositionMs"
-        )
     }
 
     fun pause() = engine.pause()

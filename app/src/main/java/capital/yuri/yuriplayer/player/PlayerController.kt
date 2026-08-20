@@ -202,11 +202,7 @@ class PlayerController(
     }
 
     fun play() {
-        ContextCompat.startForegroundService(
-            context,
-            Intent(context, MusicService::class.java)
-        )
-        service?.play()
+        runOrQueue { it.play() }
     }
 
     fun pause() = service?.pause()

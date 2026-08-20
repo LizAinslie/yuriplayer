@@ -1,9 +1,11 @@
 package capital.yuri.yuriplayer.player.engine
 
 import android.content.Context
+import android.content.res.AssetFileDescriptor
 import android.net.Uri
 import android.os.Handler
 import android.os.Looper
+import android.os.ParcelFileDescriptor
 import android.util.Log
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -11,12 +13,14 @@ import kotlinx.coroutines.flow.asStateFlow
 import org.videolan.libvlc.LibVLC
 import org.videolan.libvlc.Media
 import org.videolan.libvlc.MediaPlayer
+import java.io.File
 
 /**
  * [PlaybackEngine] backed by LibVLC.
  *
- * Handles local FLAC / APE / odd containers and HTTP streams that Media3
- * refuses. Window is single-item: [MusicService] advances the queue on [onEnded].
+ * Local SAF / MediaStore tracks are opened via a file descriptor — LibVLC cannot
+ * play Android `content://` URIs as VLC locations. Window is single-item:
+ * [capital.yuri.yuriplayer.player.MusicService] advances the queue on [onEnded].
  */
 class VlcPlaybackEngine(
     context: Context
@@ -29,12 +33,10 @@ class VlcPlaybackEngine(
     private val libVLC: LibVLC = LibVLC(
         appContext,
         arrayListOf(
-            "--aout=opensles",
             "--audio-time-stretch",
             "--network-caching=3000",
             "--file-caching=1500",
-            "--no-video",
-            "--quiet"
+            "--no-video"
         )
     )
 
@@ -44,6 +46,11 @@ class VlcPlaybackEngine(
                 MediaPlayer.Event.Playing -> {
                     playWhenReady = true
                     _isPlaying.value = true
+                    val seek = pendingSeekMs
+                    if (seek > 0L) {
+                        pendingSeekMs = -1L
+                        runCatching { mp.time = seek }
+                    }
                     dispatch { onIsPlayingChanged(true) }
                     dispatch { onPlaybackStateChanged(PlaybackEngine.PlaybackState.READY) }
                 }
@@ -52,11 +59,14 @@ class VlcPlaybackEngine(
                     dispatch { onIsPlayingChanged(false) }
                 }
                 MediaPlayer.Event.Stopped -> {
+                    // stop() is async; ignore if we already started a new item
+                    if (loadGeneration != eventGeneration) return@setEventListener
                     _isPlaying.value = false
                     dispatch { onIsPlayingChanged(false) }
                     dispatch { onPlaybackStateChanged(PlaybackEngine.PlaybackState.IDLE) }
                 }
                 MediaPlayer.Event.EndReached -> {
+                    if (loadGeneration != eventGeneration) return@setEventListener
                     _isPlaying.value = false
                     dispatch { onIsPlayingChanged(false) }
                     dispatch { onPlaybackStateChanged(PlaybackEngine.PlaybackState.ENDED) }
@@ -81,6 +91,13 @@ class VlcPlaybackEngine(
     private var window: List<PlaybackMedia> = emptyList()
     private var index: Int = 0
     private var playWhenReady: Boolean = false
+    private var pendingSeekMs: Long = -1L
+    private var loadGeneration: Int = 0
+    private var eventGeneration: Int = 0
+
+    /** Kept open for the duration of the current item (content:// FDs). */
+    private var currentPfd: ParcelFileDescriptor? = null
+    private var currentAfd: AssetFileDescriptor? = null
 
     private val _isPlaying = MutableStateFlow(false)
     override val isPlaying: StateFlow<Boolean> = _isPlaying.asStateFlow()
@@ -127,11 +144,12 @@ class VlcPlaybackEngine(
         if (idx != this.index) {
             this.index = idx
             loadAt(idx, positionMs, autoPlay = playWhenReady)
-        } else {
+        } else if (mediaPlayer.isPlaying || mediaPlayer.media != null) {
             val length = mediaPlayer.length
             if (length > 0) {
-                val fraction = (positionMs.toDouble() / length.toDouble()).coerceIn(0.0, 1.0)
-                mediaPlayer.position = fraction.toFloat()
+                mediaPlayer.time = positionMs.coerceIn(0L, length)
+            } else {
+                pendingSeekMs = positionMs.coerceAtLeast(0L)
             }
         }
     }
@@ -149,6 +167,8 @@ class VlcPlaybackEngine(
     }
 
     override fun getPositionMs(): Long {
+        val t = mediaPlayer.time
+        if (t > 0L) return t
         val len = mediaPlayer.length
         if (len <= 0L) return 0L
         return (mediaPlayer.position * len).toLong().coerceAtLeast(0L)
@@ -164,7 +184,7 @@ class VlcPlaybackEngine(
 
     override fun setPlayWhenReady(value: Boolean) {
         playWhenReady = value
-        if (value) play() else pause()
+        // MusicService calls play()/pause() explicitly after setWindow.
     }
 
     override fun getPlayWhenReady(): Boolean = playWhenReady
@@ -172,10 +192,11 @@ class VlcPlaybackEngine(
     override fun release() {
         listeners.clear()
         runCatching {
+            mediaPlayer.setEventListener(null)
             mediaPlayer.stop()
-            mediaPlayer.detachViews()
             mediaPlayer.release()
         }
+        closeDescriptors()
         runCatching { libVLC.release() }
     }
 
@@ -191,22 +212,21 @@ class VlcPlaybackEngine(
         val item = window.getOrNull(idx) ?: return
         index = idx
         _currentUri.value = item.uri
+        loadGeneration += 1
+        val gen = loadGeneration
+        eventGeneration = gen
         dispatch { onPlaybackStateChanged(PlaybackEngine.PlaybackState.BUFFERING) }
         try {
-            mediaPlayer.stop()
             val media = buildMedia(item)
             mediaPlayer.media = media
-            media.release() // MediaPlayer retains its own ref
-            if (startPositionMs > 0L) {
-                // Position is set after playing starts; store and apply on Playing if needed
-                mediaPlayer.time = startPositionMs
-            }
+            media.release()
+            pendingSeekMs = if (startPositionMs > 0L) startPositionMs else -1L
             if (autoPlay) {
                 playWhenReady = true
                 mediaPlayer.play()
             }
             dispatch { onMediaTransition(PlaybackEngine.TransitionReason.PLAYLIST) }
-            Log.i(TAG, "loadAt idx=$idx uri=${item.uri} autoPlay=$autoPlay")
+            Log.i(TAG, "loadAt idx=$idx uri=${item.uri} scheme=${item.uri.scheme} autoPlay=$autoPlay")
         } catch (e: Exception) {
             Log.e(TAG, "loadAt failed ${item.uri}", e)
             dispatch { onError(e.message ?: "VLC load failed", recoverable = true) }
@@ -214,8 +234,25 @@ class VlcPlaybackEngine(
     }
 
     private fun buildMedia(item: PlaybackMedia): Media {
-        val media = Media(libVLC, item.uri)
-        media.setHWDecoderEnabled(true, false)
+        closeDescriptors()
+        val uri = item.uri
+        val scheme = uri.scheme?.lowercase().orEmpty()
+        val media = when {
+            scheme == "content" -> mediaFromContent(uri)
+            scheme == "file" -> {
+                val path = uri.path
+                if (!path.isNullOrBlank() && File(path).exists()) Media(libVLC, path)
+                else Media(libVLC, uri)
+            }
+            scheme == "http" || scheme == "https" -> Media(libVLC, uri)
+            else -> {
+                val path = uri.path
+                if (!path.isNullOrBlank() && File(path).canRead()) Media(libVLC, path)
+                else Media(libVLC, uri)
+            }
+        }
+        // Audio-only: HW video decoder can error on some FLACs
+        media.setHWDecoderEnabled(false, false)
         item.headers.forEach { (k, v) ->
             media.addOption(":http-header=$k: $v")
         }
@@ -225,11 +262,34 @@ class VlcPlaybackEngine(
         return media
     }
 
-    private fun stopInternal() {
-        runCatching {
-            mediaPlayer.stop()
-            mediaPlayer.media = null
+    private fun mediaFromContent(uri: Uri): Media {
+        val resolver = appContext.contentResolver
+        val afd = runCatching { resolver.openAssetFileDescriptor(uri, "r") }.getOrNull()
+        if (afd != null) {
+            currentAfd = afd
+            Log.i(TAG, "content AFD uri=$uri offset=${afd.startOffset} len=${afd.length}")
+            return Media(libVLC, afd)
         }
+        val pfd = resolver.openFileDescriptor(uri, "r")
+            ?: throw IllegalStateException("Cannot open content uri: $uri")
+        currentPfd = pfd
+        Log.i(TAG, "content PFD uri=$uri")
+        return Media(libVLC, pfd.fileDescriptor)
+    }
+
+    private fun closeDescriptors() {
+        runCatching { currentAfd?.close() }
+        runCatching { currentPfd?.close() }
+        currentAfd = null
+        currentPfd = null
+    }
+
+    private fun stopInternal() {
+        loadGeneration += 1
+        eventGeneration = loadGeneration
+        runCatching { mediaPlayer.stop() }
+        runCatching { mediaPlayer.media = null }
+        closeDescriptors()
         _isPlaying.value = false
     }
 
