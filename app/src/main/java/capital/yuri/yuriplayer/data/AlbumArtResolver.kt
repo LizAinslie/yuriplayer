@@ -8,6 +8,8 @@ import android.net.Uri
 import android.util.Log
 import androidx.documentfile.provider.DocumentFile
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import org.jaudiotagger.audio.AudioFileIO
 import org.jaudiotagger.tag.TagOptionSingleton
@@ -15,19 +17,23 @@ import java.io.File
 import java.io.InputStream
 import java.net.HttpURLConnection
 import java.net.URL
+import java.util.concurrent.ConcurrentHashMap
 
 /**
  * Album art decode order:
- * preferred → disk cache → MMR embedded → **jaudiotagger embedded** →
- * filesystem folder cover → SAF sibling cover → enriched → albumArtUri.
+ * preferred → disk cache → image albumArtUri → folder cover → SAF cover →
+ * MMR embedded → jaudiotagger embedded (File or one SAF extract per album).
  *
- * MediaMetadataRetriever frequently returns null for FLAC/Opus embedded art
- * on Android; jaudiotagger is the reliable path when we have a real File
- * (or a temp copy from SAF).
+ * Never feeds audio/* into BitmapFactory/Coil — that produces
+ * "Failed to create image decoder with message 'unimplemented'".
  */
 object AlbumArtResolver {
 
     private const val TAG = "AlbumArtResolver"
+    private const val MAX_SAF_EXTRACT_BYTES = 120L * 1024L * 1024L // 120MB
+
+    /** One extract at a time per albumKey so list scroll doesn't stampede. */
+    private val albumLocks = ConcurrentHashMap<String, Mutex>()
 
     init {
         runCatching { TagOptionSingleton.getInstance().isAndroid = true }
@@ -45,23 +51,52 @@ object AlbumArtResolver {
         withContext(Dispatchers.IO) {
             val preferred = preferredUri?.takeIf { it.isNotBlank() }
                 ?.let { loadAnyUri(context, it, maxSize) }
-            val bitmap = preferred
-                ?: loadDiskAlbumCache(context, song, maxSize)
-                ?: loadEmbeddedMmr(context, song, maxSize)?.also {
-                    cacheToDisk(context, song, it)
+            if (preferred != null) return@withContext scaleDown(preferred, maxSize)
+
+            loadDiskAlbumCache(context, song, maxSize)?.let {
+                return@withContext scaleDown(it, maxSize)
+            }
+
+            // Image URIs only — never audio contentUri
+            loadImageUri(context, song.albumArtUri, maxSize)?.also {
+                cacheToDisk(context, song, it)
+                return@withContext scaleDown(it, maxSize)
+            }
+
+            loadFolderCover(song.path, maxSize)?.also {
+                cacheToDisk(context, song, it)
+                return@withContext scaleDown(it, maxSize)
+            }
+
+            loadSafFolderCover(context, song, maxSize)?.also {
+                cacheToDisk(context, song, it)
+                return@withContext scaleDown(it, maxSize)
+            }
+
+            loadEnrichedCover(context, song, maxSize)?.let {
+                return@withContext scaleDown(it, maxSize)
+            }
+
+            // Embedded — serialize per album so 14 rows don't each copy a FLAC
+            val aKey = albumKey(song.album, song.effectiveAlbumArtist).ifBlank { song.songKey }
+            val lock = albumLocks.getOrPut(aKey) { Mutex() }
+            lock.withLock {
+                // Re-check disk after waiting
+                loadDiskAlbumCache(context, song, maxSize)?.let {
+                    return@withContext scaleDown(it, maxSize)
                 }
-                ?: loadEmbeddedJaudio(context, song, maxSize)?.also {
+                loadEmbeddedMmr(context, song, maxSize)?.also {
                     cacheToDisk(context, song, it)
+                    return@withContext scaleDown(it, maxSize)
                 }
-                ?: loadFolderCover(song.path, maxSize)?.also {
+                loadEmbeddedJaudio(context, song, maxSize)?.also {
                     cacheToDisk(context, song, it)
+                    Log.i(TAG, "jaudio art ok album=$aKey")
+                    return@withContext scaleDown(it, maxSize)
                 }
-                ?: loadSafFolderCover(context, song, maxSize)?.also {
-                    cacheToDisk(context, song, it)
-                }
-                ?: loadEnrichedCover(context, song, maxSize)
-                ?: loadUri(context, song.albumArtUri, maxSize)
-            bitmap?.let { scaleDown(it, maxSize) }
+            }
+
+            null
         }
 
     suspend fun downloadToFile(url: String, dest: File, maxSize: Int = 512): Boolean =
@@ -82,6 +117,26 @@ object AlbumArtResolver {
                 false
             }
         }
+
+    /** Public: extract embedded art from a readable File into [dest]. Used at scan time. */
+    fun extractEmbeddedToFile(file: File, dest: File): Boolean {
+        if (!file.isFile || !file.canRead()) return false
+        val bmp = extractJaudioArtwork(file, 512) ?: return false
+        return try {
+            dest.parentFile?.mkdirs()
+            val tmp = File(dest.parentFile, "tmp-${System.nanoTime()}.jpg")
+            tmp.outputStream().use { out -> bmp.compress(Bitmap.CompressFormat.JPEG, 88, out) }
+            if (!tmp.renameTo(dest)) {
+                tmp.copyTo(dest, overwrite = true)
+                tmp.delete()
+            }
+            if (!bmp.isRecycled) runCatching { bmp.recycle() }
+            dest.isFile && dest.length() > 0L
+        } catch (e: Exception) {
+            Log.w(TAG, "extractEmbeddedToFile failed", e)
+            false
+        }
+    }
 
     private fun diskCacheFile(context: Context, song: Song): File {
         val key = albumKey(song.album, song.effectiveAlbumArtist)
@@ -131,9 +186,10 @@ object AlbumArtResolver {
         return try {
             val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
             BitmapFactory.decodeFile(path, bounds)
+            if (bounds.outWidth <= 0 || bounds.outHeight <= 0) return null
             val opts = BitmapFactory.Options().apply {
                 inSampleSize = sampleSize(bounds.outWidth, bounds.outHeight, maxSize)
-                inPreferredConfig = Bitmap.Config.RGB_565
+                inPreferredConfig = Bitmap.Config.ARGB_8888
             }
             BitmapFactory.decodeFile(path, opts)
         } catch (_: Exception) {
@@ -154,9 +210,10 @@ object AlbumArtResolver {
         return try {
             val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
             BitmapFactory.decodeByteArray(bytes, 0, bytes.size, bounds)
+            if (bounds.outWidth <= 0 || bounds.outHeight <= 0) return null
             val opts = BitmapFactory.Options().apply {
                 inSampleSize = sampleSize(bounds.outWidth, bounds.outHeight, maxSize)
-                inPreferredConfig = Bitmap.Config.RGB_565
+                inPreferredConfig = Bitmap.Config.ARGB_8888
             }
             BitmapFactory.decodeByteArray(bytes, 0, bytes.size, opts)
         } catch (_: Exception) {
@@ -220,16 +277,10 @@ object AlbumArtResolver {
         return false
     }
 
-    /**
-     * jaudiotagger reads FLAC/MP3/Ogg art where MMR returns null.
-     * Uses a real File when available; for SAF content:// copies to a temp file
-     * once (result is disk-cached by albumKey for subsequent loads).
-     */
     private fun loadEmbeddedJaudio(context: Context, song: Song, maxSize: Int): Bitmap? {
         val path = song.path
         if (path != null && isVirtualLibraryPath(path)) return null
 
-        // Real filesystem path
         if (!path.isNullOrBlank() && !path.contains("://")) {
             val f = File(path)
             if (f.isFile && f.canRead()) {
@@ -237,7 +288,6 @@ object AlbumArtResolver {
             }
         }
 
-        // file:// URI
         if (song.contentUri.scheme.equals("file", true)) {
             val p = song.contentUri.path
             if (!p.isNullOrBlank()) {
@@ -248,8 +298,6 @@ object AlbumArtResolver {
             }
         }
 
-        // SAF content:// — stream to temp with a real extension so jaudiotagger
-        // picks the right reader, extract art, delete temp.
         if (song.contentUri.scheme.equals("content", true)) {
             return extractJaudioFromContentUri(context, song.contentUri, maxSize)
         }
@@ -260,18 +308,31 @@ object AlbumArtResolver {
     private fun extractJaudioArtwork(file: File, maxSize: Int): Bitmap? {
         return try {
             val audio = AudioFileIO.read(file)
-            val tag = audio.tag ?: return null
-            val art = tag.firstArtwork ?: return null
+            val tag = audio.tag ?: run {
+                Log.d(TAG, "jaudio no tag ${file.name}")
+                return null
+            }
+            val art = tag.firstArtwork ?: run {
+                Log.d(TAG, "jaudio no artwork ${file.name}")
+                return null
+            }
             val bytes = art.binaryData ?: return null
             if (bytes.isEmpty()) return null
             decodeBytesSampled(bytes, maxSize)
         } catch (t: Throwable) {
-            Log.d(TAG, "jaudio art failed ${file.name}: ${t.message}")
+            Log.w(TAG, "jaudio art failed ${file.name}: ${t.javaClass.simpleName}: ${t.message}")
             null
         }
     }
 
     private fun extractJaudioFromContentUri(context: Context, uri: Uri, maxSize: Int): Bitmap? {
+        // Don't copy huge files during scroll — skip if size known and too large
+        val size = querySize(context, uri)
+        if (size != null && size > MAX_SAF_EXTRACT_BYTES) {
+            Log.w(TAG, "skip jaudio SAF extract size=$size > $MAX_SAF_EXTRACT_BYTES")
+            return null
+        }
+
         val ext = guessAudioExt(context, uri)
         val tmp = File.createTempFile("yp_art_", ".$ext", context.cacheDir)
         return try {
@@ -281,27 +342,50 @@ object AlbumArtResolver {
             if (tmp.length() == 0L) return null
             extractJaudioArtwork(tmp, maxSize)
         } catch (t: Throwable) {
-            Log.d(TAG, "jaudio SAF art failed: ${t.message}")
+            Log.w(TAG, "jaudio SAF art failed: ${t.javaClass.simpleName}: ${t.message}")
             null
         } finally {
             runCatching { tmp.delete() }
         }
     }
 
+    private fun querySize(context: Context, uri: Uri): Long? {
+        return try {
+            context.contentResolver.query(uri, arrayOf(android.provider.OpenableColumns.SIZE), null, null, null)
+                ?.use { c ->
+                    if (!c.moveToFirst()) return@use null
+                    val i = c.getColumnIndex(android.provider.OpenableColumns.SIZE)
+                    if (i < 0) return@use null
+                    c.getLong(i).takeIf { it > 0 }
+                }
+        } catch (_: Exception) {
+            null
+        }
+    }
+
     private fun guessAudioExt(context: Context, uri: Uri): String {
+        val mime = runCatching { context.contentResolver.getType(uri) }.getOrNull()
+        when (mime) {
+            "audio/flac" -> return "flac"
+            "audio/mpeg", "audio/mp3" -> return "mp3"
+            "audio/mp4", "audio/aac", "audio/x-m4a" -> return "m4a"
+            "audio/ogg", "audio/opus" -> return "ogg"
+            "audio/wav", "audio/x-wav" -> return "wav"
+        }
         val fromName = uri.lastPathSegment
             ?.substringAfterLast('.', "")
+            ?.substringAfterLast('%') // sometimes encoded
             ?.lowercase()
             ?.takeIf { it.length in 2..5 && it.all { ch -> ch.isLetterOrDigit() } }
-        if (fromName != null) return fromName
-        val mime = runCatching { context.contentResolver.getType(uri) }.getOrNull()
-        return when (mime) {
-            "audio/flac" -> "flac"
-            "audio/mpeg", "audio/mp3" -> "mp3"
-            "audio/mp4", "audio/aac" -> "m4a"
-            "audio/ogg", "audio/opus" -> "ogg"
-            else -> "flac"
+        if (fromName != null && fromName in setOf("flac", "mp3", "m4a", "aac", "ogg", "opus", "wav", "wma")) {
+            return fromName
         }
+        // Decode %2Eflac style path segments
+        val decoded = runCatching { Uri.decode(uri.toString()) }.getOrNull().orEmpty()
+        for (ext in listOf("flac", "mp3", "m4a", "ogg", "opus", "wav")) {
+            if (decoded.contains(".$ext", ignoreCase = true)) return ext
+        }
+        return "flac"
     }
 
     private fun isVirtualLibraryPath(path: String): Boolean =
@@ -322,7 +406,6 @@ object AlbumArtResolver {
         return null
     }
 
-    /** Sibling cover.jpg next to a SAF audio document. */
     private fun loadSafFolderCover(context: Context, song: Song, maxSize: Int): Bitmap? {
         val uri = song.contentUri
         if (!uri.scheme.equals("content", true)) return null
@@ -332,6 +415,7 @@ object AlbumArtResolver {
             for (name in FOLDER_COVERS) {
                 val cover = parent.findFile(name) ?: continue
                 if (!cover.isFile) continue
+                if (!isLikelyImageUri(context, cover.uri)) continue
                 context.contentResolver.openInputStream(cover.uri)?.use { input ->
                     decodeStreamSampled(input, maxSize)
                 }?.let { return it }
@@ -349,11 +433,16 @@ object AlbumArtResolver {
         if (trimmed.startsWith("/") && !trimmed.contains("://")) {
             return decodeFileSampled(trimmed, maxSize)
         }
-        return loadUri(context, Uri.parse(trimmed), maxSize)
+        return loadImageUri(context, Uri.parse(trimmed), maxSize)
     }
 
-    private fun loadUri(context: Context, uri: Uri?, maxSize: Int): Bitmap? {
+    /** Only decode if URI is (or looks like) an image — never audio. */
+    private fun loadImageUri(context: Context, uri: Uri?, maxSize: Int): Bitmap? {
         if (uri == null) return null
+        if (!isLikelyImageUri(context, uri)) {
+            Log.d(TAG, "skip non-image uri $uri")
+            return null
+        }
         val scheme = uri.scheme?.lowercase()
         return when (scheme) {
             null, "" -> {
@@ -366,15 +455,36 @@ object AlbumArtResolver {
                 decodeFileSampled(path, maxSize)
             }
             else -> try {
-                // Image content URI (MediaStore albumart, SAF cover.jpg)
                 context.contentResolver.openInputStream(uri)?.use { input ->
                     decodeStreamSampled(input, maxSize)
                 }
             } catch (e: Exception) {
-                Log.d(TAG, "loadUri content failed: ${e.message}")
+                Log.d(TAG, "loadImageUri failed: ${e.message}")
                 null
             }
         }
+    }
+
+    private fun isLikelyImageUri(context: Context, uri: Uri): Boolean {
+        val scheme = uri.scheme?.lowercase()
+        if (scheme == "http" || scheme == "https") return true
+        if (scheme == "file" || scheme.isNullOrEmpty()) {
+            val p = (uri.path ?: uri.toString()).lowercase()
+            return p.endsWith(".jpg") || p.endsWith(".jpeg") || p.endsWith(".png") ||
+                p.endsWith(".webp") || p.endsWith(".bmp") || p.endsWith(".gif")
+        }
+        val mime = runCatching { context.contentResolver.getType(uri) }.getOrNull()?.lowercase()
+        if (mime != null) {
+            if (mime.startsWith("audio/")) return false
+            if (mime.startsWith("image/")) return true
+            // MediaStore albumart sometimes reports null or odd types
+        }
+        val s = uri.toString().lowercase()
+        if (s.contains("albumart")) return true
+        if (s.endsWith(".jpg") || s.endsWith(".jpeg") || s.endsWith(".png") || s.endsWith(".webp")) return true
+        // Unknown content — try only if not clearly audio
+        if (mime == null && scheme == "content") return true
+        return false
     }
 
     private fun openHttp(url: String): InputStream? {
