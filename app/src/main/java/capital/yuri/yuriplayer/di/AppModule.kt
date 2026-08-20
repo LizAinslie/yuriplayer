@@ -16,6 +16,7 @@ import capital.yuri.yuriplayer.data.MyStuffPinStore
 import capital.yuri.yuriplayer.data.PlayerThemeStore
 import capital.yuri.yuriplayer.data.PlaylistRepository
 import capital.yuri.yuriplayer.data.ScanCheckpointStore
+import capital.yuri.yuriplayer.data.SecretCoverPrivacy
 import capital.yuri.yuriplayer.data.UserImageStore
 import capital.yuri.yuriplayer.data.db.YuriDatabase
 import capital.yuri.yuriplayer.data.organize.LibraryOrganizeService
@@ -159,6 +160,12 @@ val appModule = module {
     }
 
     single { PlaylistRepository(get(), get(), get()) }
+
+    // Secret covers are session-only — reset on background / lock / cold start
+    single(createdAtStart = true) {
+        SecretCoverPrivacy(get()).also { it.start() }
+    }
+
     single { MusicBrainzClient(get<HttpClient>()) }
     single { BandsintownClient(get<HttpClient>()) }
 

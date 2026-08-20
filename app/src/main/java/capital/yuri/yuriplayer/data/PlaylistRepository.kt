@@ -260,6 +260,31 @@ class PlaylistRepository(
             }
         }
 
+    /**
+     * Privacy: secret covers are session-only. When the app backgrounds, the
+     * phone locks, or the process starts cold, restore each playlist that has a
+     * secret cover active back to its first **public** cover (or none).
+     */
+    suspend fun resetSecretActiveCoversToPublic(): Int = withContext(Dispatchers.IO) {
+        val secrets = dao.getActiveSecretCovers()
+        if (secrets.isEmpty()) return@withContext 0
+        var changed = 0
+        for (secret in secrets) {
+            val playlist = dao.get(secret.playlistId) ?: continue
+            if (playlist.activeCoverId != secret.id) continue
+            val public = dao.getCovers(secret.playlistId).firstOrNull { !it.isSecret }
+            dao.upsert(
+                playlist.copy(
+                    customImageUri = public?.uri,
+                    activeCoverId = public?.id,
+                    updatedAtMs = System.currentTimeMillis()
+                )
+            )
+            changed++
+        }
+        changed
+    }
+
     suspend fun delete(id: String) =
         withContext(Dispatchers.IO) {
             val covers = dao.getCovers(id)

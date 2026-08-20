@@ -67,6 +67,9 @@ interface PlaylistDao {
     @Query("SELECT * FROM playlists WHERE id = :id LIMIT 1")
     suspend fun get(id: String): PlaylistEntity?
 
+    @Query("SELECT * FROM playlists")
+    suspend fun getAll(): List<PlaylistEntity>
+
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun upsert(entity: PlaylistEntity)
 
@@ -121,6 +124,16 @@ interface PlaylistDao {
 
     @Query("SELECT * FROM playlist_covers WHERE id = :coverId LIMIT 1")
     suspend fun getCover(coverId: String): PlaylistCoverEntity?
+
+    /** Covers currently marked active that are secret (session-only art). */
+    @Query(
+        """
+        SELECT c.* FROM playlist_covers c
+        INNER JOIN playlists p ON p.activeCoverId = c.id
+        WHERE c.isSecret = 1
+        """
+    )
+    suspend fun getActiveSecretCovers(): List<PlaylistCoverEntity>
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun upsertCover(entity: PlaylistCoverEntity)
