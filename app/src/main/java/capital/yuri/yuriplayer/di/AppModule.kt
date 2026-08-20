@@ -18,6 +18,8 @@ import capital.yuri.yuriplayer.data.PlaylistRepository
 import capital.yuri.yuriplayer.data.ScanCheckpointStore
 import capital.yuri.yuriplayer.data.UserImageStore
 import capital.yuri.yuriplayer.data.db.YuriDatabase
+import capital.yuri.yuriplayer.data.organize.LibraryOrganizeService
+import capital.yuri.yuriplayer.data.organize.OrganizeLayoutPrefs
 import capital.yuri.yuriplayer.data.source.ArtistInfoService
 import capital.yuri.yuriplayer.data.source.ArtistInfoSource
 import capital.yuri.yuriplayer.data.source.AudioDbArtistImageSource
@@ -68,6 +70,8 @@ val appModule = module {
     single { MyStuffPinStore(androidContext()) }
     single { UserImageStore(androidContext()) }
     single { AlbumCoverPrefs(androidContext()) }
+    single { OrganizeLayoutPrefs(androidContext()) }
+    single { LibraryOrganizeService(androidContext(), get(), get()) }
     single { FfmpegService(androidContext()) }
     single { LibraryScanNotifier(androidContext()) }
     single { ScanCheckpointStore(androidContext()) }
