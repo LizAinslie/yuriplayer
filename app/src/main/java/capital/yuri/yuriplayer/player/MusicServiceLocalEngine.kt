@@ -36,11 +36,11 @@ class MusicServiceLocalEngine(
         context = context,
         engine = engine,
         sessionActivity = sessionActivity,
-        onPlay = onPlay,
-        onPause = onPause,
-        onNext = onNext,
-        onPrev = onPrev,
-        onSeek = onSeek
+        playAction = onPlay,
+        pauseAction = onPause,
+        nextAction = onNext,
+        prevAction = onPrev,
+        seekAction = onSeek
     )
 
     private val listener = object : PlaybackEngine.Listener {

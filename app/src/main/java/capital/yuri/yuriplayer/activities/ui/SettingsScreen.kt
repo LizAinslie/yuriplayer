@@ -486,7 +486,4 @@ private fun TextNote(text: String) {
     )
 }
 
-private fun shortTreeLabel(uri: String): String {
-    val path = runCatching { Uri.parse(uri).lastPathSegment }.getOrNull().orEmpty()
-    return path.substringAfterLast(':').ifBlank { uri.takeLast(32) }
-}
+// shortTreeLabel lives in OrganizeLayoutScreen.kt (same package)
