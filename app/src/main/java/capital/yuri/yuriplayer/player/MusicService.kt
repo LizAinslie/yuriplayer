@@ -307,6 +307,20 @@ class MusicService : Service() {
         }
     }
 
+    /**
+     * Swap onto the already-prepared next item and advance queue state
+     * without reloading. Used by skip, EndReached, and the stall watchdog.
+     */
+    private fun advanceUsingPreparedNext(userInitiated: Boolean): Boolean {
+        val hooks = engineHooks ?: return false
+        if (!hooks.hasPreparedNext()) return false
+        if (!hooks.playPreparedNext()) return false
+        windowGeneration += 1
+        endedForWindow = windowGeneration
+        applyAdvanceKeepEngine(queueManager.advance(userInitiated = userInitiated))
+        return true
+    }
+
     private fun onEngineEnded() {
         if (advancing) return
         val gen = windowGeneration
@@ -328,6 +342,10 @@ class MusicService : Service() {
 
         advancing = true
         try {
+            if (advanceUsingPreparedNext(userInitiated = false)) {
+                Log.i(TAG, "onEnded → playPreparedNext")
+                return
+            }
             applyAdvance(queueManager.advance(userInitiated = false))
         } finally {
             advancing = false
@@ -481,22 +499,9 @@ class MusicService : Service() {
         if (advancing) return
         userSeekGuardUntilElapsed = 0L
         clearStickySeek()
-        val hooks = engineHooks
-        if (hooks != null && hooks.hasPreparedNext()) {
-            advancing = true
-            try {
-                if (hooks.playPreparedNext()) {
-                    windowGeneration += 1
-                    endedForWindow = windowGeneration
-                    applyAdvanceKeepEngine(queueManager.advance(userInitiated = true))
-                    return
-                }
-            } finally {
-                advancing = false
-            }
-        }
         advancing = true
         try {
+            if (advanceUsingPreparedNext(userInitiated = true)) return
             applyAdvance(queueManager.advance(userInitiated = true))
         } finally {
             advancing = false
@@ -631,21 +636,24 @@ class MusicService : Service() {
                     stallSamplePos = -1L
                     continue
                 }
-                if (!hooks.getPlayWhenReady()) {
-                    stallSamplePos = -1L
-                    continue
-                }
-                // Buffering is expected on Jellyfin/HTTP. Reloading here is what
-                // made remote playback sound cut-up.
-                if (hooks.isBuffering()) {
-                    stallSamplePos = -1L
-                    continue
-                }
 
                 val pos = hooks.getPositionMs().coerceAtLeast(0L)
-                val duration = hooks.getDurationMs().takeIf { it > 0 } ?: 0L
+                val engineDur = hooks.getDurationMs().takeIf { it > 0 } ?: 0L
+                val metaDur = _nowPlaying.value?.durationMs?.takeIf { it > 0 } ?: 0L
+                val duration = if (engineDur > 0L) engineDur else metaDur
+                val remaining = if (duration > 0L) (duration - pos).coerceAtLeast(0L) else Long.MAX_VALUE
                 val now = SystemClock.elapsedRealtime()
                 val remote = isRemoteSong(_nowPlaying.value)
+                val wantPlay = hooks.getPlayWhenReady()
+                val playing = hooks.isPlaying()
+                val buffering = hooks.isBuffering()
+                val nearEnd = duration > 0L && remaining <= NEAR_END_MS
+
+                // Fill the standby HTTP cache in the last seconds so swap
+                // doesn't open a dead connection. Local FDs need no warmup.
+                if (wantPlay && remaining in 1L..WARMUP_NEXT_MS && !isRepeatOne()) {
+                    hooks.warmupNext()
+                }
 
                 if (pos != stallSamplePos) {
                     stallSamplePos = pos
@@ -656,15 +664,34 @@ class MusicService : Service() {
                 val frozenFor = now - stallSampleAtElapsed
                 if (stallSamplePos < 0L) continue
 
-                // Track finished but the engine never fired onEnded (common for
-                // HTTP files that VLC used to treat as live). Advance ourselves.
-                if (duration > 0L && pos >= duration - NEAR_END_MS) {
-                    if (frozenFor >= NEAR_END_ADVANCE_MS) {
-                        Log.i(TAG, "near-end freeze ${frozenFor}ms pos=$pos/$duration → onEnded")
-                        onEngineEnded()
-                    }
+                // End-of-track freeze: HTTP streams often sit BUFFERING at EOF
+                // and never fire onEnded. Still honor a real pause (wantPlay
+                // false and not buffering). Prefer the prepared next on advance.
+                if (nearEnd && frozenFor >= NEAR_END_ADVANCE_MS && (wantPlay || buffering)) {
+                    Log.i(
+                        TAG,
+                        "near-end freeze ${frozenFor}ms pos=$pos/$duration " +
+                            "playing=$playing buffering=$buffering wantPlay=$wantPlay → onEnded"
+                    )
+                    onEngineEnded()
+                    stallSamplePos = -1L
                     continue
                 }
+
+                // Intended to play but producing no audio, stuck off zero.
+                // Covers VLC Stopped-without-EndReached mid-file-end.
+                if (wantPlay && !playing && !buffering && pos > 1_000L &&
+                    frozenFor >= ENDED_SILENCE_MS && remaining <= 5_000L
+                ) {
+                    Log.i(TAG, "silent near end ${frozenFor}ms pos=$pos/$duration → onEnded")
+                    onEngineEnded()
+                    stallSamplePos = -1L
+                    continue
+                }
+
+                if (!wantPlay) continue
+                // Mid-track buffering is expected on Jellyfin/HTTP.
+                if (buffering) continue
 
                 val threshold = if (remote) NETWORK_STALL_MS else STALL_MS
                 if (frozenFor >= threshold) {
@@ -887,8 +914,10 @@ class MusicService : Service() {
         private const val STALL_POLL_MS = 500L
         private const val STALL_MS = 4_000L
         private const val NETWORK_STALL_MS = 12_000L
-        private const val NEAR_END_MS = 1_200L
+        private const val NEAR_END_MS = 2_500L
         private const val NEAR_END_ADVANCE_MS = 700L
+        private const val WARMUP_NEXT_MS = 4_000L
+        private const val ENDED_SILENCE_MS = 1_500L
         private const val STICKY_SEEK_MS = 1_200L
         private const val USER_SEEK_GUARD_MS = 1_000L
         private const val SEEK_CONFIRM_MS = 600L

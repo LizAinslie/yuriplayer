@@ -95,6 +95,8 @@ class MusicServiceLocalEngine(
 
     fun playPreparedNext(): Boolean = engine.playPreparedNext()
 
+    fun warmupNext() = engine.warmupNext()
+
     fun pause() = engine.pause()
     fun play() = engine.play()
     fun stop() = engine.stop()

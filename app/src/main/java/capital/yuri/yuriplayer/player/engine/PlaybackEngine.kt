@@ -53,6 +53,12 @@ interface PlaybackEngine {
      */
     fun playPreparedNext(): Boolean = false
 
+    /**
+     * Start filling the next item's buffers now (call when the current track
+     * is near the end). No-op if nothing is queued.
+     */
+    fun warmupNext() {}
+
     fun release()
 
     fun addListener(listener: Listener)

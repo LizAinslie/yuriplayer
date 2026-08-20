@@ -60,6 +60,10 @@ internal class MusicServiceEngineHooks(
 
     fun playPreparedNext(): Boolean = active && host.playPreparedNext()
 
+    fun warmupNext() {
+        if (active) host.warmupNext()
+    }
+
     fun deactivate() {
         if (!active) return
         host.pause()

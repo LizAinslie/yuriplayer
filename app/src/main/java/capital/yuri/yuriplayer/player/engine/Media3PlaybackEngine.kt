@@ -100,7 +100,20 @@ class Media3PlaybackEngine(
             }
             dispatch { onPlaybackStateChanged(state) }
             buffering = playbackState == Player.STATE_BUFFERING
-            if (playbackState == Player.STATE_ENDED) dispatch { onEnded() }
+            if (playbackState == Player.STATE_ENDED) {
+                buffering = false
+                if (player.hasNextMediaItem()) {
+                    // Some HTTP streams never AUTO-transition; kick the
+                    // already-queued next item ourselves instead of sitting
+                    // on ENDED until the user skips.
+                    player.seekToNextMediaItem()
+                    player.playWhenReady = true
+                    compactPlayed()
+                    dispatch { onAutoAdvanced() }
+                } else {
+                    dispatch { onEnded() }
+                }
+            }
         }
 
         override fun onPlayerError(error: PlaybackException) {
