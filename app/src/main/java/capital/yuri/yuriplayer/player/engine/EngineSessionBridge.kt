@@ -79,10 +79,9 @@ class EngineSessionBridge(
             session.setMetadata(null)
             return
         }
-        val durationMs: Long = when {
-            song.durationMs > 0L -> song.durationMs
-            else -> engine.getDurationMs().coerceAtLeast(0L)
-        }
+        val tagged = song.durationMs ?: 0L
+        val durationMs: Long =
+            if (tagged > 0L) tagged else engine.getDurationMs().coerceAtLeast(0L)
         val b = MediaMetadata.Builder()
             .putString(MediaMetadata.METADATA_KEY_TITLE, song.displayTitle)
             .putString(MediaMetadata.METADATA_KEY_ARTIST, song.displayArtist)
