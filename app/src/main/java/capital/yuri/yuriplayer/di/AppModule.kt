@@ -190,7 +190,7 @@ val appModule = module {
         )
     }
 
-    single { MetadataEditService(androidContext(), get(), get()) }
+    single { MetadataEditService(androidContext(), get(), get(), get()) }
 
     single { QueueManager() }
 
