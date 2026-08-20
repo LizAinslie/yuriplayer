@@ -62,6 +62,10 @@ import capital.yuri.yuriplayer.player.PlayerController
 import capital.yuri.yuriplayer.player.QueueLane
 import capital.yuri.yuriplayer.player.QueueSnapshot
 import capital.yuri.yuriplayer.player.RepeatMode
+import capital.yuri.yuriplayer.player.radio.RadioAlgorithmId
+import capital.yuri.yuriplayer.player.radio.RadioSession
+import capital.yuri.yuriplayer.player.radio.RadioSessionKind
+import capital.yuri.yuriplayer.player.radio.RadioSourcePrefs
 import org.koin.compose.koinInject
 import java.util.Locale
 import java.util.concurrent.TimeUnit
@@ -96,6 +100,23 @@ private fun RadioSettingsIcon(
                 .padding(1.dp)
         )
     }
+}
+
+/** Prefer live session; if only coldSource is RADIO (e.g. after restore), synthesize one. */
+private fun radioSessionForSettings(snapshot: QueueSnapshot): RadioSession? {
+    snapshot.radioSession?.takeIf { it.active || snapshot.coldSource?.type == ColdSourceType.RADIO }
+        ?.let { return it }
+    if (snapshot.coldSource?.type != ColdSourceType.RADIO) return null
+    val src = snapshot.coldSource
+    return RadioSession(
+        kind = RadioSessionKind.CUSTOM,
+        displayName = src.title?.takeIf { it.isNotBlank() } ?: "Radio",
+        algorithmId = RadioAlgorithmId.PLAYBACK,
+        seedId = src.id,
+        seedTitle = src.title,
+        active = true,
+        prefs = RadioSourcePrefs()
+    )
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -165,6 +186,9 @@ fun NowPlayingScreen(
     val canSwipePrev = peekPrevSong != null
     val buttonGoesToPrevTrack = positionMs <= PREV_RESTART_MS && canSwipePrev
     val isRadio = snapshot.isRadio
+    val radioSettingsSession = remember(snapshot.radioSession, snapshot.coldSource) {
+        radioSessionForSettings(snapshot)
+    }
 
     fun requestSkipNext() {
         skipDirection = -1
@@ -327,7 +351,6 @@ fun NowPlayingScreen(
                             )
                         }
                 ) {
-                    // Top bar: collapse left, radio settings top-right when radio
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         verticalAlignment = Alignment.CenterVertically
@@ -585,23 +608,21 @@ fun NowPlayingScreen(
                         label = "Sources",
                         onClick = {
                             showSongMenu = false
-                            // long-press path uses SongContextSheet; keep NP simple
                         }
                     )
                     MediaSheetBottomPad()
                 }
             }
 
-            if (showRadioSettings) {
-                val session = snapshot.radioSession
+            // Always open when isRadio — never silently clear the flag mid-composition
+            if (showRadioSettings && isRadio) {
+                val session = radioSettingsSession
                 if (session != null) {
                     RadioSettingsSheet(
                         session = session,
                         onApply = { prefs -> player.applyRadioPrefs(prefs) },
                         onDismiss = { showRadioSettings = false }
                     )
-                } else {
-                    showRadioSettings = false
                 }
             }
         }
