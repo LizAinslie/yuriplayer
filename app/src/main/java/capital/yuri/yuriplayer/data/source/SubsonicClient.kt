@@ -15,8 +15,11 @@ import java.security.MessageDigest
 import java.util.UUID
 
 /**
- * Subsonic / OpenSubsonic REST client (JSON responses).
- * Token auth: u + t=md5(password+salt) + s + v + c + f=json
+ * Subsonic / OpenSubsonic REST client (JSON).
+ *
+ * Auth: u + t=md5(password+salt) + s + v + c + f=json
+ * Large libraries: prefer [listSongsPaged] (getAlbumList2 + getAlbum) over
+ * walking getIndexes for every artist.
  */
 class SubsonicClient(
     private val http: HttpClient,
@@ -26,55 +29,201 @@ class SubsonicClient(
         val baseUrl: String,
         val username: String,
         val password: String,
-        val clientName: String = "YuriPlayer"
+        val clientName: String = "YuriPlayer",
+        val openSubsonic: Boolean = false,
+        val serverVersion: String? = null
     )
 
-    suspend fun ping(session: Session): Result<Unit> = runCatching {
+    data class AlbumPage(
+        val albums: List<AlbumRef>,
+        val offset: Int,
+        /** True when the server returned fewer than [pageSize] albums. */
+        val exhausted: Boolean
+    )
+
+    data class AlbumRef(
+        val id: String,
+        val name: String?,
+        val artist: String?,
+        val coverArt: String?,
+        val year: Int? = null,
+        val songCount: Int? = null
+    )
+
+    suspend fun ping(session: Session): Result<Session> = runCatching {
         val body = apiGet(session, "ping")
         val root = json.decodeFromString<SubsonicResponse>(body)
-        if (root.subsonicResponse.status != "ok") {
-            error(root.subsonicResponse.error?.message ?: "ping failed")
+        val resp = root.subsonicResponse
+        if (resp.status != "ok") {
+            error(resp.error?.message ?: "ping failed")
         }
-    }.onFailure { Log.w(TAG, "ping failed", it) }
+        val open = resp.openSubsonic == true ||
+            resp.type?.contains("navidrome", ignoreCase = true) == true ||
+            resp.serverVersion?.contains("navidrome", ignoreCase = true) == true
+        session.copy(
+            openSubsonic = open,
+            serverVersion = resp.version ?: resp.serverVersion
+        )
+    }.onFailure { Log.w(TAG, "ping failed: ${it.message}") }
 
     /**
-     * Walks indexes → artists → albums → songs. Fine for moderate libraries;
-     * large servers should later switch to getAlbumList2 paging + getAlbum.
+     * Paged album index via getAlbumList2 (alphabeticalByName).
+     * [offset] is the album-list cursor for resume.
+     */
+    suspend fun listAlbumsPage(
+        session: Session,
+        offset: Int = 0,
+        pageSize: Int = 100
+    ): Result<AlbumPage> = runCatching {
+        val body = apiGet(session, "getAlbumList2") {
+            parameter("type", "alphabeticalByName")
+            parameter("size", pageSize.coerceIn(1, 500))
+            parameter("offset", offset.coerceAtLeast(0))
+        }
+        val list = json.decodeFromString<SubsonicResponse>(body)
+            .subsonicResponse.albumList2?.album.orEmpty()
+        val refs = list.mapNotNull { a ->
+            val id = a.id ?: return@mapNotNull null
+            AlbumRef(
+                id = id,
+                name = a.name ?: a.album,
+                artist = a.artist,
+                coverArt = a.coverArt,
+                year = a.year,
+                songCount = a.songCount
+            )
+        }
+        AlbumPage(
+            albums = refs,
+            offset = offset,
+            exhausted = refs.size < pageSize
+        )
+    }.onFailure { Log.w(TAG, "listAlbumsPage failed: ${it.message}") }
+
+    suspend fun listSongsForAlbum(session: Session, albumId: String): Result<List<Song>> =
+        runCatching {
+            val body = apiGet(session, "getAlbum") {
+                parameter("id", albumId)
+            }
+            val album = json.decodeFromString<SubsonicResponse>(body)
+                .subsonicResponse.album ?: return@runCatching emptyList()
+            album.song.orEmpty().mapNotNull { it.toSong(session) }
+        }.onFailure { Log.w(TAG, "listSongsForAlbum($albumId) failed: ${it.message}") }
+
+    /**
+     * Streams all songs via album list paging. Prefer this for large Navidrome libraries.
+     * [startAlbumOffset] resumes the getAlbumList2 cursor.
+     */
+    suspend fun listSongsPaged(
+        session: Session,
+        pageSize: Int = 100,
+        startAlbumOffset: Int = 0,
+        maxSongs: Int = 100_000,
+        onPage: suspend (
+            songs: List<Song>,
+            albumOffset: Int,
+            albumsInPage: Int,
+            exhausted: Boolean
+        ) -> Unit
+    ): Result<Int> = runCatching {
+        var offset = startAlbumOffset.coerceAtLeast(0)
+        var delivered = 0
+        while (delivered < maxSongs) {
+            val page = listAlbumsPage(session, offset = offset, pageSize = pageSize).getOrThrow()
+            if (page.albums.isEmpty()) {
+                onPage(emptyList(), offset, 0, true)
+                break
+            }
+            val batch = mutableListOf<Song>()
+            for (album in page.albums) {
+                val songs = listSongsForAlbum(session, album.id).getOrElse { emptyList() }
+                batch += songs
+            }
+            if (batch.isNotEmpty()) {
+                onPage(batch, offset, page.albums.size, page.exhausted)
+                delivered += batch.size
+            } else {
+                onPage(emptyList(), offset, page.albums.size, page.exhausted)
+            }
+            offset += page.albums.size
+            if (page.exhausted) break
+        }
+        delivered
+    }.onFailure { Log.w(TAG, "listSongsPaged failed: ${it.message}") }
+
+    /**
+     * Legacy full walk via indexes (small libraries / servers without albumList2).
      */
     suspend fun listAllSongs(session: Session): Result<List<Song>> = runCatching {
-        val songs = mutableListOf<Song>()
-        val indexesBody = apiGet(session, "getIndexes")
-        val indexes = json.decodeFromString<SubsonicResponse>(indexesBody)
-            .subsonicResponse.indexes ?: return@runCatching emptyList()
+        val out = mutableListOf<Song>()
+        listSongsPaged(session) { songs, _, _, _ ->
+            out += songs
+        }.getOrThrow()
+        out
+    }
 
-        val artists = buildList {
-            indexes.index.orEmpty().forEach { idx ->
-                idx.artist.orEmpty().forEach { add(it) }
+    /**
+     * OpenSubsonic / Subsonic similar tracks for radio discovery.
+     * Uses getSimilarSongs2 when available, falls back to getSimilarSongs.
+     */
+    suspend fun similarSongs(
+        session: Session,
+        seedId: String,
+        count: Int = 50
+    ): Result<List<Song>> = runCatching {
+        val action = if (session.openSubsonic) "getSimilarSongs2" else "getSimilarSongs"
+        val body = runCatching {
+            apiGet(session, action) {
+                parameter("id", seedId)
+                parameter("count", count.coerceIn(1, 200))
             }
-            indexes.child.orEmpty().forEach { add(it) }
+        }.getOrElse {
+            if (action == "getSimilarSongs2") {
+                apiGet(session, "getSimilarSongs") {
+                    parameter("id", seedId)
+                    parameter("count", count.coerceIn(1, 200))
+                }
+            } else throw it
         }
+        val resp = json.decodeFromString<SubsonicResponse>(body).subsonicResponse
+        if (resp.status != null && resp.status != "ok") {
+            error(resp.error?.message ?: "similarSongs failed")
+        }
+        val children = resp.similarSongs2?.song
+            ?: resp.similarSongs?.song
+            ?: emptyList()
+        children.mapNotNull { it.toSong(session) }
+    }.onFailure { Log.w(TAG, "similarSongs failed: ${it.message}") }
 
-        for (artist in artists) {
-            val artistId = artist.id ?: continue
-            val artistBody = apiGet(session, "getArtist") {
-                parameter("id", artistId)
-            }
-            val artistResp = json.decodeFromString<SubsonicResponse>(artistBody)
-                .subsonicResponse.artist ?: continue
-            for (album in artistResp.album.orEmpty()) {
-                val albumId = album.id ?: continue
-                val albumBody = apiGet(session, "getAlbum") {
-                    parameter("id", albumId)
-                }
-                val albumResp = json.decodeFromString<SubsonicResponse>(albumBody)
-                    .subsonicResponse.album ?: continue
-                for (child in albumResp.song.orEmpty()) {
-                    child.toSong(session)?.let { songs += it }
-                }
-            }
+    suspend fun searchArtists(
+        session: Session,
+        query: String,
+        count: Int = 12
+    ): Result<List<ArtistHit>> = runCatching {
+        val body = apiGet(session, "search3") {
+            parameter("query", query)
+            parameter("artistCount", count.coerceIn(1, 40))
+            parameter("albumCount", 0)
+            parameter("songCount", 0)
         }
-        songs
-    }.onFailure { Log.w(TAG, "listAllSongs failed", it) }
+        val artists = json.decodeFromString<SubsonicResponse>(body)
+            .subsonicResponse.searchResult3?.artist.orEmpty()
+        artists.mapNotNull { a ->
+            val id = a.id ?: return@mapNotNull null
+            val name = a.name?.takeIf { it.isNotBlank() } ?: return@mapNotNull null
+            ArtistHit(
+                id = id,
+                name = name,
+                coverArt = a.coverArt
+            )
+        }
+    }.onFailure { Log.w(TAG, "searchArtists failed: ${it.message}") }
+
+    data class ArtistHit(
+        val id: String,
+        val name: String,
+        val coverArt: String?
+    )
 
     fun streamUrl(session: Session, id: String): String {
         val (token, salt) = tokenPair(session.password)
@@ -87,6 +236,7 @@ class SubsonicClient(
             append("&v=").append(API_VERSION)
             append("&c=").append(Uri.encode(session.clientName))
             append("&id=").append(Uri.encode(id))
+            append("&format=raw")
         }
     }
 
@@ -132,21 +282,28 @@ class SubsonicClient(
         val sid = id ?: return null
         if (isDir == true) return null
         val stream = streamUrl(session, sid)
-        val art = coverUrl(session, coverArt)?.let { Uri.parse(it) }
+        val art = coverUrl(session, coverArt, size = 512)?.let { Uri.parse(it) }
+        val title = title?.takeIf { it.isNotBlank() }
+            ?: name?.takeIf { it.isNotBlank() }
+        val genreStr = genre?.takeIf { it.isNotBlank() }
         return Song(
             id = sid.hashCode().toLong(),
-            title = title ?: name,
-            artist = artist,
-            albumArtist = artist,
-            album = album,
+            title = title,
+            artist = artist?.takeIf { it.isNotBlank() },
+            albumArtist = albumArtist?.takeIf { it.isNotBlank() }
+                ?: artist?.takeIf { it.isNotBlank() },
+            album = album?.takeIf { it.isNotBlank() },
             durationMs = duration?.times(1000L)?.takeIf { it > 0 },
             contentUri = Uri.parse(stream),
             albumArtUri = art,
             trackNumber = track,
             discNumber = discNumber,
             year = year,
-            path = path,
-            mimeType = contentType
+            genre = genreStr,
+            // Catalog / Explore classify remotes by path prefix.
+            path = "subsonic:$sid",
+            mimeType = contentType,
+            explicit = genreStr?.contains("explicit", ignoreCase = true) == true
         )
     }
 
@@ -170,10 +327,17 @@ class SubsonicClient(
     private data class SubsonicBody(
         val status: String? = null,
         val version: String? = null,
+        val type: String? = null,
+        val serverVersion: String? = null,
+        val openSubsonic: Boolean? = null,
         val error: SubsonicError? = null,
         val indexes: SubsonicIndexes? = null,
         val artist: SubsonicArtistDetail? = null,
-        val album: SubsonicAlbumDetail? = null
+        val album: SubsonicAlbumDetail? = null,
+        val albumList2: SubsonicAlbumList2? = null,
+        val similarSongs: SubsonicSongList? = null,
+        val similarSongs2: SubsonicSongList? = null,
+        val searchResult3: SubsonicSearchResult3? = null
     )
 
     @Serializable
@@ -197,20 +361,32 @@ class SubsonicClient(
     @Serializable
     private data class SubsonicArtist(
         val id: String? = null,
-        val name: String? = null
+        val name: String? = null,
+        val coverArt: String? = null
     )
 
     @Serializable
     private data class SubsonicArtistDetail(
         val id: String? = null,
         val name: String? = null,
+        val coverArt: String? = null,
         val album: List<SubsonicAlbumRef>? = null
     )
 
     @Serializable
     private data class SubsonicAlbumRef(
         val id: String? = null,
-        val name: String? = null
+        val name: String? = null,
+        val album: String? = null,
+        val artist: String? = null,
+        val coverArt: String? = null,
+        val year: Int? = null,
+        val songCount: Int? = null
+    )
+
+    @Serializable
+    private data class SubsonicAlbumList2(
+        val album: List<SubsonicAlbumRef>? = null
     )
 
     @Serializable
@@ -221,6 +397,16 @@ class SubsonicClient(
     )
 
     @Serializable
+    private data class SubsonicSongList(
+        val song: List<SubsonicChild>? = null
+    )
+
+    @Serializable
+    private data class SubsonicSearchResult3(
+        val artist: List<SubsonicArtist>? = null
+    )
+
+    @Serializable
     private data class SubsonicChild(
         val id: String? = null,
         val parent: String? = null,
@@ -228,8 +414,10 @@ class SubsonicClient(
         val name: String? = null,
         val album: String? = null,
         val artist: String? = null,
+        val albumArtist: String? = null,
         val track: Int? = null,
         val year: Int? = null,
+        val genre: String? = null,
         val coverArt: String? = null,
         val size: Long? = null,
         val contentType: String? = null,
@@ -243,6 +431,7 @@ class SubsonicClient(
 
     companion object {
         private const val TAG = "SubsonicClient"
+        /** 1.16.1 is widely implemented; OpenSubsonic servers accept it. */
         private const val API_VERSION = "1.16.1"
     }
 }
