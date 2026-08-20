@@ -29,13 +29,9 @@ data class ArtistAggregateRow(
 /**
  * Persistent catalog = local library + remote-indexed tracks (Jellyfin / Subsonic).
  * Search and key lookups must stay SQL — never load the full table onto Main.
- *
- * Rollups are rebuilt via GROUP BY aggregates, not by pulling every track into RAM.
  */
 @Dao
 interface CatalogDao {
-
-    // ── Tracks ──────────────────────────────────────────────────────────
 
     @Query("SELECT * FROM catalog_tracks ORDER BY title COLLATE NOCASE")
     fun observeTracks(): Flow<List<CatalogTrackEntity>>
@@ -46,7 +42,6 @@ interface CatalogDao {
     @Query("SELECT * FROM catalog_tracks WHERE sourceType = :sourceType")
     suspend fun getTracksBySource(sourceType: String): List<CatalogTrackEntity>
 
-    /** Bounded sample for art pass / diagnostics — never load a whole remote library. */
     @Query("SELECT * FROM catalog_tracks WHERE sourceType = :sourceType LIMIT :limit")
     suspend fun getTracksBySourceLimited(sourceType: String, limit: Int): List<CatalogTrackEntity>
 
@@ -65,10 +60,6 @@ interface CatalogDao {
     @Query("SELECT * FROM catalog_tracks WHERE songKey IN (:keys)")
     suspend fun getTracksByKeys(keys: List<String>): List<CatalogTrackEntity>
 
-    /**
-     * Bounded multi-source lookup for one logical track (title + artist + album).
-     * Used for E / multi-source badges and Sources sheet — never full-table.
-     */
     @Query(
         """
         SELECT * FROM catalog_tracks
@@ -98,10 +89,7 @@ interface CatalogDao {
     @Query("SELECT * FROM catalog_tracks WHERE albumKey = :albumKey ORDER BY discNumber, trackNumber, title")
     suspend fun getTracksForAlbum(albumKey: String): List<CatalogTrackEntity>
 
-    /**
-     * All rows whose album tag equals [album] (case-insensitive), any source / key.
-     * Needed because local vs JF often land under different albumKey strings.
-     */
+    /** Exact album tag match, any source / albumKey. */
     @Query(
         "SELECT * FROM catalog_tracks WHERE album = :album COLLATE NOCASE " +
             "ORDER BY discNumber, trackNumber, title LIMIT :limit"
@@ -109,9 +97,37 @@ interface CatalogDao {
     suspend fun getTracksByAlbumName(album: String, limit: Int = 500): List<CatalogTrackEntity>
 
     /**
-     * Single seed track for list / hero cover art.
-     * Prefer LOCAL (embedded tags / folder art), then any row that already has art.
+     * Album page primary query: album tag equals [album] AND artist loosely matches.
+     * Empty [artist] means any artist (caller filters further if needed).
      */
+    @Query(
+        """
+        SELECT * FROM catalog_tracks
+        WHERE album = :album COLLATE NOCASE
+          AND (
+            :artist = ''
+            OR IFNULL(albumArtist, '') = :artist COLLATE NOCASE
+            OR IFNULL(artist, '') = :artist COLLATE NOCASE
+            OR IFNULL(albumArtist, '') LIKE '%' || :artist || '%' COLLATE NOCASE
+            OR IFNULL(artist, '') LIKE '%' || :artist || '%' COLLATE NOCASE
+          )
+        ORDER BY discNumber, trackNumber, title
+        LIMIT :limit
+        """
+    )
+    suspend fun getTracksForAlbumNameArtist(
+        album: String,
+        artist: String,
+        limit: Int = 1000
+    ): List<CatalogTrackEntity>
+
+    /** All albumKeys that share this album title (case-insensitive). */
+    @Query(
+        "SELECT DISTINCT albumKey FROM catalog_tracks " +
+            "WHERE album = :album COLLATE NOCASE AND albumKey IS NOT NULL AND albumKey != ''"
+    )
+    suspend fun albumKeysForAlbumName(album: String): List<String>
+
     @Query(
         "SELECT * FROM catalog_tracks WHERE albumKey = :albumKey " +
             "ORDER BY CASE WHEN sourceType = 'LOCAL' THEN 0 ELSE 1 END, " +
@@ -152,12 +168,6 @@ interface CatalogDao {
     @Query("DELETE FROM catalog_tracks WHERE songKey = :songKey")
     suspend fun deleteTrack(songKey: String)
 
-    // ── SQL rollups (never SELECT * tracks into Kotlin) ─────────────────
-
-    /**
-     * Logical track count: same title + disc + track # across sources counts once
-     * (local + Jellyfin copies of Trench no longer double the album length).
-     */
     @Query(
         """
         SELECT albumKey AS albumKey,
@@ -191,8 +201,6 @@ interface CatalogDao {
     )
     suspend fun aggregateArtists(): List<ArtistAggregateRow>
 
-    // ── Albums ──────────────────────────────────────────────────────────
-
     @Query("SELECT * FROM catalog_albums ORDER BY artist COLLATE NOCASE, name COLLATE NOCASE")
     fun observeAlbums(): Flow<List<CatalogAlbumEntity>>
 
@@ -222,8 +230,6 @@ interface CatalogDao {
     @Query("DELETE FROM catalog_albums WHERE albumKey = :albumKey")
     suspend fun deleteAlbum(albumKey: String)
 
-    // ── Artists ─────────────────────────────────────────────────────────
-
     @Query("SELECT * FROM catalog_artists ORDER BY displayName COLLATE NOCASE")
     fun observeArtists(): Flow<List<CatalogArtistEntity>>
 
@@ -248,8 +254,6 @@ interface CatalogDao {
 
     @Query("DELETE FROM catalog_artists WHERE artistKey = :artistKey")
     suspend fun deleteArtist(artistKey: String)
-
-    // ── Bulk local sync ─────────────────────────────────────────────────
 
     @Transaction
     suspend fun replaceLocalCatalog(
