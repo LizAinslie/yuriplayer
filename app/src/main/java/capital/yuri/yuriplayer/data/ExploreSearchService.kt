@@ -148,10 +148,6 @@ class ExploreSearchService(
         }
     }
 
-    /**
-     * Start (or resume) remote indexing in the FGS. Safe to call from UI —
-     * never cancels an in-flight scan unless [force].
-     */
     fun requestRemoteScan(force: Boolean = false) {
         if (!force && _isScanning.value) {
             Log.i(TAG, "requestRemoteScan ignored — already scanning")
@@ -232,12 +228,9 @@ class ExploreSearchService(
                 )
             }.distinctBy { "${it.sourceType.name}:${it.song.songKey}" }
 
-            // Playback source: user override first, else LOCAL before remote.
             val preferredBase = sourceResolver.prefer(SCOPE_TRACK, key, offerings)
                 ?: offerings.minByOrNull { it.sourceType.rank }
                 ?: offerings.first()
-            // Display tags: richest across offerings ("Song (feat. X)" > "Song").
-            // URI/path stay on preferredBase so local still plays when available.
             val preferred = preferredBase.copy(
                 song = TrackIdentity.withRichestDisplay(
                     preferredBase.song,
@@ -416,7 +409,9 @@ class ExploreSearchService(
                         username = row.username,
                         secret = row.secret,
                         seenAt = seenAt,
-                        keepKeys = keepKeys
+                        keepKeys = keepKeys,
+                        startAlbumOffset = resumeFrom,
+                        priorDelivered = priorDelivered
                     )
                     else -> 0
                 }
@@ -655,6 +650,10 @@ class ExploreSearchService(
         Log.i(TAG, "passive art pass: attempted=$attempted cached=${cachedAlbumArtKeys.size}")
     }
 
+    /**
+     * Subsonic / OpenSubsonic scan via getAlbumList2 paging.
+     * [startAlbumOffset] is the album-list cursor (not song index).
+     */
     private suspend fun scanSubsonic(
         type: SourceType,
         instanceId: Long,
@@ -663,71 +662,111 @@ class ExploreSearchService(
         username: String?,
         secret: String?,
         seenAt: Long,
-        keepKeys: Set<String>
+        keepKeys: Set<String>,
+        startAlbumOffset: Int,
+        priorDelivered: Int
     ): Int {
         val url = baseUrl ?: return 0
         val user = username ?: return 0
         val pass = secret ?: return 0
-        val session = SubsonicClient.Session(url, user, pass)
+        val baseSession = SubsonicClient.Session(
+            baseUrl = SourceInstanceRepository.normalizeBaseUrl(url),
+            username = user,
+            password = pass
+        )
         val catalogType =
             if (type == SourceType.NAVIDROME) CatalogSources.NAVIDROME else CatalogSources.SUBSONIC
 
-        var delivered = 0
+        val session = subsonicClient.ping(baseSession).getOrElse {
+            if (it is CancellationException) throw it
+            Log.w(TAG, "subsonic ping failed: ${it.message}")
+            _lastError.value = "$sourceName: ${it.message}"
+            return 0
+        }
+
+        var delivered = priorDelivered
+        var albumOffset = startAlbumOffset.coerceAtLeast(0)
         var aborted = false
-        checkpoints.markRunning(instanceId, sourceName, 0, 0, null)
-        runCatching {
-            subsonicClient.ping(session).getOrThrow()
-            val songs = subsonicClient.listAllSongs(session).getOrThrow()
-            songs.chunked(budget.pageSize).forEachIndexed { i, chunk ->
-                if (shouldAbortSource(instanceId) || stopAll.get() || shouldPauseSource(instanceId)) {
-                    aborted = true
-                    return@forEachIndexed
-                }
-                if (!assertSyncAllowedOrThrow()) {
-                    aborted = true
-                    return@forEachIndexed
-                }
+        var paused = false
+
+        checkpoints.markRunning(instanceId, sourceName, albumOffset, delivered, null)
+
+        subsonicClient.listSongsPaged(
+            session = session,
+            pageSize = minOf(budget.pageSize, 100),
+            startAlbumOffset = albumOffset
+        ) { songs, offset, albumsInPage, exhausted ->
+            if (shouldAbortSource(instanceId) || stopAll.get()) {
+                aborted = true
+                throw CancellationException("stopped by user")
+            }
+            if (shouldPauseSource(instanceId)) {
+                paused = true
+                throw CancellationException("paused by user")
+            }
+            if (!assertSyncAllowedOrThrow()) {
+                paused = true
+                throw CancellationException("paused for mobile data policy")
+            }
+
+            if (songs.isNotEmpty()) {
                 catalog.ingestRemoteBatch(
-                    songs = chunk,
+                    songs = songs,
                     sourceType = catalogType,
                     sourceInstanceId = instanceId,
                     seenAt = seenAt
                 )
-                delivered += chunk.size
-                bumpIndexedCount(delivered)
-                checkpoints.markRunning(instanceId, sourceName, delivered, delivered, songs.size)
-                val done = minOf((i + 1) * budget.pageSize, songs.size)
-                if (i == 0 || (i + 1) % budget.progressEveryPages == 0 || done >= songs.size) {
-                    progress("$sourceName: $done / ${songs.size}")
-                    notifier.update(
-                        "Syncing libraries",
-                        "$sourceName: $done / ${songs.size}",
-                        done,
-                        songs.size
-                    )
-                }
-                budget.yieldBetweenPages()
+                delivered += songs.size
             }
-            if (!aborted) {
-                catalog.pruneRemoteSource(
-                    sourceType = catalogType,
-                    sourceInstanceId = instanceId,
-                    beforeMs = seenAt,
-                    keepSongKeys = keepKeys
+            albumOffset = offset + albumsInPage
+            bumpIndexedCount(delivered)
+            checkpoints.markRunning(instanceId, sourceName, albumOffset, delivered, null)
+            refreshCheckpointSnapshot()
+
+            val n = pageCounter.incrementAndGet()
+            if (n == 1 || n % budget.progressEveryPages == 0 || exhausted) {
+                progress("$sourceName: $delivered tracks (albums @$albumOffset)")
+                notifier.update(
+                    "Syncing libraries",
+                    "$sourceName: $delivered tracks",
+                    delivered,
+                    null
                 )
-                checkpoints.markDone(instanceId, sourceName, delivered, songs.size)
-            } else if (shouldAbortSource(instanceId) || stopAll.get()) {
-                checkpoints.markStopped(instanceId, sourceName, delivered, delivered, null)
-            } else {
-                checkpoints.markPaused(instanceId, sourceName, delivered, delivered, null)
             }
+
+            budget.yieldBetweenPages()
         }.onFailure {
-            if (it is CancellationException) throw it
-            Log.w(TAG, "subsonic scan failed: ${it.message}")
-            _lastError.value = "$sourceName: ${it.message}"
+            when {
+                it is CancellationException && paused -> {
+                    checkpoints.markPaused(instanceId, sourceName, albumOffset, delivered, null)
+                    Log.i(TAG, "subsonic paused $sourceName at albumOffset=$albumOffset delivered=$delivered")
+                }
+                it is CancellationException && aborted -> {
+                    checkpoints.markStopped(instanceId, sourceName, albumOffset, delivered, null)
+                    Log.i(TAG, "subsonic stopped $sourceName at albumOffset=$albumOffset")
+                }
+                it is CancellationException -> throw it
+                else -> {
+                    Log.w(TAG, "subsonic scan failed: ${it.message}")
+                    _lastError.value = "$sourceName: ${it.message}"
+                }
+            }
         }
+
+        if (paused || aborted) {
+            refreshCheckpointSnapshot()
+            return -delivered.coerceAtLeast(1)
+        }
+
+        catalog.pruneRemoteSource(
+            sourceType = catalogType,
+            sourceInstanceId = instanceId,
+            beforeMs = seenAt,
+            keepSongKeys = keepKeys
+        )
+        checkpoints.markDone(instanceId, sourceName, delivered, delivered)
         refreshCheckpointSnapshot()
-        return if (aborted) -delivered.coerceAtLeast(1) else delivered
+        return delivered
     }
 
     companion object {
