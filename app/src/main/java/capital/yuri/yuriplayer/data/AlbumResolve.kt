@@ -5,14 +5,15 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
 /**
- * Full [AlbumItem] for the album page from catalog + optional seed.
+ * Full [AlbumItem] for the album page from catalog + optional seed + local index.
  * Never returns fewer songs than a multi-track seed.
  */
 suspend fun resolveAlbumItem(
     dao: CatalogDao,
     name: String?,
     artist: String?,
-    seedSongs: List<Song> = emptyList()
+    seedSongs: List<Song> = emptyList(),
+    library: LibraryIndex? = null
 ): AlbumItem? = withContext(Dispatchers.IO) {
     if (name.isNullOrBlank() && seedSongs.isEmpty()) return@withContext null
     val albumName = name ?: seedSongs.firstOrNull()?.album
@@ -28,8 +29,10 @@ suspend fun resolveAlbumItem(
         extraSeedSongs = seedSongs
     )
 
-    // Absolute union — never lose seed tracks
-    val songs = dedupeAlbumPageTracks(expanded + seedSongs)
+    val localSongs = library?.let { findLocalAlbum(it, albumName, artistName)?.songs }.orEmpty()
+
+    // Absolute union — never lose seed or local tracks
+    val songs = dedupeAlbumPageTracks(expanded + seedSongs + localSongs)
     if (songs.isEmpty()) return@withContext null
 
     AlbumItem(
