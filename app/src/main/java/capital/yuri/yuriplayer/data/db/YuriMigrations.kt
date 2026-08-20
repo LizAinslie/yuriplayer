@@ -37,7 +37,7 @@ object YuriMigrations {
                 """
                 INSERT INTO playlist_covers (id, playlistId, uri, isSecret, sortOrder, createdAtMs)
                 SELECT
-                    playlistId || '-legacy',
+                    id || '-legacy',
                     id,
                     customImageUri,
                     0,

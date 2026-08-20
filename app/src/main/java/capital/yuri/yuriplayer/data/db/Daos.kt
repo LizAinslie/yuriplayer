@@ -110,6 +110,29 @@ interface PlaylistDao {
             }
         )
     }
+
+    // ── multi covers ──────────────────────────────────────────────────────
+
+    @Query("SELECT * FROM playlist_covers WHERE playlistId = :playlistId ORDER BY sortOrder ASC, createdAtMs ASC")
+    fun observeCovers(playlistId: String): Flow<List<PlaylistCoverEntity>>
+
+    @Query("SELECT * FROM playlist_covers WHERE playlistId = :playlistId ORDER BY sortOrder ASC, createdAtMs ASC")
+    suspend fun getCovers(playlistId: String): List<PlaylistCoverEntity>
+
+    @Query("SELECT * FROM playlist_covers WHERE id = :coverId LIMIT 1")
+    suspend fun getCover(coverId: String): PlaylistCoverEntity?
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun upsertCover(entity: PlaylistCoverEntity)
+
+    @Query("DELETE FROM playlist_covers WHERE id = :coverId")
+    suspend fun deleteCover(coverId: String)
+
+    @Query("DELETE FROM playlist_covers WHERE playlistId = :playlistId")
+    suspend fun clearCovers(playlistId: String)
+
+    @Query("SELECT COALESCE(MAX(sortOrder), -1) FROM playlist_covers WHERE playlistId = :playlistId")
+    suspend fun maxCoverSortOrder(playlistId: String): Int
 }
 
 @Dao
