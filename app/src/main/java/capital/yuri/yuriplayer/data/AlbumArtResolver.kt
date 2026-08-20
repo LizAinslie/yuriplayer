@@ -13,6 +13,8 @@ import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import org.jaudiotagger.audio.AudioFileIO
 import org.jaudiotagger.tag.TagOptionSingleton
+import java.io.BufferedInputStream
+import java.io.DataInputStream
 import java.io.File
 import java.io.InputStream
 import java.net.HttpURLConnection
@@ -20,17 +22,16 @@ import java.net.URL
 import java.util.concurrent.ConcurrentHashMap
 
 /**
- * Album art decode order:
- * preferred, disk cache, image albumArtUri, folder cover, SAF cover,
- * MMR embedded, then jaudiotagger embedded (File or one SAF extract per album).
+ * Album art pipeline. Successful local extracts always land in
+ * [filesDir]/covers] keyed by albumKey so later opens skip re-decode.
  *
- * Never feeds audio MIME streams into BitmapFactory or Coil. That produces
- * OpenGL "Failed to create image decoder with message unimplemented".
+ * For SAF FLACs, [MediaMetadataRetriever] usually fails; we stream-parse
+ * FLAC METADATA_BLOCK_PICTURE from the head of the file (no full copy).
  */
 object AlbumArtResolver {
 
     private const val TAG = "AlbumArtResolver"
-    private const val MAX_SAF_EXTRACT_BYTES = 120L * 1024L * 1024L
+    private const val MAX_SAF_EXTRACT_BYTES = 80L * 1024L * 1024L
 
     private val albumLocks = ConcurrentHashMap<String, Mutex>()
 
@@ -50,7 +51,10 @@ object AlbumArtResolver {
         withContext(Dispatchers.IO) {
             val preferred = preferredUri?.takeIf { it.isNotBlank() }
                 ?.let { loadAnyUri(context, it, maxSize) }
-            if (preferred != null) return@withContext scaleDown(preferred, maxSize)
+            if (preferred != null) {
+                cacheToDisk(context, song, preferred)
+                return@withContext scaleDown(preferred, maxSize)
+            }
 
             loadDiskAlbumCache(context, song, maxSize)?.let {
                 return@withContext scaleDown(it, maxSize)
@@ -81,15 +85,27 @@ object AlbumArtResolver {
                 loadDiskAlbumCache(context, song, maxSize)?.let {
                     return@withContext scaleDown(it, maxSize)
                 }
-                loadEmbeddedMmr(context, song, maxSize)?.also {
+
+                // Stream FLAC picture first (SAF-friendly, no full-file copy)
+                loadStreamEmbedded(context, song, maxSize)?.also {
                     cacheToDisk(context, song, it)
+                    Log.i(TAG, "stream art ok album=$aKey")
                     return@withContext scaleDown(it, maxSize)
                 }
+
+                loadEmbeddedMmr(context, song, maxSize)?.also {
+                    cacheToDisk(context, song, it)
+                    Log.i(TAG, "MMR art ok album=$aKey")
+                    return@withContext scaleDown(it, maxSize)
+                }
+
                 loadEmbeddedJaudio(context, song, maxSize)?.also {
                     cacheToDisk(context, song, it)
                     Log.i(TAG, "jaudio art ok album=$aKey")
                     return@withContext scaleDown(it, maxSize)
                 }
+
+                Log.w(TAG, "no art for album=$aKey path=${song.path} uri=${song.contentUri}")
             }
 
             null
@@ -116,31 +132,25 @@ object AlbumArtResolver {
 
     fun extractEmbeddedToFile(file: File, dest: File): Boolean {
         if (!file.isFile || !file.canRead()) return false
-        val bmp = extractJaudioArtwork(file, 512) ?: return false
-        return try {
-            dest.parentFile?.mkdirs()
-            val tmp = File(dest.parentFile, "tmp-${System.nanoTime()}.jpg")
-            tmp.outputStream().use { out -> bmp.compress(Bitmap.CompressFormat.JPEG, 88, out) }
-            if (!tmp.renameTo(dest)) {
-                tmp.copyTo(dest, overwrite = true)
-                tmp.delete()
-            }
-            if (!bmp.isRecycled) runCatching { bmp.recycle() }
-            dest.isFile && dest.length() > 0L
-        } catch (e: Exception) {
-            Log.w(TAG, "extractEmbeddedToFile failed", e)
-            false
-        }
+        val bmp = extractJaudioArtwork(file, 512)
+            ?: file.inputStream().use { extractFlacPicture(it)?.let { bytes -> decodeBytesSampled(bytes, 512) } }
+            ?: return false
+        return writeBitmapFile(bmp, dest)
+    }
+
+    fun diskCoverFile(context: Context, albumKeyStr: String): File {
+        val name = MetadataEnrichmentService.sanitizeFileName(albumKeyStr) + ".jpg"
+        return File(File(context.filesDir, "covers").also { it.mkdirs() }, name)
     }
 
     private fun diskCacheFile(context: Context, song: Song): File {
         val key = albumKey(song.album, song.effectiveAlbumArtist)
-        val name = if (key.isNotBlank() && key != "|") {
-            MetadataEnrichmentService.sanitizeFileName(key) + ".jpg"
+        return if (key.isNotBlank() && key != "|") {
+            diskCoverFile(context, key)
         } else {
-            "song-" + MetadataEnrichmentService.sanitizeFileName(song.songKey) + ".jpg"
+            val name = "song-" + MetadataEnrichmentService.sanitizeFileName(song.songKey) + ".jpg"
+            File(File(context.filesDir, "covers").also { it.mkdirs() }, name)
         }
-        return File(File(context.filesDir, "covers"), name)
     }
 
     private fun loadDiskAlbumCache(context: Context, song: Song, maxSize: Int): Bitmap? {
@@ -151,18 +161,24 @@ object AlbumArtResolver {
 
     private fun cacheToDisk(context: Context, song: Song, bmp: Bitmap) {
         if (bmp.isRecycled) return
-        try {
-            val dest = diskCacheFile(context, song)
-            if (dest.isFile && dest.length() > 0L) return
+        val dest = diskCacheFile(context, song)
+        if (dest.isFile && dest.length() > 0L) return
+        writeBitmapFile(bmp, dest)
+    }
+
+    private fun writeBitmapFile(bmp: Bitmap, dest: File): Boolean {
+        return try {
             dest.parentFile?.mkdirs()
             val tmp = File(dest.parentFile, "tmp-${System.nanoTime()}.jpg")
-            tmp.outputStream().use { out -> bmp.compress(Bitmap.CompressFormat.JPEG, 88, out) }
+            tmp.outputStream().use { out -> bmp.compress(Bitmap.CompressFormat.JPEG, 90, out) }
             if (!tmp.renameTo(dest)) {
                 tmp.copyTo(dest, overwrite = true)
                 tmp.delete()
             }
+            dest.isFile && dest.length() > 0L
         } catch (e: Exception) {
-            Log.d(TAG, "cacheToDisk failed: ${e.message}")
+            Log.w(TAG, "writeBitmapFile failed", e)
+            false
         }
     }
 
@@ -218,10 +234,206 @@ object AlbumArtResolver {
 
     private fun loadEnrichedCover(context: Context, song: Song, maxSize: Int): Bitmap? {
         val key = albumKey(song.album, song.effectiveAlbumArtist)
-        val name = MetadataEnrichmentService.sanitizeFileName(key) + ".jpg"
-        val f = File(File(context.filesDir, "covers"), name)
+        val f = diskCoverFile(context, key)
         if (!f.isFile) return null
         return decodeFileSampled(f.absolutePath, maxSize)
+    }
+
+    /**
+     * Open content/file stream and pull embedded picture without a full temp copy.
+     * FLAC: METADATA_BLOCK_PICTURE. MP3: ID3v2 APIC near the head.
+     */
+    private fun loadStreamEmbedded(context: Context, song: Song, maxSize: Int): Bitmap? {
+        val path = song.path
+        if (path != null && isVirtualLibraryPath(path)) return null
+
+        // Real file path
+        if (!path.isNullOrBlank() && !path.contains("://")) {
+            val f = File(path)
+            if (f.isFile && f.canRead()) {
+                f.inputStream().use { streamEmbeddedFrom(it, f.name, maxSize) }?.let { return it }
+            }
+        }
+
+        val uri = when {
+            song.contentUri.scheme.equals("content", true) -> song.contentUri
+            song.contentUri.scheme.equals("file", true) -> song.contentUri
+            !path.isNullOrBlank() && path.contains("://") -> Uri.parse(path)
+            else -> null
+        } ?: return null
+
+        return try {
+            context.contentResolver.openInputStream(uri)?.use { input ->
+                streamEmbeddedFrom(input, uri.toString(), maxSize)
+            }
+        } catch (e: Exception) {
+            Log.d(TAG, "stream open failed: ${e.message}")
+            null
+        }
+    }
+
+    private fun streamEmbeddedFrom(input: InputStream, label: String, maxSize: Int): Bitmap? {
+        val buffered = if (input is BufferedInputStream) input else BufferedInputStream(input, 64 * 1024)
+        buffered.mark(512 * 1024)
+        // Probe magic
+        val header = ByteArray(4)
+        val n = buffered.read(header)
+        if (n < 4) return null
+        buffered.reset()
+
+        val isFlac = header[0] == 'f'.code.toByte() &&
+            header[1] == 'L'.code.toByte() &&
+            header[2] == 'a'.code.toByte() &&
+            header[3] == 'C'.code.toByte()
+        val isId3 = header[0] == 'I'.code.toByte() &&
+            header[1] == 'D'.code.toByte() &&
+            header[2] == '3'.code.toByte()
+
+        val bytes = when {
+            isFlac -> extractFlacPicture(buffered)
+            isId3 -> extractId3Apic(buffered)
+            else -> null
+        }
+        if (bytes == null) {
+            Log.d(TAG, "stream no picture for $label flac=$isFlac id3=$isId3")
+            return null
+        }
+        return decodeBytesSampled(bytes, maxSize)
+    }
+
+    /**
+     * Walk FLAC metadata blocks; return first PICTURE (type 6) image payload.
+     * Only reads the metadata region at the start of the file.
+     */
+    private fun extractFlacPicture(input: InputStream): ByteArray? {
+        return try {
+            val din = DataInputStream(BufferedInputStream(input, 64 * 1024))
+            val magic = ByteArray(4)
+            din.readFully(magic)
+            if (String(magic, Charsets.US_ASCII) != "fLaC") return null
+
+            var last = false
+            var blocks = 0
+            while (!last && blocks < 64) {
+                blocks++
+                val header = din.readInt()
+                last = (header ushr 31) == 1
+                val type = (header ushr 24) and 0x7F
+                val length = header and 0x00FFFFFF
+                if (length < 0 || length > 32 * 1024 * 1024) return null
+
+                if (type == 6) {
+                    // PICTURE block
+                    if (length < 32) {
+                        din.skipBytes(length)
+                        continue
+                    }
+                    din.readInt() // picture type
+                    val mimeLen = din.readInt()
+                    if (mimeLen < 0 || mimeLen > 256) return null
+                    din.skipBytes(mimeLen)
+                    val descLen = din.readInt()
+                    if (descLen < 0 || descLen > 4096) return null
+                    din.skipBytes(descLen)
+                    din.readInt() // width
+                    din.readInt() // height
+                    din.readInt() // depth
+                    din.readInt() // colors
+                    val dataLen = din.readInt()
+                    if (dataLen <= 0 || dataLen > 16 * 1024 * 1024) return null
+                    val data = ByteArray(dataLen)
+                    din.readFully(data)
+                    return data
+                } else {
+                    din.skipBytes(length)
+                }
+            }
+            null
+        } catch (e: Exception) {
+            Log.d(TAG, "FLAC picture parse failed: ${e.message}")
+            null
+        }
+    }
+
+    /**
+     * Minimal ID3v2 APIC extract (JPEG/PNG). Reads only the tag at file start.
+     */
+    private fun extractId3Apic(input: InputStream): ByteArray? {
+        return try {
+            val din = DataInputStream(BufferedInputStream(input, 64 * 1024))
+            val header = ByteArray(10)
+            din.readFully(header)
+            if (header[0] != 'I'.code.toByte() ||
+                header[1] != 'D'.code.toByte() ||
+                header[2] != '3'.code.toByte()
+            ) return null
+            val ver = header[3].toInt() and 0xFF
+            // synchsafe size
+            val tagSize = ((header[6].toInt() and 0x7F) shl 21) or
+                ((header[7].toInt() and 0x7F) shl 14) or
+                ((header[8].toInt() and 0x7F) shl 7) or
+                (header[9].toInt() and 0x7F)
+            if (tagSize <= 0 || tagSize > 4 * 1024 * 1024) return null
+
+            var remaining = tagSize
+            while (remaining > 10) {
+                val frameId = ByteArray(4)
+                din.readFully(frameId)
+                remaining -= 4
+                val frameSize = if (ver >= 4) {
+                    val b = ByteArray(4)
+                    din.readFully(b)
+                    remaining -= 4
+                    ((b[0].toInt() and 0x7F) shl 21) or
+                        ((b[1].toInt() and 0x7F) shl 14) or
+                        ((b[2].toInt() and 0x7F) shl 7) or
+                        (b[3].toInt() and 0x7F)
+                } else {
+                    din.readInt().also { remaining -= 4 }
+                }
+                din.readUnsignedShort() // flags
+                remaining -= 2
+                if (frameSize <= 0 || frameSize > remaining) return null
+
+                val id = String(frameId, Charsets.US_ASCII)
+                if (id == "APIC") {
+                    val body = ByteArray(frameSize)
+                    din.readFully(body)
+                    return parseApicPayload(body)
+                }
+                din.skipBytes(frameSize)
+                remaining -= frameSize
+            }
+            null
+        } catch (e: Exception) {
+            Log.d(TAG, "ID3 APIC parse failed: ${e.message}")
+            null
+        }
+    }
+
+    private fun parseApicPayload(body: ByteArray): ByteArray? {
+        if (body.isEmpty()) return null
+        var i = 0
+        val encoding = body[i++].toInt() and 0xFF
+        // MIME null-terminated (latin1)
+        while (i < body.size && body[i] != 0.toByte()) i++
+        i++ // null
+        if (i >= body.size) return null
+        i++ // picture type
+        // description terminated per encoding
+        when (encoding) {
+            0, 3 -> { // ISO-8859-1 / UTF-8
+                while (i < body.size && body[i] != 0.toByte()) i++
+                i++
+            }
+            1, 2 -> { // UTF-16
+                while (i + 1 < body.size && !(body[i] == 0.toByte() && body[i + 1] == 0.toByte())) i += 2
+                i += 2
+            }
+            else -> return null
+        }
+        if (i >= body.size) return null
+        return body.copyOfRange(i, body.size)
     }
 
     private fun loadEmbeddedMmr(context: Context, song: Song, maxSize: Int): Bitmap? {
@@ -303,14 +515,8 @@ object AlbumArtResolver {
     private fun extractJaudioArtwork(file: File, maxSize: Int): Bitmap? {
         return try {
             val audio = AudioFileIO.read(file)
-            val tag = audio.tag ?: run {
-                Log.d(TAG, "jaudio no tag ${file.name}")
-                return null
-            }
-            val art = tag.firstArtwork ?: run {
-                Log.d(TAG, "jaudio no artwork ${file.name}")
-                return null
-            }
+            val tag = audio.tag ?: return null
+            val art = tag.firstArtwork ?: return null
             val bytes = art.binaryData ?: return null
             if (bytes.isEmpty()) return null
             decodeBytesSampled(bytes, maxSize)
@@ -323,7 +529,7 @@ object AlbumArtResolver {
     private fun extractJaudioFromContentUri(context: Context, uri: Uri, maxSize: Int): Bitmap? {
         val size = querySize(context, uri)
         if (size != null && size > MAX_SAF_EXTRACT_BYTES) {
-            Log.w(TAG, "skip jaudio SAF extract size=$size > $MAX_SAF_EXTRACT_BYTES")
+            Log.w(TAG, "skip jaudio SAF extract size=$size")
             return null
         }
 
@@ -371,17 +577,9 @@ object AlbumArtResolver {
             "audio/ogg", "audio/opus" -> return "ogg"
             "audio/wav", "audio/x-wav" -> return "wav"
         }
-        val fromName = uri.lastPathSegment
-            ?.substringAfterLast('.', "")
-            ?.substringAfterLast('%')
-            ?.lowercase()
-            ?.takeIf { it.length in 2..5 && it.all { ch -> ch.isLetterOrDigit() } }
-        if (fromName != null && fromName in setOf("flac", "mp3", "m4a", "aac", "ogg", "opus", "wav", "wma")) {
-            return fromName
-        }
-        val decoded = runCatching { Uri.decode(uri.toString()) }.getOrNull().orEmpty()
+        val decoded = runCatching { Uri.decode(uri.toString()) }.getOrNull().orEmpty().lowercase()
         for (ext in listOf("flac", "mp3", "m4a", "ogg", "opus", "wav")) {
-            if (decoded.contains(".$ext", ignoreCase = true)) return ext
+            if (decoded.contains(".$ext")) return ext
         }
         return "flac"
     }
