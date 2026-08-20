@@ -16,6 +16,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Code
 import androidx.compose.material.icons.filled.ColorLens
 import androidx.compose.material.icons.filled.Folder
+import androidx.compose.material.icons.filled.FolderCopy
 import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.LibraryMusic
@@ -44,6 +45,10 @@ private sealed class SettingsPage {
     data object Hub : SettingsPage()
     data object Providers : SettingsPage()
     data object LocalLibrary : SettingsPage()
+    data class Organize(
+        val rootKey: String,
+        val rootLabel: String
+    ) : SettingsPage()
     data class ProviderEditor(
         val id: Long?,
         val createType: SourceType?
@@ -85,7 +90,17 @@ fun SettingsScreen(onBack: () -> Unit) {
             onOpenProvider = { id -> push(SettingsPage.ProviderEditor(id, null)) },
             onAddProvider = { type -> push(SettingsPage.ProviderEditor(null, type)) }
         )
-        SettingsPage.LocalLibrary -> LocalLibrarySettingsScreen(onBack = { pop() })
+        SettingsPage.LocalLibrary -> LocalLibrarySettingsScreen(
+            onBack = { pop() },
+            onOpenOrganize = { rootKey, rootLabel ->
+                push(SettingsPage.Organize(rootKey, rootLabel))
+            }
+        )
+        is SettingsPage.Organize -> OrganizeLayoutScreen(
+            rootKey = p.rootKey,
+            rootLabel = p.rootLabel,
+            onBack = { pop() }
+        )
         is SettingsPage.ProviderEditor -> ProviderEditorScreen(
             existingId = p.id,
             createType = p.createType,
@@ -257,7 +272,10 @@ private fun SettingsHubScreen(
 }
 
 @Composable
-private fun LocalLibrarySettingsScreen(onBack: () -> Unit) {
+private fun LocalLibrarySettingsScreen(
+    onBack: () -> Unit,
+    onOpenOrganize: (rootKey: String, rootLabel: String) -> Unit
+) {
     val context = LocalContext.current
     val settings: LibrarySettings = koinInject()
     val library: LibraryIndex = koinInject()
@@ -325,9 +343,7 @@ private fun LocalLibrarySettingsScreen(onBack: () -> Unit) {
                     onClick = { treePicker.launch(null) }
                 )
                 manualTrees.forEach { tree ->
-                    val label = runCatching {
-                        Uri.parse(tree).lastPathSegment?.substringAfterLast(':') ?: tree
-                    }.getOrDefault(tree).takeLast(40)
+                    val label = shortTreeLabel(tree)
                     SettingsNavRow(
                         title = label,
                         subtitle = "Tap to remove",
@@ -339,6 +355,25 @@ private fun LocalLibrarySettingsScreen(onBack: () -> Unit) {
                     )
                 }
             }
+
+            if (manualTrees.isNotEmpty()) {
+                SettingsSectionTitle("Organize")
+                SettingsGroup {
+                    TextNote(
+                        text = "Per-folder path templates. Moves stay inside the granted SAF tree. " +
+                            "Same model will apply to remote folder-like sources later."
+                    )
+                    manualTrees.forEach { tree ->
+                        val label = shortTreeLabel(tree)
+                        SettingsNavRow(
+                            title = "Layout · $label",
+                            subtitle = "Album / single patterns · dry-run · apply",
+                            icon = Icons.Default.FolderCopy,
+                            onClick = { onOpenOrganize(tree, label) }
+                        )
+                    }
+                }
+            }
         } else {
             SettingsSectionTitle("Roots")
             SettingsGroup {
@@ -346,6 +381,14 @@ private fun LocalLibrarySettingsScreen(onBack: () -> Unit) {
                     title = "Default roots",
                     subtitle = "Music, Music/library, Download",
                     onClick = {}
+                )
+            }
+            SettingsSectionTitle("Organize")
+            SettingsGroup {
+                TextNote(
+                    text = "Path-template organize requires Manual folders (SAF) so we can " +
+                        "rename/move inside a writable tree. Switch scan mode to Manual and " +
+                        "grant a folder to configure layouts."
                 )
             }
         }
@@ -363,3 +406,22 @@ private fun LocalLibrarySettingsScreen(onBack: () -> Unit) {
         Spacer(modifier = Modifier.height(48.dp))
     }
 }
+
+@Composable
+private fun TextNote(text: String) {
+    androidx.compose.material3.Text(
+        text = text,
+        style = androidx.compose.material3.MaterialTheme.typography.bodySmall,
+        color = androidx.compose.material3.MaterialTheme.colorScheme.onSurface.copy(alpha = 0.55f),
+        modifier = Modifier.padding(
+            horizontal = 16.dp,
+            vertical = 12.dp
+        )
+    )
+}
+
+// local import for TextNote padding
+private fun Modifier.padding(horizontal: androidx.compose.ui.unit.Dp, vertical: androidx.compose.ui.unit.Dp) =
+    this.then(
+        androidx.compose.foundation.layout.padding(horizontal = horizontal, vertical = vertical)
+    )
