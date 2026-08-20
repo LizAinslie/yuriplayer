@@ -3,6 +3,7 @@ package capital.yuri.yuriplayer.activities.ui
 import android.net.Uri
 import android.widget.Toast
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -16,17 +17,9 @@ import org.koin.compose.koinInject
 /**
  * Multi-cover + crop overlay for a playlist.
  *
- * Usage from detail:
- * ```
- * var showCovers by remember { mutableStateOf(false) }
- * PlaylistMultiCoverOverlay(
- *     playlistId = id,
- *     playlistName = name,
- *     open = showCovers,
- *     onOpenChange = { showCovers = it }
- * )
- * // changeCover / edit cover button → showCovers = true
- * ```
+ * Important: while cropping we must **not** call [onOpenChange](false).
+ * [PlaylistCoverGlobalHost] tears down this whole subtree when open becomes
+ * false, which would drop [cropUri] and never show [ImageCropScreen].
  */
 @Composable
 fun PlaylistMultiCoverOverlay(
@@ -41,6 +34,17 @@ fun PlaylistMultiCoverOverlay(
 
     var cropUri by remember { mutableStateOf<Uri?>(null) }
     var cropAsSecret by remember { mutableStateOf(false) }
+    var showSheet by remember { mutableStateOf(open) }
+
+    LaunchedEffect(open) {
+        if (open) {
+            showSheet = true
+            // Fresh open — drop any stale crop from a previous session
+            if (cropUri == null) return@LaunchedEffect
+        } else if (cropUri == null) {
+            showSheet = false
+        }
+    }
 
     val crop = cropUri
     if (crop != null) {
@@ -48,11 +52,14 @@ fun PlaylistMultiCoverOverlay(
             sourceUri = crop,
             title = "Crop cover",
             aspect = 1f,
-            onCancel = { cropUri = null },
+            onCancel = {
+                cropUri = null
+                showSheet = true
+            },
             onCropped = { uri ->
                 cropUri = null
                 scope.launch {
-                    repo.addCover(
+                    val slot = repo.addCover(
                         playlistId = playlistId,
                         sourceUri = uri.toString(),
                         isSecret = cropAsSecret,
@@ -60,25 +67,32 @@ fun PlaylistMultiCoverOverlay(
                     )
                     Toast.makeText(
                         context,
-                        if (cropAsSecret) "Secret cover added" else "Cover added",
+                        when {
+                            slot == null -> "Could not save cover"
+                            cropAsSecret -> "Secret cover added"
+                            else -> "Cover added"
+                        },
                         Toast.LENGTH_SHORT
                     ).show()
                     cropAsSecret = false
-                    onOpenChange(true)
+                    showSheet = true
                 }
             }
         )
         return
     }
 
-    if (open) {
+    if (open && showSheet) {
         PlaylistCoverPickerSheet(
             playlistId = playlistId,
             playlistName = playlistName,
-            onDismiss = { onOpenChange(false) },
+            onDismiss = {
+                showSheet = false
+                onOpenChange(false)
+            },
             onRequestCrop = { uri, secret ->
                 cropAsSecret = secret
-                onOpenChange(false)
+                // Keep host alive — only swap sheet → crop
                 cropUri = uri
             }
         )

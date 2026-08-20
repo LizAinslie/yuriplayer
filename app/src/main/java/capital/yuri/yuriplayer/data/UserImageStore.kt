@@ -5,6 +5,8 @@ import android.net.Uri
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.io.File
+import java.io.FileInputStream
+import java.io.InputStream
 
 /**
  * Copies picker content:// (or other transient) URIs into app-private storage
@@ -47,11 +49,11 @@ class UserImageStore(private val context: Context) {
             it.isFile && it.name.startsWith("$safeKey.") && !it.name.endsWith(CLEARED_SUFFIX)
         }?.forEach { it.delete() }
 
-        val ext = guessExtension(context, src)
+        val ext = guessExtension(context, src, sourceUri)
         val dest = File(dir, "$safeKey.${System.currentTimeMillis()}.$ext")
 
         try {
-            context.contentResolver.openInputStream(src)?.use { input ->
+            openSource(context, src, sourceUri)?.use { input ->
                 dest.outputStream().use { output -> input.copyTo(output) }
             } ?: return@withContext null
             if (!dest.isFile || dest.length() == 0L) {
@@ -83,10 +85,10 @@ class UserImageStore(private val context: Context) {
             it.isFile && it.name.startsWith("$safeKey.") && !it.name.endsWith(CLEARED_SUFFIX)
         }?.forEach { it.delete() }
 
-        val ext = guessExtension(context, src)
+        val ext = guessExtension(context, src, sourceUri)
         val dest = File(dir, "$safeKey.${System.currentTimeMillis()}.$ext")
         try {
-            context.contentResolver.openInputStream(src)?.use { input ->
+            openSource(context, src, sourceUri)?.use { input ->
                 dest.outputStream().use { output -> input.copyTo(output) }
             } ?: return@withContext null
             if (!dest.isFile || dest.length() == 0L) {
@@ -181,7 +183,34 @@ class UserImageStore(private val context: Context) {
         private fun safe(key: String): String =
             key.replace(Regex("[^a-zA-Z0-9._-]"), "_")
 
-        private fun guessExtension(context: Context, uri: Uri): String {
+        /**
+         * Open a source for copy. [ImageCropScreen] returns `file://` cache URIs;
+         * [ContentResolver.openInputStream] often fails on those, so prefer
+         * [FileInputStream] for file paths and absolute paths.
+         */
+        private fun openSource(
+            context: Context,
+            uri: Uri,
+            raw: String
+        ): InputStream? {
+            val scheme = uri.scheme?.lowercase()
+            when {
+                scheme == "file" -> {
+                    val path = uri.path ?: return null
+                    val f = File(path)
+                    return if (f.isFile && f.canRead()) FileInputStream(f) else null
+                }
+                scheme.isNullOrEmpty() || raw.startsWith("/") -> {
+                    val f = File(if (raw.startsWith("/")) raw else uri.path.orEmpty())
+                    return if (f.isFile && f.canRead()) FileInputStream(f) else null
+                }
+                else -> return runCatching {
+                    context.contentResolver.openInputStream(uri)
+                }.getOrNull()
+            }
+        }
+
+        private fun guessExtension(context: Context, uri: Uri, raw: String): String {
             val type = runCatching { context.contentResolver.getType(uri) }.getOrNull()
             return when (type) {
                 "image/png" -> "png"
@@ -189,7 +218,7 @@ class UserImageStore(private val context: Context) {
                 "image/gif" -> "gif"
                 "image/jpeg", "image/jpg" -> "jpg"
                 else -> {
-                    val path = uri.lastPathSegment.orEmpty().lowercase()
+                    val path = (uri.lastPathSegment ?: raw).lowercase()
                     when {
                         path.endsWith(".png") -> "png"
                         path.endsWith(".webp") -> "webp"
