@@ -37,8 +37,8 @@ import kotlinx.coroutines.launch
 import org.koin.compose.koinInject
 
 /**
- * Edit path templates for one library root (SAF tree URI) and dry-run / apply
- * organize. Same model will key off remote mount ids later.
+ * Edit path templates for one library root (SAF tree URI, or future folder-like
+ * remote mount id) and dry-run / apply organize.
  */
 @Composable
 fun OrganizeLayoutScreen(
@@ -57,10 +57,12 @@ fun OrganizeLayoutScreen(
     var collision by remember { mutableStateOf(initial.collision) }
     var enabled by remember { mutableStateOf(initial.enabled) }
     var planSummary by remember { mutableStateOf<String?>(null) }
+    var planDetails by remember { mutableStateOf<List<String>>(emptyList()) }
     var samplePreview by remember { mutableStateOf<String?>(null) }
 
     val busy by organize.busy.collectAsState()
     val status by organize.status.collectAsState()
+    val librarySongs by library.songs.collectAsState()
 
     fun currentLayout() = OrganizeLayout(
         rootKey = rootKey,
@@ -170,16 +172,13 @@ fun OrganizeLayoutScreen(
                 subtitle = samplePreview ?: "Expand patterns against first local track",
                 icon = Icons.Default.Preview,
                 onClick = {
-                    scope.launch {
-                        val song = library.songs().firstOrNull()
-                        if (song == null) {
-                            samplePreview = "No tracks in library"
-                            return@launch
-                        }
-                        val layout = currentLayout()
-                        val path = PathTemplate.relativePathFor(layout, song)
-                        samplePreview = path
+                    val song = librarySongs.firstOrNull()
+                    if (song == null) {
+                        samplePreview = "No tracks in library"
+                        return@SettingsNavRow
                     }
+                    val layout = currentLayout()
+                    samplePreview = PathTemplate.relativePathFor(layout, song)
                 }
             )
             SettingsNavRow(
@@ -189,27 +188,45 @@ fun OrganizeLayoutScreen(
                 onClick = {
                     scope.launch {
                         save()
-                        val songs = library.songs()
-                        val plan = organize.plan(rootKey, songs)
+                        val plan = organize.plan(rootKey, librarySongs)
                         planSummary =
                             "${plan.moveCount} to move · ${plan.skipCount} already ok / skipped"
+                        planDetails = plan.moves
+                            .filter { !it.alreadyOk && it.skipReason == null }
+                            .take(40)
+                            .map { "${it.fromLabel} → ${it.toRelative}" }
                         Toast.makeText(context, planSummary, Toast.LENGTH_SHORT).show()
                     }
                 }
             )
             SettingsNavRow(
                 title = if (busy) "Organizing…" else "Organize now",
-                subtitle = status ?: "Apply layout inside this SAF tree only",
+                subtitle = status ?: "Apply layout inside this tree only (never leaves the root)",
                 icon = Icons.Default.PlayArrow,
                 onClick = {
                     if (busy) return@SettingsNavRow
                     scope.launch {
                         save()
-                        val result = organize.apply(rootKey, library.songs())
+                        val result = organize.apply(rootKey, librarySongs)
                         Toast.makeText(context, result.message, Toast.LENGTH_LONG).show()
                     }
                 }
             )
+        }
+
+        if (planDetails.isNotEmpty()) {
+            SettingsSectionTitle("Dry-run preview (first ${planDetails.size})")
+            SettingsGroup {
+                planDetails.forEach { line ->
+                    Text(
+                        text = line,
+                        style = MaterialTheme.typography.bodySmall,
+                        fontFamily = FontFamily.Monospace,
+                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp)
+                    )
+                }
+                Spacer(modifier = Modifier.height(8.dp))
+            }
         }
 
         Spacer(modifier = Modifier.height(48.dp))
