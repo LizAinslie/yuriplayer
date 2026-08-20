@@ -14,7 +14,6 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.shape.CircleShape
@@ -31,7 +30,6 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -49,8 +47,8 @@ import coil3.request.crossfade
 import kotlinx.coroutines.launch
 
 /**
- * Swipeable cover carousel. Each page is a unique art preview (deduped upstream).
- * Last page is a "+" placeholder reserved for the file → crop pipeline.
+ * Swipeable cover carousel. Local candidates preview via [AlbumArt] (embedded
+ * / SAF). Remote / file paths use Coil. Last page is "+" → file → crop.
  */
 @OptIn(ExperimentalMaterial3Api::class, androidx.compose.foundation.ExperimentalFoundationApi::class)
 @Composable
@@ -66,7 +64,6 @@ fun AlbumCoverPickerSheet(
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
 
-    // pages = candidates + trailing "add" slot
     val pageCount = candidates.size + 1
     val initial = run {
         val idx = candidates.indexOfFirst { preferredUri != null && it.uri == preferredUri }
@@ -134,24 +131,25 @@ fun AlbumCoverPickerSheet(
                                 )
                                 .background(MaterialTheme.colorScheme.surfaceVariant)
                         ) {
-                            val model = c.seedSong?.let { song ->
-                                // Prefer seed song so Coil/AlbumArt path can decode embedded tags
-                                song
-                            } ?: c.uri
-                            AsyncImage(
-                                model = ImageRequest.Builder(context)
-                                    .data(
-                                        when {
-                                            c.seedSong != null && c.isLocal -> c.seedSong.contentUri
-                                            else -> c.uri
-                                        }
-                                    )
-                                    .crossfade(true)
-                                    .build(),
-                                contentDescription = c.label,
-                                contentScale = ContentScale.Crop,
-                                modifier = Modifier.matchParentSize()
-                            )
+                            // Local with seed → AlbumArt (embedded / SAF)
+                            // Otherwise Coil on the image URI (http / file path)
+                            if (c.isLocal && c.seedSong != null) {
+                                AlbumArt(
+                                    song = c.seedSong,
+                                    modifier = Modifier.matchParentSize(),
+                                    corner = 0.dp
+                                )
+                            } else {
+                                AsyncImage(
+                                    model = ImageRequest.Builder(context)
+                                        .data(c.uri)
+                                        .crossfade(true)
+                                        .build(),
+                                    contentDescription = c.label,
+                                    contentScale = ContentScale.Crop,
+                                    modifier = Modifier.matchParentSize()
+                                )
+                            }
                             if (selected) {
                                 Box(
                                     modifier = Modifier
@@ -185,7 +183,6 @@ fun AlbumCoverPickerSheet(
                         )
                     }
                 } else {
-                    // "+" custom file slot
                     Column(
                         horizontalAlignment = Alignment.CenterHorizontally,
                         modifier = Modifier
@@ -232,7 +229,6 @@ fun AlbumCoverPickerSheet(
                 }
             }
 
-            // Dot indicators
             if (pageCount > 1) {
                 Row(
                     horizontalArrangement = Arrangement.Center,
