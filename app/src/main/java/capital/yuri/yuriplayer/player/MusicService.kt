@@ -54,6 +54,7 @@ class MusicService : Service() {
 
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private var persistJob: Job? = null
+    private var persistDebounceJob: Job? = null
     private var stallWatchJob: Job? = null
     private var restoredOnce = false
     private var advancing = false
@@ -106,7 +107,6 @@ class MusicService : Service() {
             onPlayingChanged = { playing ->
                 _isPlaying.value = playing
                 updateForegroundNotification()
-                persistState()
             }
         )
 
@@ -187,7 +187,6 @@ class MusicService : Service() {
         val repeatOne = isRepeatOne()
         val nextSong = if (repeatOne) null else queueManager.peekNext()
 
-        // Skip reload if same track is already loaded and position is close
         if (!forceReload &&
             hooks.active &&
             _nowPlaying.value?.id == current.id
@@ -207,15 +206,16 @@ class MusicService : Service() {
         Log.i(
             TAG,
             "rebufferWindow engine=${hooks.engineId} current='${current.displayTitle}' " +
-                "next='${if (repeatOne) "(repeat-one)" else nextSong?.displayTitle}' " +
+                "peekNext='${if (repeatOne) "(repeat-one)" else nextSong?.displayTitle}' " +
                 "startMs=$startPositionMs autoPlay=$autoPlay force=$forceReload " +
                 "remote=${isRemoteSong(current)}"
         )
 
         try {
+            // Single-item window. Queue advance is MusicService-owned (onEnded / skip).
             hooks.playWindow(
                 song = current,
-                next = nextSong,
+                next = null,
                 startPositionMs = startPositionMs.coerceAtLeast(0L),
                 autoPlay = autoPlay
             )
@@ -227,20 +227,6 @@ class MusicService : Service() {
         maybeRecordHistory(current)
         updateForegroundNotification()
         persistState()
-    }
-
-    private fun updateNextMediaItemOnly() {
-        // Engines hold a 1–2 item window; reload next peek without seeking away
-        val hooks = engineHooks ?: return
-        val current = queueManager.currentSong() ?: return
-        if (pendingRemoteRestore != null) return
-        if (!hooks.active) {
-            rebufferWindow(0L, autoPlay = hooks.getPlayWhenReady(), forceReload = true)
-            return
-        }
-        val pos = hooks.getPositionMs()
-        val playing = hooks.getPlayWhenReady()
-        rebufferWindow(pos, autoPlay = playing, forceReload = true)
     }
 
     private fun maybeRecordHistory(song: Song) {
@@ -309,32 +295,27 @@ class MusicService : Service() {
 
     fun updateColdFromSource(songs: List<Song>, sourceId: String) {
         if (queueManager.updateColdFromSource(songs, sourceId)) {
-            updateNextMediaItemOnly()
             persistState()
         }
     }
 
     fun applyRadioPrefs(prefs: RadioSourcePrefs) {
         queueManager.applyRadioPrefs(prefs)
-        updateNextMediaItemOnly()
         persistState()
     }
 
     fun addToHotQueue(song: Song) {
         queueManager.addToQueue(song)
-        updateNextMediaItemOnly()
         persistState()
     }
 
     fun addToHotQueue(songs: List<Song>) {
         queueManager.addToQueue(songs)
-        updateNextMediaItemOnly()
         persistState()
     }
 
     fun clearHotQueue() {
         queueManager.clearHotQueue()
-        updateNextMediaItemOnly()
         persistState()
     }
 
@@ -342,8 +323,6 @@ class MusicService : Service() {
         val needReload = queueManager.removeFromQueue(index)
         if (needReload) {
             rebufferWindow(0L, autoPlay = engineHooks?.getPlayWhenReady() == true, forceReload = true)
-        } else {
-            updateNextMediaItemOnly()
         }
         persistState()
     }
@@ -352,21 +331,17 @@ class MusicService : Service() {
         val needReload = queueManager.removeFromContext(index)
         if (needReload) {
             rebufferWindow(0L, autoPlay = engineHooks?.getPlayWhenReady() == true, forceReload = true)
-        } else {
-            updateNextMediaItemOnly()
         }
         persistState()
     }
 
     fun moveHot(from: Int, to: Int) {
         queueManager.moveInQueue(from, to)
-        updateNextMediaItemOnly()
         persistState()
     }
 
     fun moveCold(from: Int, to: Int) {
         queueManager.moveInContext(from, to)
-        updateNextMediaItemOnly()
         persistState()
     }
 
@@ -374,8 +349,6 @@ class MusicService : Service() {
         val needReload = queueManager.moveColdToHot(index)
         if (needReload) {
             rebufferWindow(0L, autoPlay = engineHooks?.getPlayWhenReady() == true, forceReload = true)
-        } else {
-            updateNextMediaItemOnly()
         }
         persistState()
     }
@@ -388,19 +361,16 @@ class MusicService : Service() {
 
     fun setShuffle(enabled: Boolean) {
         queueManager.setShuffle(enabled)
-        updateNextMediaItemOnly()
         persistState()
     }
 
     fun cycleRepeatMode() {
         queueManager.cycleRepeatMode()
-        updateNextMediaItemOnly()
         persistState()
     }
 
     fun setRepeatMode(mode: RepeatMode) {
         queueManager.setRepeatMode(mode)
-        updateNextMediaItemOnly()
         persistState()
     }
 
@@ -615,13 +585,23 @@ class MusicService : Service() {
         }
     }
 
-    private fun persistState() {
+    private fun persistState(immediate: Boolean = false) {
         val pending = pendingRemoteRestore
-        stateStore.save(
-            snapshot = queueManager.getSnapshot(),
-            positionMs = if (pending != null) pending.positionMs else getPositionMs(),
-            playWhenReady = if (pending != null) false else engineHooks?.getPlayWhenReady() == true
-        )
+        val snap = queueManager.getSnapshot()
+        val pos = if (pending != null) pending.positionMs else getPositionMs()
+        val ready = if (pending != null) false else engineHooks?.getPlayWhenReady() == true
+        persistDebounceJob?.cancel()
+        val write = {
+            stateStore.save(snap, pos, ready)
+        }
+        if (immediate) {
+            serviceScope.launch(Dispatchers.IO) { write() }
+            return
+        }
+        persistDebounceJob = serviceScope.launch(Dispatchers.IO) {
+            delay(750)
+            write()
+        }
     }
 
     private fun recoverFromAudioGlitch(atPositionMs: Long? = null) {
@@ -710,7 +690,6 @@ class MusicService : Service() {
                 serviceActionPending(ACTION_NEXT, REQUEST_NEXT)
             )
 
-        // Platform MediaSession token (works for Media3 and VLC)
         engineHooks?.let { hooks ->
             try {
                 @Suppress("DEPRECATION")
@@ -723,7 +702,6 @@ class MusicService : Service() {
                         .setShowActionsInCompactView(0, 1, 2)
                 )
             } catch (e: Throwable) {
-                // media artifact optional at compile; actions still work
                 Log.d(TAG, "MediaStyle skipped: ${e.message}")
             }
         }
@@ -772,7 +750,7 @@ class MusicService : Service() {
 
     override fun onTaskRemoved(rootIntent: Intent?) {
         Log.i(TAG, "onTaskRemoved — stopping playback")
-        persistState()
+        persistState(immediate = true)
         try {
             engineHooks?.pause()
             engineHooks?.deactivate()
@@ -789,7 +767,8 @@ class MusicService : Service() {
     }
 
     override fun onDestroy() {
-        persistState()
+        persistState(immediate = true)
+        persistDebounceJob?.cancel()
         persistJob?.cancel()
         stallWatchJob?.cancel()
         serviceScope.cancel()

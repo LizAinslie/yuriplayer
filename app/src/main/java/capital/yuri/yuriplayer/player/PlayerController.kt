@@ -182,8 +182,7 @@ class PlayerController(
     }
 
     fun setShuffle(enabled: Boolean) {
-        queueManager.setShuffle(enabled)
-        service?.setShuffle(enabled)
+        runOrQueue { it.setShuffle(enabled) }
     }
 
     fun toggleShuffle() {
@@ -192,23 +191,23 @@ class PlayerController(
     }
 
     fun cycleRepeatMode() {
-        if (service != null) service?.cycleRepeatMode()
-        else queueManager.cycleRepeatMode()
+        runOrQueue { it.cycleRepeatMode() }
     }
 
     fun setRepeatMode(mode: RepeatMode) {
-        if (service != null) service?.setRepeatMode(mode)
-        else queueManager.setRepeatMode(mode)
+        runOrQueue { it.setRepeatMode(mode) }
     }
 
     fun play() {
         runOrQueue { it.play() }
     }
 
-    fun pause() = service?.pause()
+    fun pause() {
+        runOrQueue { it.pause() }
+    }
 
     fun togglePlayPause() {
-        if (service?.isPlaying() == true) service?.pause()
+        if (service?.isPlaying() == true) pause()
         else play()
     }
 
@@ -220,7 +219,9 @@ class PlayerController(
         runOrQueue { it.skipToPrevious(forceTrackChange) }
     }
 
-    fun seekTo(positionMs: Long) = service?.seekTo(positionMs)
+    fun seekTo(positionMs: Long) {
+        runOrQueue { it.seekTo(positionMs) }
+    }
 
     fun seekToFraction(fraction: Float) {
         runOrQueue { it.seekToFraction(fraction) }
@@ -246,10 +247,10 @@ class PlayerController(
     fun getPositionMs(): Long = service?.getPositionMs() ?: 0L
     fun getDurationMs(): Long = service?.getDurationMs() ?: 0L
     fun getQueue(): List<Song> = service?.getQueue() ?: emptyList()
-    fun getQueueSnapshot(): QueueSnapshot =
-        service?.getQueueSnapshot() ?: queueManager.getSnapshot()
+    fun getQueueSnapshot(): QueueSnapshot = queueManager.getSnapshot()
+    val snapshot: StateFlow<QueueSnapshot> get() = queueManager.snapshot
 
-    fun queueSnapshotFlow(): StateFlow<QueueSnapshot>? = service?.queueSnapshot
+    fun queueSnapshotFlow(): StateFlow<QueueSnapshot> = queueManager.snapshot
 
     private fun ensureServiceStarted() {
         ContextCompat.startForegroundService(

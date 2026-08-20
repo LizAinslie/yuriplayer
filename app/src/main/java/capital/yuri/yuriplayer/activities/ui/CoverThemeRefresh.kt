@@ -5,6 +5,8 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableLongStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.ui.platform.LocalContext
 import capital.yuri.yuriplayer.data.MetadataEnrichmentService
 import capital.yuri.yuriplayer.data.PlayerThemeStore
@@ -26,9 +28,13 @@ fun CoverThemeRefresh(
     val enrichment: MetadataEnrichmentService = koinInject()
     val themeStore: PlayerThemeStore = koinInject()
     val coverGen by enrichment.coverGeneration.collectAsState()
+    // Seed to the current gen so entering Now Playing does not force-decode art
+    // (that hitch was stalling audio). Only run when a NEW cover actually lands.
+    val lastApplied = remember { mutableLongStateOf(coverGen) }
 
     LaunchedEffect(coverGen, song?.path, song?.id) {
-        if (coverGen <= 0L) return@LaunchedEffect
+        if (coverGen <= 0L || coverGen == lastApplied.longValue) return@LaunchedEffect
+        lastApplied.longValue = coverGen
         themeStore.updateCurrent(
             context = context,
             song = song,

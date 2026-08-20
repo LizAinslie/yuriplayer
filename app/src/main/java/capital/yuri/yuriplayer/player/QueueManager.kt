@@ -144,6 +144,20 @@ class QueueManager {
         )
     }
 
+    /** Hot-lane mutations: don't copy the (often huge) cold lists. */
+    private fun publishHot() {
+        _snapshot.value = _snapshot.value.copy(
+            hotQueue = hotQueue.toList(),
+            lane = lane,
+            indexInLane = indexInLane
+        )
+    }
+
+    /** Repeat flag only — leave song lists shared. */
+    private fun publishRepeat() {
+        _snapshot.value = _snapshot.value.copy(repeatMode = repeatMode)
+    }
+
     private fun pushPlayed(song: Song) {
         if (playedStack.lastOrNull()?.let { sameSong(it, song) } == true) return
         playedStack.add(song)
@@ -401,13 +415,13 @@ class QueueManager {
 
     fun addToQueue(song: Song) {
         hotQueue.add(song)
-        publish()
+        publishHot()
     }
 
     fun addToQueue(songs: List<Song>) {
         if (songs.isEmpty()) return
         hotQueue.addAll(songs)
-        publish()
+        publishHot()
     }
 
     fun clearHotQueue(): Boolean {
@@ -415,11 +429,11 @@ class QueueManager {
             floatingCurrent = hotQueue[indexInLane]
             hotQueue.clear()
             indexInLane = -1
-            publish()
+            publishHot()
             return false
         }
         hotQueue.clear()
-        publish()
+        publishHot()
         return false
     }
 
@@ -431,7 +445,7 @@ class QueueManager {
             when {
                 hotQueue.isEmpty() -> {
                     indexInLane = -1
-                    publish()
+                    publishHot()
                     return removingCurrent
                 }
                 index < indexInLane -> indexInLane--
@@ -440,7 +454,7 @@ class QueueManager {
                 }
             }
         }
-        publish()
+        publishHot()
         return removingCurrent
     }
 
@@ -491,7 +505,7 @@ class QueueManager {
         if (lane == QueueLane.HOT && floatingCurrent == null) {
             indexInLane = remapIndex(indexInLane, from, to)
         }
-        publish()
+        publishHot()
     }
 
     fun moveInContext(from: Int, to: Int) {
@@ -501,7 +515,10 @@ class QueueManager {
         if (lane == QueueLane.COLD && floatingCurrent == null) {
             indexInLane = remapIndex(indexInLane, from, to)
         }
-        publish()
+        _snapshot.value = _snapshot.value.copy(
+            coldQueue = coldQueue.toList(),
+            indexInLane = indexInLane
+        )
     }
 
     fun playItem(laneTarget: QueueLane, index: Int) {
@@ -633,7 +650,7 @@ class QueueManager {
                 RepeatMode.COLD -> RepeatMode.OFF
             }
         }
-        publish()
+        publishRepeat()
         emit(QueueEvent.RepeatModeChanged(repeatMode))
     }
 
@@ -643,7 +660,7 @@ class QueueManager {
         } else mode
         if (repeatMode == resolved) return
         repeatMode = resolved
-        publish()
+        publishRepeat()
         emit(QueueEvent.RepeatModeChanged(resolved))
     }
 

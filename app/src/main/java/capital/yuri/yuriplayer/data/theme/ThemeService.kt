@@ -42,14 +42,14 @@ class ThemeService(
         base: ColorScheme,
         maxSize: Int = 768,
         forceRefresh: Boolean = false
-    ): ResolvedTheme {
+    ): ResolvedTheme = withContext(Dispatchers.Default) {
         if (song == null) {
-            return ResolvedTheme("none", fallbackPlayerColors(base), null)
+            return@withContext ResolvedTheme("none", fallbackPlayerColors(base), null)
         }
         val key = artCache.artKey(song)
         if (!forceRefresh) {
             cache[key]?.let {
-                return ResolvedTheme(key, it, artCache.get(context, song, maxSize))
+                return@withContext ResolvedTheme(key, it, artCache.get(context, song, maxSize))
             }
         } else {
             cache.remove(key)
@@ -57,7 +57,7 @@ class ThemeService(
         val bmp = artCache.get(context, song, maxSize)
         val colors = extractFromBitmap(bmp, base)
         cache[key] = colors
-        return ResolvedTheme(key, colors, bmp)
+        ResolvedTheme(key, colors, bmp)
     }
 
     suspend fun themeFromBitmap(

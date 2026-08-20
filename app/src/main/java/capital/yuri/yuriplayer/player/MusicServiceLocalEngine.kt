@@ -62,20 +62,17 @@ class MusicServiceLocalEngine(
         Log.i(TAG, "active engine=$engineId")
     }
 
-    /** Load current (+ optional next) and optionally start. */
+    /** Load current and optionally start. Next track is MusicService's job. */
     fun playWindow(song: Song, next: Song?, startPositionMs: Long, autoPlay: Boolean) {
-        val items = buildList {
-            add(song.toPlaybackMedia())
-            if (next != null) add(next.toPlaybackMedia())
-        }
+        val item = song.toPlaybackMedia()
         Log.i(
             TAG,
             "playWindow engine=$engineId '${song.displayTitle}' " +
-                "uri=${items.firstOrNull()?.uri} scheme=${items.firstOrNull()?.uri?.scheme} " +
-                "autoPlay=$autoPlay pos=$startPositionMs"
+                "uri=${item.uri} scheme=${item.uri.scheme} " +
+                "autoPlay=$autoPlay pos=$startPositionMs peek=${next?.displayTitle}"
         )
         engine.setPlayWhenReady(autoPlay)
-        engine.setWindow(items, 0, startPositionMs)
+        engine.setWindow(listOf(item), 0, startPositionMs)
         if (autoPlay) engine.play()
         sessionBridge.updateMetadata(song)
     }

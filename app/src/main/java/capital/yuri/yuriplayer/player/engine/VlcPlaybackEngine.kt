@@ -38,7 +38,8 @@ class VlcPlaybackEngine(
         arrayListOf(
             "--audio-time-stretch",
             "--no-video",
-            // Start quickly; demux thread fills ahead
+            // Start quickly; keep enough cache that UI work (open now-playing,
+            // add-to-queue) cannot underrun on low-end devices.
             "--file-caching=$FILE_CACHE_MS",
             "--network-caching=$NETWORK_CACHE_MS",
             "--live-caching=$NETWORK_CACHE_MS",
@@ -72,6 +73,7 @@ class VlcPlaybackEngine(
                 }
                 MediaPlayer.Event.EndReached -> {
                     if (loadGeneration != eventGeneration) return@setEventListener
+                    eventGeneration = -1
                     _isPlaying.value = false
                     dispatch { onIsPlayingChanged(false) }
                     dispatch { onPlaybackStateChanged(PlaybackEngine.PlaybackState.ENDED) }
@@ -367,7 +369,7 @@ class VlcPlaybackEngine(
 
     companion object {
         private const val TAG = "VlcEngine"
-        private const val FILE_CACHE_MS = 400
+        private const val FILE_CACHE_MS = 1500
         private const val NETWORK_CACHE_MS = 2500
         private const val PREFETCH_BYTES = 2 * 1024 * 1024
 

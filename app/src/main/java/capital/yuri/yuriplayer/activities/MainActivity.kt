@@ -107,7 +107,6 @@ import capital.yuri.yuriplayer.data.artistKey
 import capital.yuri.yuriplayer.player.ColdSource
 import capital.yuri.yuriplayer.player.ColdSourceType
 import capital.yuri.yuriplayer.player.PlayerController
-import capital.yuri.yuriplayer.player.QueueSnapshot
 import capital.yuri.yuriplayer.player.RepeatMode
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
@@ -413,7 +412,7 @@ fun YuriApp(
     var playing by remember { mutableStateOf(false) }
     var positionMs by remember { mutableLongStateOf(0L) }
     var durationMs by remember { mutableLongStateOf(0L) }
-    var snapshot by remember { mutableStateOf(QueueSnapshot()) }
+    val snapshot by player.snapshot.collectAsState()
     var peekNext by remember { mutableStateOf<Song?>(null) }
     var peekPrev by remember { mutableStateOf<Song?>(null) }
 
@@ -426,11 +425,12 @@ fun YuriApp(
             playing = player.isPlayingNow()
             positionMs = player.getPositionMs()
             durationMs = player.getDurationMs()
-            snapshot = player.getQueueSnapshot()
-            peekNext = player.peekNext()
-            peekPrev = player.peekPrevious()
             delay(250)
         }
+    }
+    LaunchedEffect(snapshot) {
+        peekNext = player.peekNext()
+        peekPrev = player.peekPrevious()
     }
 
     LaunchedEffect(currentSong?.id, currentSong?.path) {

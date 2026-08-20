@@ -36,7 +36,6 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
@@ -49,7 +48,6 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.input.pointer.pointerInput
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -152,7 +150,6 @@ fun NowPlayingScreen(
     onGoToArtist: (Song) -> Unit = {},
     onAddToPlaylist: (Song) -> Unit = {}
 ) {
-    val context = LocalContext.current
     val themeStore: PlayerThemeStore = koinInject()
     val player: PlayerController = koinInject()
     val baseScheme = MaterialTheme.colorScheme
@@ -204,19 +201,13 @@ fun NowPlayingScreen(
         skipToken++
     }
 
-    LaunchedEffect(song?.id, song?.path) {
-        themeStore.updateCurrent(context, song, baseScheme)
-    }
-    LaunchedEffect(peekNextSong?.id, peekPrevSong?.id, song?.id) {
-        themeStore.updateNeighbors(context, peekNextSong, peekPrevSong, baseScheme)
-    }
+    // Theme is kept warm by MainActivity on song change. Don't re-extract here —
+    // opening Now Playing used to hitch audio via Palette on Main.
 
-    LaunchedEffect(positionMs, durationMs, sliding) {
-        if (!sliding && durationMs > 0) {
-            sliderPosition = (positionMs.toDouble() / durationMs.toDouble())
-                .toFloat()
-                .coerceIn(0f, 1f)
-        }
+    val displayedProgress = if (sliding || durationMs <= 0L) {
+        sliderPosition
+    } else {
+        (positionMs.toDouble() / durationMs.toDouble()).toFloat().coerceIn(0f, 1f)
     }
 
     val playerColors = theme?.colors ?: fallbackPlayerColors(baseScheme)
@@ -432,7 +423,7 @@ fun NowPlayingScreen(
                     Spacer(modifier = Modifier.height(16.dp))
 
                     WavySeekBar(
-                        progress = sliderPosition,
+                        progress = displayedProgress,
                         playing = playing,
                         onProgressChange = {
                             sliding = true
