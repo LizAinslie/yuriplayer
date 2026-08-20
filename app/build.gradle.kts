@@ -242,6 +242,8 @@ dependencies {
     implementation(libs.androidx.media3.session)
     implementation(libs.androidx.media3.ui)
     implementation(libs.androidx.media3.common)
+    // MediaStyle + MediaSessionCompat.Token for engine-agnostic notifications
+    implementation(libs.androidx.media)
 
     // LibVLC — local FLAC/APE and other formats Media3 often rejects
     implementation(libs.libvlc.all)
