@@ -22,6 +22,7 @@ import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.LibraryMusic
 import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.SettingsInputComponent
 import androidx.compose.material.icons.filled.SignalCellularAlt
 import androidx.compose.material.icons.filled.Storage
 import androidx.compose.material.icons.filled.Sync
@@ -42,12 +43,15 @@ import capital.yuri.yuriplayer.data.LibraryIndex
 import capital.yuri.yuriplayer.data.LibraryScanMode
 import capital.yuri.yuriplayer.data.LibrarySettings
 import capital.yuri.yuriplayer.data.source.SourceType
+import capital.yuri.yuriplayer.player.engine.PlaybackEngineCatalog
+import capital.yuri.yuriplayer.player.engine.PlaybackEngineId
 import org.koin.compose.koinInject
 
 private sealed class SettingsPage {
     data object Hub : SettingsPage()
     data object Providers : SettingsPage()
     data object LocalLibrary : SettingsPage()
+    data object PlaybackEngine : SettingsPage()
     data class Organize(
         val rootKey: String,
         val rootLabel: String
@@ -84,6 +88,7 @@ fun SettingsScreen(onBack: () -> Unit) {
             onBack = onBack,
             onOpenProviders = { push(SettingsPage.Providers) },
             onOpenLocalLibrary = { push(SettingsPage.LocalLibrary) },
+            onOpenPlaybackEngine = { push(SettingsPage.PlaybackEngine) },
             onOpenLicenses = { push(SettingsPage.OpenSourceLicenses) },
             onOpenVersion = { push(SettingsPage.VersionInfo) }
         )
@@ -99,6 +104,7 @@ fun SettingsScreen(onBack: () -> Unit) {
                 push(SettingsPage.Organize(rootKey, rootLabel))
             }
         )
+        SettingsPage.PlaybackEngine -> PlaybackEngineSettingsScreen(onBack = { pop() })
         is SettingsPage.Organize -> OrganizeLayoutScreen(
             rootKey = p.rootKey,
             rootLabel = p.rootLabel,
@@ -119,6 +125,7 @@ private fun SettingsHubScreen(
     onBack: () -> Unit,
     onOpenProviders: () -> Unit,
     onOpenLocalLibrary: () -> Unit,
+    onOpenPlaybackEngine: () -> Unit,
     onOpenLicenses: () -> Unit,
     onOpenVersion: () -> Unit
 ) {
@@ -134,6 +141,7 @@ private fun SettingsHubScreen(
         mutableStateOf(settings.isSyncOverMobileDataEnabled())
     }
     val scanMode = settings.getScanMode()
+    val engineDesc = PlaybackEngineCatalog.descriptor(settings.getPlaybackEngineId())
     val versionSubtitle = buildString {
         append(BuildConfig.VERSION_NAME)
         val short = BuildConfig.GIT_COMMIT_SHORT
@@ -204,6 +212,12 @@ private fun SettingsHubScreen(
 
         SettingsSectionTitle("Playback")
         SettingsGroup {
+            SettingsNavRow(
+                title = "Playback engine",
+                subtitle = engineDesc.displayName,
+                icon = Icons.Default.SettingsInputComponent,
+                onClick = onOpenPlaybackEngine
+            )
             SettingsSwitchRow(
                 title = "Auto-play recommended",
                 subtitle = "When a queue ends, play another album from the same artist",
@@ -267,6 +281,58 @@ private fun SettingsHubScreen(
                         )
                     }
                 }
+            )
+        }
+
+        Spacer(modifier = Modifier.height(48.dp))
+    }
+}
+
+@Composable
+private fun PlaybackEngineSettingsScreen(onBack: () -> Unit) {
+    val settings: LibrarySettings = koinInject()
+    var selected by remember { mutableStateOf(settings.getPlaybackEngineId()) }
+
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .statusBarsPadding()
+            .verticalScroll(rememberScrollState())
+    ) {
+        SettingsTopBar(title = "Playback engine", onBack = onBack)
+
+        SettingsSectionTitle("Backend")
+        TextNote(
+            text = "One engine plays everything — local files and remote streams. " +
+                "Change applies the next time playback starts (force-stop the app if a track is mid-play)."
+        )
+        SettingsGroup {
+            PlaybackEngineCatalog.available.forEach { desc ->
+                val id = PlaybackEngineId.fromId(desc.id)
+                val enabled = id != PlaybackEngineId.FFMPEG
+                SettingsNavRow(
+                    title = desc.displayName,
+                    subtitle = desc.description,
+                    trailing = when {
+                        !enabled -> "Soon"
+                        selected == id -> "Selected"
+                        else -> null
+                    },
+                    onClick = {
+                        if (!enabled) return@SettingsNavRow
+                        settings.setPlaybackEngineId(id)
+                        selected = id
+                    }
+                )
+            }
+        }
+
+        SettingsSectionTitle("Tips")
+        SettingsGroup {
+            TextNote(
+                text = "LibVLC is the best bet for stubborn FLAC / APE / odd containers. " +
+                    "Media3 is lighter and fine for most MP3/AAC and HTTP streams. " +
+                    "An FFmpeg AudioTrack engine can share the bundled ffmpeg binary later."
             )
         }
 
@@ -418,4 +484,9 @@ private fun TextNote(text: String) {
         color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.55f),
         modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp)
     )
+}
+
+private fun shortTreeLabel(uri: String): String {
+    val path = runCatching { Uri.parse(uri).lastPathSegment }.getOrNull().orEmpty()
+    return path.substringAfterLast(':').ifBlank { uri.takeLast(32) }
 }
