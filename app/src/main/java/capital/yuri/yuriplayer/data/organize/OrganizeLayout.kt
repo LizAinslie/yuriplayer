@@ -69,10 +69,9 @@ object PathTemplate {
             ?: song.path?.substringAfterLast('/')?.substringBeforeLast('.')
             ?: "Unknown Title"
         val track = song.trackNumber?.let { String.format(Locale.US, "%02d", it) } ?: ""
-        val disc = "" // reserved for multi-disc when we store disc number
+        val disc = song.discNumber?.takeIf { it > 0 }?.toString().orEmpty()
         val year = song.year?.toString().orEmpty()
 
-        val useAlbum = !album.isNullOrBlank()
         var out = pattern
         out = replaceToken(out, "albumArtist", sanitize(albumArtist))
         out = replaceToken(out, "artist", sanitize(artist))
