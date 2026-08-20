@@ -29,20 +29,21 @@ import java.io.FileOutputStream
  * - Local filesystem / MediaStore files
  * - SAF document trees (manual library mode)
  *
- * Writable later (same path once we have a real file or content URI):
- * - OneDrive / Dropbox / Google Drive / Nextcloud / WebDAV mounts
- *
  * Not writable:
  * - Jellyfin / Subsonic / Navidrome streams (server-owned metadata)
+ *
+ * Cover art: always also written to app [filesDir]/covers] so the UI has a
+ * durable image even when FLAC embed or MediaStore update cannot succeed
+ * (common with SAF document URIs).
  */
 class MetadataEditService(
     private val context: Context,
     private val libraryIndex: LibraryIndex,
-    private val catalog: CatalogRepository
+    private val catalog: CatalogRepository,
+    private val coverPrefs: AlbumCoverPrefs
 ) {
 
     init {
-        // Force jaudiotagger off the desktop ImageIO path (crashes on Android).
         runCatching {
             TagOptionSingleton.getInstance().isAndroid = true
         }.onFailure {
@@ -53,7 +54,6 @@ class MetadataEditService(
     data class SongEdit(
         val title: String?,
         val artist: String?,
-        /** Genre string (semicolon-separated ok). */
         val genre: String? = null
     )
 
@@ -61,7 +61,6 @@ class MetadataEditService(
         val albumName: String?,
         val albumArtist: String?,
         val year: Int?,
-        /** Applied to every track when set. */
         val genre: String? = null,
         val coverBytes: ByteArray? = null,
         val coverMime: String? = null
@@ -73,7 +72,6 @@ class MetadataEditService(
         val message: String
     )
 
-    /** Where we can open a mutable audio payload. */
     sealed class WritableTarget {
         data class FilePath(val file: File) : WritableTarget()
         data class ContentUri(val uri: Uri) : WritableTarget()
@@ -81,23 +79,16 @@ class MetadataEditService(
 
     fun isWritableSong(song: Song): Boolean = resolveWritableTarget(song) != null
 
-    /** @deprecated Prefer [isWritableSong] — kept for call sites. */
     fun isLocalFile(song: Song): Boolean = isWritableSong(song)
 
     fun isWritableAlbum(album: AlbumItem): Boolean =
         album.songs.any { isWritableSong(it) }
 
-    /** @deprecated Prefer [isWritableAlbum]. */
     fun isLocalAlbum(album: AlbumItem): Boolean = isWritableAlbum(album)
 
-    /**
-     * True for source types that can accept embedded tag writes.
-     * Remote media servers keep their own catalog; cloud file backends are file-like.
-     */
     fun sourceTypeAllowsTagWrites(type: SourceType): Boolean = when (type) {
         SourceType.LOCAL -> true
         SourceType.WEBDAV -> true
-        // Future: OneDrive / Dropbox / Drive / Nextcloud map to OTHER or dedicated types
         SourceType.OTHER -> true
         SourceType.JELLYFIN,
         SourceType.SUBSONIC,
@@ -106,11 +97,7 @@ class MetadataEditService(
 
     suspend fun saveSong(song: Song, edit: SongEdit): Result = withContext(Dispatchers.IO) {
         val target = resolveWritableTarget(song)
-            ?: return@withContext Result(
-                0,
-                1,
-                notWritableMessage(song)
-            )
+            ?: return@withContext Result(0, 1, notWritableMessage(song))
         try {
             when (target) {
                 is WritableTarget.FilePath -> {
@@ -153,6 +140,29 @@ class MetadataEditService(
             return@withContext Result(0, album.songs.size, "No writable files in this album")
         }
 
+        val aKey = albumKey(
+            edit.albumName ?: album.name,
+            edit.albumArtist ?: album.artist
+        )
+
+        // Always persist cover into app storage so UI works even when
+        // embed-into-FLAC or MediaStore update cannot (SAF).
+        val appCoverPath = edit.coverBytes?.let { bytes ->
+            persistAppCover(aKey, bytes)
+        }
+        if (appCoverPath != null) {
+            coverPrefs.setPreferredUri(aKey, appCoverPath)
+            runCatching {
+                catalog.applyAlbumCover(
+                    albumKey = aKey,
+                    coverPath = appCoverPath,
+                    coverUrl = null,
+                    mbid = null
+                )
+            }
+            Log.i(TAG, "app cover cached $appCoverPath")
+        }
+
         val coverFile = edit.coverBytes?.let { bytes ->
             val firstFile = writableSongs.firstNotNullOfOrNull { (_, t) ->
                 (t as? WritableTarget.FilePath)?.file
@@ -165,7 +175,7 @@ class MetadataEditService(
                     scanned += out.absolutePath
                     out
                 } catch (e: Exception) {
-                    Log.w(TAG, "cover.jpg write failed", e)
+                    Log.d(TAG, "folder cover.jpg write skipped: ${e.message}")
                     null
                 }
             } else null
@@ -203,11 +213,10 @@ class MetadataEditService(
             }
         }
 
-        // Count non-writable members as failed for the message
         failed += album.songs.size - writableSongs.size
 
         if (scanned.isNotEmpty()) scanPaths(scanned)
-        if (ok > 0) {
+        if (ok > 0 || appCoverPath != null) {
             runCatching { catalog.rebuildRollups() }
             libraryIndex.reloadFromCatalog()
         }
@@ -215,11 +224,32 @@ class MetadataEditService(
             ok = ok,
             failed = failed,
             message = when {
-                failed == 0 -> "Saved $ok tracks"
+                appCoverPath != null && ok == 0 ->
+                    "Cover saved in app (file tags not writable)"
+                failed == 0 -> "Saved $ok tracks" +
+                    if (appCoverPath != null) " + cover" else ""
                 ok == 0 -> "Could not write tags — check storage permission"
                 else -> "Saved $ok, failed $failed"
             }
         )
+    }
+
+    private fun persistAppCover(albumKeyStr: String, bytes: ByteArray): String? {
+        return try {
+            val dir = File(context.filesDir, "covers").also { it.mkdirs() }
+            val name = MetadataEnrichmentService.sanitizeFileName(albumKeyStr) + ".jpg"
+            val dest = File(dir, name)
+            val tmp = File(dir, "tmp-${System.nanoTime()}.jpg")
+            FileOutputStream(tmp).use { it.write(bytes) }
+            if (!tmp.renameTo(dest)) {
+                tmp.copyTo(dest, overwrite = true)
+                tmp.delete()
+            }
+            if (dest.isFile && dest.length() > 0L) dest.absolutePath else null
+        } catch (e: Exception) {
+            Log.w(TAG, "persistAppCover failed", e)
+            null
+        }
     }
 
     private fun notWritableMessage(song: Song): String {
@@ -234,22 +264,16 @@ class MetadataEditService(
         }
     }
 
-    /**
-     * Prefer a real [File], else a content URI we can open for read (and ideally write).
-     * Remote virtual keys never resolve.
-     */
     fun resolveWritableTarget(song: Song): WritableTarget? {
         val path = song.path
         if (isVirtualLibraryPath(path)) return null
         if (isNetworkUri(song.contentUri)) return null
 
-        // Explicit filesystem path (MediaStore DATA or scanner)
         if (!path.isNullOrBlank() && !path.contains("://")) {
             val f = File(path)
             if (f.isFile) return WritableTarget.FilePath(f)
         }
 
-        // file:// contentUri
         if (song.contentUri.scheme.equals("file", ignoreCase = true)) {
             val p = song.contentUri.path
             if (!p.isNullOrBlank()) {
@@ -258,13 +282,11 @@ class MetadataEditService(
             }
         }
 
-        // MediaStore DATA column (may be null on modern Android)
         if (song.contentUri.scheme.equals("content", ignoreCase = true)) {
             queryMediaStorePath(song.contentUri)?.let { dataPath ->
                 val f = File(dataPath)
                 if (f.isFile) return WritableTarget.FilePath(f)
             }
-            // SAF / MediaStore — openable content URI
             if (canOpenContent(song.contentUri)) {
                 return WritableTarget.ContentUri(song.contentUri)
             }
@@ -273,7 +295,6 @@ class MetadataEditService(
         return null
     }
 
-    /** Legacy helper used by older call sites. */
     fun resolveWritablePath(song: Song): String? =
         (resolveWritableTarget(song) as? WritableTarget.FilePath)?.file?.absolutePath
 
@@ -292,22 +313,18 @@ class MetadataEditService(
                 c.getString(idx)?.takeIf { it.isNotBlank() && File(it).isFile }
             }
         } catch (e: Exception) {
-            Log.w(TAG, "DATA query failed for $uri", e)
+            Log.d(TAG, "DATA query failed for $uri: ${e.message}")
             null
         }
 
     private fun canOpenContent(uri: Uri): Boolean {
-        // Prefer rw; fall back to read-only (we'll try write-back via wt later)
         val modes = arrayOf("rw", "r")
         for (mode in modes) {
             try {
                 context.contentResolver.openFileDescriptor(uri, mode)?.use {
                     return true
                 }
-            } catch (_: SecurityException) {
-                // try next mode
             } catch (_: Exception) {
-                // try next mode
             }
         }
         return try {
@@ -335,14 +352,13 @@ class MetadataEditService(
     }
 
     private fun writeBytesToContentUri(uri: Uri, file: File): Boolean {
-        // "wt" truncates; "rwt" via PFD is more reliable on some providers
         try {
             context.contentResolver.openOutputStream(uri, "wt")?.use { out ->
                 FileInputStream(file).use { it.copyTo(out) }
                 return true
             }
         } catch (e: Exception) {
-            Log.w(TAG, "openOutputStream wt failed for $uri: ${e.message}")
+            Log.d(TAG, "openOutputStream wt failed for $uri: ${e.message}")
         }
         try {
             context.contentResolver.openFileDescriptor(uri, "rwt")?.use { pfd ->
@@ -352,18 +368,17 @@ class MetadataEditService(
                 return true
             }
         } catch (e: Exception) {
-            Log.w(TAG, "openFileDescriptor rwt failed for $uri: ${e.message}")
+            Log.d(TAG, "openFileDescriptor rwt failed for $uri: ${e.message}")
         }
         try {
             context.contentResolver.openFileDescriptor(uri, "rw")?.use { pfd ->
-                // Truncate then write
                 ParcelFileDescriptor.AutoCloseOutputStream(pfd).use { out ->
                     FileInputStream(file).use { it.copyTo(out) }
                 }
                 return true
             }
         } catch (e: Exception) {
-            Log.w(TAG, "openFileDescriptor rw failed for $uri: ${e.message}")
+            Log.d(TAG, "openFileDescriptor rw failed for $uri: ${e.message}")
         }
         return false
     }
@@ -413,28 +428,26 @@ class MetadataEditService(
             else -> null
         }
         if (art != null) {
-            // Throwable: NoClassDefFoundError is an Error, not Exception
             try {
-                tag.deleteArtworkField()
+                runCatching { tag.deleteArtworkField() }
                 tag.setField(art)
             } catch (t: Throwable) {
-                Log.w(TAG, "embedded art failed for ${file.name}: ${t.message}")
+                // FLAC embed often fails on Android; app cover cache still holds the image.
+                Log.d(
+                    TAG,
+                    "embedded art skipped for ${file.name}: ${t.javaClass.simpleName}: ${t.message}"
+                )
             }
         }
         audio.commit()
     }
 
-    /**
-     * Build artwork without [org.jaudiotagger.tag.images.StandardArtwork] /
-     * javax.imageio.ImageIO (missing on Android).
-     */
     private fun createAndroidArtwork(bytes: ByteArray, mime: String): Artwork {
         val art = AndroidArtwork()
         art.binaryData = bytes
         art.mimeType = mime.ifBlank { "image/jpeg" }
         art.description = "Cover"
         art.pictureType = FRONT_COVER_PICTURE_TYPE
-        // Leave width/height unset — do not call setImageFromData()
         return art
     }
 
@@ -462,8 +475,15 @@ class MetadataEditService(
         }
     }
 
+    /** Only MediaStore audio rows support update — SAF document URIs throw. */
+    private fun isMediaStoreAudioUri(uri: Uri): Boolean {
+        if (!uri.scheme.equals("content", ignoreCase = true)) return false
+        val auth = uri.authority.orEmpty()
+        return auth.contains("media", ignoreCase = true)
+    }
+
     private fun updateMediaStoreSong(song: Song, edit: SongEdit) {
-        if (!song.contentUri.scheme.equals("content", ignoreCase = true)) return
+        if (!isMediaStoreAudioUri(song.contentUri)) return
         val values = ContentValues().apply {
             edit.title?.let { put(MediaStore.Audio.Media.TITLE, it) }
             edit.artist?.let { put(MediaStore.Audio.Media.ARTIST, it) }
@@ -474,11 +494,13 @@ class MetadataEditService(
         if (values.size() == 0) return
         runCatching {
             context.contentResolver.update(song.contentUri, values, null, null)
-        }.onFailure { Log.w(TAG, "MediaStore song update failed", it) }
+        }.onFailure {
+            Log.d(TAG, "MediaStore song update skipped: ${it.message}")
+        }
     }
 
     private fun updateMediaStoreAlbumFields(song: Song, edit: AlbumEdit) {
-        if (!song.contentUri.scheme.equals("content", ignoreCase = true)) return
+        if (!isMediaStoreAudioUri(song.contentUri)) return
         val values = ContentValues().apply {
             edit.albumName?.let { put(MediaStore.Audio.Media.ALBUM, it) }
             edit.year?.let { put(MediaStore.Audio.Media.YEAR, it) }
@@ -489,7 +511,9 @@ class MetadataEditService(
         if (values.size() == 0) return
         runCatching {
             context.contentResolver.update(song.contentUri, values, null, null)
-        }.onFailure { Log.w(TAG, "MediaStore album update failed", it) }
+        }.onFailure {
+            Log.d(TAG, "MediaStore album update skipped: ${it.message}")
+        }
     }
 
     private fun scanPaths(paths: List<String>) {
@@ -516,7 +540,6 @@ class MetadataEditService(
 
     companion object {
         private const val TAG = "MetadataEdit"
-        /** ID3/FLAC picture type 3 = Front cover. */
         private const val FRONT_COVER_PICTURE_TYPE = 3
     }
 }
