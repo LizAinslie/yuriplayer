@@ -4,6 +4,9 @@ package capital.yuri.yuriplayer.data
  * Prefer the full track list for a release by unioning every known copy
  * (catalog expand + local LibraryIndex + navigation seed) then deduping
  * with [CatalogRepository.dedupeLogicalTracks] (local preferred for playback).
+ *
+ * Multi-source = one logical track with offerings, NOT duplicate album cards.
+ * Never replaces a rich list with a thinner one (Clancy flash bug).
  */
 fun mergeAlbumSources(
     seed: AlbumItem,
@@ -18,17 +21,27 @@ fun mergeAlbumSources(
         }
     )
     if (merged.isEmpty()) return seed
+
+    // Guard: if seed already had a full album and merge somehow lost tracks, keep union
+    val songs = if (seed.songs.size > 1 && merged.size < seed.songs.size) {
+        CatalogRepository.dedupeLogicalTracks(seed.songs + merged)
+    } else {
+        merged
+    }
+
     return AlbumItem(
         name = fromCatalog?.name
             ?: fromLocal?.name
             ?: seed.name
-            ?: merged.firstOrNull()?.album,
+            ?: songs.firstOrNull()?.album,
         artist = fromCatalog?.artist
             ?: fromLocal?.artist
             ?: seed.artist
-            ?: merged.firstOrNull()?.effectiveAlbumArtist,
-        trackCount = merged.size,
-        songs = merged
+            ?: songs.firstOrNull()?.effectiveAlbumArtist,
+        trackCount = songs.size.coerceAtLeast(
+            listOfNotNull(fromCatalog?.trackCount, fromLocal?.trackCount, seed.trackCount).maxOrNull() ?: 0
+        ),
+        songs = songs
     )
 }
 
@@ -52,11 +65,10 @@ fun findLocalAlbum(
     }?.let { return it }
 
     library.albums(taggedOnly = false).firstOrNull {
-        it.name.equals(name, ignoreCase = true) &&
-            (artist.isNullOrBlank() || it.artist.equals(artist, ignoreCase = true))
+        TrackIdentity.albumsMatch(it.name, name) &&
+            (artist.isNullOrBlank() || TrackIdentity.albumArtistsMatch(it.artist, artist))
     }?.let { return it }
 
-    // Raw song scan — catches local files whose albumArtist differs from JF
     val nameFolded = TrackIdentity.normalizeToken(name)
     val artistFolded = TrackIdentity.normalizeToken(artist)
     val matches = library.songs.value.filter { song ->
@@ -65,22 +77,10 @@ fun findLocalAlbum(
     }.filter { song ->
         if (artistFolded.isEmpty()) return@filter true
         val aa = TrackIdentity.normalizeToken(song.effectiveAlbumArtist)
-        aa.isEmpty() || aa == artistFolded
+        if (aa.isEmpty()) return@filter true
+        aa == artistFolded || aa.contains(artistFolded) || artistFolded.contains(aa)
     }
-    if (matches.isEmpty()) {
-        // Last resort: album title only (still better than a 1-track JF seed)
-        val byTitle = library.songs.value.filter {
-            TrackIdentity.albumsMatch(it.album, name)
-        }
-        if (byTitle.isEmpty()) return null
-        val deduped = CatalogRepository.dedupeLogicalTracks(byTitle)
-        return AlbumItem(
-            name = name,
-            artist = artist ?: deduped.firstOrNull()?.effectiveAlbumArtist,
-            trackCount = deduped.size,
-            songs = deduped
-        )
-    }
+    if (matches.isEmpty()) return null
     val deduped = CatalogRepository.dedupeLogicalTracks(matches)
     return AlbumItem(
         name = name,
