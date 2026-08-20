@@ -2,21 +2,24 @@ package capital.yuri.yuriplayer.player
 
 import android.content.Context
 import android.util.Log
+import capital.yuri.yuriplayer.data.LibrarySettings
 import capital.yuri.yuriplayer.data.Song
 import capital.yuri.yuriplayer.player.engine.EngineSessionBridge
-import capital.yuri.yuriplayer.player.engine.HybridPlaybackEngine
 import capital.yuri.yuriplayer.player.engine.PlaybackEngine
+import capital.yuri.yuriplayer.player.engine.PlaybackEngineFactory
+import capital.yuri.yuriplayer.player.engine.PlaybackEngineId
 import capital.yuri.yuriplayer.player.engine.toPlaybackMedia
 
 /**
- * Owns the hybrid (VLC local + Media3 stream) engine + platform MediaSession
- * for local playback so FLAC/APE work even when ExoPlayer rejects the file.
+ * Owns the **user-selected** [PlaybackEngine] + platform [EngineSessionBridge].
  *
- * [MusicService] still drives queue policy; this is only the audio backend for
- * on-device files.
+ * One engine plays everything (local + remote). Switching engines in Settings
+ * takes effect the next time this host is created (service restart / next
+ * play session).
  */
 class MusicServiceLocalEngine(
     context: Context,
+    settings: LibrarySettings,
     sessionActivity: android.app.PendingIntent,
     onPlay: () -> Unit,
     onPause: () -> Unit,
@@ -26,7 +29,8 @@ class MusicServiceLocalEngine(
     private val onEnded: () -> Unit,
     private val onPlayingChanged: (Boolean) -> Unit
 ) {
-    val engine: HybridPlaybackEngine = HybridPlaybackEngine(context)
+    val engineId: PlaybackEngineId = settings.getPlaybackEngineId()
+    val engine: PlaybackEngine = PlaybackEngineFactory.create(context, engineId)
 
     val sessionBridge = EngineSessionBridge(
         context = context,
@@ -49,15 +53,17 @@ class MusicServiceLocalEngine(
         }
 
         override fun onError(message: String, recoverable: Boolean) {
-            Log.e(TAG, "engine error: $message recoverable=$recoverable")
+            Log.e(TAG, "engine($engineId) error: $message recoverable=$recoverable")
         }
     }
 
     init {
         engine.addListener(listener)
+        Log.i(TAG, "active engine=$engineId")
     }
 
-    fun playLocal(song: Song, next: Song?, startPositionMs: Long, autoPlay: Boolean) {
+    /** Load current (+ optional next) and optionally start. */
+    fun playWindow(song: Song, next: Song?, startPositionMs: Long, autoPlay: Boolean) {
         val items = buildList {
             add(song.toPlaybackMedia())
             if (next != null) add(next.toPlaybackMedia())
@@ -66,7 +72,11 @@ class MusicServiceLocalEngine(
         engine.setWindow(items, 0, startPositionMs)
         if (autoPlay) engine.play()
         sessionBridge.updateMetadata(song)
-        Log.i(TAG, "playLocal '${song.displayTitle}' autoPlay=$autoPlay pos=$startPositionMs")
+        Log.i(
+            TAG,
+            "playWindow engine=$engineId '${song.displayTitle}' " +
+                "autoPlay=$autoPlay pos=$startPositionMs"
+        )
     }
 
     fun pause() = engine.pause()
@@ -85,6 +95,6 @@ class MusicServiceLocalEngine(
     }
 
     companion object {
-        private const val TAG = "LocalEngine"
+        private const val TAG = "SelectedEngine"
     }
 }

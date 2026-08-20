@@ -3,17 +3,19 @@ package capital.yuri.yuriplayer.player
 import android.app.PendingIntent
 import android.content.Context
 import android.util.Log
+import capital.yuri.yuriplayer.data.LibrarySettings
 import capital.yuri.yuriplayer.data.Song
-import capital.yuri.yuriplayer.player.engine.isNetworkUri
-import capital.yuri.yuriplayer.player.engine.isVirtualLibraryPath
-import capital.yuri.yuriplayer.player.engine.resolvePlayableUri
 
 /**
- * Bridges [MusicService] to [MusicServiceLocalEngine] for on-device files.
- * Network / virtual library paths stay on ExoPlayer.
+ * Holds the user-selected [MusicServiceLocalEngine] for [MusicService].
+ *
+ * When fully wired, **all** playback (local + remote) goes through this host;
+ * MediaSession is [capital.yuri.yuriplayer.player.engine.EngineSessionBridge],
+ * independent of Media3.
  */
 internal class MusicServiceEngineHooks(
     context: Context,
+    settings: LibrarySettings,
     sessionActivity: PendingIntent,
     onPlay: () -> Unit,
     onPause: () -> Unit,
@@ -23,8 +25,9 @@ internal class MusicServiceEngineHooks(
     onEnded: () -> Unit,
     onPlayingChanged: (Boolean) -> Unit
 ) {
-    private val local = MusicServiceLocalEngine(
+    private val host = MusicServiceLocalEngine(
         context = context,
+        settings = settings,
         sessionActivity = sessionActivity,
         onPlay = onPlay,
         onPause = onPause,
@@ -35,60 +38,54 @@ internal class MusicServiceEngineHooks(
         onPlayingChanged = onPlayingChanged
     )
 
-    /** True while the active track is playing through LibVLC. */
-    var localActive: Boolean = false
+    val engineId get() = host.engineId
+
+    /** True once [playWindow] has been used this session. */
+    var active: Boolean = false
         private set
 
-    fun shouldUseLocal(song: Song?): Boolean {
-        if (song == null) return false
-        if (isVirtualLibraryPath(song.path)) return false
-        val uri = resolvePlayableUri(song)
-        if (isNetworkUri(uri)) return false
-        return true
+    fun playWindow(song: Song, next: Song?, startPositionMs: Long, autoPlay: Boolean) {
+        active = true
+        host.playWindow(song, next, startPositionMs, autoPlay)
+        Log.i(TAG, "window via ${host.engineId} '${song.displayTitle}'")
     }
 
-    fun playLocal(song: Song, next: Song?, startPositionMs: Long, autoPlay: Boolean) {
-        localActive = true
-        local.playLocal(song, next, startPositionMs, autoPlay)
-        Log.i(TAG, "local engine active for '${song.displayTitle}'")
-    }
-
-    fun deactivateLocal() {
-        if (!localActive) return
-        local.pause()
-        local.stop()
-        localActive = false
+    fun deactivate() {
+        if (!active) return
+        host.pause()
+        host.stop()
+        active = false
     }
 
     fun play() {
-        if (localActive) local.play()
+        if (active) host.play()
     }
 
     fun pause() {
-        if (localActive) local.pause()
+        if (active) host.pause()
     }
 
     fun seekTo(ms: Long) {
-        if (localActive) local.seekTo(ms)
+        if (active) host.seekTo(ms)
     }
 
-    fun isPlaying(): Boolean = localActive && local.isPlaying()
+    fun isPlaying(): Boolean = active && host.isPlaying()
 
-    fun getPositionMs(): Long = if (localActive) local.getPositionMs() else 0L
+    fun getPositionMs(): Long = if (active) host.getPositionMs() else 0L
 
-    fun getDurationMs(): Long = if (localActive) local.getDurationMs() else 0L
+    fun getDurationMs(): Long = if (active) host.getDurationMs() else 0L
 
-    fun getPlayWhenReady(): Boolean = if (localActive) local.getPlayWhenReady() else false
+    fun getPlayWhenReady(): Boolean = if (active) host.getPlayWhenReady() else false
 
-    fun sessionToken() = local.sessionBridge.sessionToken()
+    fun sessionToken() = host.sessionBridge.sessionToken()
 
     fun updateMetadata(song: Song?) {
-        if (localActive) local.sessionBridge.updateMetadata(song)
+        if (active) host.sessionBridge.updateMetadata(song)
     }
 
     fun release() {
-        local.release()
-        localActive = false
+        host.release()
+        active = false
     }
 
     companion object {

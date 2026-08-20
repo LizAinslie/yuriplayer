@@ -2,6 +2,7 @@ package capital.yuri.yuriplayer.data
 
 import android.content.Context
 import android.os.Environment
+import capital.yuri.yuriplayer.player.engine.PlaybackEngineId
 import java.io.File
 
 /** How local files are discovered. */
@@ -121,6 +122,20 @@ class LibrarySettings(context: Context) {
         prefs.edit().putBoolean(KEY_SYNC_OVER_MOBILE_DATA, enabled).apply()
     }
 
+    // ── playback engine ───────────────────────────────────────────────────
+
+    /**
+     * Single backend for **all** playback (local files + remote streams).
+     * Default [PlaybackEngineId.MEDIA3]; pick [PlaybackEngineId.VLC] if FLAC
+     * or odd containers fail on Media3.
+     */
+    fun getPlaybackEngineId(): PlaybackEngineId =
+        PlaybackEngineId.fromId(prefs.getString(KEY_PLAYBACK_ENGINE, PlaybackEngineId.MEDIA3.id))
+
+    fun setPlaybackEngineId(id: PlaybackEngineId) {
+        prefs.edit().putString(KEY_PLAYBACK_ENGINE, id.id).apply()
+    }
+
     fun networkMetadataConsent(): Boolean? = isAutomaticMetadataEnabled()
 
     fun isNetworkMetadataEnabled(): Boolean = isAutomaticMetadataEnabled()
@@ -150,6 +165,7 @@ class LibrarySettings(context: Context) {
         private const val KEY_AUTO_PLAY_RECOMMENDED = "auto_play_recommended"
         private const val KEY_NETWORK_META = "network_metadata_enabled"
         private const val KEY_SYNC_OVER_MOBILE_DATA = "sync_over_mobile_data"
+        private const val KEY_PLAYBACK_ENGINE = "playback_engine_id"
 
         val DEFAULT_ROOTS = listOf(
             "Music",
