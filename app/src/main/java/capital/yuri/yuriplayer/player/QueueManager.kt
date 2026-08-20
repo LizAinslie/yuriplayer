@@ -140,7 +140,8 @@ class QueueManager {
             repeatMode = repeatMode,
             playedStack = playedStack.toList(),
             radioSession = radioSession,
-            radioUpcoming = radioUpcoming
+            radioUpcoming = radioUpcoming,
+            floatingCurrent = floatingCurrent
         )
     }
 
@@ -149,7 +150,8 @@ class QueueManager {
         _snapshot.value = _snapshot.value.copy(
             hotQueue = hotQueue.toList(),
             lane = lane,
-            indexInLane = indexInLane
+            indexInLane = indexInLane,
+            floatingCurrent = floatingCurrent
         )
     }
 
@@ -241,7 +243,7 @@ class QueueManager {
         indexInLane = snap.indexInLane
         shuffleEnabled = snap.shuffleEnabled
         repeatMode = snap.repeatMode
-        floatingCurrent = null
+        floatingCurrent = snap.floatingCurrent
         playedStack.clear()
         playedStack.addAll(snap.playedStack)
         radioSession = snap.radioSession

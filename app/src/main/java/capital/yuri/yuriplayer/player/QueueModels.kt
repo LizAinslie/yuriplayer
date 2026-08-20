@@ -60,10 +60,12 @@ data class QueueSnapshot(
     val repeatMode: RepeatMode = RepeatMode.OFF,
     val playedStack: List<Song> = emptyList(),
     val radioSession: RadioSession? = null,
-    val radioUpcoming: List<Song> = emptyList()
+    val radioUpcoming: List<Song> = emptyList(),
+    /** Playing item when it is not at [indexInLane] (search / one-off). */
+    val floatingCurrent: Song? = null
 ) {
     val currentSong: Song?
-        get() = when (lane) {
+        get() = floatingCurrent ?: when (lane) {
             QueueLane.HOT -> hotQueue.getOrNull(indexInLane)
             QueueLane.COLD -> coldQueue.getOrNull(indexInLane)
         }

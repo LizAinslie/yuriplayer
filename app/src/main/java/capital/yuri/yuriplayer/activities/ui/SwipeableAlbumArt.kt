@@ -70,6 +70,8 @@ fun SwipeableAlbumArt(
     allowPrevTrackChange: Boolean = true,
     skipToken: Long = 0L,
     skipDirection: Int = 0,
+    /** False when the queue already advanced (auto-next) — only play the art. */
+    commitSkip: Boolean = true,
     onSkipConsumed: () -> Unit = {},
     modifier: Modifier = Modifier,
     horizontalInset: androidx.compose.ui.unit.Dp = 20.dp
@@ -95,20 +97,20 @@ fun SwipeableAlbumArt(
         }
     }
 
-    suspend fun finishNext() {
+    suspend fun finishNext(commit: Boolean) {
         onPromoteNext()
         onHorizontalFraction(0f)
         offsetX.snapTo(0f)
         offsetY.snapTo(0f)
-        onSwipeNext()
+        if (commit) onSwipeNext()
     }
 
-    suspend fun finishPrev() {
+    suspend fun finishPrev(commit: Boolean) {
         onPromotePrev()
         onHorizontalFraction(0f)
         offsetX.snapTo(0f)
         offsetY.snapTo(0f)
-        onSwipePrev()
+        if (commit) onSwipePrev()
     }
 
     /** Restart current track only — no art/theme swap. */
@@ -136,13 +138,13 @@ fun SwipeableAlbumArt(
                 x < -trackThreshold && next != null -> {
                     animatingSkip = -1
                     animateSkipTo(-screenWidthPx)
-                    finishNext()
+                    finishNext(commit = true)
                     animatingSkip = 0
                 }
                 x > trackThreshold && effectivePrev != null -> {
                     animatingSkip = 1
                     animateSkipTo(screenWidthPx)
-                    finishPrev()
+                    finishPrev(commit = true)
                     animatingSkip = 0
                 }
                 x > trackThreshold && !allowPrevTrackChange -> {
@@ -171,20 +173,20 @@ fun SwipeableAlbumArt(
             skipDirection < 0 && next != null -> {
                 animatingSkip = -1
                 animateSkipTo(-screenWidthPx)
-                finishNext()
+                finishNext(commit = commitSkip)
                 animatingSkip = 0
             }
             skipDirection > 0 && effectivePrev != null -> {
                 animatingSkip = 1
                 animateSkipTo(screenWidthPx)
-                finishPrev()
+                finishPrev(commit = commitSkip)
                 animatingSkip = 0
             }
             // Button Previous while still in the "restart current" window.
             skipDirection > 0 -> {
-                onSwipePrev()
+                if (commitSkip) onSwipePrev()
             }
-            skipDirection < 0 -> onSwipeNext()
+            skipDirection < 0 -> if (commitSkip) onSwipeNext()
         }
         onSkipConsumed()
     }

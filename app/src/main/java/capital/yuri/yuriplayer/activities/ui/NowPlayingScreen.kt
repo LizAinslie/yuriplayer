@@ -1,5 +1,10 @@
 package capital.yuri.yuriplayer.activities.ui
 
+import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.detectVerticalDragGestures
 import androidx.compose.foundation.layout.Arrangement
@@ -36,6 +41,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
@@ -177,6 +183,8 @@ fun NowPlayingScreen(
 
     var skipToken by remember { mutableLongStateOf(0L) }
     var skipDirection by remember { mutableIntStateOf(0) }
+    var skipCommit by remember { mutableStateOf(true) }
+    var ignoreSongChangeAnim by remember { mutableStateOf(false) }
 
     val dismissThreshold = with(density) { 140.dp.toPx() }
 
@@ -187,17 +195,47 @@ fun NowPlayingScreen(
         radioSessionForSettings(snapshot)
     }
 
+    val songKey = song?.path ?: song?.contentUri?.toString()
+    var seenSongKey by remember { mutableStateOf(songKey) }
+
     fun requestSkipNext() {
+        ignoreSongChangeAnim = true
+        skipCommit = true
         skipDirection = -1
         skipToken++
     }
 
     fun requestSkipPrev() {
         if (!buttonGoesToPrevTrack) {
+            ignoreSongChangeAnim = true
             onPrev()
             return
         }
+        ignoreSongChangeAnim = true
+        skipCommit = true
         skipDirection = 1
+        skipToken++
+    }
+
+    LaunchedEffect(songKey) {
+        val previous = seenSongKey
+        seenSongKey = songKey
+        if (previous != songKey) {
+            sliding = false
+            sliderPosition = 0f
+        }
+        if (previous == null || songKey == null || previous == songKey) return@LaunchedEffect
+        if (ignoreSongChangeAnim) {
+            ignoreSongChangeAnim = false
+            return@LaunchedEffect
+        }
+        if (showQueue || skipDirection != 0) return@LaunchedEffect
+        val id = song?.id
+        val path = song?.path
+        val matchesNext = nextTheme?.let { it.songId == id || (path != null && it.path == path) } == true
+        val matchesPrev = prevTheme?.let { it.songId == id || (path != null && it.path == path) } == true
+        skipCommit = false
+        skipDirection = if (matchesPrev && !matchesNext) 1 else -1
         skipToken++
     }
 
@@ -377,8 +415,14 @@ fun NowPlayingScreen(
                         current = theme,
                         next = nextTheme,
                         prev = if (canSwipePrev) prevTheme else null,
-                        onSwipeNext = onNext,
-                        onSwipePrev = onForcePrev,
+                        onSwipeNext = {
+                            ignoreSongChangeAnim = true
+                            onNext()
+                        },
+                        onSwipePrev = {
+                            ignoreSongChangeAnim = true
+                            onForcePrev()
+                        },
                         onPromoteNext = { themeStore.promoteNext() },
                         onPromotePrev = { themeStore.promotePrev() },
                         onDismiss = onCollapse,
@@ -387,8 +431,10 @@ fun NowPlayingScreen(
                         allowPrevTrackChange = canSwipePrev,
                         skipToken = skipToken,
                         skipDirection = skipDirection,
+                        commitSkip = skipCommit,
                         onSkipConsumed = {
                             skipDirection = 0
+                            skipCommit = true
                         },
                         horizontalInset = 20.dp,
                         modifier = Modifier.fillMaxWidth()
@@ -403,22 +449,32 @@ fun NowPlayingScreen(
                         .padding(horizontal = 16.dp)
                         .padding(bottom = 8.dp)
                 ) {
-                    MarqueeText(
-                        text = song?.displayTitle ?: "Not playing",
-                        style = MaterialTheme.typography.headlineSmall,
-                        fontWeight = FontWeight.Bold,
-                        color = scheme.onBackground
-                    )
-                    MarqueeText(
-                        text = song?.displayArtist ?: "",
-                        style = MaterialTheme.typography.titleMedium,
-                        color = scheme.onBackground.copy(alpha = 0.65f)
-                    )
-                    MarqueeText(
-                        text = song?.displayAlbum ?: "",
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = scheme.onBackground.copy(alpha = 0.5f)
-                    )
+                    AnimatedContent(
+                        targetState = songKey ?: "none",
+                        transitionSpec = {
+                            fadeIn(tween(180)) togetherWith fadeOut(tween(120))
+                        },
+                        label = "npMeta"
+                    ) { _ ->
+                        Column {
+                            MarqueeText(
+                                text = song?.displayTitle ?: "Not playing",
+                                style = MaterialTheme.typography.headlineSmall,
+                                fontWeight = FontWeight.Bold,
+                                color = scheme.onBackground
+                            )
+                            MarqueeText(
+                                text = song?.displayArtist ?: "",
+                                style = MaterialTheme.typography.titleMedium,
+                                color = scheme.onBackground.copy(alpha = 0.65f)
+                            )
+                            MarqueeText(
+                                text = song?.displayAlbum ?: "",
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = scheme.onBackground.copy(alpha = 0.5f)
+                            )
+                        }
+                    }
 
                     Spacer(modifier = Modifier.height(16.dp))
 

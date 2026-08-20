@@ -40,15 +40,15 @@ class PlayerThemeStore(
 
     fun promoteNext() {
         val n = _peekNext.value ?: return
+        _peekPrev.value = _current.value
         _current.value = n
-        _peekPrev.value = n
         _peekNext.value = null
     }
 
     fun promotePrev() {
         val p = _peekPrev.value ?: return
+        _peekNext.value = _current.value
         _current.value = p
-        _peekNext.value = p
         _peekPrev.value = null
     }
 

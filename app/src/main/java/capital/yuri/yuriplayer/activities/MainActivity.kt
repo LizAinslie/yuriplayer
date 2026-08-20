@@ -409,11 +409,11 @@ fun YuriApp(
         }
     }
 
-    var currentSong by remember { mutableStateOf<Song?>(null) }
     var playing by remember { mutableStateOf(false) }
     var positionMs by remember { mutableLongStateOf(0L) }
     var durationMs by remember { mutableLongStateOf(0L) }
     val snapshot by player.snapshot.collectAsState()
+    val currentSong = snapshot.currentSong
     var peekNext by remember { mutableStateOf<Song?>(null) }
     var peekPrev by remember { mutableStateOf<Song?>(null) }
 
@@ -422,7 +422,6 @@ fun YuriApp(
     LaunchedEffect(connected) {
         if (!connected) return@LaunchedEffect
         while (isActive) {
-            currentSong = player.getCurrentSong()
             playing = player.isPlayingNow()
             positionMs = player.getPositionMs()
             durationMs = player.getDurationMs()
@@ -435,11 +434,21 @@ fun YuriApp(
     }
 
     LaunchedEffect(currentSong?.id, currentSong?.path, colorRev) {
-        themeStore.updateCurrent(context, currentSong, baseScheme)
-        themeStore.updateNeighbors(context, peekNext, peekPrev, baseScheme)
-        activity?.title = ActivityTitleFormat.format(currentSong)
+        val incoming = currentSong
+        val peek = themeStore.peekNext.value
+        val warmNext = incoming != null && peek != null &&
+            (peek.songId == incoming.id || (incoming.path != null && peek.path == incoming.path))
+        if (!warmNext) {
+            themeStore.updateCurrent(context, incoming, baseScheme)
+        }
+        activity?.title = ActivityTitleFormat.format(incoming)
     }
-    LaunchedEffect(peekNext?.id, peekPrev?.id) {
+    var lastNeighborSongId by remember { mutableStateOf(currentSong?.id) }
+    LaunchedEffect(peekNext?.id, peekPrev?.id, currentSong?.id) {
+        val songChanged = currentSong?.id != lastNeighborSongId
+        lastNeighborSongId = currentSong?.id
+        // Keep peek-next art on screen for the skip animation (~280ms).
+        if (songChanged) delay(350)
         themeStore.updateNeighbors(context, peekNext, peekPrev, baseScheme)
     }
 
