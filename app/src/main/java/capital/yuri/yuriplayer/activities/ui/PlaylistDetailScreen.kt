@@ -2,6 +2,7 @@ package capital.yuri.yuriplayer.activities.ui
 
 import android.widget.Toast
 import androidx.compose.foundation.background
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.layout.Box
@@ -94,6 +95,7 @@ private val EditHeaderBody = 380.dp
 
 private enum class PlaylistMode { Browse, EditDetails, Reorder }
 
+@OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
 @Composable
 fun PlaylistDetailScreen(
     playlistId: String,
@@ -357,7 +359,8 @@ fun PlaylistDetailScreen(
                                         mode = PlaylistMode.EditDetails
                                     },
                                     onReorder = { mode = PlaylistMode.Reorder },
-                                    onMore = { showMenu = true }
+                                    onMore = { showMenu = true },
+                                    onCoverLongPress = { openCoverPicker() }
                                 )
                                 PlaylistMode.EditDetails -> PlaylistEditHero(
                                     playlist = pl,
@@ -592,6 +595,7 @@ fun PlaylistDetailScreen(
     }
 }
 
+@OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
 @Composable
 private fun PlaylistExpandedHero(
     playlist: Playlist,
@@ -602,7 +606,8 @@ private fun PlaylistExpandedHero(
     onStartRadio: () -> Unit,
     onEdit: () -> Unit,
     onReorder: () -> Unit,
-    onMore: () -> Unit
+    onMore: () -> Unit,
+    onCoverLongPress: () -> Unit = {}
 ) {
     Column(
         modifier = Modifier
@@ -611,7 +616,14 @@ private fun PlaylistExpandedHero(
             .padding(top = 36.dp, bottom = 16.dp),
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
-        PlaylistCoverArt(playlist, size = 160.dp)
+        Box(
+            modifier = Modifier.combinedClickable(
+                onClick = {},
+                onLongClick = onCoverLongPress
+            )
+        ) {
+            PlaylistCoverArt(playlist, size = 160.dp)
+        }
         Spacer(modifier = Modifier.height(16.dp))
         Column(
             modifier = Modifier.fillMaxWidth(),
