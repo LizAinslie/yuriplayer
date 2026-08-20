@@ -20,25 +20,33 @@ suspend fun lightAlbumItemsForArtist(
 
     val rows = dao.getAlbumsForArtist(artistKey)
     if (rows.isNotEmpty()) {
-        return@withContext rows
-            .groupBy { albumKey(it.name, it.artist) }
-            .map { (_, group) ->
-                val row = group.maxByOrNull { it.trackCount } ?: group.first()
-                val seed = dao.getOneTrackForAlbum(row.albumKey)?.toLightSong()
-                    ?: group.asSequence()
-                        .mapNotNull { dao.getOneTrackForAlbum(it.albumKey)?.toLightSong() }
-                        .firstOrNull()
-                AlbumItem(
-                    name = row.name,
-                    artist = row.artist,
-                    trackCount = group.maxOf { it.trackCount },
-                    songs = listOfNotNull(seed)
-                )
+        val items = ArrayList<AlbumItem>(rows.size)
+        val seen = LinkedHashSet<String>()
+        // Prefer highest trackCount per logical release
+        val grouped = rows.groupBy { albumKey(it.name, it.artist) }
+        for ((_, group) in grouped) {
+            val row = group.maxByOrNull { it.trackCount } ?: group.first()
+            val mergeKey = albumKey(row.name, row.artist)
+            if (!seen.add(mergeKey)) continue
+
+            var seed: Song? = null
+            for (candidate in listOf(row) + group) {
+                val track = dao.getOneTrackForAlbum(candidate.albumKey) ?: continue
+                seed = track.toLightSong()
+                break
             }
-            .sortedWith(
-                compareByDescending<AlbumItem> { it.songs.firstOrNull()?.year ?: Int.MIN_VALUE }
-                    .thenBy(String.CASE_INSENSITIVE_ORDER) { it.displayName }
+
+            items += AlbumItem(
+                name = row.name,
+                artist = row.artist,
+                trackCount = group.maxOf { it.trackCount },
+                songs = listOfNotNull(seed)
             )
+        }
+        return@withContext items.sortedWith(
+            compareByDescending<AlbumItem> { it.songs.firstOrNull()?.year ?: Int.MIN_VALUE }
+                .thenBy(String.CASE_INSENSITIVE_ORDER) { it.displayName }
+        )
     }
 
     dao.getTracksForArtist(artistKey)
