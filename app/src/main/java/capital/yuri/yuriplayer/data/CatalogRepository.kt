@@ -12,7 +12,6 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.withContext
-import java.io.File
 
 class CatalogRepository(
     private val dao: CatalogDao,
@@ -119,7 +118,6 @@ class CatalogRepository(
         )
     }
 
-    /** Delegate to shared expand that matches by album *name* across fragmented keys. */
     private suspend fun expandAlbumTracksLocked(albumKey: String): List<Song> =
         expandAlbumTracks(dao, albumKey)
 
@@ -137,118 +135,15 @@ class CatalogRepository(
         )
     }
 
-    suspend fun albumItemsForArtist(artistKey: String): List<AlbumItem> = withContext(Dispatchers.IO) {
-        if (artistKey.isBlank()) return@withContext emptyList()
-        val albumRows = dao.getAlbumsForArtist(artistKey)
-        val raw = if (albumRows.isNotEmpty()) {
-            albumRows.mapNotNull { row -> albumItemForKeyLocked(row.albumKey) }
-        } else {
-            dao.getTracksForArtist(artistKey)
-                .map { it.toSong() }
-                .groupBy { albumKey(it.album, it.effectiveAlbumArtist) }
-                .map { (_, tracks) ->
-                    val sorted = dedupeLogicalTracks(tracks)
-                    AlbumItem(
-                        name = sorted.firstOrNull()?.album,
-                        artist = sorted.firstOrNull()?.effectiveAlbumArtist,
-                        trackCount = sorted.size,
-                        songs = sorted
-                    )
-                }
-        }
-        raw
-            .groupBy { albumKey(it.name, it.artist) }
-            .map { (_, group) ->
-                if (group.size == 1) group.first()
-                else {
-                    val mergedSongs = dedupeLogicalTracks(group.flatMap { it.songs })
-                    val bestName = group.mapNotNull { it.name }.maxByOrNull { it.length }
-                    val bestArtist = group.mapNotNull { it.artist }.maxByOrNull { it.length }
-                    AlbumItem(
-                        name = bestName,
-                        artist = bestArtist,
-                        trackCount = mergedSongs.size,
-                        songs = mergedSongs
-                    )
-                }
-            }
-            .sortedWith(
-                compareByDescending<AlbumItem> {
-                    it.songs.mapNotNull { s -> s.year }.maxOrNull() ?: Int.MIN_VALUE
-                }.thenBy(String.CASE_INSENSITIVE_ORDER) { it.displayName }
-            )
-    }
+    /** Light discography for artist page (seed + counts only). Full expand on album open. */
+    suspend fun albumItemsForArtist(artistKey: String): List<AlbumItem> =
+        lightAlbumItemsForArtist(dao, artistKey)
 
     suspend fun coverCandidatesForAlbum(albumKey: String, tracks: List<Song> = emptyList()): List<CoverCandidate> =
         withContext(Dispatchers.IO) {
             val songs = tracks.ifEmpty { expandAlbumTracksLocked(albumKey) }
             val row = dao.getAlbum(albumKey)
-            val out = LinkedHashMap<String, CoverCandidate>()
-
-            fun add(c: CoverCandidate) {
-                out.putIfAbsent(c.id, c)
-            }
-
-            songs.filter { sourceTypeForSong(it) == SourceType.LOCAL }.forEach { song ->
-                val path = song.path
-                if (!path.isNullOrBlank() && !path.contains("://")) {
-                    add(
-                        CoverCandidate(
-                            id = "local:${song.songKey}",
-                            label = "Local file",
-                            uri = song.albumArtUri?.toString() ?: "file://$path",
-                            seedSong = song,
-                            isLocal = true
-                        )
-                    )
-                    val parent = File(path).parentFile
-                    if (parent != null) {
-                        for (name in listOf("cover.jpg", "cover.png", "folder.jpg", "AlbumArt.jpg")) {
-                            val f = File(parent, name)
-                            if (f.isFile && f.length() > 0) {
-                                add(
-                                    CoverCandidate(
-                                        id = "folder:${f.absolutePath}",
-                                        label = "Folder cover",
-                                        uri = "file://${f.absolutePath}",
-                                        seedSong = song,
-                                        isLocal = true
-                                    )
-                                )
-                                break
-                            }
-                        }
-                    }
-                }
-            }
-
-            row?.coverPath?.takeIf { it.isNotBlank() }?.let { path ->
-                val uri = if (path.startsWith("/") || path.startsWith("file:")) {
-                    if (path.startsWith("file:")) path else "file://$path"
-                } else path
-                add(CoverCandidate(id = "enriched:$path", label = "Saved cover", uri = uri, isLocal = true))
-            }
-
-            songs.forEach { song ->
-                val uri = song.albumArtUri?.toString() ?: return@forEach
-                if (!uri.startsWith("http", ignoreCase = true)) return@forEach
-                val type = sourceTypeForSong(song)
-                add(
-                    CoverCandidate(
-                        id = "remote:${type.name}:$uri",
-                        label = "${friendlySourceName(type.name)} cover",
-                        uri = uri,
-                        seedSong = song,
-                        isLocal = false
-                    )
-                )
-            }
-
-            row?.coverUrl?.takeIf { it.startsWith("http", ignoreCase = true) }?.let { url ->
-                add(CoverCandidate(id = "catalog:$url", label = "Catalog cover", uri = url, isLocal = false))
-            }
-
-            out.values.sortedBy { if (it.isLocal) 0 else 1 }
+            CoverCandidates.build(songs, row?.coverPath, row?.coverUrl)
         }
 
     suspend fun countRemoteTracks(): Int = withContext(Dispatchers.IO) {
