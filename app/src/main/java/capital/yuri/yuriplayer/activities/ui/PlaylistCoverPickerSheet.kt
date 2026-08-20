@@ -13,7 +13,6 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
@@ -62,6 +61,9 @@ import coil3.request.crossfade
 import kotlinx.coroutines.launch
 import org.koin.compose.koinInject
 
+/** Art size inside each carousel page — leaves room for caption + actions. */
+private val CoverArtSize = 200.dp
+
 /**
  * Swipeable cover carousel (same pattern as [AlbumCoverPickerSheet]).
  * Long-press playlist art → this sheet. Tap to activate · lock for secret · + for custom.
@@ -100,36 +102,35 @@ fun PlaylistCoverPickerSheet(
         Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(bottom = 28.dp),
+                .padding(top = 8.dp, bottom = 32.dp),
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
             Text(
                 "Playlist cover",
                 style = MaterialTheme.typography.titleMedium,
                 fontWeight = FontWeight.SemiBold,
-                modifier = Modifier.padding(horizontal = 20.dp, vertical = 4.dp)
+                modifier = Modifier.padding(horizontal = 24.dp)
             )
+            Spacer(modifier = Modifier.height(6.dp))
             Text(
                 playlistName,
-                style = MaterialTheme.typography.bodySmall,
+                style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.55f),
                 textAlign = TextAlign.Center,
-                modifier = Modifier.padding(horizontal = 24.dp)
+                modifier = Modifier.padding(horizontal = 32.dp)
             )
             Text(
                 "Swipe to preview · tap to use",
-                style = MaterialTheme.typography.labelSmall,
+                style = MaterialTheme.typography.labelMedium,
                 color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.4f),
-                modifier = Modifier.padding(top = 4.dp, bottom = 12.dp)
+                modifier = Modifier.padding(top = 8.dp, bottom = 20.dp)
             )
 
             HorizontalPager(
                 state = pagerState,
-                contentPadding = PaddingValues(horizontal = 48.dp),
-                pageSpacing = 16.dp,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(280.dp)
+                contentPadding = PaddingValues(horizontal = 56.dp),
+                pageSpacing = 20.dp,
+                modifier = Modifier.fillMaxWidth()
             ) { page ->
                 if (page < covers.size) {
                     val slot = covers[page]
@@ -166,13 +167,13 @@ fun PlaylistCoverPickerSheet(
                     horizontalArrangement = Arrangement.Center,
                     modifier = Modifier
                         .fillMaxWidth()
-                        .padding(top = 12.dp)
+                        .padding(top = 16.dp)
                 ) {
                     repeat(pageCount) { i ->
                         val selected = pagerState.currentPage == i
                         Box(
                             modifier = Modifier
-                                .padding(horizontal = 3.dp)
+                                .padding(horizontal = 4.dp)
                                 .size(if (selected) 8.dp else 6.dp)
                                 .clip(CircleShape)
                                 .background(
@@ -187,12 +188,12 @@ fun PlaylistCoverPickerSheet(
                 }
             }
 
-            Spacer(modifier = Modifier.height(8.dp))
+            Spacer(modifier = Modifier.height(16.dp))
             Row(
                 verticalAlignment = Alignment.CenterVertically,
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(horizontal = 16.dp)
+                    .padding(horizontal = 20.dp)
             ) {
                 TextButton(onClick = { addAsSecret = !addAsSecret }) {
                     Icon(
@@ -200,7 +201,7 @@ fun PlaylistCoverPickerSheet(
                         contentDescription = null,
                         modifier = Modifier.size(18.dp)
                     )
-                    Spacer(modifier = Modifier.width(6.dp))
+                    Spacer(modifier = Modifier.width(8.dp))
                     Text(if (addAsSecret) "Next add: secret" else "Next add: public")
                 }
                 Spacer(modifier = Modifier.weight(1f))
@@ -223,17 +224,17 @@ private fun CoverCarouselPage(
         modifier = Modifier
             .fillMaxWidth()
             .clickable(onClick = onSelect)
+            .padding(vertical = 4.dp)
     ) {
         Box(
             modifier = Modifier
-                .fillMaxWidth()
-                .aspectRatio(1f)
-                .clip(RoundedCornerShape(12.dp))
+                .size(CoverArtSize)
+                .clip(RoundedCornerShape(16.dp))
                 .border(
                     width = if (slot.isActive) 3.dp else 0.dp,
                     color = if (slot.isActive) MaterialTheme.colorScheme.primary
                     else Color.Transparent,
-                    shape = RoundedCornerShape(12.dp)
+                    shape = RoundedCornerShape(16.dp)
                 )
                 .background(MaterialTheme.colorScheme.surfaceVariant)
         ) {
@@ -252,7 +253,7 @@ private fun CoverCarouselPage(
                 Box(
                     modifier = Modifier
                         .align(Alignment.TopEnd)
-                        .padding(8.dp)
+                        .padding(10.dp)
                         .size(28.dp)
                         .clip(CircleShape)
                         .background(MaterialTheme.colorScheme.primary),
@@ -270,7 +271,7 @@ private fun CoverCarouselPage(
                 Box(
                     modifier = Modifier
                         .align(Alignment.BottomStart)
-                        .padding(8.dp)
+                        .padding(10.dp)
                         .size(28.dp)
                         .clip(CircleShape)
                         .background(MaterialTheme.colorScheme.tertiary),
@@ -285,7 +286,7 @@ private fun CoverCarouselPage(
                 }
             }
         }
-        Spacer(modifier = Modifier.height(8.dp))
+        Spacer(modifier = Modifier.height(14.dp))
         Text(
             when {
                 slot.isActive && slot.isSecret -> "Active · secret"
@@ -296,22 +297,23 @@ private fun CoverCarouselPage(
             style = MaterialTheme.typography.labelLarge,
             fontWeight = if (slot.isActive) FontWeight.SemiBold else FontWeight.Normal
         )
+        Spacer(modifier = Modifier.height(4.dp))
         Row(
-            horizontalArrangement = Arrangement.Center,
-            modifier = Modifier.padding(top = 2.dp)
+            horizontalArrangement = Arrangement.spacedBy(4.dp),
+            verticalAlignment = Alignment.CenterVertically
         ) {
-            IconButton(onClick = onToggleSecret, modifier = Modifier.size(36.dp)) {
+            IconButton(onClick = onToggleSecret, modifier = Modifier.size(40.dp)) {
                 Icon(
                     if (slot.isSecret) Icons.Default.LockOpen else Icons.Default.Lock,
                     contentDescription = if (slot.isSecret) "Make public" else "Make secret",
-                    modifier = Modifier.size(18.dp)
+                    modifier = Modifier.size(20.dp)
                 )
             }
-            IconButton(onClick = onDelete, modifier = Modifier.size(36.dp)) {
+            IconButton(onClick = onDelete, modifier = Modifier.size(40.dp)) {
                 Icon(
                     Icons.Default.Delete,
                     contentDescription = "Remove",
-                    modifier = Modifier.size(18.dp),
+                    modifier = Modifier.size(20.dp),
                     tint = MaterialTheme.colorScheme.error
                 )
             }
@@ -326,17 +328,17 @@ private fun AddCarouselPage(secret: Boolean, onClick: () -> Unit) {
         modifier = Modifier
             .fillMaxWidth()
             .clickable(onClick = onClick)
+            .padding(vertical = 4.dp)
     ) {
         Box(
             modifier = Modifier
-                .fillMaxWidth()
-                .aspectRatio(1f)
-                .clip(RoundedCornerShape(12.dp))
-                .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f))
+                .size(CoverArtSize)
+                .clip(RoundedCornerShape(16.dp))
+                .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.55f))
                 .border(
                     width = 2.dp,
-                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.2f),
-                    shape = RoundedCornerShape(12.dp)
+                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.18f),
+                    shape = RoundedCornerShape(16.dp)
                 ),
             contentAlignment = Alignment.Center
         ) {
@@ -344,28 +346,31 @@ private fun AddCarouselPage(secret: Boolean, onClick: () -> Unit) {
                 Icon(
                     Icons.Default.Add,
                     contentDescription = "Add cover",
-                    modifier = Modifier.size(40.dp),
-                    tint = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.55f)
+                    modifier = Modifier.size(44.dp),
+                    tint = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f)
                 )
-                Spacer(modifier = Modifier.height(8.dp))
+                Spacer(modifier = Modifier.height(10.dp))
                 Icon(
                     if (secret) Icons.Default.Lock else Icons.Default.Image,
                     contentDescription = null,
-                    modifier = Modifier.size(20.dp),
+                    modifier = Modifier.size(22.dp),
                     tint = if (secret) MaterialTheme.colorScheme.tertiary
                     else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.35f)
                 )
             }
         }
-        Spacer(modifier = Modifier.height(8.dp))
+        Spacer(modifier = Modifier.height(14.dp))
         Text(
             if (secret) "Add secret cover" else "Custom image",
             style = MaterialTheme.typography.labelLarge
         )
+        Spacer(modifier = Modifier.height(4.dp))
         Text(
             "File → crop",
-            style = MaterialTheme.typography.labelSmall,
+            style = MaterialTheme.typography.labelMedium,
             color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f)
         )
+        // Match action-row height on cover pages so pages align
+        Spacer(modifier = Modifier.height(44.dp))
     }
 }
