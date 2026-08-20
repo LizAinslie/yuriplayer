@@ -21,18 +21,17 @@ import java.util.concurrent.ConcurrentHashMap
 
 /**
  * Album art decode order:
- * preferred → disk cache → image albumArtUri → folder cover → SAF cover →
- * MMR embedded → jaudiotagger embedded (File or one SAF extract per album).
+ * preferred, disk cache, image albumArtUri, folder cover, SAF cover,
+ * MMR embedded, then jaudiotagger embedded (File or one SAF extract per album).
  *
- * Never feeds audio/* into BitmapFactory/Coil — that produces
- * "Failed to create image decoder with message 'unimplemented'".
+ * Never feeds audio MIME streams into BitmapFactory or Coil. That produces
+ * OpenGL "Failed to create image decoder with message unimplemented".
  */
 object AlbumArtResolver {
 
     private const val TAG = "AlbumArtResolver"
-    private const val MAX_SAF_EXTRACT_BYTES = 120L * 1024L * 1024L // 120MB
+    private const val MAX_SAF_EXTRACT_BYTES = 120L * 1024L * 1024L
 
-    /** One extract at a time per albumKey so list scroll doesn't stampede. */
     private val albumLocks = ConcurrentHashMap<String, Mutex>()
 
     init {
@@ -57,7 +56,6 @@ object AlbumArtResolver {
                 return@withContext scaleDown(it, maxSize)
             }
 
-            // Image URIs only — never audio contentUri
             loadImageUri(context, song.albumArtUri, maxSize)?.also {
                 cacheToDisk(context, song, it)
                 return@withContext scaleDown(it, maxSize)
@@ -77,11 +75,9 @@ object AlbumArtResolver {
                 return@withContext scaleDown(it, maxSize)
             }
 
-            // Embedded — serialize per album so 14 rows don't each copy a FLAC
             val aKey = albumKey(song.album, song.effectiveAlbumArtist).ifBlank { song.songKey }
             val lock = albumLocks.getOrPut(aKey) { Mutex() }
             lock.withLock {
-                // Re-check disk after waiting
                 loadDiskAlbumCache(context, song, maxSize)?.let {
                     return@withContext scaleDown(it, maxSize)
                 }
@@ -118,7 +114,6 @@ object AlbumArtResolver {
             }
         }
 
-    /** Public: extract embedded art from a readable File into [dest]. Used at scan time. */
     fun extractEmbeddedToFile(file: File, dest: File): Boolean {
         if (!file.isFile || !file.canRead()) return false
         val bmp = extractJaudioArtwork(file, 512) ?: return false
@@ -326,7 +321,6 @@ object AlbumArtResolver {
     }
 
     private fun extractJaudioFromContentUri(context: Context, uri: Uri, maxSize: Int): Bitmap? {
-        // Don't copy huge files during scroll — skip if size known and too large
         val size = querySize(context, uri)
         if (size != null && size > MAX_SAF_EXTRACT_BYTES) {
             Log.w(TAG, "skip jaudio SAF extract size=$size > $MAX_SAF_EXTRACT_BYTES")
@@ -351,13 +345,18 @@ object AlbumArtResolver {
 
     private fun querySize(context: Context, uri: Uri): Long? {
         return try {
-            context.contentResolver.query(uri, arrayOf(android.provider.OpenableColumns.SIZE), null, null, null)
-                ?.use { c ->
-                    if (!c.moveToFirst()) return@use null
-                    val i = c.getColumnIndex(android.provider.OpenableColumns.SIZE)
-                    if (i < 0) return@use null
-                    c.getLong(i).takeIf { it > 0 }
-                }
+            context.contentResolver.query(
+                uri,
+                arrayOf(android.provider.OpenableColumns.SIZE),
+                null,
+                null,
+                null
+            )?.use { c ->
+                if (!c.moveToFirst()) return@use null
+                val i = c.getColumnIndex(android.provider.OpenableColumns.SIZE)
+                if (i < 0) return@use null
+                c.getLong(i).takeIf { it > 0 }
+            }
         } catch (_: Exception) {
             null
         }
@@ -374,13 +373,12 @@ object AlbumArtResolver {
         }
         val fromName = uri.lastPathSegment
             ?.substringAfterLast('.', "")
-            ?.substringAfterLast('%') // sometimes encoded
+            ?.substringAfterLast('%')
             ?.lowercase()
             ?.takeIf { it.length in 2..5 && it.all { ch -> ch.isLetterOrDigit() } }
         if (fromName != null && fromName in setOf("flac", "mp3", "m4a", "aac", "ogg", "opus", "wav", "wma")) {
             return fromName
         }
-        // Decode %2Eflac style path segments
         val decoded = runCatching { Uri.decode(uri.toString()) }.getOrNull().orEmpty()
         for (ext in listOf("flac", "mp3", "m4a", "ogg", "opus", "wav")) {
             if (decoded.contains(".$ext", ignoreCase = true)) return ext
@@ -436,7 +434,6 @@ object AlbumArtResolver {
         return loadImageUri(context, Uri.parse(trimmed), maxSize)
     }
 
-    /** Only decode if URI is (or looks like) an image — never audio. */
     private fun loadImageUri(context: Context, uri: Uri?, maxSize: Int): Bitmap? {
         if (uri == null) return null
         if (!isLikelyImageUri(context, uri)) {
@@ -477,12 +474,10 @@ object AlbumArtResolver {
         if (mime != null) {
             if (mime.startsWith("audio/")) return false
             if (mime.startsWith("image/")) return true
-            // MediaStore albumart sometimes reports null or odd types
         }
         val s = uri.toString().lowercase()
         if (s.contains("albumart")) return true
         if (s.endsWith(".jpg") || s.endsWith(".jpeg") || s.endsWith(".png") || s.endsWith(".webp")) return true
-        // Unknown content — try only if not clearly audio
         if (mime == null && scheme == "content") return true
         return false
     }
