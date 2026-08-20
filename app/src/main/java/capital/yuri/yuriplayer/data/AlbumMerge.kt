@@ -1,19 +1,15 @@
 package capital.yuri.yuriplayer.data
 
 /**
- * Prefer the full track list for a release by unioning every known copy
- * (catalog expand + local LibraryIndex + navigation seed) then deduping
- * with [CatalogRepository.dedupeLogicalTracks] (local preferred for playback).
- *
- * Multi-source = one logical track with offerings, NOT duplicate album cards.
- * Never replaces a rich list with a thinner one (Clancy flash bug).
+ * Union every known copy of a release. Multi-source = one logical track with
+ * offerings, NOT duplicate album cards. Never replaces a rich list with a thinner one.
  */
 fun mergeAlbumSources(
     seed: AlbumItem,
     fromCatalog: AlbumItem?,
     fromLocal: AlbumItem?
 ): AlbumItem {
-    val merged = CatalogRepository.dedupeLogicalTracks(
+    val merged = dedupeAlbumPageTracks(
         buildList {
             addAll(fromCatalog?.songs.orEmpty())
             addAll(fromLocal?.songs.orEmpty())
@@ -22,9 +18,20 @@ fun mergeAlbumSources(
     )
     if (merged.isEmpty()) return seed
 
-    // Guard: if seed already had a full album and merge somehow lost tracks, keep union
-    val songs = if (seed.songs.size > 1 && merged.size < seed.songs.size) {
-        CatalogRepository.dedupeLogicalTracks(seed.songs + merged)
+    // Absolute never-shrink against every input
+    val richest = listOfNotNull(
+        fromCatalog?.songs?.size,
+        fromLocal?.songs?.size,
+        seed.songs.size,
+        merged.size
+    ).maxOrNull() ?: merged.size
+
+    val songs = if (merged.size < richest && seed.songs.size >= richest) {
+        dedupeAlbumPageTracks(seed.songs + merged)
+    } else if (merged.size < richest && (fromCatalog?.songs?.size ?: 0) >= richest) {
+        dedupeAlbumPageTracks(fromCatalog!!.songs + merged)
+    } else if (merged.size < richest && (fromLocal?.songs?.size ?: 0) >= richest) {
+        dedupeAlbumPageTracks(fromLocal!!.songs + merged)
     } else {
         merged
     }
@@ -39,19 +46,17 @@ fun mergeAlbumSources(
             ?: seed.artist
             ?: songs.firstOrNull()?.effectiveAlbumArtist,
         trackCount = songs.size.coerceAtLeast(
-            listOfNotNull(fromCatalog?.trackCount, fromLocal?.trackCount, seed.trackCount).maxOrNull() ?: 0
+            listOfNotNull(
+                fromCatalog?.trackCount,
+                fromLocal?.trackCount,
+                seed.trackCount,
+                songs.size
+            ).maxOrNull() ?: 0
         ),
         songs = songs
     )
 }
 
-/**
- * Find local device tracks for this release.
- *
- * Tries structured [LibraryIndex.albums] first, then a raw scan of
- * [LibraryIndex.songs] so we still match when album-artist tags differ
- * slightly (e.g. Øne vs One) or albums() grouping keyed only on title.
- */
 fun findLocalAlbum(
     library: LibraryIndex,
     name: String?,
@@ -81,7 +86,7 @@ fun findLocalAlbum(
         aa == artistFolded || aa.contains(artistFolded) || artistFolded.contains(aa)
     }
     if (matches.isEmpty()) return null
-    val deduped = CatalogRepository.dedupeLogicalTracks(matches)
+    val deduped = dedupeAlbumPageTracks(matches)
     return AlbumItem(
         name = name,
         artist = artist ?: deduped.firstOrNull()?.effectiveAlbumArtist,
