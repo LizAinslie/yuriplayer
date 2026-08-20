@@ -5,11 +5,8 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
 /**
- * Build a full [AlbumItem] from catalog by **album name**, not a single albumKey.
- *
- * Multi-source copies of the same track collapse via [CatalogRepository.dedupeLogicalTracks].
- * Different tracks on the same release stay distinct. Never returns fewer songs than [seedSongs]
- * when the seed already looked complete (guards the Clancy "full → one track" flash).
+ * Full [AlbumItem] for the album page from catalog + optional seed.
+ * Never returns fewer songs than a multi-track seed.
  */
 suspend fun resolveAlbumItem(
     dao: CatalogDao,
@@ -31,15 +28,9 @@ suspend fun resolveAlbumItem(
         extraSeedSongs = seedSongs
     )
 
-    val merged = CatalogRepository.dedupeLogicalTracks(expanded + seedSongs)
-    if (merged.isEmpty()) return@withContext null
-
-    // Never shrink a multi-track seed to a single-track expand glitch
-    val songs = if (seedSongs.size > 1 && merged.size < seedSongs.size) {
-        CatalogRepository.dedupeLogicalTracks(seedSongs + merged)
-    } else {
-        merged
-    }
+    // Absolute union — never lose seed tracks
+    val songs = dedupeAlbumPageTracks(expanded + seedSongs)
+    if (songs.isEmpty()) return@withContext null
 
     AlbumItem(
         name = albumName,
