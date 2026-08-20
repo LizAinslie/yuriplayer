@@ -17,7 +17,10 @@ import java.net.URL
  * Album art decode: **preferred override** → embedded tags → folder cover →
  * enriched file → HTTP(S) remote URI → MediaStore / content URI.
  *
- * Local is default unless [AlbumCoverPrefs] stores a user pick for the albumKey.
+ * SAF / manual-scan tracks store a content:// [Song.contentUri] and often a
+ * non-file [Song.path]. Embedded art must use [MediaMetadataRetriever] with
+ * a Context + Uri — plain setDataSource(path) fails for those and was why
+ * local covers disappeared after switching off MediaStore.
  */
 object AlbumArtResolver {
 
@@ -36,7 +39,7 @@ object AlbumArtResolver {
             val preferred = preferredUri?.takeIf { it.isNotBlank() }
                 ?.let { loadUri(context, Uri.parse(it), maxSize) }
             val bitmap = preferred
-                ?: loadEmbedded(song.path, maxSize)
+                ?: loadEmbedded(context, song, maxSize)
                 ?: loadFolderCover(song.path, maxSize)
                 ?: loadEnrichedCover(context, song, maxSize)
                 ?: loadUri(context, song.albumArtUri, maxSize)
@@ -110,14 +113,50 @@ object AlbumArtResolver {
         return decodeFileSampled(f.absolutePath, maxSize)
     }
 
-    private fun loadEmbedded(path: String?, maxSize: Int): Bitmap? {
-        if (path.isNullOrBlank()) return null
-        if (path.startsWith("jellyfin:") || path.startsWith("subsonic:") || path.startsWith("navidrome:")) {
-            return null
-        }
+    /**
+     * Pull embedded picture from the audio file.
+     * Tries real filesystem path first, then content:// / file:// via Context.
+     */
+    private fun loadEmbedded(context: Context, song: Song, maxSize: Int): Bitmap? {
+        val path = song.path
+        if (path != null && isVirtualLibraryPath(path)) return null
+
         val retriever = MediaMetadataRetriever()
         return try {
-            retriever.setDataSource(path)
+            var opened = false
+            // 1) Plain filesystem path
+            if (!path.isNullOrBlank() && !path.contains("://") && File(path).canRead()) {
+                try {
+                    retriever.setDataSource(path)
+                    opened = true
+                } catch (e: Exception) {
+                    Log.d(TAG, "embedded path open failed: ${e.message}")
+                }
+            }
+            // 2) content:// / file:// on path string
+            if (!opened && !path.isNullOrBlank() && path.contains("://")) {
+                try {
+                    retriever.setDataSource(context, Uri.parse(path))
+                    opened = true
+                } catch (e: Exception) {
+                    Log.d(TAG, "embedded path-uri open failed: ${e.message}")
+                }
+            }
+            // 3) Song.contentUri (SAF document / MediaStore)
+            if (!opened) {
+                val uri = song.contentUri
+                val scheme = uri.scheme?.lowercase()
+                if (scheme == "content" || scheme == "file") {
+                    try {
+                        retriever.setDataSource(context, uri)
+                        opened = true
+                    } catch (e: Exception) {
+                        Log.d(TAG, "embedded contentUri open failed: ${e.message}")
+                    }
+                }
+            }
+            if (!opened) return null
+
             val bytes = retriever.embeddedPicture ?: return null
             val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
             BitmapFactory.decodeByteArray(bytes, 0, bytes.size, bounds)
@@ -126,7 +165,8 @@ object AlbumArtResolver {
                 inPreferredConfig = Bitmap.Config.RGB_565
             }
             BitmapFactory.decodeByteArray(bytes, 0, bytes.size, opts)
-        } catch (_: Exception) {
+        } catch (e: Exception) {
+            Log.d(TAG, "embedded decode failed: ${e.message}")
             null
         } finally {
             try {
@@ -136,11 +176,14 @@ object AlbumArtResolver {
         }
     }
 
+    private fun isVirtualLibraryPath(path: String): Boolean =
+        path.startsWith("jellyfin:", true) ||
+            path.startsWith("subsonic:", true) ||
+            path.startsWith("navidrome:", true)
+
     private fun loadFolderCover(path: String?, maxSize: Int): Bitmap? {
         if (path.isNullOrBlank()) return null
-        if (path.startsWith("jellyfin:") || path.startsWith("subsonic:") || path.contains("://")) {
-            return null
-        }
+        if (isVirtualLibraryPath(path) || path.contains("://")) return null
         val dir = File(path).parentFile ?: return null
         val candidates = listOf(
             "cover.jpg", "cover.jpeg", "cover.png",
