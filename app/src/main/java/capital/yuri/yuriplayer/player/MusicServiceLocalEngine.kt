@@ -26,9 +26,10 @@ class MusicServiceLocalEngine(
     onNext: () -> Unit,
     onPrev: () -> Unit,
     onSeek: (Long) -> Unit,
-    private val onEnded: () -> Unit,
-    private val onAutoAdvanced: () -> Unit,
-    private val onPlayingChanged: (Boolean) -> Unit
+    ended: () -> Unit,
+    autoAdvanced: () -> Unit,
+    playingChanged: (Boolean) -> Unit,
+    onEngineError: (String, Boolean) -> Unit = { _, _ -> }
 ) {
     val engineId: PlaybackEngineId = settings.getPlaybackEngineId()
     val engine: PlaybackEngine = PlaybackEngineFactory.create(context, engineId)
@@ -45,20 +46,15 @@ class MusicServiceLocalEngine(
     )
 
     private val listener = object : PlaybackEngine.Listener {
-        override fun onEnded() {
-            onEnded()
-        }
+        override fun onEnded() = ended()
 
-        override fun onAutoAdvanced() {
-            onAutoAdvanced()
-        }
+        override fun onAutoAdvanced() = autoAdvanced()
 
-        override fun onIsPlayingChanged(playing: Boolean) {
-            onPlayingChanged(playing)
-        }
+        override fun onIsPlayingChanged(playing: Boolean) = playingChanged(playing)
 
         override fun onError(message: String, recoverable: Boolean) {
             Log.e(TAG, "engine($engineId) error: $message recoverable=$recoverable")
+            onEngineError(message, recoverable)
         }
     }
 

@@ -96,6 +96,7 @@
         <service
             android:name=".player.MusicService"
             android:exported="false"
+            android:stopWithTask="false"
             android:foregroundServiceType="mediaPlayback" />
 
         <service

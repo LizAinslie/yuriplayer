@@ -5,10 +5,14 @@ import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
 import android.app.Service
+import android.content.Context
 import android.content.Intent
+import android.media.AudioManager
+import android.net.wifi.WifiManager
 import android.os.Binder
 import android.os.Build
 import android.os.IBinder
+import android.os.PowerManager
 import android.os.SystemClock
 import android.util.Log
 import androidx.core.app.NotificationCompat
@@ -72,6 +76,11 @@ class MusicService : Service() {
 
     private var pendingRemoteRestore: PendingRemoteRestore? = null
 
+    /** User/session wants audio. Engine hiccups must not clear this. */
+    private var userWantsPlay = false
+    private var wakeLock: PowerManager.WakeLock? = null
+    private var wifiLock: WifiManager.WifiLock? = null
+
     private data class PendingRemoteRestore(
         val positionMs: Long,
         val wasPlayWhenReady: Boolean
@@ -110,6 +119,14 @@ class MusicService : Service() {
             onPlayingChanged = { playing ->
                 _isPlaying.value = playing
                 updateForegroundNotification()
+                if (playing) acquireSleepLocks()
+                else if (!userWantsPlay) releaseSleepLocks()
+            },
+            onError = { message, recoverable ->
+                Log.e(TAG, "engine error: $message recoverable=$recoverable")
+                if (recoverable && userWantsPlay && !recoveringAudio && !advancing) {
+                    recoverFromAudioGlitch()
+                }
             }
         )
 
@@ -217,6 +234,10 @@ class MusicService : Service() {
         try {
             windowGeneration += 1
             endedForWindow = -1
+            if (autoPlay) {
+                userWantsPlay = true
+                acquireSleepLocks()
+            }
             hooks.playWindow(
                 song = current,
                 next = nextSong,
@@ -245,6 +266,8 @@ class MusicService : Service() {
         pendingRemoteRestore = null
         when {
             result.finished -> {
+                userWantsPlay = false
+                releaseSleepLocks()
                 engineHooks?.pause()
                 _nowPlaying.value = queueManager.currentSong()
                 updateForegroundNotification()
@@ -268,6 +291,8 @@ class MusicService : Service() {
         pendingRemoteRestore = null
         when {
             result.finished -> {
+                userWantsPlay = false
+                releaseSleepLocks()
                 engineHooks?.pause()
                 _nowPlaying.value = queueManager.currentSong()
             }
@@ -459,6 +484,8 @@ class MusicService : Service() {
     }
 
     fun play() {
+        userWantsPlay = true
+        acquireSleepLocks()
         if (flushPendingRemoteRestore(autoPlay = true)) {
             updateForegroundNotification()
             persistState()
@@ -475,6 +502,8 @@ class MusicService : Service() {
     }
 
     fun pause() {
+        userWantsPlay = false
+        releaseSleepLocks()
         engineHooks?.pause()
         updateForegroundNotification()
         persistState()
@@ -482,17 +511,7 @@ class MusicService : Service() {
 
     fun togglePlayPause() {
         val hooks = engineHooks
-        if (hooks != null && !hooks.isPlaying() && pendingRemoteRestore != null) {
-            play()
-            return
-        }
-        if (hooks == null || !hooks.active) {
-            play()
-            return
-        }
-        if (hooks.isPlaying()) hooks.pause() else hooks.play()
-        updateForegroundNotification()
-        persistState()
+        if (hooks != null && hooks.isPlaying()) pause() else play()
     }
 
     fun skipToNext() {
@@ -595,19 +614,23 @@ class MusicService : Service() {
             _nowPlaying.value = current
             updateForegroundNotification()
             yield()
-            if (isRemoteSong(current)) {
+            if (isRemoteSong(current) && !saved.playWhenReady) {
                 pendingRemoteRestore = PendingRemoteRestore(
                     positionMs = saved.positionMs,
-                    wasPlayWhenReady = saved.playWhenReady
+                    wasPlayWhenReady = false
                 )
                 Log.i(
                     TAG,
-                    "restore deferred remote '${current?.displayTitle}' " +
-                        "pos=${saved.positionMs} wasPlaying=${saved.playWhenReady}"
+                    "restore deferred remote '${current?.displayTitle}' pos=${saved.positionMs}"
                 )
             } else {
                 delay(RESTORE_PREPARE_DELAY_MS)
-                rebufferWindow(saved.positionMs, autoPlay = false, forceReload = true)
+                userWantsPlay = saved.playWhenReady
+                rebufferWindow(
+                    saved.positionMs,
+                    autoPlay = saved.playWhenReady,
+                    forceReload = true
+                )
             }
         }
     }
@@ -636,6 +659,7 @@ class MusicService : Service() {
                     stallSamplePos = -1L
                     continue
                 }
+                if (userWantsPlay) acquireSleepLocks()
 
                 val pos = hooks.getPositionMs().coerceAtLeast(0L)
                 val engineDur = hooks.getDurationMs().takeIf { it > 0 } ?: 0L
@@ -689,11 +713,31 @@ class MusicService : Service() {
                     continue
                 }
 
-                if (!wantPlay) continue
+                if (!wantPlay) {
+                    // Media3 audio-focus pause clears playWhenReady; we still
+                    // resume unless this was an explicit user pause or a call.
+                    val inCall = isInCall()
+                    if (userWantsPlay && !playing && !buffering && !inCall &&
+                        frozenFor >= UNEXPECTED_PAUSE_MS && !nearEnd
+                    ) {
+                        Log.i(TAG, "unexpected pause ${frozenFor}ms pos=$pos — resume")
+                        acquireSleepLocks()
+                        hooks.play()
+                    }
+                    continue
+                }
                 // Mid-track buffering is expected on Jellyfin/HTTP.
                 if (buffering) continue
 
                 val threshold = if (remote) NETWORK_STALL_MS else STALL_MS
+
+                if (userWantsPlay && !playing && !isInCall() && frozenFor >= UNEXPECTED_PAUSE_MS) {
+                    Log.i(TAG, "unexpected pause ${frozenFor}ms pos=$pos — resume")
+                    acquireSleepLocks()
+                    hooks.play()
+                    continue
+                }
+
                 if (frozenFor >= threshold) {
                     Log.w(
                         TAG,
@@ -709,7 +753,7 @@ class MusicService : Service() {
         val pending = pendingRemoteRestore
         val snap = queueManager.getSnapshot()
         val pos = if (pending != null) pending.positionMs else getPositionMs()
-        val ready = if (pending != null) false else engineHooks?.getPlayWhenReady() == true
+        val ready = if (pending != null) false else userWantsPlay || engineHooks?.getPlayWhenReady() == true
         persistDebounceJob?.cancel()
         val write = {
             stateStore.save(snap, pos, ready)
@@ -724,6 +768,55 @@ class MusicService : Service() {
         }
     }
 
+    private fun isInCall(): Boolean {
+        return try {
+            val mode = (getSystemService(Context.AUDIO_SERVICE) as AudioManager).mode
+            mode == AudioManager.MODE_IN_CALL || mode == AudioManager.MODE_IN_COMMUNICATION
+        } catch (_: Exception) {
+            false
+        }
+    }
+
+    private fun acquireSleepLocks() {
+        try {
+            val lock = wakeLock ?: (getSystemService(Context.POWER_SERVICE) as PowerManager)
+                .newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "yuriplayer:playback")
+                .also {
+                    it.setReferenceCounted(false)
+                    wakeLock = it
+                }
+            if (!lock.isHeld) lock.acquire()
+        } catch (e: Exception) {
+            Log.w(TAG, "wakeLock", e)
+        }
+        if (!isRemoteSong(_nowPlaying.value)) return
+        try {
+            @Suppress("DEPRECATION")
+            val lock = wifiLock ?: (applicationContext.getSystemService(Context.WIFI_SERVICE) as WifiManager)
+                .createWifiLock(WifiManager.WIFI_MODE_FULL_HIGH_PERF, "yuriplayer:wifi")
+                .also {
+                    it.setReferenceCounted(false)
+                    wifiLock = it
+                }
+            if (!lock.isHeld) lock.acquire()
+        } catch (e: Exception) {
+            Log.w(TAG, "wifiLock", e)
+        }
+    }
+
+    private fun releaseSleepLocks() {
+        try {
+            if (wakeLock?.isHeld == true) wakeLock?.release()
+        } catch (e: Exception) {
+            Log.w(TAG, "wakeLock release", e)
+        }
+        try {
+            if (wifiLock?.isHeld == true) wifiLock?.release()
+        } catch (e: Exception) {
+            Log.w(TAG, "wifiLock release", e)
+        }
+    }
+
     private fun recoverFromAudioGlitch(atPositionMs: Long? = null) {
         if (recoveringAudio) return
         recoveringAudio = true
@@ -731,7 +824,9 @@ class MusicService : Service() {
             try {
                 val hooks = engineHooks
                 val pos = (atPositionMs ?: hooks?.getPositionMs() ?: 0L).coerceAtLeast(0L)
-                val wasPlaying = hooks?.getPlayWhenReady() == true || hooks?.isPlaying() == true
+                val wasPlaying = userWantsPlay ||
+                    hooks?.getPlayWhenReady() == true ||
+                    hooks?.isPlaying() == true
                 Log.w(TAG, "audio glitch → rebuffer at $pos autoPlay=$wasPlaying")
                 rebufferWindow(pos, autoPlay = wasPlaying, forceReload = true)
             } finally {
@@ -869,20 +964,9 @@ class MusicService : Service() {
     }
 
     override fun onTaskRemoved(rootIntent: Intent?) {
-        Log.i(TAG, "onTaskRemoved — stopping playback")
+        // Keep playing after recents swipe — this is a music service.
+        Log.i(TAG, "onTaskRemoved — keeping playback userWantsPlay=$userWantsPlay")
         persistState(immediate = true)
-        try {
-            engineHooks?.pause()
-            engineHooks?.deactivate()
-        } catch (e: Exception) {
-            Log.w(TAG, "stop on task removed", e)
-        }
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) stopForeground(STOP_FOREGROUND_REMOVE)
-        else {
-            @Suppress("DEPRECATION")
-            stopForeground(true)
-        }
-        stopSelf()
         super.onTaskRemoved(rootIntent)
     }
 
@@ -892,6 +976,7 @@ class MusicService : Service() {
         persistJob?.cancel()
         stallWatchJob?.cancel()
         serviceScope.cancel()
+        releaseSleepLocks()
         engineHooks?.release()
         engineHooks = null
         super.onDestroy()
@@ -918,6 +1003,7 @@ class MusicService : Service() {
         private const val NEAR_END_ADVANCE_MS = 700L
         private const val WARMUP_NEXT_MS = 4_000L
         private const val ENDED_SILENCE_MS = 1_500L
+        private const val UNEXPECTED_PAUSE_MS = 1_200L
         private const val STICKY_SEEK_MS = 1_200L
         private const val USER_SEEK_GUARD_MS = 1_000L
         private const val SEEK_CONFIRM_MS = 600L

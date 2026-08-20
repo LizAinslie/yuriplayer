@@ -99,8 +99,22 @@ class VlcPlaybackEngine(
                 dispatch { onPlaybackStateChanged(PlaybackEngine.PlaybackState.READY) }
             }
             MediaPlayer.Event.Paused -> {
+                if (loadGeneration != eventGeneration) return
                 _isPlaying.value = false
                 dispatch { onIsPlayingChanged(false) }
+                // HTTP underruns pause VLC without a user pause. Kick it
+                // back if we still intend to play.
+                if (playWhenReady) {
+                    mainHandler.post {
+                        if (!playWhenReady) return@post
+                        if (loadGeneration != eventGeneration) return@post
+                        if (mp !== active()) return@post
+                        if (!mp.isPlaying) {
+                            Log.i(TAG, "unexpected pause → resume")
+                            runCatching { mp.play() }
+                        }
+                    }
+                }
             }
             MediaPlayer.Event.Stopped -> {
                 if (loadGeneration != eventGeneration) return

@@ -24,7 +24,8 @@ internal class MusicServiceEngineHooks(
     onSeek: (Long) -> Unit,
     onEnded: () -> Unit,
     onAutoAdvanced: () -> Unit,
-    onPlayingChanged: (Boolean) -> Unit
+    onPlayingChanged: (Boolean) -> Unit,
+    onError: (String, Boolean) -> Unit = { _, _ -> }
 ) {
     private val host = MusicServiceLocalEngine(
         context = context,
@@ -35,9 +36,10 @@ internal class MusicServiceEngineHooks(
         onNext = onNext,
         onPrev = onPrev,
         onSeek = onSeek,
-        onEnded = onEnded,
-        onAutoAdvanced = onAutoAdvanced,
-        onPlayingChanged = onPlayingChanged
+        ended = onEnded,
+        autoAdvanced = onAutoAdvanced,
+        playingChanged = onPlayingChanged,
+        onEngineError = onError
     )
 
     val engineId get() = host.engineId
