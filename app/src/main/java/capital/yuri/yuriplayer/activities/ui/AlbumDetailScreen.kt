@@ -65,8 +65,10 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import capital.yuri.yuriplayer.data.AlbumItem
+import capital.yuri.yuriplayer.data.AlbumArtCache
 import capital.yuri.yuriplayer.data.CatalogRepository
 import capital.yuri.yuriplayer.data.LibraryIndex
+import capital.yuri.yuriplayer.data.LibrarySettings
 import capital.yuri.yuriplayer.data.MetadataEnrichmentService
 import capital.yuri.yuriplayer.data.MyStuffPinStore
 import capital.yuri.yuriplayer.data.Song
@@ -76,6 +78,7 @@ import capital.yuri.yuriplayer.data.db.CatalogDao
 import capital.yuri.yuriplayer.data.findLocalAlbum
 import capital.yuri.yuriplayer.data.mergeAlbumSources
 import capital.yuri.yuriplayer.data.resolveAlbumItem
+import capital.yuri.yuriplayer.data.theme.ArtColorSurface
 import capital.yuri.yuriplayer.data.theme.ThemeService
 import capital.yuri.yuriplayer.ui.formatTrackCount
 import kotlinx.coroutines.Dispatchers
@@ -141,14 +144,23 @@ fun AlbumDetailScreen(
     val context = LocalContext.current
     val themeService: ThemeService = koinInject()
     val enrichment: MetadataEnrichmentService = koinInject()
+    val settings: LibrarySettings = koinInject()
+    val artCache: AlbumArtCache = koinInject()
     val pinStore: MyStuffPinStore = koinInject()
     val catalog: CatalogRepository = koinInject()
     val catalogDao: CatalogDao = koinInject()
     val library: LibraryIndex = koinInject()
     val entries by pinStore.entries.collectAsState()
     val coverGen by enrichment.coverGeneration.collectAsState()
+    val colorRev by settings.colorPrefsRevision.collectAsState()
     val base = MaterialTheme.colorScheme
-    var themeColors by remember { mutableStateOf(fallbackPlayerColors(base)) }
+    var themeColors by remember {
+        mutableStateOf(
+            album.songs.firstOrNull()?.let { seed ->
+                themeService.peekCached(artCache.artKey(seed), ArtColorSurface.COVER)
+            } ?: fallbackPlayerColors(base)
+        )
+    }
     var showMenu by remember { mutableStateOf(false) }
     var showCoverPicker by remember { mutableStateOf(false) }
     val listState = rememberLazyListState()
@@ -228,12 +240,20 @@ fun AlbumDetailScreen(
         collapsePx = 0f
     }
 
-    LaunchedEffect(liveAlbum.name, liveAlbum.artist, liveAlbum.songs.firstOrNull()?.path, coverGen) {
+    LaunchedEffect(
+        liveAlbum.name,
+        liveAlbum.artist,
+        liveAlbum.songs.firstOrNull()?.path,
+        coverGen,
+        colorRev
+    ) {
         themeColors = themeService.themeFromSong(
             context = context,
             song = liveAlbum.songs.firstOrNull(),
             base = base,
-            forceRefresh = coverGen > 0L
+            forceRefresh = false,
+            surface = ArtColorSurface.COVER,
+            loadBitmap = false
         ).colors
     }
 

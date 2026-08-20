@@ -337,6 +337,7 @@ fun YuriApp(
 
     val songCount by library.songs.collectAsState()
     val loading by library.isLoading.collectAsState()
+    val colorRev by settings.colorPrefsRevision.collectAsState()
 
     LaunchedEffect(songCount.size, loading, showNetworkPrompt) {
         if (!showNetworkPrompt &&
@@ -433,7 +434,7 @@ fun YuriApp(
         peekPrev = player.peekPrevious()
     }
 
-    LaunchedEffect(currentSong?.id, currentSong?.path) {
+    LaunchedEffect(currentSong?.id, currentSong?.path, colorRev) {
         themeStore.updateCurrent(context, currentSong, baseScheme)
         themeStore.updateNeighbors(context, peekNext, peekPrev, baseScheme)
         activity?.title = ActivityTitleFormat.format(currentSong)

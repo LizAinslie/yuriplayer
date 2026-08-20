@@ -37,7 +37,11 @@ import org.koin.compose.koinInject
  * Display [size] drives decode tier:
  * - row-sized (<= 80.dp) → [AlbumArtCache.THUMB_DECODE_SIZE] (128px), kept in the
  *   large thumb LRU so queue / playlist / library scrolling stays smooth
- * - larger → hero tier (512px)
+ * - mid (<= 160.dp) → 256px
+ * - larger / unspecified → hero tier (512px)
+ *
+ * Now Playing uses [PlayerThemeStore] + [AlbumArtCache.HQ_DECODE_SIZE], not this
+ * composable.
  */
 @Composable
 fun AlbumArt(

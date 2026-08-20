@@ -6,7 +6,6 @@ import android.util.Log
 import capital.yuri.yuriplayer.data.db.AlbumMetadataDao
 import capital.yuri.yuriplayer.data.db.AlbumMetadataEntity
 import capital.yuri.yuriplayer.data.source.MusicBrainzClient
-import capital.yuri.yuriplayer.data.theme.ThemeService
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -25,8 +24,7 @@ class MetadataEnrichmentService(
     private val client: MusicBrainzClient,
     private val library: LibraryIndex,
     private val settings: LibrarySettings,
-    private val artCache: AlbumArtCache,
-    private val themeService: ThemeService
+    private val artCache: AlbumArtCache
 ) {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val workLock = Mutex()
@@ -47,7 +45,6 @@ class MetadataEnrichmentService(
     /** Force UI art/theme reload after a user cover preference change. */
     fun bumpCoverGeneration() {
         _coverGeneration.value = System.currentTimeMillis()
-        themeService.invalidateAll()
     }
 
     suspend fun applyCachedToLibrary() = withContext(Dispatchers.IO) {
@@ -258,7 +255,6 @@ class MetadataEnrichmentService(
         if (coverChanged) {
             runCatching { artCache.invalidateAlbum(key) }
             runCatching { artCache.invalidateAllMemory() }
-            themeService.invalidateAll()
             _coverGeneration.value = System.currentTimeMillis()
         }
     }

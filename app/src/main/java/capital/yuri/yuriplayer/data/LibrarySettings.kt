@@ -2,7 +2,12 @@ package capital.yuri.yuriplayer.data
 
 import android.content.Context
 import android.os.Environment
+import capital.yuri.yuriplayer.data.theme.ArtColorSurface
+import capital.yuri.yuriplayer.data.theme.ArtColorVariant
 import capital.yuri.yuriplayer.player.engine.PlaybackEngineId
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import java.io.File
 
 /** How local files are discovered. */
@@ -29,6 +34,10 @@ enum class LibraryScanMode {
 class LibrarySettings(context: Context) {
 
     private val prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+
+    private val _colorPrefsRevision = MutableStateFlow(0L)
+    /** Ticks when cover/banner color variants change so themed pages re-resolve once. */
+    val colorPrefsRevision: StateFlow<Long> = _colorPrefsRevision.asStateFlow()
 
     // ── local scan mode ───────────────────────────────────────────────────
 
@@ -136,6 +145,36 @@ class LibrarySettings(context: Context) {
         prefs.edit().putString(KEY_PLAYBACK_ENGINE, id.id).apply()
     }
 
+    // ── appearance / artwork colors ───────────────────────────────────────
+
+    fun getCoverColorVariant(): ArtColorVariant =
+        ArtColorVariant.fromId(prefs.getString(KEY_COVER_COLOR_VARIANT, ArtColorVariant.AUTO.id))
+
+    fun setCoverColorVariant(variant: ArtColorVariant) {
+        if (variant == getCoverColorVariant()) return
+        prefs.edit().putString(KEY_COVER_COLOR_VARIANT, variant.id).apply()
+        bumpColorPrefs()
+    }
+
+    fun getBannerColorVariant(): ArtColorVariant =
+        ArtColorVariant.fromId(prefs.getString(KEY_BANNER_COLOR_VARIANT, ArtColorVariant.AUTO.id))
+
+    fun setBannerColorVariant(variant: ArtColorVariant) {
+        if (variant == getBannerColorVariant()) return
+        prefs.edit().putString(KEY_BANNER_COLOR_VARIANT, variant.id).apply()
+        bumpColorPrefs()
+    }
+
+    fun variantFor(surface: ArtColorSurface): ArtColorVariant =
+        when (surface) {
+            ArtColorSurface.COVER -> getCoverColorVariant()
+            ArtColorSurface.BANNER -> getBannerColorVariant()
+        }
+
+    private fun bumpColorPrefs() {
+        _colorPrefsRevision.value = System.currentTimeMillis()
+    }
+
     fun networkMetadataConsent(): Boolean? = isAutomaticMetadataEnabled()
 
     fun isNetworkMetadataEnabled(): Boolean = isAutomaticMetadataEnabled()
@@ -166,6 +205,8 @@ class LibrarySettings(context: Context) {
         private const val KEY_NETWORK_META = "network_metadata_enabled"
         private const val KEY_SYNC_OVER_MOBILE_DATA = "sync_over_mobile_data"
         private const val KEY_PLAYBACK_ENGINE = "playback_engine_id"
+        private const val KEY_COVER_COLOR_VARIANT = "cover_color_variant"
+        private const val KEY_BANNER_COLOR_VARIANT = "banner_color_variant"
 
         val DEFAULT_ROOTS = listOf(
             "Music",

@@ -43,6 +43,7 @@ import capital.yuri.yuriplayer.data.LibraryIndex
 import capital.yuri.yuriplayer.data.LibraryScanMode
 import capital.yuri.yuriplayer.data.LibrarySettings
 import capital.yuri.yuriplayer.data.source.SourceType
+import capital.yuri.yuriplayer.data.theme.ArtColorVariant
 import capital.yuri.yuriplayer.player.engine.PlaybackEngineCatalog
 import capital.yuri.yuriplayer.player.engine.PlaybackEngineId
 import org.koin.compose.koinInject
@@ -52,6 +53,7 @@ private sealed class SettingsPage {
     data object Providers : SettingsPage()
     data object LocalLibrary : SettingsPage()
     data object PlaybackEngine : SettingsPage()
+    data object Appearance : SettingsPage()
     data class Organize(
         val rootKey: String,
         val rootLabel: String
@@ -89,6 +91,7 @@ fun SettingsScreen(onBack: () -> Unit) {
             onOpenProviders = { push(SettingsPage.Providers) },
             onOpenLocalLibrary = { push(SettingsPage.LocalLibrary) },
             onOpenPlaybackEngine = { push(SettingsPage.PlaybackEngine) },
+            onOpenAppearance = { push(SettingsPage.Appearance) },
             onOpenLicenses = { push(SettingsPage.OpenSourceLicenses) },
             onOpenVersion = { push(SettingsPage.VersionInfo) }
         )
@@ -105,6 +108,7 @@ fun SettingsScreen(onBack: () -> Unit) {
             }
         )
         SettingsPage.PlaybackEngine -> PlaybackEngineSettingsScreen(onBack = { pop() })
+        SettingsPage.Appearance -> AppearanceSettingsScreen(onBack = { pop() })
         is SettingsPage.Organize -> OrganizeLayoutScreen(
             rootKey = p.rootKey,
             rootLabel = p.rootLabel,
@@ -126,6 +130,7 @@ private fun SettingsHubScreen(
     onOpenProviders: () -> Unit,
     onOpenLocalLibrary: () -> Unit,
     onOpenPlaybackEngine: () -> Unit,
+    onOpenAppearance: () -> Unit,
     onOpenLicenses: () -> Unit,
     onOpenVersion: () -> Unit
 ) {
@@ -142,6 +147,8 @@ private fun SettingsHubScreen(
     }
     val scanMode = settings.getScanMode()
     val engineDesc = PlaybackEngineCatalog.descriptor(settings.getPlaybackEngineId())
+    val coverVariant = settings.getCoverColorVariant()
+    val bannerVariant = settings.getBannerColorVariant()
     val versionSubtitle = buildString {
         append(BuildConfig.VERSION_NAME)
         val short = BuildConfig.GIT_COMMIT_SHORT
@@ -241,9 +248,9 @@ private fun SettingsHubScreen(
         SettingsGroup {
             SettingsNavRow(
                 title = "Appearance",
-                subtitle = "Theme, accent, dynamic colors",
+                subtitle = "Cover · ${coverVariant.displayName}  ·  Banner · ${bannerVariant.displayName}",
                 icon = Icons.Default.ColorLens,
-                onClick = {}
+                onClick = onOpenAppearance
             )
             SettingsNavRow(
                 title = "Library browser",
@@ -334,6 +341,60 @@ private fun PlaybackEngineSettingsScreen(onBack: () -> Unit) {
                     "Media3 is lighter and fine for most MP3/AAC and HTTP streams. " +
                     "An FFmpeg AudioTrack engine can share the bundled ffmpeg binary later."
             )
+        }
+
+        Spacer(modifier = Modifier.height(48.dp))
+    }
+}
+
+@Composable
+private fun AppearanceSettingsScreen(onBack: () -> Unit) {
+    val settings: LibrarySettings = koinInject()
+    var coverVariant by remember { mutableStateOf(settings.getCoverColorVariant()) }
+    var bannerVariant by remember { mutableStateOf(settings.getBannerColorVariant()) }
+
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .statusBarsPadding()
+            .verticalScroll(rememberScrollState())
+    ) {
+        SettingsTopBar(title = "Appearance", onBack = onBack)
+
+        TextNote(
+            text = "Dynamic colors come from artwork. Covers (now playing, albums, " +
+                "playlists) and artist banners can use different Palette variants. " +
+                "Cached per artwork — only re-extracted when the art or these settings change."
+        )
+
+        SettingsSectionTitle("Cover")
+        SettingsGroup {
+            ArtColorVariant.entries.forEach { variant ->
+                SettingsNavRow(
+                    title = variant.displayName,
+                    subtitle = variant.description,
+                    trailing = if (coverVariant == variant) "Selected" else null,
+                    onClick = {
+                        settings.setCoverColorVariant(variant)
+                        coverVariant = variant
+                    }
+                )
+            }
+        }
+
+        SettingsSectionTitle("Banner")
+        SettingsGroup {
+            ArtColorVariant.entries.forEach { variant ->
+                SettingsNavRow(
+                    title = variant.displayName,
+                    subtitle = variant.description,
+                    trailing = if (bannerVariant == variant) "Selected" else null,
+                    onClick = {
+                        settings.setBannerColorVariant(variant)
+                        bannerVariant = variant
+                    }
+                )
+            }
         }
 
         Spacer(modifier = Modifier.height(48.dp))

@@ -76,9 +76,11 @@ import capital.yuri.yuriplayer.data.MyStuffPinStore
 import capital.yuri.yuriplayer.data.Playlist
 import capital.yuri.yuriplayer.data.PlaylistCover
 import capital.yuri.yuriplayer.data.PlaylistRepository
+import capital.yuri.yuriplayer.data.LibrarySettings
 import capital.yuri.yuriplayer.data.Song
 import capital.yuri.yuriplayer.data.StuffPin
 import capital.yuri.yuriplayer.data.StuffPinKind
+import capital.yuri.yuriplayer.data.theme.ArtColorSurface
 import capital.yuri.yuriplayer.data.theme.ThemeService
 import capital.yuri.yuriplayer.player.PlayerController
 import capital.yuri.yuriplayer.ui.formatTrackCount
@@ -113,7 +115,9 @@ fun PlaylistDetailScreen(
     val pinStore: MyStuffPinStore = koinInject()
     val player: PlayerController = koinInject()
     val themeService: ThemeService = koinInject()
+    val settings: LibrarySettings = koinInject()
     val playlist by repo.observePlaylist(playlistId).collectAsState(initial = null)
+    val colorRev by settings.colorPrefsRevision.collectAsState()
     val scope = rememberCoroutineScope()
     val context = LocalContext.current
     val base = MaterialTheme.colorScheme
@@ -133,7 +137,7 @@ fun PlaylistDetailScreen(
         PlaylistCoverUi.open(playlistId)
     }
 
-    LaunchedEffect(playlist?.id, playlist?.customImageUri, playlist?.activeCoverId, playlist?.songs?.size) {
+    LaunchedEffect(playlist?.id, playlist?.customImageUri, playlist?.activeCoverId, playlist?.songs?.size, colorRev) {
         val pl = playlist ?: return@LaunchedEffect
         val cover = PlaylistRepository.coverFor(pl)
         val uri = when (cover.mode) {
@@ -148,10 +152,18 @@ fun PlaylistDetailScreen(
                 context = context,
                 key = "playlist:${pl.id}:${uri}",
                 uri = uri,
-                base = base
+                base = base,
+                surface = ArtColorSurface.COVER,
+                loadBitmap = false
             ).colors
         } else {
-            themeService.themeFromSong(context, pl.songs.firstOrNull(), base).colors
+            themeService.themeFromSong(
+                context = context,
+                song = pl.songs.firstOrNull(),
+                base = base,
+                surface = ArtColorSurface.COVER,
+                loadBitmap = false
+            ).colors
         }
     }
 

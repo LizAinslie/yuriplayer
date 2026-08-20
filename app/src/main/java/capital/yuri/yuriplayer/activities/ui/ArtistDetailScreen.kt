@@ -77,6 +77,7 @@ import androidx.compose.ui.unit.dp
 import capital.yuri.yuriplayer.data.AlbumItem
 import capital.yuri.yuriplayer.data.ArtistItem
 import capital.yuri.yuriplayer.data.ArtistProfileRepository
+import capital.yuri.yuriplayer.data.LibrarySettings
 import capital.yuri.yuriplayer.data.MyStuffPinStore
 import capital.yuri.yuriplayer.data.ReleaseType
 import capital.yuri.yuriplayer.data.Song
@@ -89,6 +90,7 @@ import capital.yuri.yuriplayer.data.source.ArtistEvent
 import capital.yuri.yuriplayer.data.source.ArtistImageKind
 import capital.yuri.yuriplayer.data.source.ArtistInfoService
 import capital.yuri.yuriplayer.data.source.ArtistLink
+import capital.yuri.yuriplayer.data.theme.ArtColorSurface
 import capital.yuri.yuriplayer.data.theme.ThemeService
 import capital.yuri.yuriplayer.ui.formatAlbumCount
 import capital.yuri.yuriplayer.ui.formatTrackCount
@@ -179,7 +181,9 @@ fun ArtistDetailScreen(
     val profileRepo: ArtistProfileRepository = koinInject()
     val artistInfo: ArtistInfoService = koinInject()
     val pinStore: MyStuffPinStore = koinInject()
+    val settings: LibrarySettings = koinInject()
     val entries by pinStore.entries.collectAsState()
+    val colorRev by settings.colorPrefsRevision.collectAsState()
     val base = MaterialTheme.colorScheme
     val context = LocalContext.current
     val density = LocalDensity.current
@@ -197,6 +201,7 @@ fun ArtistDetailScreen(
     var events by remember { mutableStateOf<List<ArtistEvent>>(emptyList()) }
     var themeTick by remember { mutableStateOf(0) }
     var bannerUri by remember { mutableStateOf(profileRepo.bannerUri(artist.displayName)) }
+    var resolvedImageUri by remember { mutableStateOf<String?>(null) }
     val uriHandler = LocalUriHandler.current
 
     val profile by profileRepo.observe(artist.displayName).collectAsState(initial = null)
@@ -223,21 +228,27 @@ fun ArtistDetailScreen(
         val resolved = runCatching { profileRepo.resolve(artist.displayName) }.getOrNull()
         val diskBanner = profileRepo.bannerUri(artist.displayName)
         if (diskBanner != bannerUri) bannerUri = diskBanner
-        val themeUri = parseImageUri(bannerUri)
-            ?: parseImageUri(profile?.imageUri ?: resolved?.imageUri)
+        resolvedImageUri = resolved?.imageUri
 
         dataLinks = (resolved?.links.orEmpty() + profile?.links.orEmpty())
             .distinctBy { it.url.lowercase() }
 
         events = runCatching { artistInfo.upcomingEvents(artist.displayName) }
             .getOrDefault(emptyList())
+    }
 
+    LaunchedEffect(artist.name, bannerUri, profile?.imageUri, resolvedImageUri, themeTick, colorRev) {
+        val themeUri = parseImageUri(bannerUri)
+            ?: parseImageUri(profile?.imageUri)
+            ?: parseImageUri(resolvedImageUri)
         themeColors = if (themeUri != null) {
             themeService.themeFromUri(
                 context = context,
                 key = "artist:${artistKeyStr}:${themeUri}",
                 uri = themeUri,
-                base = base
+                base = base,
+                surface = ArtColorSurface.BANNER,
+                loadBitmap = false
             ).colors
         } else {
             val seed = albums.firstOrNull()?.songs?.firstOrNull()
@@ -246,7 +257,9 @@ fun ArtistDetailScreen(
                 context = context,
                 song = seed,
                 base = base,
-                forceRefresh = true
+                forceRefresh = false,
+                surface = ArtColorSurface.BANNER,
+                loadBitmap = false
             ).colors
         }
     }

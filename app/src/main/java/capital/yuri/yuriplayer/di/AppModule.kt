@@ -198,8 +198,8 @@ val appModule = module {
     }
 
     single { AlbumArtCache(androidContext(), get()) }
-    single { ThemeService(get()) }
-    single { PlayerThemeStore(get(), get()) }
+    single { ThemeService(androidContext(), get(), get()) }
+    single { PlayerThemeStore(get(), get(), get()) }
 
     single {
         MetadataEnrichmentService(
@@ -208,8 +208,7 @@ val appModule = module {
             client = get(),
             library = get(),
             settings = get(),
-            artCache = get(),
-            themeService = get()
+            artCache = get()
         )
     }
 

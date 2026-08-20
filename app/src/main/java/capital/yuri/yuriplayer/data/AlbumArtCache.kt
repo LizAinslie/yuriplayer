@@ -12,10 +12,13 @@ import java.io.File
 import java.security.MessageDigest
 
 /**
- * Cover cache tuned for list scrolling on mid-range devices.
+ * Cover cache tuned for list scrolling on mid-range devices, with a tiny HQ
+ * LRU for now-playing (current + next + prev) so the full-player art is sharp.
  *
  * When [AlbumCoverPrefs] has a preferred URI for the albumKey, that wins the
  * cache key and decode path so list + hero stay in sync after a user swap.
+ *
+ * Tiers never upscale: a 512px hero miss must re-decode from source for HQ.
  */
 class AlbumArtCache(
     context: Context,
@@ -38,6 +41,14 @@ class AlbumArtCache(
         override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, Bitmap>?): Boolean {
             val drop = size > MAX_HERO_MEMORY
             if (drop) Log.d(TAG, "hero-evict ${eldest?.key}")
+            return drop
+        }
+    }
+
+    private val hq = object : LinkedHashMap<String, Bitmap>(MAX_HQ_MEMORY + 1, 0.75f, true) {
+        override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, Bitmap>?): Boolean {
+            val drop = size > MAX_HQ_MEMORY
+            if (drop) Log.d(TAG, "hq-evict ${eldest?.key}")
             return drop
         }
     }
@@ -78,15 +89,21 @@ class AlbumArtCache(
     fun tierSize(maxSize: Int): Int = when {
         maxSize <= THUMB_DECODE_SIZE -> THUMB_DECODE_SIZE
         maxSize <= 256 -> 256
-        else -> HERO_DECODE_SIZE
+        maxSize <= HERO_DECODE_SIZE -> HERO_DECODE_SIZE
+        else -> HQ_DECODE_SIZE
     }
 
     private fun isThumbTier(tier: Int): Boolean = tier <= THUMB_DECODE_SIZE
 
+    private fun isHqTier(tier: Int): Boolean = tier >= HQ_DECODE_SIZE
+
     private fun memKey(baseKey: String, tier: Int): String = "$baseKey@$tier"
 
-    private fun mapFor(tier: Int): LinkedHashMap<String, Bitmap> =
-        if (isThumbTier(tier)) thumbs else heroes
+    private fun mapFor(tier: Int): LinkedHashMap<String, Bitmap> = when {
+        isThumbTier(tier) -> thumbs
+        isHqTier(tier) -> hq
+        else -> heroes
+    }
 
     fun peek(song: Song, maxSize: Int = THUMB_DECODE_SIZE): Bitmap? {
         val tier = tierSize(maxSize)
@@ -122,12 +139,14 @@ class AlbumArtCache(
             }
             purge(thumbs)
             purge(heroes)
+            purge(hq)
         }
     }
 
     suspend fun invalidateAllMemory() = lock.withLock {
         thumbs.clear()
         heroes.clear()
+        hq.clear()
         Log.d(TAG, "mem-clear")
     }
 
@@ -197,6 +216,21 @@ class AlbumArtCache(
             return fromDisk
         }
 
+        // Downscale from a higher in-memory tier. Never upscale 512 → 1024.
+        if (tier < HQ_DECODE_SIZE) {
+            val hqKey = memKey(base, HQ_DECODE_SIZE)
+            val hqBmp = lock.withLock { hq[hqKey]?.takeIf { !it.isRecycled } }
+            if (hqBmp != null) {
+                val scaled = withContext(Dispatchers.Default) { scaleTo(hqBmp, tier) }
+                lock.withLock {
+                    map[key]?.takeIf { !it.isRecycled }?.let { return it }
+                    map[key] = scaled
+                }
+                withContext(Dispatchers.IO) { writeDisk(key, scaled) }
+                return scaled
+            }
+        }
+
         if (isThumbTier(tier)) {
             val heroKey = memKey(base, HERO_DECODE_SIZE)
             val heroBmp = lock.withLock { heroes[heroKey]?.takeIf { !it.isRecycled } }
@@ -257,12 +291,14 @@ class AlbumArtCache(
     suspend fun clearMemory() = lock.withLock {
         thumbs.clear()
         heroes.clear()
+        hq.clear()
     }
 
     suspend fun clearAll() {
         lock.withLock {
             thumbs.clear()
             heroes.clear()
+            hq.clear()
         }
         withContext(Dispatchers.IO) {
             diskDir.listFiles()?.forEach { it.delete() }
@@ -273,10 +309,14 @@ class AlbumArtCache(
         private const val TAG = "YuriPlayer.ArtCache"
         const val THUMB_DECODE_SIZE = 128
         const val HERO_DECODE_SIZE = 512
+        /** Now-playing cover. Stylo 4 NP art is ~680px; 512 looked soft. */
+        const val HQ_DECODE_SIZE = 1024
         const val MAX_THUMB_MEMORY = 96
         const val MAX_HERO_MEMORY = 6
+        /** Current + next + prev for swipe. ~4MB each ARGB. */
+        const val MAX_HQ_MEMORY = 3
         const val MAX_MEMORY = MAX_THUMB_MEMORY
-        const val MAX_DISK = 96
+        const val MAX_DISK = 128
 
         private val COVER_NAMES = listOf(
             "cover.jpg", "cover.jpeg", "cover.png",
