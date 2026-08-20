@@ -233,6 +233,8 @@ dependencies {
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.documentfile)
     implementation(libs.androidx.lifecycle.runtime.ktx)
+    // ProcessLifecycleOwner for secret playlist cover reset on background / lock
+    implementation(libs.androidx.lifecycle.process)
     implementation(libs.material)
     implementation(libs.androidx.palette)
 
