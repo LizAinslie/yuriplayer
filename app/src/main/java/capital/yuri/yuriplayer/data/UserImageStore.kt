@@ -16,6 +16,8 @@ import java.io.File
  *
  * Manual clears are remembered via a `.cleared` marker file so auto-fetch /
  * provider resolve will not re-populate that slot until the user sets a new image.
+ *
+ * [persistSlot] keeps sibling slots under the same key (multi playlist covers).
  */
 class UserImageStore(private val context: Context) {
 
@@ -62,6 +64,51 @@ class UserImageStore(private val context: Context) {
             null
         }
     }
+
+    /**
+     * Persist under `key-slotId` without deleting other slots of [key].
+     * Used for multiple playlist covers.
+     */
+    suspend fun persistSlot(
+        sourceUri: String,
+        namespace: String,
+        key: String,
+        slotId: String
+    ): String? = withContext(Dispatchers.IO) {
+        val src = runCatching { Uri.parse(sourceUri) }.getOrNull() ?: return@withContext null
+        val dir = File(root, namespace).also { if (!it.exists()) it.mkdirs() }
+        val safeKey = safe("$key-$slotId")
+
+        dir.listFiles()?.filter {
+            it.isFile && it.name.startsWith("$safeKey.") && !it.name.endsWith(CLEARED_SUFFIX)
+        }?.forEach { it.delete() }
+
+        val ext = guessExtension(context, src)
+        val dest = File(dir, "$safeKey.${System.currentTimeMillis()}.$ext")
+        try {
+            context.contentResolver.openInputStream(src)?.use { input ->
+                dest.outputStream().use { output -> input.copyTo(output) }
+            } ?: return@withContext null
+            if (!dest.isFile || dest.length() == 0L) {
+                dest.delete()
+                return@withContext null
+            }
+            Uri.fromFile(dest).toString()
+        } catch (_: Exception) {
+            dest.delete()
+            null
+        }
+    }
+
+    suspend fun deleteSlot(namespace: String, key: String, slotId: String) =
+        withContext(Dispatchers.IO) {
+            val dir = File(root, namespace)
+            if (!dir.isDirectory) return@withContext
+            val safeKey = safe("$key-$slotId")
+            dir.listFiles()?.filter {
+                it.isFile && it.name.startsWith("$safeKey.") && !it.name.endsWith(CLEARED_SUFFIX)
+            }?.forEach { it.delete() }
+        }
 
     /** Existing persisted file:// URI for [key], or null (ignores clear markers). */
     fun resolve(namespace: String, key: String): String? {
