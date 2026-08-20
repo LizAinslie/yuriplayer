@@ -80,6 +80,8 @@ import capital.yuri.yuriplayer.activities.ui.LocalStatusBarStack
 import capital.yuri.yuriplayer.activities.ui.MiniPlayerBar
 import capital.yuri.yuriplayer.activities.ui.MyStuffScreen
 import capital.yuri.yuriplayer.activities.ui.NowPlayingScreen
+import capital.yuri.yuriplayer.activities.ui.PlaylistCoverGlobalHost
+import capital.yuri.yuriplayer.activities.ui.PlaylistCoverUi
 import capital.yuri.yuriplayer.activities.ui.PlaylistDetailScreen
 import capital.yuri.yuriplayer.activities.ui.PlaylistNavActions
 import capital.yuri.yuriplayer.activities.ui.SettingsScreen
@@ -617,7 +619,9 @@ fun YuriApp(
                     )
                 )
                 Toast.makeText(context, "Added to My Stuff", Toast.LENGTH_SHORT).show()
-            }
+            },
+            // Root default: open multi-cover picker (public + secret slots).
+            changeCover = { playlistId -> PlaylistCoverUi.open(playlistId) }
         )
     ) {
         ApplyStatusBarStack(statusBarStack)
@@ -913,6 +917,9 @@ fun YuriApp(
                     onDismiss = { npPlaylistSong = null }
                 )
             }
+
+            // Multi-cover picker (public + secret) — works from detail and from sheets.
+            PlaylistCoverGlobalHost()
         }
     }
 }
