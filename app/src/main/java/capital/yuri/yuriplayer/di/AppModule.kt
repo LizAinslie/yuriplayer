@@ -37,9 +37,12 @@ import capital.yuri.yuriplayer.data.source.MusicBrainzArtistProfileProvider
 import capital.yuri.yuriplayer.data.source.MusicBrainzClient
 import capital.yuri.yuriplayer.data.source.SourceInstanceRepository
 import capital.yuri.yuriplayer.data.source.SourceResolver
+import capital.yuri.yuriplayer.data.source.SubsonicArtistImageSource
 import capital.yuri.yuriplayer.data.source.SubsonicClient
 import capital.yuri.yuriplayer.data.source.WikipediaArtistImageSource
 import capital.yuri.yuriplayer.data.source.WikidataArtistImageSource
+import capital.yuri.yuriplayer.data.storage.StorageRootRegistry
+import capital.yuri.yuriplayer.data.storage.StorageRoots
 import capital.yuri.yuriplayer.data.theme.ThemeService
 import capital.yuri.yuriplayer.media.FfmpegService
 import capital.yuri.yuriplayer.player.MusicServiceAutoPlay
@@ -101,6 +104,13 @@ val appModule = module {
 
     single { SourceInstanceRepository(get()) }
 
+    // Folder-like mounts (SAF today; WebDAV/Drive/Nextcloud later)
+    single {
+        StorageRootRegistry(
+            StorageRoots.fromSettings(androidContext(), get())
+        )
+    }
+
     single {
         val context = androidContext()
         createJellyfin {
@@ -153,6 +163,7 @@ val appModule = module {
     single { BandsintownClient(get<HttpClient>()) }
 
     single { JellyfinArtistImageSource(get(), get()) }
+    single { SubsonicArtistImageSource(get(), get()) }
     single<List<ArtistInfoSource>> {
         listOf(
             MusicBrainzArtistProfileProvider(androidContext(), get()),
@@ -161,7 +172,8 @@ val appModule = module {
             DeezerArtistImageSource(get()),
             AudioDbArtistImageSource(get()),
             DiscogsArtistImageSource(get()),
-            get<JellyfinArtistImageSource>()
+            get<JellyfinArtistImageSource>(),
+            get<SubsonicArtistImageSource>()
         )
     }
     single { ArtistInfoService(get(), get()) }
