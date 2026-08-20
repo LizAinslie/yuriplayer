@@ -200,17 +200,23 @@ fun NowPlayingScreen(
         radioSessionForSettings(snapshot)
     }
 
-    val songKey = song?.path ?: song?.contentUri?.toString()
+    val songKey = song?.songKey ?: song?.path ?: song?.contentUri?.toString()
     val meta = NowPlayingMeta(
-        key = songKey ?: "none",
+        key = listOf(
+            songKey ?: "none",
+            song?.title.orEmpty(),
+            song?.artist.orEmpty(),
+            song?.album.orEmpty()
+        ).joinToString("\u0000"),
         title = song?.displayTitle ?: "Not playing",
         artist = song?.displayArtist ?: "",
         album = song?.displayAlbum ?: ""
     )
 
     fun requestSkipNext() {
-        skipDirection = -1
-        skipToken++
+        // Advance the queue now. Cover slide follows playing-song identity —
+        // waiting on skipToken is what left titles/art stuck on the old track.
+        onNext()
     }
 
     fun requestSkipPrev() {
@@ -218,8 +224,7 @@ fun NowPlayingScreen(
             onPrev()
             return
         }
-        skipDirection = 1
-        skipToken++
+        onForcePrev()
     }
 
     LaunchedEffect(songKey) {
@@ -416,6 +421,8 @@ fun NowPlayingScreen(
                         onSkipConsumed = {
                             skipDirection = 0
                         },
+                        playingSongId = song?.id,
+                        playingSongKey = song?.path ?: song?.contentUri?.toString(),
                         horizontalInset = 20.dp,
                         modifier = Modifier.fillMaxWidth()
                     )
@@ -434,6 +441,7 @@ fun NowPlayingScreen(
                         transitionSpec = {
                             fadeIn(tween(180)) togetherWith fadeOut(tween(120))
                         },
+                        contentKey = { it.key },
                         label = "npMeta"
                     ) { m ->
                         Column {

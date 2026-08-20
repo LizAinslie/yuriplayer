@@ -413,11 +413,18 @@ fun YuriApp(
     var positionMs by remember { mutableLongStateOf(0L) }
     var durationMs by remember { mutableLongStateOf(0L) }
     val snapshot by player.snapshot.collectAsState()
-    val currentSong by player.nowPlaying.collectAsState()
+    var currentSong by remember { mutableStateOf(snapshot.currentSong) }
     var peekNext by remember { mutableStateOf<Song?>(null) }
     var peekPrev by remember { mutableStateOf<Song?>(null) }
 
     val connected by player.isConnected.collectAsState()
+
+    // Snapshot is the source of truth — any queue publish recomposes titles/art.
+    LaunchedEffect(snapshot) {
+        currentSong = snapshot.currentSong
+        peekNext = player.peekNext()
+        peekPrev = player.peekPrevious()
+    }
 
     LaunchedEffect(connected) {
         if (!connected) return@LaunchedEffect
@@ -425,20 +432,67 @@ fun YuriApp(
             playing = player.isPlayingNow()
             positionMs = player.getPositionMs()
             durationMs = player.getDurationMs()
+            // Re-read .value every tick so a missed StateFlow emission still lands.
+            val fromQueue = player.getQueueSnapshot().currentSong
+            val live = fromQueue ?: player.getCurrentSong()
+            if (live != null && (currentSong == null || !live.isSameAs(currentSong))) {
+                currentSong = live
+            }
+            peekNext = player.peekNext()
+            peekPrev = player.peekPrevious()
             delay(250)
         }
     }
-    LaunchedEffect(snapshot) {
-        peekNext = player.peekNext()
-        peekPrev = player.peekPrevious()
-    }
 
-    LaunchedEffect(currentSong?.id, currentSong?.path, colorRev) {
-        themeStore.updateCurrent(context, currentSong, baseScheme)
+    LaunchedEffect(
+        currentSong?.id,
+        currentSong?.path,
+        currentSong?.title,
+        currentSong?.album,
+        colorRev
+    ) {
+        val incoming = currentSong
+        activity?.title = ActivityTitleFormat.format(incoming)
+        if (incoming == null) {
+            themeStore.updateCurrent(context, null, baseScheme)
+            return@LaunchedEffect
+        }
+        val cur = themeStore.current.value
+        val already = cur != null && (
+            cur.songId == incoming.id ||
+                (incoming.path != null && cur.path == incoming.path)
+            )
+        val peek = themeStore.peekNext.value
+        val warmNext = peek != null && (
+            peek.songId == incoming.id ||
+                (incoming.path != null && peek.path == incoming.path)
+            )
+        if (already) {
+            // Cover already matches; still refresh neighbors.
+        } else if (warmNext) {
+            // SwipeableAlbumArt slides then promoteNext. Snap if that doesn't.
+            delay(320)
+            val still = themeStore.current.value
+            val ok = still != null && (
+                still.songId == incoming.id ||
+                    (incoming.path != null && still.path == incoming.path)
+                )
+            if (!ok) themeStore.promoteNext()
+            val after = themeStore.current.value
+            val ok2 = after != null && (
+                after.songId == incoming.id ||
+                    (incoming.path != null && after.path == incoming.path)
+                )
+            if (!ok2) themeStore.updateCurrent(context, incoming, baseScheme)
+        } else {
+            themeStore.updateCurrent(context, incoming, baseScheme)
+        }
         themeStore.updateNeighbors(context, peekNext, peekPrev, baseScheme)
-        activity?.title = ActivityTitleFormat.format(currentSong)
     }
-    LaunchedEffect(peekNext?.id, peekPrev?.id) {
+    LaunchedEffect(peekNext?.id, peekPrev?.id, peekNext?.path, peekPrev?.path) {
+        // Wait for the cover slide to promote peek-next; replacing it
+        // immediately would snap art and skip the animation.
+        delay(350)
         themeStore.updateNeighbors(context, peekNext, peekPrev, baseScheme)
     }
 

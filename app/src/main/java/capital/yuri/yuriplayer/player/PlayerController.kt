@@ -18,6 +18,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.collect
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 
 class PlayerController(
@@ -31,6 +32,7 @@ class PlayerController(
     private var bound = false
     private var pendingAction: (() -> Unit)? = null
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
+    private var serviceNowPlayingJob: Job? = null
 
     private val _isConnected = MutableStateFlow(false)
     val isConnected: StateFlow<Boolean> = _isConnected.asStateFlow()
@@ -47,6 +49,15 @@ class PlayerController(
             bound = true
             _isConnected.value = true
             _nowPlaying.value = service?.getCurrentSong() ?: queueManager.currentSong()
+            serviceNowPlayingJob?.cancel()
+            val svc = service
+            if (svc != null) {
+                serviceNowPlayingJob = scope.launch {
+                    svc.nowPlaying.collect { song ->
+                        _nowPlaying.value = song ?: queueManager.currentSong()
+                    }
+                }
+            }
             val pending = pendingAction
             pendingAction = null
             try {
@@ -57,6 +68,8 @@ class PlayerController(
         }
 
         override fun onServiceDisconnected(name: ComponentName?) {
+            serviceNowPlayingJob?.cancel()
+            serviceNowPlayingJob = null
             service = null
             bound = false
             _isConnected.value = false
@@ -66,7 +79,9 @@ class PlayerController(
     init {
         scope.launch {
             queueManager.snapshot.collect { snap ->
-                _nowPlaying.value = snap.currentSong
+                if (serviceNowPlayingJob == null) {
+                    _nowPlaying.value = snap.currentSong
+                }
             }
         }
     }
@@ -85,6 +100,8 @@ class PlayerController(
             context.unbindService(connection)
         } catch (_: IllegalArgumentException) {
         }
+        serviceNowPlayingJob?.cancel()
+        serviceNowPlayingJob = null
         bound = false
         service = null
         _isConnected.value = false
