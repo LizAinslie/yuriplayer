@@ -159,8 +159,7 @@ fun AlbumDetailScreen(
         pinStore.contains(StuffPinKind.ALBUM, albumKeyStr)
     }
 
-    // Name-first expand — navigation seed is often a single JF track while
-    // catalog has the full release under other albumKeys.
+    // Start with navigation seed; replace only with equal-or-richer lists.
     var liveAlbum by remember(albumKeyStr) { mutableStateOf(album) }
     LaunchedEffect(albumKeyStr, album.name, album.artist) {
         val resolved = withContext(Dispatchers.IO) {
@@ -175,11 +174,23 @@ fun AlbumDetailScreen(
             catalog.albumItemForKey(albumKeyStr)
         }
         val fromLocal = findLocalAlbum(library, album.name, album.artist)
-        liveAlbum = mergeAlbumSources(
+        val merged = mergeAlbumSources(
             seed = resolved ?: album,
             fromCatalog = fromCatalog,
             fromLocal = fromLocal
         )
+        // Absolute never-shrink: once we have N>1 tracks, refuse thinner updates
+        liveAlbum = if (liveAlbum.songs.size > 1 && merged.songs.size < liveAlbum.songs.size) {
+            liveAlbum.copy(
+                trackCount = maxOf(liveAlbum.trackCount, merged.trackCount, liveAlbum.songs.size)
+            )
+        } else if (merged.songs.size >= liveAlbum.songs.size) {
+            merged
+        } else if (liveAlbum.songs.size <= 1) {
+            merged
+        } else {
+            liveAlbum
+        }
     }
 
     val collapseRangePx = with(density) { (ExpandedHeaderBody - CollapsedBarHeight).toPx() }
@@ -236,11 +247,12 @@ fun AlbumDetailScreen(
     val releaseYear = remember(liveAlbum.songs, coverGen) {
         liveAlbum.songs.mapNotNull { it.year }.maxOrNull()
     }
-    val releaseType = guessReleaseType(liveAlbum.trackCount.coerceAtLeast(liveAlbum.songs.size))
+    val shownTrackCount = liveAlbum.songs.size.coerceAtLeast(1)
+    val releaseType = guessReleaseType(shownTrackCount)
     val metaLine = buildString {
         append(releaseType)
         if (releaseYear != null) append(" · $releaseYear")
-        append(" · ${formatTrackCount(liveAlbum.songs.size.coerceAtLeast(liveAlbum.trackCount))}")
+        append(" · ${formatTrackCount(shownTrackCount)}")
     }
 
     val showPause = isSourceActive && isPlaying
@@ -383,10 +395,15 @@ fun AlbumDetailScreen(
                         }
                         itemsIndexed(
                             tracks,
-                            key = { _, s -> "${s.id}-${s.path}" }
+                            key = { i, s ->
+                                // Unique even when id/path collide across sources
+                                "${s.songKey}#$i#${s.trackNumber}"
+                            }
                         ) { _, song ->
                             val globalIndex = liveAlbum.songs.indexOfFirst {
-                                (it.path != null && it.path == song.path) || it.id == song.id
+                                it.songKey == song.songKey ||
+                                    (it.path != null && it.path == song.path) ||
+                                    it.id == song.id
                             }.coerceAtLeast(0)
                             SwipeAddSongRow(
                                 song = song,
