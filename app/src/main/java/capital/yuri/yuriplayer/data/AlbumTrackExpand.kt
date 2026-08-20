@@ -4,18 +4,12 @@ import capital.yuri.yuriplayer.data.db.CatalogDao
 import capital.yuri.yuriplayer.data.db.CatalogTrackEntity
 
 /**
- * Resolve every catalog row for a release.
+ * Resolve catalog rows for one release.
  *
- * Local + Jellyfin often store *different* albumKey strings for the same album
- * (artist spelling, albumArtist vs artist). Explore song search still finds them
- * by title; album pages used to only query one albumKey and showed a single track.
- *
- * Strategy:
- *  1. rows for the exact albumKey
- *  2. all rows with the same album tag (any source / key)
- *  3. LIKE search on album name + soft artist filter
- *  4. folded albumKey variant
- * then [CatalogRepository.dedupeLogicalTracks] (local preferred).
+ * Album *name* alone is not enough — "Let Them Talk" (A2D Sound) must not merge
+ * with Hugh Laurie's LP of the same title. When [artistName] is known we **always**
+ * require a matching albumArtist/artist (folded). Empty artist tags on a row are
+ * only kept if the row already shares the seed albumKey.
  */
 suspend fun expandAlbumTracks(
     dao: CatalogDao,
@@ -35,10 +29,6 @@ suspend fun expandAlbumTracks(
     return expandAlbumTracksByName(dao, albumName, artistName, seedKey = albumKey, seedRows = direct)
 }
 
-/**
- * Name-first expand used by album pages when the navigation seed only has one track
- * but the header trackCount says otherwise.
- */
 suspend fun expandAlbumTracksByName(
     dao: CatalogDao,
     albumName: String?,
@@ -53,13 +43,24 @@ suspend fun expandAlbumTracksByName(
         dao.getTracksForAlbum(seedKey).forEach { candidates.putIfAbsent(it.songKey, it) }
     }
 
+    val artistFolded = TrackIdentity.normalizeToken(artistName)
+    val seedKeys = candidates.keys.toHashSet()
+
+    fun artistOk(t: CatalogTrackEntity): Boolean {
+        if (artistFolded.isEmpty()) return true
+        // Already on the exact seed key → keep (same release fragment)
+        if (t.songKey in seedKeys) return true
+        if (!seedKey.isNullOrBlank() && t.albumKey == seedKey) return true
+        val aa = TrackIdentity.normalizeToken(t.albumArtist ?: t.artist)
+        if (aa.isEmpty()) return false // unknown artist, different key → drop
+        return aa == artistFolded || TrackIdentity.normalizeToken(t.artist) == artistFolded
+    }
+
     if (!albumName.isNullOrBlank()) {
-        // Exact album tag across every source/key
         dao.getTracksByAlbumName(albumName.trim(), limit = 500).forEach { t ->
-            candidates.putIfAbsent(t.songKey, t)
+            if (artistOk(t)) candidates.putIfAbsent(t.songKey, t)
         }
 
-        // LIKE broaden — catches trailing spaces / slight variants
         val needle = albumName.trim().take(64)
         if (needle.isNotEmpty()) {
             dao.searchTracks(needle, limit = 400).forEach { t ->
@@ -67,27 +68,31 @@ suspend fun expandAlbumTracksByName(
                 if (!TrackIdentity.albumsMatch(t.album, albumName) &&
                     !t.album.equals(albumName, ignoreCase = true)
                 ) return@forEach
+                if (!artistOk(t)) return@forEach
                 candidates.putIfAbsent(t.songKey, t)
             }
         }
 
         val folded = albumKey(albumName, artistName)
         if (folded != seedKey) {
-            dao.getTracksForAlbum(folded).forEach { candidates.putIfAbsent(it.songKey, it) }
+            dao.getTracksForAlbum(folded).forEach { t ->
+                if (artistOk(t)) candidates.putIfAbsent(t.songKey, t)
+            }
         }
     }
 
-    // Soft artist filter only when the set is huge (ambiguous album titles)
-    val artistFolded = TrackIdentity.normalizeToken(artistName)
-    val filtered = if (artistFolded.isNotEmpty() && candidates.size > 80) {
-        val match = candidates.values.filter { t ->
-            val aa = TrackIdentity.normalizeToken(t.albumArtist ?: t.artist)
-            aa.isEmpty() || aa == artistFolded ||
-                TrackIdentity.normalizeToken(t.artist) == artistFolded
-        }
-        if (match.size >= 2) match else candidates.values
-    } else {
+    // Final hard filter — never keep a foreign artist once we know ours
+    val filtered = if (artistFolded.isEmpty()) {
         candidates.values
+    } else {
+        candidates.values.filter { t ->
+            if (t.songKey in seedKeys || (!seedKey.isNullOrBlank() && t.albumKey == seedKey)) {
+                true
+            } else {
+                val aa = TrackIdentity.normalizeToken(t.albumArtist ?: t.artist)
+                aa == artistFolded || TrackIdentity.normalizeToken(t.artist) == artistFolded
+            }
+        }
     }
 
     return CatalogRepository.dedupeLogicalTracks(filtered.map { it.toSong() })
