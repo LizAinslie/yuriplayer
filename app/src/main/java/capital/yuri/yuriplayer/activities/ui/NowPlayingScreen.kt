@@ -45,6 +45,8 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -186,6 +188,9 @@ fun NowPlayingScreen(
     var dismissFrac by remember { mutableFloatStateOf(0f) }
     var topPull by remember { mutableFloatStateOf(0f) }
 
+    var skipToken by remember { mutableLongStateOf(0L) }
+    var skipDirection by remember { mutableIntStateOf(0) }
+
     val dismissThreshold = with(density) { 140.dp.toPx() }
 
     val canSwipePrev = peekPrevSong != null
@@ -204,7 +209,8 @@ fun NowPlayingScreen(
     )
 
     fun requestSkipNext() {
-        onNext()
+        skipDirection = -1
+        skipToken++
     }
 
     fun requestSkipPrev() {
@@ -212,7 +218,8 @@ fun NowPlayingScreen(
             onPrev()
             return
         }
-        onForcePrev()
+        skipDirection = 1
+        skipToken++
     }
 
     LaunchedEffect(songKey) {
@@ -404,8 +411,11 @@ fun NowPlayingScreen(
                         onHorizontalFraction = { hFrac = it },
                         onDismissFraction = { dismissFrac = it },
                         allowPrevTrackChange = canSwipePrev,
-                        playingSongId = song?.id,
-                        playingSongKey = songKey,
+                        skipToken = skipToken,
+                        skipDirection = skipDirection,
+                        onSkipConsumed = {
+                            skipDirection = 0
+                        },
                         horizontalInset = 20.dp,
                         modifier = Modifier.fillMaxWidth()
                     )

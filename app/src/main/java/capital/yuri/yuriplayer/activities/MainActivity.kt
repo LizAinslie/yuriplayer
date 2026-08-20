@@ -413,7 +413,7 @@ fun YuriApp(
     var positionMs by remember { mutableLongStateOf(0L) }
     var durationMs by remember { mutableLongStateOf(0L) }
     val snapshot by player.snapshot.collectAsState()
-    val currentSong = snapshot.currentSong
+    val currentSong by player.nowPlaying.collectAsState()
     var peekNext by remember { mutableStateOf<Song?>(null) }
     var peekPrev by remember { mutableStateOf<Song?>(null) }
 
@@ -434,42 +434,11 @@ fun YuriApp(
     }
 
     LaunchedEffect(currentSong?.id, currentSong?.path, colorRev) {
-        val incoming = currentSong
-        if (incoming == null) {
-            themeStore.updateCurrent(context, null, baseScheme)
-            activity?.title = ActivityTitleFormat.format(null)
-            return@LaunchedEffect
-        }
-        val peek = themeStore.peekNext.value
-        val warmNext = peek != null &&
-            (peek.songId == incoming.id || (incoming.path != null && peek.path == incoming.path))
-        if (warmNext) {
-            // Cover skip animation promotes peek-next; if it doesn't, snap after the slide.
-            delay(400)
-            val cur = themeStore.current.value
-            val matched = cur != null &&
-                (cur.songId == incoming.id || (incoming.path != null && cur.path == incoming.path))
-            if (!matched) themeStore.promoteNext()
-            val still = themeStore.current.value
-            val ok = still != null &&
-                (still.songId == incoming.id || (incoming.path != null && still.path == incoming.path))
-            if (!ok) themeStore.updateCurrent(context, incoming, baseScheme)
-        } else {
-            themeStore.updateCurrent(context, incoming, baseScheme)
-        }
-        activity?.title = ActivityTitleFormat.format(incoming)
+        themeStore.updateCurrent(context, currentSong, baseScheme)
+        themeStore.updateNeighbors(context, peekNext, peekPrev, baseScheme)
+        activity?.title = ActivityTitleFormat.format(currentSong)
     }
-    LaunchedEffect(peekNext?.id, peekPrev?.id, currentSong?.id, currentSong?.path) {
-        val incoming = currentSong
-        if (incoming != null) {
-            for (i in 0 until 20) {
-                val cur = themeStore.current.value
-                val showing = cur != null &&
-                    (cur.songId == incoming.id || (incoming.path != null && cur.path == incoming.path))
-                if (showing) break
-                delay(50)
-            }
-        }
+    LaunchedEffect(peekNext?.id, peekPrev?.id) {
         themeStore.updateNeighbors(context, peekNext, peekPrev, baseScheme)
     }
 

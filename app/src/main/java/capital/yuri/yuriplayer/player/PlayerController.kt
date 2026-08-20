@@ -11,9 +11,14 @@ import capital.yuri.yuriplayer.data.AlbumItem
 import capital.yuri.yuriplayer.data.Song
 import capital.yuri.yuriplayer.player.radio.RadioEngine
 import capital.yuri.yuriplayer.player.radio.RadioSourcePrefs
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.collect
+import kotlinx.coroutines.launch
 
 class PlayerController(
     private val context: Context,
@@ -25,9 +30,13 @@ class PlayerController(
     private var service: MusicService? = null
     private var bound = false
     private var pendingAction: (() -> Unit)? = null
+    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
 
     private val _isConnected = MutableStateFlow(false)
     val isConnected: StateFlow<Boolean> = _isConnected.asStateFlow()
+
+    private val _nowPlaying = MutableStateFlow<Song?>(queueManager.currentSong())
+    val nowPlaying: StateFlow<Song?> = _nowPlaying.asStateFlow()
 
     val historyEntries: StateFlow<List<HistoryEntry>> get() = historyStore.entries
 
@@ -37,6 +46,7 @@ class PlayerController(
             service = local.getService()
             bound = true
             _isConnected.value = true
+            _nowPlaying.value = service?.getCurrentSong() ?: queueManager.currentSong()
             val pending = pendingAction
             pendingAction = null
             try {
@@ -50,6 +60,14 @@ class PlayerController(
             service = null
             bound = false
             _isConnected.value = false
+        }
+    }
+
+    init {
+        scope.launch {
+            queueManager.snapshot.collect { snap ->
+                _nowPlaying.value = snap.currentSong
+            }
         }
     }
 
@@ -242,7 +260,7 @@ class PlayerController(
     }
 
     fun isPlayingNow(): Boolean = service?.isPlaying() == true
-    fun getCurrentSong(): Song? = service?.getCurrentSong()
+    fun getCurrentSong(): Song? = service?.getCurrentSong() ?: queueManager.currentSong()
     fun getCurrentIndex(): Int = service?.getCurrentIndex() ?: -1
     fun getPositionMs(): Long = service?.getPositionMs() ?: 0L
     fun getDurationMs(): Long = service?.getDurationMs() ?: 0L
