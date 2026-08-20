@@ -53,8 +53,8 @@ class SubsonicLibrarySource(
     }
 
     override suspend fun scan(): LibrarySnapshot {
-        val session = sessionOrNull() ?: error("Incomplete Subsonic instance")
-        client.ping(session).getOrThrow()
+        val base = sessionOrNull() ?: error("Incomplete Subsonic instance")
+        val session = client.ping(base).getOrThrow()
         val songs = client.listAllSongs(session).getOrThrow()
         return LibrarySnapshot(
             sourceId = id,
@@ -68,7 +68,7 @@ class SubsonicLibrarySource(
         val user = instance.username ?: return null
         val secret = instance.secret ?: return null
         return SubsonicClient.Session(
-            baseUrl = url,
+            baseUrl = SourceInstanceRepository.normalizeBaseUrl(url),
             username = user,
             password = secret
         )
