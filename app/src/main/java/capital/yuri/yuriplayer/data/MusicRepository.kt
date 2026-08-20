@@ -35,6 +35,12 @@ class MusicRepository(
             "/ui/", "/system/media/"
         )
         private val YEAR_REGEX = Regex("""(19|20)\d{2}""")
+        private val FOLDER_COVER_NAMES = listOf(
+            "cover.jpg", "cover.jpeg", "cover.png",
+            "folder.jpg", "folder.png",
+            "AlbumArt.jpg", "AlbumArt.png",
+            "front.jpg", "front.png"
+        )
     }
 
     suspend fun scanLibrary(): List<Song> = withContext(Dispatchers.IO) {
@@ -44,7 +50,6 @@ class MusicRepository(
         }
     }
 
-    /** MediaStore query + filesystem fill for configured roots (legacy default). */
     private suspend fun scanMediaStoreHybrid(): List<Song> {
         requestMediaScan()
 
@@ -63,8 +68,8 @@ class MusicRepository(
     }
 
     /**
-     * Walk user-granted SAF trees only. Uses DocumentFile + our tag reader;
-     * never calls MediaStore / MediaScannerConnection.
+     * Walk user-granted SAF trees only. Attaches sibling folder cover as
+     * [Song.albumArtUri] when present so the art pipeline can open a real image.
      */
     private fun scanManualTrees(): List<Song> {
         val trees = settings.getManualTreeUris()
@@ -81,13 +86,14 @@ class MusicRepository(
                 continue
             }
             Log.i(TAG, "manual scan tree $uriString")
-            walkDocumentTree(root, depth = 0, maxDepth = 12) { doc ->
+            walkDocumentTree(root, depth = 0, maxDepth = 12) { doc, parent ->
                 val name = doc.name ?: return@walkDocumentTree
                 if (!isAudioFileName(name)) return@walkDocumentTree
                 val uri = doc.uri
                 val key = uri.toString()
                 if (byKey.containsKey(key)) return@walkDocumentTree
                 val tags = readTagsFromUri(uri)
+                val coverUri = findFolderCoverUri(parent)
                 byKey[key] = Song(
                     id = key.hashCode().toLong(),
                     title = tags.title ?: name.substringBeforeLast('.'),
@@ -96,6 +102,7 @@ class MusicRepository(
                     album = tags.album,
                     durationMs = tags.durationMs,
                     contentUri = uri,
+                    albumArtUri = coverUri,
                     trackNumber = tags.trackNumber,
                     year = tags.year,
                     genre = tags.genre,
@@ -108,11 +115,26 @@ class MusicRepository(
         return byKey.values.toList()
     }
 
+    private fun findFolderCoverUri(dir: DocumentFile?): Uri? {
+        if (dir == null || !dir.isDirectory) return null
+        val children = try {
+            dir.listFiles()
+        } catch (_: Exception) {
+            return null
+        }
+        val byLower = children.filter { it.isFile }.associateBy { it.name?.lowercase().orEmpty() }
+        for (name in FOLDER_COVER_NAMES) {
+            val hit = byLower[name.lowercase()] ?: continue
+            return hit.uri
+        }
+        return null
+    }
+
     private fun walkDocumentTree(
         dir: DocumentFile,
         depth: Int,
         maxDepth: Int,
-        onFile: (DocumentFile) -> Unit
+        onFile: (DocumentFile, DocumentFile) -> Unit
     ) {
         if (depth > maxDepth) return
         val children = try {
@@ -124,7 +146,7 @@ class MusicRepository(
         for (child in children) {
             when {
                 child.isDirectory -> walkDocumentTree(child, depth + 1, maxDepth, onFile)
-                child.isFile -> onFile(child)
+                child.isFile -> onFile(child, dir)
             }
         }
     }
@@ -365,7 +387,6 @@ class MusicRepository(
 
     private fun readTagsFromUri(uri: Uri): FileTags {
         val fromMmr = readTagsWithRetrieverUri(uri)
-        // jaudiotagger needs a real File; try openFileDescriptor path when possible
         val path = uri.path
         val fromJaudio = if (path != null && path.startsWith("/") && File(path).canRead()) {
             readTagsWithJaudio(path)
