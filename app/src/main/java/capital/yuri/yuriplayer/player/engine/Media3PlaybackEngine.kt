@@ -92,6 +92,7 @@ class Media3PlaybackEngine(
                 else -> PlaybackEngine.PlaybackState.IDLE
             }
             dispatch { onPlaybackStateChanged(state) }
+            buffering = playbackState == Player.STATE_BUFFERING
             if (playbackState == Player.STATE_ENDED) dispatch { onEnded() }
         }
 
@@ -123,6 +124,8 @@ class Media3PlaybackEngine(
 
     /** Exposed for MediaSession on Android. */
     fun exoPlayer(): ExoPlayer = player
+
+    private var buffering: Boolean = false
     private val _isPlaying = MutableStateFlow(false)
 
     override val isPlaying: StateFlow<Boolean> = _isPlaying.asStateFlow()
@@ -198,6 +201,8 @@ class Media3PlaybackEngine(
     }
 
     override fun getPlayWhenReady(): Boolean = player.playWhenReady
+
+    override fun isBuffering(): Boolean = buffering
 
     override fun release() {
         listeners.clear()

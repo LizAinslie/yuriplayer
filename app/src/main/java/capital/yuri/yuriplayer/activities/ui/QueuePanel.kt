@@ -45,6 +45,7 @@ import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -258,6 +259,8 @@ private fun QueueTabContent(
     val upcomingCold = remember(snapshot.coldQueue, currentKey) {
         keyedQueue("cold", snapshot.coldQueue, ::isCurrent)
     }
+    val latestHot = rememberUpdatedState(upcomingHot)
+    val latestCold = rememberUpdatedState(upcomingCold)
     val radioNext = remember(snapshot.radioUpcoming, currentKey) {
         keyedQueue("radio", snapshot.radioUpcoming) { false }
     }
@@ -318,6 +321,7 @@ private fun QueueTabContent(
                 ) { entry ->
                     SwipeableQueueRow(
                         song = entry.song,
+                        rowId = entry.key,
                         index = entry.index,
                         listSize = snapshot.hotQueue.size,
                         isCurrent = false,
@@ -329,7 +333,11 @@ private fun QueueTabContent(
                         listTopInRoot = listTopInRoot,
                         onClick = { onPlayItem(QueueLane.HOT, entry.index) },
                         onCommitMove = { f, t -> onMoveHot(f, t) },
-                        onSwipeRemove = { onRemoveHot(entry.index) },
+                        onSwipeRemove = {
+                            val live = latestHot.value.firstOrNull { it.key == entry.key }?.index
+                                ?: entry.index
+                            onRemoveHot(live)
+                        },
                         onSwipePromote = null,
                         modifier = Modifier.animateItem(
                             fadeInSpec = fadeSpec,
@@ -394,6 +402,7 @@ private fun QueueTabContent(
             ) { entry ->
                 SwipeableQueueRow(
                     song = entry.song,
+                    rowId = entry.key,
                     index = entry.index,
                     listSize = snapshot.coldQueue.size,
                     isCurrent = false,
@@ -405,8 +414,16 @@ private fun QueueTabContent(
                     listTopInRoot = listTopInRoot,
                     onClick = { onPlayItem(QueueLane.COLD, entry.index) },
                     onCommitMove = { f, t -> onMoveCold(f, t) },
-                    onSwipeRemove = { onRemoveCold(entry.index) },
-                    onSwipePromote = { onMoveColdToHot(entry.index) },
+                    onSwipeRemove = {
+                        val live = latestCold.value.firstOrNull { it.key == entry.key }?.index
+                            ?: entry.index
+                        onRemoveCold(live)
+                    },
+                    onSwipePromote = {
+                        val live = latestCold.value.firstOrNull { it.key == entry.key }?.index
+                            ?: entry.index
+                        onMoveColdToHot(live)
+                    },
                     onDragPromote = { onMoveColdToHot(it) },
                     modifier = Modifier.animateItem(
                         fadeInSpec = fadeSpec,
@@ -503,6 +520,7 @@ private fun NowPlayingQueueCard(song: Song, radioLabel: String? = null) {
 @Composable
 private fun SwipeableQueueRow(
     song: Song,
+    rowId: String,
     index: Int,
     listSize: Int,
     isCurrent: Boolean,
@@ -521,9 +539,14 @@ private fun SwipeableQueueRow(
 ) {
     val density = LocalDensity.current
     val swipeThreshold = with(density) { 96.dp.toPx() }
-    var swipeX by remember { mutableFloatStateOf(0f) }
+    var swipeX by remember(rowId) { mutableFloatStateOf(0f) }
     val isDragged = drag.active && drag.from == index
     var rowCoords by remember { mutableStateOf<LayoutCoordinates?>(null) }
+    val latestRemove = rememberUpdatedState(onSwipeRemove)
+    val latestPromote = rememberUpdatedState(onSwipePromote)
+    val latestMove = rememberUpdatedState(onCommitMove)
+    val latestClick = rememberUpdatedState(onClick)
+    val latestDragPromote = rememberUpdatedState(onDragPromote)
 
     val targetShift = when {
         !drag.active || isDragged -> 0f
@@ -605,8 +628,8 @@ private fun SwipeableQueueRow(
                         )
                     else Modifier.background(MaterialTheme.colorScheme.surface)
                 )
-                .clickable(enabled = !drag.active && swipeX == 0f, onClick = onClick)
-                .pointerInput(index, listSize, listTopInRoot) {
+                .clickable(enabled = !drag.active && swipeX == 0f, onClick = { latestClick.value() })
+                .pointerInput(rowId, listSize, listTopInRoot) {
                     detectDragGesturesAfterLongPress(
                         onDragStart = { start ->
                             swipeX = 0f
@@ -618,8 +641,8 @@ private fun SwipeableQueueRow(
                         onDragEnd = {
                             autoScroll.onDragEnd()
                             drag.end()?.let { (f, t, promote) ->
-                                if (promote && allowPromoteToHot) onDragPromote?.invoke(f)
-                                else if (f != t) onCommitMove(f, t)
+                                if (promote && allowPromoteToHot) latestDragPromote.value?.invoke(f)
+                                else if (f != t) latestMove.value(f, t)
                             }
                         },
                         onDragCancel = {
@@ -633,13 +656,14 @@ private fun SwipeableQueueRow(
                         }
                     )
                 }
-                .pointerInput(index, drag.active) {
+                .pointerInput(rowId, drag.active) {
                     if (drag.active) return@pointerInput
                     detectHorizontalDragGestures(
                         onDragEnd = {
                             when {
-                                swipeX < -swipeThreshold -> onSwipeRemove()
-                                swipeX > swipeThreshold && onSwipePromote != null -> onSwipePromote()
+                                swipeX < -swipeThreshold -> latestRemove.value()
+                                swipeX > swipeThreshold && latestPromote.value != null ->
+                                    latestPromote.value?.invoke()
                             }
                             swipeX = 0f
                         },

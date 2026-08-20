@@ -332,6 +332,23 @@ class PlaylistRepository(
             touch(id)
         }
 
+    /**
+     * Remove the [occurrence]-th copy of [songKey] (0-based). Safer than a raw
+     * list index when Compose gesture detectors hold a stale position.
+     */
+    suspend fun removeOccurrence(id: String, songKey: String, occurrence: Int = 0) =
+        withContext(Dispatchers.IO) {
+            val keys = dao.getTracks(id).map { it.songKey }.toMutableList()
+            var seen = 0
+            val pos = keys.indices.firstOrNull { i ->
+                if (keys[i] != songKey) false
+                else (seen++ == occurrence)
+            } ?: return@withContext
+            keys.removeAt(pos)
+            dao.replaceTracks(id, keys)
+            touch(id)
+        }
+
     suspend fun move(id: String, from: Int, to: Int) =
         withContext(Dispatchers.IO) {
             val keys = dao.getTracks(id).map { it.songKey }.toMutableList()

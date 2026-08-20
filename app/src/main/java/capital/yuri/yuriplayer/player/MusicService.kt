@@ -60,6 +60,8 @@ class MusicService : Service() {
     private var advancing = false
     private var recoveringAudio = false
     private var lastHistoryKey: String? = null
+    private var windowGeneration: Int = 0
+    private var endedForWindow: Int = -1
 
     private var stallSamplePos = -1L
     private var stallSampleAtElapsed = 0L
@@ -213,6 +215,8 @@ class MusicService : Service() {
 
         try {
             // Single-item window. Queue advance is MusicService-owned (onEnded / skip).
+            windowGeneration += 1
+            endedForWindow = -1
             hooks.playWindow(
                 song = current,
                 next = null,
@@ -260,6 +264,9 @@ class MusicService : Service() {
 
     private fun onEngineEnded() {
         if (advancing) return
+        val gen = windowGeneration
+        if (endedForWindow == gen) return
+        endedForWindow = gen
 
         if (inUserSeekGuard()) {
             val target = stickySeekTargetMs.takeIf { it >= 0L }
@@ -555,16 +562,18 @@ class MusicService : Service() {
                     stallSamplePos = -1L
                     continue
                 }
-
-                val pos = hooks.getPositionMs().coerceAtLeast(0L)
-                val duration = hooks.getDurationMs().takeIf { it > 0 } ?: 0L
-                if (duration > 0L && pos >= duration - NEAR_END_MS) {
-                    stallSamplePos = pos
-                    stallSampleAtElapsed = SystemClock.elapsedRealtime()
+                // Buffering is expected on Jellyfin/HTTP. Reloading here is what
+                // made remote playback sound cut-up.
+                if (hooks.isBuffering()) {
+                    stallSamplePos = -1L
                     continue
                 }
 
+                val pos = hooks.getPositionMs().coerceAtLeast(0L)
+                val duration = hooks.getDurationMs().takeIf { it > 0 } ?: 0L
                 val now = SystemClock.elapsedRealtime()
+                val remote = isRemoteSong(_nowPlaying.value)
+
                 if (pos != stallSamplePos) {
                     stallSamplePos = pos
                     stallSampleAtElapsed = now
@@ -572,12 +581,23 @@ class MusicService : Service() {
                 }
 
                 val frozenFor = now - stallSampleAtElapsed
-                val looksStuck = frozenFor >= STALL_MS &&
-                    (hooks.isPlaying() || hooks.getPlayWhenReady())
-                if (looksStuck && stallSamplePos >= 0L) {
+                if (stallSamplePos < 0L) continue
+
+                // Track finished but the engine never fired onEnded (common for
+                // HTTP files that VLC used to treat as live). Advance ourselves.
+                if (duration > 0L && pos >= duration - NEAR_END_MS) {
+                    if (frozenFor >= NEAR_END_ADVANCE_MS) {
+                        Log.i(TAG, "near-end freeze ${frozenFor}ms pos=$pos/$duration → onEnded")
+                        onEngineEnded()
+                    }
+                    continue
+                }
+
+                val threshold = if (remote) NETWORK_STALL_MS else STALL_MS
+                if (frozenFor >= threshold) {
                     Log.w(
                         TAG,
-                        "stall watchdog: pos frozen at $pos for ${frozenFor}ms — recovering"
+                        "stall watchdog: pos frozen at $pos for ${frozenFor}ms remote=$remote — recovering"
                     )
                     recoverFromAudioGlitch(atPositionMs = pos)
                 }
@@ -792,8 +812,10 @@ class MusicService : Service() {
         private const val REQUEST_NEXT = 103
         private const val REQUEST_DELETE = 104
         private const val STALL_POLL_MS = 500L
-        private const val STALL_MS = 2_000L
-        private const val NEAR_END_MS = 500L
+        private const val STALL_MS = 4_000L
+        private const val NETWORK_STALL_MS = 12_000L
+        private const val NEAR_END_MS = 1_200L
+        private const val NEAR_END_ADVANCE_MS = 700L
         private const val STICKY_SEEK_MS = 1_200L
         private const val USER_SEEK_GUARD_MS = 1_000L
         private const val SEEK_CONFIRM_MS = 600L

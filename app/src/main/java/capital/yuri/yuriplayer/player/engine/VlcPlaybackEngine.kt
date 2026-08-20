@@ -38,11 +38,8 @@ class VlcPlaybackEngine(
         arrayListOf(
             "--audio-time-stretch",
             "--no-video",
-            // Start quickly; keep enough cache that UI work (open now-playing,
-            // add-to-queue) cannot underrun on low-end devices.
             "--file-caching=$FILE_CACHE_MS",
             "--network-caching=$NETWORK_CACHE_MS",
-            "--live-caching=$NETWORK_CACHE_MS",
             "--prefetch-buffer-size=$PREFETCH_BYTES"
         )
     )
@@ -52,6 +49,7 @@ class VlcPlaybackEngine(
             when (event.type) {
                 MediaPlayer.Event.Playing -> {
                     playWhenReady = true
+                    buffering = false
                     _isPlaying.value = true
                     val seek = pendingSeekMs
                     if (seek > 0L) {
@@ -74,6 +72,7 @@ class VlcPlaybackEngine(
                 MediaPlayer.Event.EndReached -> {
                     if (loadGeneration != eventGeneration) return@setEventListener
                     eventGeneration = -1
+                    buffering = false
                     _isPlaying.value = false
                     dispatch { onIsPlayingChanged(false) }
                     dispatch { onPlaybackStateChanged(PlaybackEngine.PlaybackState.ENDED) }
@@ -86,7 +85,8 @@ class VlcPlaybackEngine(
                     dispatch { onError("VLC playback error", recoverable = true) }
                 }
                 MediaPlayer.Event.Buffering -> {
-                    if (event.buffering < 100f) {
+                    buffering = event.buffering < 100f
+                    if (buffering) {
                         dispatch { onPlaybackStateChanged(PlaybackEngine.PlaybackState.BUFFERING) }
                     } else {
                         dispatch { onPlaybackStateChanged(PlaybackEngine.PlaybackState.READY) }
@@ -103,6 +103,7 @@ class VlcPlaybackEngine(
     private var pendingSeekMs: Long = -1L
     private var loadGeneration: Int = 0
     private var eventGeneration: Int = 0
+    @Volatile private var buffering: Boolean = false
 
     private var currentPfd: ParcelFileDescriptor? = null
     private var currentAfd: AssetFileDescriptor? = null
@@ -195,6 +196,8 @@ class VlcPlaybackEngine(
     }
 
     override fun getPlayWhenReady(): Boolean = playWhenReady
+
+    override fun isBuffering(): Boolean = buffering
 
     override fun release() {
         listeners.clear()
@@ -321,9 +324,10 @@ class VlcPlaybackEngine(
             media.addOption(":http-header=$k: $v")
         }
         if (item.isNetwork) {
+            // On-demand file (Jellyfin / Subsonic), NOT a live pipe.
+            // :http-continuous makes VLC never fire EndReached.
+            // :http-reconnect restarts the HTTP GET and chops the audio.
             media.addOption(":network-caching=$NETWORK_CACHE_MS")
-            media.addOption(":http-reconnect")
-            media.addOption(":http-continuous")
         } else {
             media.addOption(":file-caching=$FILE_CACHE_MS")
         }
@@ -370,8 +374,8 @@ class VlcPlaybackEngine(
     companion object {
         private const val TAG = "VlcEngine"
         private const val FILE_CACHE_MS = 1500
-        private const val NETWORK_CACHE_MS = 2500
-        private const val PREFETCH_BYTES = 2 * 1024 * 1024
+        private const val NETWORK_CACHE_MS = 6000
+        private const val PREFETCH_BYTES = 4 * 1024 * 1024
 
         val DESCRIPTOR = PlaybackEngineDescriptor(
             id = "vlc",

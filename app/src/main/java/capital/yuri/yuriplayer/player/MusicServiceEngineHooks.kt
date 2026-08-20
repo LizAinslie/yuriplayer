@@ -77,6 +77,8 @@ internal class MusicServiceEngineHooks(
 
     fun getPlayWhenReady(): Boolean = if (active) host.getPlayWhenReady() else false
 
+    fun isBuffering(): Boolean = active && host.isBuffering()
+
     fun sessionToken() = host.sessionBridge.sessionToken()
 
     fun updateMetadata(song: Song?) {

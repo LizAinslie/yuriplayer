@@ -35,6 +35,9 @@ interface PlaybackEngine {
     fun setPlayWhenReady(value: Boolean)
     fun getPlayWhenReady(): Boolean
 
+    /** True while the backend is filling buffers (HTTP underrun, demux, …). */
+    fun isBuffering(): Boolean = false
+
     fun release()
 
     fun addListener(listener: Listener)
@@ -101,7 +104,35 @@ fun resolvePlayableUri(song: Song): Uri {
         val file = java.io.File(path)
         if (file.exists() && file.canRead()) return Uri.fromFile(file)
     }
+    if (!path.isNullOrBlank() && path.startsWith("jellyfin:")) {
+        return jellyfinPlayableUri(song.contentUri, path.removePrefix("jellyfin:"))
+    }
     return song.contentUri
+}
+
+/** Upgrade legacy `/Audio/{id}/stream` rows to `/universal` so players get a real file. */
+fun jellyfinPlayableUri(uri: Uri, itemId: String): Uri {
+    val raw = uri.toString()
+    if (raw.contains("/universal", ignoreCase = true)) return uri
+    val apiKey = uri.getQueryParameter("api_key")
+        ?: uri.getQueryParameter("ApiKey")
+        ?: return uri
+    val userId = uri.getQueryParameter("UserId")
+    val root = "${uri.scheme}://${uri.encodedAuthority}"
+    val id = itemId.ifBlank {
+        uri.getQueryParameter("_id")
+            ?: uri.pathSegments.getOrNull(uri.pathSegments.indexOf("Audio") + 1)
+            ?: return uri
+    }
+    return Uri.parse(buildString {
+        append(root)
+        append("/Audio/")
+        append(id)
+        append("/universal?Static=true&EnableRedirection=true&DeviceId=YuriPlayer")
+        append("&_id=").append(id)
+        append("&api_key=").append(Uri.encode(apiKey))
+        if (!userId.isNullOrBlank()) append("&UserId=").append(Uri.encode(userId))
+    })
 }
 
 fun isVirtualLibraryPath(path: String?): Boolean {

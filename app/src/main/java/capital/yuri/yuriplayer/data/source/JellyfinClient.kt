@@ -175,10 +175,24 @@ class JellyfinClient(
         result.items.orEmpty().mapNotNull { it.toSong(session) }
     }.onFailure { Log.w(TAG, "instantMixFromItem failed: ${it.message}") }
 
-    fun streamUrl(session: Session, itemId: String): String {
+    fun streamUrl(session: Session, itemId: String, container: String? = null): String {
         val root = session.baseUrl.trimEnd('/')
-        return "$root/Audio/$itemId/stream" +
-            "?static=true&api_key=${session.accessToken}&_id=$itemId"
+        // /universal + Static=true is a real file (Content-Length) instead of a
+        // chunked live pipe, so VLC/Media3 can buffer and fire end-of-track.
+        return buildString {
+            append(root)
+            append("/Audio/")
+            append(itemId)
+            append("/universal")
+            append("?UserId=").append(Uri.encode(session.userId))
+            append("&DeviceId=YuriPlayer")
+            append("&api_key=").append(Uri.encode(session.accessToken))
+            append("&Static=true")
+            append("&EnableRedirection=true")
+            append("&_id=").append(itemId)
+            val c = container?.trim()?.takeIf { it.isNotEmpty() }
+            if (c != null) append("&Container=").append(Uri.encode(c))
+        }
     }
 
     fun primaryImageUrl(session: Session, itemId: String, maxWidth: Int = 512): String =
@@ -196,7 +210,8 @@ class JellyfinClient(
 
     private fun BaseItemDto.toSong(session: Session): Song? {
         val id = id?.toString() ?: return null
-        val stream = streamUrl(session, id)
+        val fmt = mediaSources?.firstOrNull()?.container?.takeIf { it.isNotBlank() }
+        val stream = streamUrl(session, id, fmt)
 
         val art = when {
             albumId != null && !albumPrimaryImageTag.isNullOrBlank() ->
@@ -238,7 +253,7 @@ class JellyfinClient(
             year = productionYear,
             genre = genreStr,
             path = "jellyfin:$id",
-            mimeType = null,
+            mimeType = fmt?.let { "audio/$it" },
             explicit = explicitFlag
         )
     }

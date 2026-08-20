@@ -85,6 +85,7 @@ class MusicServiceLocalEngine(
     fun getPositionMs(): Long = engine.getPositionMs()
     fun getDurationMs(): Long = engine.getDurationMs()
     fun getPlayWhenReady(): Boolean = engine.getPlayWhenReady()
+    fun isBuffering(): Boolean = engine.isBuffering()
 
     fun release() {
         engine.removeListener(listener)

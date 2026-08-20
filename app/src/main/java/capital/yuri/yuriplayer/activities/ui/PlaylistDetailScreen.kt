@@ -19,7 +19,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -51,6 +51,7 @@ import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -94,6 +95,24 @@ private val CollapsedBarHeight = 56.dp
 private val GradientFadeLength = 200.dp
 private val ReorderHeaderBody = 110.dp
 private val EditHeaderBody = 380.dp
+
+private data class PlaylistRow(
+    val index: Int,
+    val song: Song,
+    val songKey: String,
+    val occurrence: Int,
+    val rowId: String
+)
+
+private fun playlistRows(songs: List<Song>): List<PlaylistRow> {
+    val seen = mutableMapOf<String, Int>()
+    return songs.mapIndexed { index, song ->
+        val k = song.songKey
+        val n = seen.getOrDefault(k, 0)
+        seen[k] = n + 1
+        PlaylistRow(index, song, k, n, "$k#$n")
+    }
+}
 
 private enum class PlaylistMode { Browse, EditDetails, Reorder }
 
@@ -434,6 +453,8 @@ fun PlaylistDetailScreen(
                 var dragFrom by remember { mutableIntStateOf(-1) }
                 var dragHover by remember { mutableIntStateOf(-1) }
                 var dragOffset by remember { mutableFloatStateOf(0f) }
+                val rows = remember(pl.songs) { playlistRows(pl.songs) }
+                val latestRows = rememberUpdatedState(rows)
 
                 autoScroll.onScrolled = { delta ->
                     if (dragFrom >= 0) {
@@ -451,7 +472,9 @@ fun PlaylistDetailScreen(
                         bottom = 96.dp
                     )
                 ) {
-                    itemsIndexed(pl.songs, key = { i, s -> "$i-${s.songKey}" }) { index, song ->
+                    items(rows, key = { it.rowId }) { row ->
+                        val index = row.index
+                        val song = row.song
                         if (mode == PlaylistMode.Reorder) {
                             val isDragged = dragFrom == index
                             val shift = when {
@@ -462,7 +485,7 @@ fun PlaylistDetailScreen(
                                 isDragged -> dragOffset
                                 else -> 0f
                             }
-                            var swipeX by remember { mutableFloatStateOf(0f) }
+                            var swipeX by remember(row.rowId) { mutableFloatStateOf(0f) }
                             val threshold = with(density) { 96.dp.toPx() }
 
                             Box(
@@ -479,7 +502,7 @@ fun PlaylistDetailScreen(
                                         }
                                         .fillMaxWidth()
                                         .background(Color.Transparent)
-                                        .pointerInput(index, pl.songs.size) {
+                                        .pointerInput(row.rowId, pl.songs.size) {
                                             detectDragGesturesAfterLongPress(
                                                 onDragStart = {
                                                     swipeX = 0f
@@ -520,12 +543,16 @@ fun PlaylistDetailScreen(
                                                 }
                                             )
                                         }
-                                        .pointerInput(index) {
+                                        .pointerInput(row.rowId) {
                                             detectHorizontalDragGestures(
                                                 onDragEnd = {
                                                     if (swipeX < -threshold) {
+                                                        val live = latestRows.value
+                                                            .firstOrNull { it.rowId == row.rowId }
+                                                        val key = live?.songKey ?: row.songKey
+                                                        val occ = live?.occurrence ?: row.occurrence
                                                         scope.launch {
-                                                            repo.removeAt(pl.id, index)
+                                                            repo.removeOccurrence(pl.id, key, occ)
                                                             Toast.makeText(
                                                                 context,
                                                                 "Removed",
@@ -568,7 +595,7 @@ fun PlaylistDetailScreen(
                                     }
                                     IconButton(onClick = {
                                         scope.launch {
-                                            repo.removeAt(pl.id, index)
+                                            repo.removeOccurrence(pl.id, row.songKey, row.occurrence)
                                             Toast.makeText(context, "Removed", Toast.LENGTH_SHORT).show()
                                         }
                                     }) {
