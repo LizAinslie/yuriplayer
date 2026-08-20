@@ -31,6 +31,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.FilterQuality
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
@@ -288,6 +289,7 @@ private fun ArtCard(bitmap: Bitmap?, modifier: Modifier = Modifier) {
                 bitmap = bitmap.asImageBitmap(),
                 contentDescription = null,
                 contentScale = ContentScale.Crop,
+                filterQuality = FilterQuality.High,
                 modifier = Modifier.fillMaxSize()
             )
         } else {

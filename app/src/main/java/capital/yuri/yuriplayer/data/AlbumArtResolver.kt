@@ -32,6 +32,10 @@ object AlbumArtResolver {
 
     private const val TAG = "AlbumArtResolver"
     private const val MAX_SAF_EXTRACT_BYTES = 80L * 1024L * 1024L
+    /** Master cover stored under filesDir/covers — big enough for now-playing. */
+    private const val PERSISTENT_COVER_SIZE = 1024
+    /** Don't persist list-row thumbs as the album master. */
+    private const val MIN_PERSIST_DIM = 256
 
     private val albumLocks = ConcurrentHashMap<String, Mutex>()
 
@@ -56,7 +60,7 @@ object AlbumArtResolver {
                 return@withContext scaleDown(preferred, maxSize)
             }
 
-            loadDiskAlbumCache(context, song, maxSize)?.let {
+            loadDiskAlbumCache(context, song, maxSize, minDim = maxSize)?.let {
                 return@withContext scaleDown(it, maxSize)
             }
 
@@ -75,14 +79,14 @@ object AlbumArtResolver {
                 return@withContext scaleDown(it, maxSize)
             }
 
-            loadEnrichedCover(context, song, maxSize)?.let {
+            loadEnrichedCover(context, song, maxSize, minDim = maxSize)?.let {
                 return@withContext scaleDown(it, maxSize)
             }
 
             val aKey = albumKey(song.album, song.effectiveAlbumArtist).ifBlank { song.songKey }
             val lock = albumLocks.getOrPut(aKey) { Mutex() }
             lock.withLock {
-                loadDiskAlbumCache(context, song, maxSize)?.let {
+                loadDiskAlbumCache(context, song, maxSize, minDim = maxSize)?.let {
                     return@withContext scaleDown(it, maxSize)
                 }
 
@@ -105,6 +109,12 @@ object AlbumArtResolver {
                     return@withContext scaleDown(it, maxSize)
                 }
 
+                // Last resort: an undersized cached cover beats a blank now-playing card.
+                loadDiskAlbumCache(context, song, maxSize, minDim = 0)?.let {
+                    Log.w(TAG, "undersized cache art album=$aKey ${it.width}x${it.height} want=$maxSize")
+                    return@withContext scaleDown(it, maxSize)
+                }
+
                 Log.w(TAG, "no art for album=$aKey path=${song.path} uri=${song.contentUri}")
             }
 
@@ -114,7 +124,8 @@ object AlbumArtResolver {
     suspend fun downloadToFile(url: String, dest: File, maxSize: Int = 512): Boolean =
         withContext(Dispatchers.IO) {
             try {
-                val bmp = openHttp(url)?.use { decodeStreamSampled(it, maxSize) } ?: return@withContext false
+                val bmp = openHttp(httpUrlForSize(url, maxSize))?.use { decodeStreamSampled(it, maxSize) }
+                    ?: return@withContext false
                 dest.parentFile?.mkdirs()
                 val tmp = File(dest.parentFile, "tmp-${System.nanoTime()}.jpg")
                 tmp.outputStream().use { out -> bmp.compress(Bitmap.CompressFormat.JPEG, 88, out) }
@@ -132,8 +143,8 @@ object AlbumArtResolver {
 
     fun extractEmbeddedToFile(file: File, dest: File): Boolean {
         if (!file.isFile || !file.canRead()) return false
-        val bmp = extractJaudioArtwork(file, 512)
-            ?: file.inputStream().use { extractFlacPicture(it)?.let { bytes -> decodeBytesSampled(bytes, 512) } }
+        val bmp = extractJaudioArtwork(file, PERSISTENT_COVER_SIZE)
+            ?: file.inputStream().use { extractFlacPicture(it)?.let { bytes -> decodeBytesSampled(bytes, PERSISTENT_COVER_SIZE) } }
             ?: return false
         return writeBitmapFile(bmp, dest)
     }
@@ -153,16 +164,41 @@ object AlbumArtResolver {
         }
     }
 
-    private fun loadDiskAlbumCache(context: Context, song: Song, maxSize: Int): Bitmap? {
+    private fun loadDiskAlbumCache(
+        context: Context,
+        song: Song,
+        maxSize: Int,
+        minDim: Int = 0
+    ): Bitmap? {
         val f = diskCacheFile(context, song)
         if (!f.isFile || f.length() == 0L) return null
-        return decodeFileSampled(f.absolutePath, maxSize)
+        return try {
+            val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+            BitmapFactory.decodeFile(f.absolutePath, bounds)
+            val dim = maxOf(bounds.outWidth, bounds.outHeight)
+            if (dim <= 0) return null
+            if (minDim > 0 && dim < minDim) return null
+            val opts = BitmapFactory.Options().apply {
+                inSampleSize = sampleSize(bounds.outWidth, bounds.outHeight, maxSize)
+                inPreferredConfig = Bitmap.Config.ARGB_8888
+            }
+            BitmapFactory.decodeFile(f.absolutePath, opts)
+        } catch (_: Exception) {
+            null
+        }
     }
 
     private fun cacheToDisk(context: Context, song: Song, bmp: Bitmap) {
         if (bmp.isRecycled) return
+        val incoming = maxOf(bmp.width, bmp.height)
+        if (incoming < MIN_PERSIST_DIM) return
         val dest = diskCacheFile(context, song)
-        if (dest.isFile && dest.length() > 0L) return
+        if (dest.isFile && dest.length() > 0L) {
+            val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+            BitmapFactory.decodeFile(dest.absolutePath, bounds)
+            val existing = maxOf(bounds.outWidth, bounds.outHeight)
+            if (existing >= incoming) return
+        }
         writeBitmapFile(bmp, dest)
     }
 
@@ -232,11 +268,20 @@ object AlbumArtResolver {
         }
     }
 
-    private fun loadEnrichedCover(context: Context, song: Song, maxSize: Int): Bitmap? {
+    private fun loadEnrichedCover(context: Context, song: Song, maxSize: Int, minDim: Int = 0): Bitmap? {
         val key = albumKey(song.album, song.effectiveAlbumArtist)
         val f = diskCoverFile(context, key)
         if (!f.isFile) return null
-        return decodeFileSampled(f.absolutePath, maxSize)
+        return try {
+            val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+            BitmapFactory.decodeFile(f.absolutePath, bounds)
+            val dim = maxOf(bounds.outWidth, bounds.outHeight)
+            if (dim <= 0) return null
+            if (minDim > 0 && dim < minDim) return null
+            decodeFileSampled(f.absolutePath, maxSize)
+        } catch (_: Exception) {
+            null
+        }
     }
 
     /**
@@ -644,7 +689,7 @@ object AlbumArtResolver {
                 val path = uri.path ?: uri.toString()
                 if (path.startsWith("/")) decodeFileSampled(path, maxSize) else null
             }
-            "http", "https" -> openHttp(uri.toString())?.use { decodeStreamSampled(it, maxSize) }
+            "http", "https" -> openHttp(httpUrlForSize(uri.toString(), maxSize))?.use { decodeStreamSampled(it, maxSize) }
             "file" -> {
                 val path = uri.path ?: return null
                 decodeFileSampled(path, maxSize)
@@ -678,6 +723,36 @@ object AlbumArtResolver {
         if (s.endsWith(".jpg") || s.endsWith(".jpeg") || s.endsWith(".png") || s.endsWith(".webp")) return true
         if (mime == null && scheme == "content") return true
         return false
+    }
+
+    /**
+     * Jellyfin bakes `maxWidth=512` and Subsonic bakes `size=512` into
+     * [Song.albumArtUri] at index time. Rewrite those to the decode tier so
+     * list rows stay cheap and now-playing can request HQ.
+     */
+    private fun httpUrlForSize(url: String, maxSize: Int): String {
+        if (maxSize <= 0) return url
+        val uri = try {
+            Uri.parse(url)
+        } catch (_: Exception) {
+            return url
+        }
+        val scheme = uri.scheme?.lowercase()
+        if (scheme != "http" && scheme != "https") return url
+        val names = uri.queryParameterNames
+        if (names.isEmpty()) return url
+        val b = uri.buildUpon().clearQuery()
+        var touched = false
+        for (name in names) {
+            val raw = uri.getQueryParameter(name) ?: continue
+            if (name.lowercase() in SIZE_QUERY_KEYS) {
+                b.appendQueryParameter(name, maxSize.toString())
+                touched = true
+            } else {
+                b.appendQueryParameter(name, raw)
+            }
+        }
+        return if (touched) b.build().toString() else url
     }
 
     private fun openHttp(url: String): InputStream? {
@@ -724,5 +799,9 @@ object AlbumArtResolver {
         "folder.jpg", "folder.png",
         "AlbumArt.jpg", "AlbumArt.png",
         "front.jpg", "front.png"
+    )
+
+    private val SIZE_QUERY_KEYS = setOf(
+        "maxwidth", "max_width", "maxheight", "max_height", "size", "width"
     )
 }

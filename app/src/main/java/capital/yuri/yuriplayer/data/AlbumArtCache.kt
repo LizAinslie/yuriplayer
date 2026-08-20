@@ -158,11 +158,19 @@ class AlbumArtCache(
         return File(diskDir, "$digest.jpg")
     }
 
-    private fun readDisk(key: String): Bitmap? {
+    private fun readDisk(key: String, minDim: Int = 0): Bitmap? {
         val f = diskFile(key)
         if (!f.isFile || f.length() == 0L) return null
         return try {
-            BitmapFactory.decodeFile(f.absolutePath)?.takeIf { !it.isRecycled }
+            val bmp = BitmapFactory.decodeFile(f.absolutePath)?.takeIf { !it.isRecycled }
+            if (bmp == null) return null
+            if (minDim > 0 && maxOf(bmp.width, bmp.height) < minDim) {
+                Log.d(TAG, "disk-stale $key ${bmp.width}x${bmp.height} < $minDim")
+                f.delete()
+                null
+            } else {
+                bmp
+            }
         } catch (e: Exception) {
             Log.w(TAG, "disk-read failed $key", e)
             null
@@ -175,7 +183,8 @@ class AlbumArtCache(
             val target = diskFile(key)
             val tmp = File(diskDir, "tmp-${Thread.currentThread().id}-${System.nanoTime()}.jpg")
             tmp.outputStream().use { out ->
-                bmp.compress(Bitmap.CompressFormat.JPEG, 85, out)
+                val quality = if (key.endsWith("@$HQ_DECODE_SIZE")) 92 else 85
+                bmp.compress(Bitmap.CompressFormat.JPEG, quality, out)
             }
             if (!tmp.renameTo(target)) {
                 tmp.copyTo(target, overwrite = true)
@@ -206,7 +215,13 @@ class AlbumArtCache(
             map[key]?.takeIf { !it.isRecycled }?.let { return it }
         }
 
-        val fromDisk = withContext(Dispatchers.IO) { readDisk(key) }
+        // Drop list-thumb JPEGs that were previously written into a hero/HQ slot.
+        val minDiskDim = when {
+            isHqTier(tier) -> 400
+            !isThumbTier(tier) -> 200
+            else -> 0
+        }
+        val fromDisk = withContext(Dispatchers.IO) { readDisk(key, minDim = minDiskDim) }
         if (fromDisk != null) {
             lock.withLock {
                 map[key]?.takeIf { !it.isRecycled }?.let { return it }

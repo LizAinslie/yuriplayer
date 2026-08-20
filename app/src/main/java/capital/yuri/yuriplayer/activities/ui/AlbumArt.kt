@@ -21,6 +21,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.FilterQuality
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
@@ -100,6 +101,11 @@ fun AlbumArt(
                 bitmap = bmp.asImageBitmap(),
                 contentDescription = song?.displayAlbum,
                 contentScale = ContentScale.Crop,
+                filterQuality = if (decodeSize >= AlbumArtCache.HERO_DECODE_SIZE) {
+                    FilterQuality.High
+                } else {
+                    FilterQuality.Low
+                },
                 modifier = Modifier.fillMaxSize()
             )
         } else {
