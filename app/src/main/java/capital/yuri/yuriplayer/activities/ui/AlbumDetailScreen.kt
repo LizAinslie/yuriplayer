@@ -159,7 +159,6 @@ fun AlbumDetailScreen(
         pinStore.contains(StuffPinKind.ALBUM, albumKeyStr)
     }
 
-    // Start with navigation seed; replace only with equal-or-richer lists.
     var liveAlbum by remember(albumKeyStr) { mutableStateOf(album) }
     LaunchedEffect(albumKeyStr, album.name, album.artist) {
         val resolved = withContext(Dispatchers.IO) {
@@ -167,7 +166,8 @@ fun AlbumDetailScreen(
                 dao = catalogDao,
                 name = album.name,
                 artist = album.artist,
-                seedSongs = album.songs
+                seedSongs = album.songs,
+                library = library
             )
         }
         val fromCatalog = withContext(Dispatchers.IO) {
@@ -179,7 +179,6 @@ fun AlbumDetailScreen(
             fromCatalog = fromCatalog,
             fromLocal = fromLocal
         )
-        // Absolute never-shrink: once we have N>1 tracks, refuse thinner updates
         liveAlbum = if (liveAlbum.songs.size > 1 && merged.songs.size < liveAlbum.songs.size) {
             liveAlbum.copy(
                 trackCount = maxOf(liveAlbum.trackCount, merged.trackCount, liveAlbum.songs.size)
@@ -395,10 +394,7 @@ fun AlbumDetailScreen(
                         }
                         itemsIndexed(
                             tracks,
-                            key = { i, s ->
-                                // Unique even when id/path collide across sources
-                                "${s.songKey}#$i#${s.trackNumber}"
-                            }
+                            key = { i, s -> "${s.songKey}#$i#${s.trackNumber}" }
                         ) { _, song ->
                             val globalIndex = liveAlbum.songs.indexOfFirst {
                                 it.songKey == song.songKey ||
