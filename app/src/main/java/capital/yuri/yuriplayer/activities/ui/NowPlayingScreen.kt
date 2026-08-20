@@ -45,8 +45,6 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
-import androidx.compose.runtime.mutableIntStateOf
-import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -76,6 +74,13 @@ import java.util.concurrent.TimeUnit
 import kotlin.math.abs
 
 private const val PREV_RESTART_MS = 3_000L
+
+private data class NowPlayingMeta(
+    val key: String,
+    val title: String,
+    val artist: String,
+    val album: String
+)
 
 /** Radio + small settings cog badge (no single Material glyph for both). */
 @Composable
@@ -181,11 +186,6 @@ fun NowPlayingScreen(
     var dismissFrac by remember { mutableFloatStateOf(0f) }
     var topPull by remember { mutableFloatStateOf(0f) }
 
-    var skipToken by remember { mutableLongStateOf(0L) }
-    var skipDirection by remember { mutableIntStateOf(0) }
-    var skipCommit by remember { mutableStateOf(true) }
-    var ignoreSongChangeAnim by remember { mutableStateOf(false) }
-
     val dismissThreshold = with(density) { 140.dp.toPx() }
 
     val canSwipePrev = peekPrevSong != null
@@ -196,47 +196,28 @@ fun NowPlayingScreen(
     }
 
     val songKey = song?.path ?: song?.contentUri?.toString()
-    var seenSongKey by remember { mutableStateOf(songKey) }
+    val meta = NowPlayingMeta(
+        key = songKey ?: "none",
+        title = song?.displayTitle ?: "Not playing",
+        artist = song?.displayArtist ?: "",
+        album = song?.displayAlbum ?: ""
+    )
 
     fun requestSkipNext() {
-        ignoreSongChangeAnim = true
-        skipCommit = true
-        skipDirection = -1
-        skipToken++
+        onNext()
     }
 
     fun requestSkipPrev() {
         if (!buttonGoesToPrevTrack) {
-            ignoreSongChangeAnim = true
             onPrev()
             return
         }
-        ignoreSongChangeAnim = true
-        skipCommit = true
-        skipDirection = 1
-        skipToken++
+        onForcePrev()
     }
 
     LaunchedEffect(songKey) {
-        val previous = seenSongKey
-        seenSongKey = songKey
-        if (previous != songKey) {
-            sliding = false
-            sliderPosition = 0f
-        }
-        if (previous == null || songKey == null || previous == songKey) return@LaunchedEffect
-        if (ignoreSongChangeAnim) {
-            ignoreSongChangeAnim = false
-            return@LaunchedEffect
-        }
-        if (showQueue || skipDirection != 0) return@LaunchedEffect
-        val id = song?.id
-        val path = song?.path
-        val matchesNext = nextTheme?.let { it.songId == id || (path != null && it.path == path) } == true
-        val matchesPrev = prevTheme?.let { it.songId == id || (path != null && it.path == path) } == true
-        skipCommit = false
-        skipDirection = if (matchesPrev && !matchesNext) 1 else -1
-        skipToken++
+        sliding = false
+        sliderPosition = 0f
     }
 
     // Theme is kept warm by MainActivity on song change. Don't re-extract here —
@@ -415,27 +396,16 @@ fun NowPlayingScreen(
                         current = theme,
                         next = nextTheme,
                         prev = if (canSwipePrev) prevTheme else null,
-                        onSwipeNext = {
-                            ignoreSongChangeAnim = true
-                            onNext()
-                        },
-                        onSwipePrev = {
-                            ignoreSongChangeAnim = true
-                            onForcePrev()
-                        },
+                        onSwipeNext = onNext,
+                        onSwipePrev = onForcePrev,
                         onPromoteNext = { themeStore.promoteNext() },
                         onPromotePrev = { themeStore.promotePrev() },
                         onDismiss = onCollapse,
                         onHorizontalFraction = { hFrac = it },
                         onDismissFraction = { dismissFrac = it },
                         allowPrevTrackChange = canSwipePrev,
-                        skipToken = skipToken,
-                        skipDirection = skipDirection,
-                        commitSkip = skipCommit,
-                        onSkipConsumed = {
-                            skipDirection = 0
-                            skipCommit = true
-                        },
+                        playingSongId = song?.id,
+                        playingSongKey = songKey,
                         horizontalInset = 20.dp,
                         modifier = Modifier.fillMaxWidth()
                     )
@@ -450,26 +420,26 @@ fun NowPlayingScreen(
                         .padding(bottom = 8.dp)
                 ) {
                     AnimatedContent(
-                        targetState = songKey ?: "none",
+                        targetState = meta,
                         transitionSpec = {
                             fadeIn(tween(180)) togetherWith fadeOut(tween(120))
                         },
                         label = "npMeta"
-                    ) { _ ->
+                    ) { m ->
                         Column {
                             MarqueeText(
-                                text = song?.displayTitle ?: "Not playing",
+                                text = m.title,
                                 style = MaterialTheme.typography.headlineSmall,
                                 fontWeight = FontWeight.Bold,
                                 color = scheme.onBackground
                             )
                             MarqueeText(
-                                text = song?.displayArtist ?: "",
+                                text = m.artist,
                                 style = MaterialTheme.typography.titleMedium,
                                 color = scheme.onBackground.copy(alpha = 0.65f)
                             )
                             MarqueeText(
-                                text = song?.displayAlbum ?: "",
+                                text = m.album,
                                 style = MaterialTheme.typography.bodyMedium,
                                 color = scheme.onBackground.copy(alpha = 0.5f)
                             )

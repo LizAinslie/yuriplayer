@@ -25,8 +25,10 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -73,6 +75,9 @@ fun SwipeableAlbumArt(
     /** False when the queue already advanced (auto-next) — only play the art. */
     commitSkip: Boolean = true,
     onSkipConsumed: () -> Unit = {},
+    /** Playing track identity — when this changes (end-of-track, skip), slide art. */
+    playingSongId: Long? = null,
+    playingSongKey: String? = null,
     modifier: Modifier = Modifier,
     horizontalInset: androidx.compose.ui.unit.Dp = 20.dp
 ) {
@@ -81,6 +86,7 @@ fun SwipeableAlbumArt(
     val offsetX = remember { Animatable(0f) }
     val offsetY = remember { Animatable(0f) }
     var animatingSkip by remember { mutableIntStateOf(0) }
+    var suppressSongAnim by remember { mutableStateOf(false) }
 
     val dismissThreshold = with(density) { 140.dp.toPx() }
     val trackThreshold = with(density) { 96.dp.toPx() }
@@ -98,6 +104,7 @@ fun SwipeableAlbumArt(
     }
 
     suspend fun finishNext(commit: Boolean) {
+        suppressSongAnim = true
         onPromoteNext()
         onHorizontalFraction(0f)
         offsetX.snapTo(0f)
@@ -106,6 +113,7 @@ fun SwipeableAlbumArt(
     }
 
     suspend fun finishPrev(commit: Boolean) {
+        suppressSongAnim = true
         onPromotePrev()
         onHorizontalFraction(0f)
         offsetX.snapTo(0f)
@@ -189,6 +197,54 @@ fun SwipeableAlbumArt(
             skipDirection < 0 -> if (commitSkip) onSwipeNext()
         }
         onSkipConsumed()
+    }
+
+    val latestNext = rememberUpdatedState(next)
+    val latestPrev = rememberUpdatedState(effectivePrev)
+    val latestPromoteNext = rememberUpdatedState(onPromoteNext)
+    val latestPromotePrev = rememberUpdatedState(onPromotePrev)
+    var seenPlayingKey by remember { mutableStateOf(playingSongKey) }
+
+    LaunchedEffect(playingSongId, playingSongKey) {
+        val previous = seenPlayingKey
+        seenPlayingKey = playingSongKey
+        if (previous == null || playingSongKey == null || previous == playingSongKey) {
+            return@LaunchedEffect
+        }
+        if (suppressSongAnim) {
+            suppressSongAnim = false
+            return@LaunchedEffect
+        }
+        if (animatingSkip != 0) return@LaunchedEffect
+
+        val nxt = latestNext.value
+        val prv = latestPrev.value
+        val id = playingSongId
+        val path = playingSongKey
+        val matchesNext = nxt != null && themeMatches(nxt, id, path)
+        val matchesPrev = prv != null && themeMatches(prv, id, path)
+
+        when {
+            matchesNext -> {
+                animatingSkip = -1
+                animateSkipTo(-screenWidthPx)
+                latestPromoteNext.value()
+                onHorizontalFraction(0f)
+                offsetX.snapTo(0f)
+                offsetY.snapTo(0f)
+                animatingSkip = 0
+            }
+            matchesPrev -> {
+                animatingSkip = 1
+                animateSkipTo(screenWidthPx)
+                latestPromotePrev.value()
+                onHorizontalFraction(0f)
+                offsetX.snapTo(0f)
+                offsetY.snapTo(0f)
+                animatingSkip = 0
+            }
+            else -> Unit
+        }
     }
 
     BoxWithConstraints(
@@ -276,6 +332,16 @@ fun SwipeableAlbumArt(
                 }
         )
     }
+}
+
+private fun themeMatches(
+    theme: PlayerThemeStore.Theme,
+    songId: Long?,
+    songKey: String?
+): Boolean {
+    if (songId != null && theme.songId == songId) return true
+    if (!songKey.isNullOrBlank() && theme.path == songKey) return true
+    return false
 }
 
 @Composable

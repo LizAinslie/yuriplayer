@@ -435,20 +435,41 @@ fun YuriApp(
 
     LaunchedEffect(currentSong?.id, currentSong?.path, colorRev) {
         val incoming = currentSong
+        if (incoming == null) {
+            themeStore.updateCurrent(context, null, baseScheme)
+            activity?.title = ActivityTitleFormat.format(null)
+            return@LaunchedEffect
+        }
         val peek = themeStore.peekNext.value
-        val warmNext = incoming != null && peek != null &&
+        val warmNext = peek != null &&
             (peek.songId == incoming.id || (incoming.path != null && peek.path == incoming.path))
-        if (!warmNext) {
+        if (warmNext) {
+            // Cover skip animation promotes peek-next; if it doesn't, snap after the slide.
+            delay(400)
+            val cur = themeStore.current.value
+            val matched = cur != null &&
+                (cur.songId == incoming.id || (incoming.path != null && cur.path == incoming.path))
+            if (!matched) themeStore.promoteNext()
+            val still = themeStore.current.value
+            val ok = still != null &&
+                (still.songId == incoming.id || (incoming.path != null && still.path == incoming.path))
+            if (!ok) themeStore.updateCurrent(context, incoming, baseScheme)
+        } else {
             themeStore.updateCurrent(context, incoming, baseScheme)
         }
         activity?.title = ActivityTitleFormat.format(incoming)
     }
-    var lastNeighborSongId by remember { mutableStateOf(currentSong?.id) }
-    LaunchedEffect(peekNext?.id, peekPrev?.id, currentSong?.id) {
-        val songChanged = currentSong?.id != lastNeighborSongId
-        lastNeighborSongId = currentSong?.id
-        // Keep peek-next art on screen for the skip animation (~280ms).
-        if (songChanged) delay(350)
+    LaunchedEffect(peekNext?.id, peekPrev?.id, currentSong?.id, currentSong?.path) {
+        val incoming = currentSong
+        if (incoming != null) {
+            for (i in 0 until 20) {
+                val cur = themeStore.current.value
+                val showing = cur != null &&
+                    (cur.songId == incoming.id || (incoming.path != null && cur.path == incoming.path))
+                if (showing) break
+                delay(50)
+            }
+        }
         themeStore.updateNeighbors(context, peekNext, peekPrev, baseScheme)
     }
 
