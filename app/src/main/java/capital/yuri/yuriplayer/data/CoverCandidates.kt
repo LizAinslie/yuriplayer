@@ -6,9 +6,8 @@ import java.io.File
 /**
  * Build a short list of **unique** covers for the picker carousel.
  *
- * Trench-style libraries often embed the same art in every track file — we
- * fingerprint by albumArtUri or parent folder so the carousel shows one local
- * tile, not 14 identical ones. Remote HTTP URIs are unique by URL.
+ * Local SAF tracks often have no albumArtUri and a content:// path — keep a
+ * seedSong so [AlbumArt] can decode embedded art via MediaMetadataRetriever.
  */
 object CoverCandidates {
 
@@ -20,13 +19,12 @@ object CoverCandidates {
         val out = LinkedHashMap<String, CoverCandidate>()
 
         fun add(c: CoverCandidate) {
-            // Dedupe key = stable fingerprint of the *image*, not the song
             out.putIfAbsent(c.id, c)
         }
 
-        // Local embedded / folder — one per unique art uri or parent dir
         songs.filter { CatalogRepository.sourceTypeForSong(it) == SourceType.LOCAL }.forEach { song ->
             val path = song.path
+            val isContentPath = path?.contains("://") == true
             val parent = path?.takeIf { !it.contains("://") }?.let { File(it).parent }
             val artUri = song.albumArtUri?.toString()?.takeIf { it.isNotBlank() }
 
@@ -42,12 +40,25 @@ object CoverCandidates {
                         )
                     )
                 }
-                parent != null -> {
+                // SAF / content:// — embedded art only available via seedSong
+                isContentPath || song.contentUri.scheme.equals("content", true) -> {
+                    val key = song.contentUri.toString()
+                    add(
+                        CoverCandidate(
+                            id = "saf:$key",
+                            label = "Local file",
+                            uri = key,
+                            seedSong = song,
+                            isLocal = true
+                        )
+                    )
+                }
+                parent != null && path != null -> {
                     add(
                         CoverCandidate(
                             id = "embedded-folder:$parent",
                             label = "Local file",
-                            uri = "file://$path",
+                            uri = if (path.startsWith("/")) path else "file://$path",
                             seedSong = song,
                             isLocal = true
                         )
@@ -63,7 +74,7 @@ object CoverCandidates {
                             CoverCandidate(
                                 id = "folder:${f.absolutePath}:${f.length()}",
                                 label = "Folder cover",
-                                uri = "file://${f.absolutePath}",
+                                uri = f.absolutePath,
                                 seedSong = song,
                                 isLocal = true
                             )
@@ -75,9 +86,11 @@ object CoverCandidates {
         }
 
         coverPath?.takeIf { it.isNotBlank() }?.let { path ->
-            val uri = if (path.startsWith("file:")) path
-            else if (path.startsWith("/")) "file://$path"
-            else path
+            val uri = when {
+                path.startsWith("file:") -> path
+                path.startsWith("/") -> path
+                else -> path
+            }
             add(
                 CoverCandidate(
                     id = "enriched:$path",
