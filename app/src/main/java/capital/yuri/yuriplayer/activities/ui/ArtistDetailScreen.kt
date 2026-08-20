@@ -27,7 +27,6 @@ import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
-import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
@@ -82,6 +81,7 @@ import capital.yuri.yuriplayer.data.MyStuffPinStore
 import capital.yuri.yuriplayer.data.ReleaseType
 import capital.yuri.yuriplayer.data.Song
 import capital.yuri.yuriplayer.data.StuffPinKind
+import capital.yuri.yuriplayer.data.albumKey
 import capital.yuri.yuriplayer.data.artistKey
 import capital.yuri.yuriplayer.data.releaseType
 import capital.yuri.yuriplayer.data.releaseYear
@@ -140,6 +140,13 @@ private fun sortedReleaseTracks(album: AlbumItem): List<Song> =
             .thenBy { it.trackNumber ?: Int.MAX_VALUE }
             .thenBy(String.CASE_INSENSITIVE_ORDER) { it.displayTitle }
     )
+
+/** Stable, unique Lazy key for a release card / section. */
+private fun releaseLazyKey(album: AlbumItem, index: Int): String {
+    val base = albumKey(album.name, album.artist)
+    val seed = album.songs.firstOrNull()?.songKey.orEmpty()
+    return "$base|$index|$seed"
+}
 
 private val ArtistBannerBodyHeight = 200.dp
 private val ArtistAvatarOnBanner = 132.dp
@@ -259,11 +266,15 @@ fun ArtistDetailScreen(
     val fadePx = with(density) { ArtistGradientFade.toPx() }
     val headerPx = with(density) { solidHeaderHeight.toPx() }
 
+    // Dedupe again at UI boundary so Lazy keys cannot collide
     val sortedAlbums = remember(albums) {
-        albums.sortedWith(
-            compareByDescending<AlbumItem> { it.releaseYear() ?: Int.MIN_VALUE }
-                .thenBy(String.CASE_INSENSITIVE_ORDER) { it.displayName }
-        )
+        albums
+            .groupBy { albumKey(it.name, it.artist) }
+            .map { (_, group) -> group.maxByOrNull { it.trackCount } ?: group.first() }
+            .sortedWith(
+                compareByDescending<AlbumItem> { it.releaseYear() ?: Int.MIN_VALUE }
+                    .thenBy(String.CASE_INSENSITIVE_ORDER) { it.displayName }
+            )
     }
     val filtered = remember(sortedAlbums, filter) {
         when (filter) {
@@ -276,7 +287,6 @@ fun ArtistDetailScreen(
         }
     }
 
-    // Nest LocalArtistNav so ArtistContextSheet (and any child) gets image/banner/links.
     val rootArtistNav = LocalArtistNav.current
     val nestedArtistNav = rootArtistNav.copy(
         startRadio = { onStartRadio() },
@@ -542,10 +552,10 @@ fun ArtistDetailScreen(
                             contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
                             horizontalArrangement = Arrangement.spacedBy(14.dp)
                         ) {
-                            items(
+                            itemsIndexed(
                                 filtered,
-                                key = { "${it.name}|${it.artist}|${it.releaseYear()}" }
-                            ) { album ->
+                                key = { i, a -> releaseLazyKey(a, i) }
+                            ) { _, album ->
                                 ArtistReleaseCard(
                                     album = album,
                                     titleColor = base.onBackground,
@@ -633,7 +643,10 @@ private fun DiscographyAllScreen(
     val context = LocalContext.current
     var filterMenuOpen by remember { mutableStateOf(false) }
     val visible = remember(albums, filters) {
-        albums.filter { filters.matches(it.releaseType()) }
+        albums
+            .filter { filters.matches(it.releaseType()) }
+            .groupBy { albumKey(it.name, it.artist) }
+            .map { (_, group) -> group.maxByOrNull { it.trackCount } ?: group.first() }
     }
 
     Column(
@@ -752,8 +765,8 @@ private fun DiscographyAllScreen(
             modifier = Modifier.fillMaxSize(),
             contentPadding = PaddingValues(bottom = 96.dp)
         ) {
-            visible.forEach { album ->
-                val releaseKey = "${album.name}|${album.artist}|${album.releaseYear()}"
+            visible.forEachIndexed { index, album ->
+                val releaseKey = releaseLazyKey(album, index)
                 val tracks = sortedReleaseTracks(album)
 
                 item(key = "hdr-$releaseKey") {
@@ -768,10 +781,10 @@ private fun DiscographyAllScreen(
                 itemsIndexed(
                     tracks,
                     key = { _, song -> "trk-$releaseKey-${song.songKey}" }
-                ) { index, song ->
+                ) { trackIndex, song ->
                     SwipeAddSongRow(
                         song = song,
-                        onClick = { onPlaySongs(tracks, index) },
+                        onClick = { onPlaySongs(tracks, trackIndex) },
                         onSwipeAdd = {
                             onAddToQueue(song)
                             Toast.makeText(context, "Added to queue", Toast.LENGTH_SHORT).show()
