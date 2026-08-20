@@ -27,6 +27,7 @@ class MusicServiceLocalEngine(
     onPrev: () -> Unit,
     onSeek: (Long) -> Unit,
     private val onEnded: () -> Unit,
+    private val onAutoAdvanced: () -> Unit,
     private val onPlayingChanged: (Boolean) -> Unit
 ) {
     val engineId: PlaybackEngineId = settings.getPlaybackEngineId()
@@ -48,6 +49,10 @@ class MusicServiceLocalEngine(
             onEnded()
         }
 
+        override fun onAutoAdvanced() {
+            onAutoAdvanced()
+        }
+
         override fun onIsPlayingChanged(playing: Boolean) {
             onPlayingChanged(playing)
         }
@@ -62,9 +67,10 @@ class MusicServiceLocalEngine(
         Log.i(TAG, "active engine=$engineId")
     }
 
-    /** Load current and optionally start. Next track is MusicService's job. */
+    /** Load current and pre-buffer [next] so the following track can start immediately. */
     fun playWindow(song: Song, next: Song?, startPositionMs: Long, autoPlay: Boolean) {
         val item = song.toPlaybackMedia()
+        val nextItem = next?.toPlaybackMedia()
         Log.i(
             TAG,
             "playWindow engine=$engineId '${song.displayTitle}' " +
@@ -72,15 +78,27 @@ class MusicServiceLocalEngine(
                 "autoPlay=$autoPlay pos=$startPositionMs peek=${next?.displayTitle}"
         )
         engine.setPlayWhenReady(autoPlay)
-        engine.setWindow(listOf(item), 0, startPositionMs)
+        val window = if (nextItem != null) listOf(item, nextItem) else listOf(item)
+        engine.setWindow(window, 0, startPositionMs)
+        // Media3 already queued [current, next]. VLC plays index 0 and this
+        // prepares the standby player (no-ops if that next is already attached).
+        engine.setNext(nextItem)
         if (autoPlay) engine.play()
         sessionBridge.updateMetadata(song)
     }
 
+    fun setNext(song: Song?) {
+        engine.setNext(song?.toPlaybackMedia())
+    }
+
+    fun hasPreparedNext(): Boolean = engine.hasPreparedNext()
+
+    fun playPreparedNext(): Boolean = engine.playPreparedNext()
+
     fun pause() = engine.pause()
     fun play() = engine.play()
     fun stop() = engine.stop()
-    fun seekTo(ms: Long) = engine.seekTo(0, ms)
+    fun seekTo(ms: Long) = engine.seekTo(engine.getCurrentIndex().coerceAtLeast(0), ms)
     fun isPlaying(): Boolean = engine.isPlaying.value
     fun getPositionMs(): Long = engine.getPositionMs()
     fun getDurationMs(): Long = engine.getDurationMs()

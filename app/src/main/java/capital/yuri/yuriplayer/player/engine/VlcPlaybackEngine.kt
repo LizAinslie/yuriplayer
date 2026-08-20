@@ -17,11 +17,8 @@ import org.videolan.libvlc.MediaPlayer
 import java.io.File
 
 /**
- * LibVLC backend.
- *
- * Open / network I/O happens on a dedicated thread. Playback starts as soon as
- * the FD or HTTP handle is ready — VLC demuxes and prefetches on demand
- * (file-caching for local, network-caching + reconnect for streams).
+ * LibVLC backend with a standby player that pre-buffers the next item
+ * (local FD or HTTP) so track changes can start immediately.
  */
 class VlcPlaybackEngine(
     context: Context
@@ -44,58 +41,14 @@ class VlcPlaybackEngine(
         )
     )
 
-    private val mediaPlayer: MediaPlayer = MediaPlayer(libVLC).also { mp ->
-        mp.setEventListener { event ->
-            when (event.type) {
-                MediaPlayer.Event.Playing -> {
-                    playWhenReady = true
-                    buffering = false
-                    _isPlaying.value = true
-                    val seek = pendingSeekMs
-                    if (seek > 0L) {
-                        pendingSeekMs = -1L
-                        runCatching { mp.time = seek }
-                    }
-                    dispatch { onIsPlayingChanged(true) }
-                    dispatch { onPlaybackStateChanged(PlaybackEngine.PlaybackState.READY) }
-                }
-                MediaPlayer.Event.Paused -> {
-                    _isPlaying.value = false
-                    dispatch { onIsPlayingChanged(false) }
-                }
-                MediaPlayer.Event.Stopped -> {
-                    if (loadGeneration != eventGeneration) return@setEventListener
-                    _isPlaying.value = false
-                    dispatch { onIsPlayingChanged(false) }
-                    dispatch { onPlaybackStateChanged(PlaybackEngine.PlaybackState.IDLE) }
-                }
-                MediaPlayer.Event.EndReached -> {
-                    if (loadGeneration != eventGeneration) return@setEventListener
-                    eventGeneration = -1
-                    buffering = false
-                    _isPlaying.value = false
-                    dispatch { onIsPlayingChanged(false) }
-                    dispatch { onPlaybackStateChanged(PlaybackEngine.PlaybackState.ENDED) }
-                    dispatch { onEnded() }
-                }
-                MediaPlayer.Event.EncounteredError -> {
-                    Log.e(TAG, "VLC EncounteredError uri=${_currentUri.value}")
-                    _isPlaying.value = false
-                    dispatch { onIsPlayingChanged(false) }
-                    dispatch { onError("VLC playback error", recoverable = true) }
-                }
-                MediaPlayer.Event.Buffering -> {
-                    buffering = event.buffering < 100f
-                    if (buffering) {
-                        dispatch { onPlaybackStateChanged(PlaybackEngine.PlaybackState.BUFFERING) }
-                    } else {
-                        dispatch { onPlaybackStateChanged(PlaybackEngine.PlaybackState.READY) }
-                    }
-                }
-                else -> Unit
-            }
-        }
-    }
+    private var activeSlot = 0
+    private val players: Array<MediaPlayer> = arrayOf(
+        MediaPlayer(libVLC),
+        MediaPlayer(libVLC)
+    )
+
+    private fun active(): MediaPlayer = players[activeSlot]
+    private fun standby(): MediaPlayer = players[1 - activeSlot]
 
     private var window: List<PlaybackMedia> = emptyList()
     private var index: Int = 0
@@ -107,6 +60,13 @@ class VlcPlaybackEngine(
 
     private var currentPfd: ParcelFileDescriptor? = null
     private var currentAfd: AssetFileDescriptor? = null
+    private var nextPfd: ParcelFileDescriptor? = null
+    private var nextAfd: AssetFileDescriptor? = null
+
+    private var nextItem: PlaybackMedia? = null
+    @Volatile private var nextReady: Boolean = false
+    @Volatile private var nextPreparing: Boolean = false
+    private var nextGeneration: Int = 0
 
     private val _isPlaying = MutableStateFlow(false)
     override val isPlaying: StateFlow<Boolean> = _isPlaying.asStateFlow()
@@ -114,32 +74,121 @@ class VlcPlaybackEngine(
     private val _currentUri = MutableStateFlow<Uri?>(null)
     override val currentUri: StateFlow<Uri?> = _currentUri.asStateFlow()
 
+    init {
+        players.forEachIndexed { slot, mp ->
+            mp.setEventListener { event ->
+                if (slot == activeSlot) onActiveEvent(mp, event)
+                else onStandbyEvent(mp, event)
+            }
+        }
+    }
+
+    private fun onActiveEvent(mp: MediaPlayer, event: MediaPlayer.Event) {
+        when (event.type) {
+            MediaPlayer.Event.Playing -> {
+                playWhenReady = true
+                buffering = false
+                _isPlaying.value = true
+                val seek = pendingSeekMs
+                if (seek > 0L) {
+                    pendingSeekMs = -1L
+                    runCatching { mp.time = seek }
+                }
+                dispatch { onIsPlayingChanged(true) }
+                dispatch { onPlaybackStateChanged(PlaybackEngine.PlaybackState.READY) }
+            }
+            MediaPlayer.Event.Paused -> {
+                _isPlaying.value = false
+                dispatch { onIsPlayingChanged(false) }
+            }
+            MediaPlayer.Event.Stopped -> {
+                if (loadGeneration != eventGeneration) return
+                _isPlaying.value = false
+                dispatch { onIsPlayingChanged(false) }
+                dispatch { onPlaybackStateChanged(PlaybackEngine.PlaybackState.IDLE) }
+            }
+            MediaPlayer.Event.EndReached -> {
+                if (loadGeneration != eventGeneration) return
+                if (swapToPreparedNext()) {
+                    dispatch { onAutoAdvanced() }
+                    return
+                }
+                eventGeneration = -1
+                buffering = false
+                _isPlaying.value = false
+                dispatch { onIsPlayingChanged(false) }
+                dispatch { onPlaybackStateChanged(PlaybackEngine.PlaybackState.ENDED) }
+                dispatch { onEnded() }
+            }
+            MediaPlayer.Event.EncounteredError -> {
+                Log.e(TAG, "VLC EncounteredError uri=${_currentUri.value}")
+                _isPlaying.value = false
+                dispatch { onIsPlayingChanged(false) }
+                dispatch { onError("VLC playback error", recoverable = true) }
+            }
+            MediaPlayer.Event.Buffering -> {
+                buffering = event.buffering < 100f
+                if (buffering) {
+                    dispatch { onPlaybackStateChanged(PlaybackEngine.PlaybackState.BUFFERING) }
+                } else {
+                    dispatch { onPlaybackStateChanged(PlaybackEngine.PlaybackState.READY) }
+                }
+            }
+            else -> Unit
+        }
+    }
+
+    private fun onStandbyEvent(mp: MediaPlayer, event: MediaPlayer.Event) {
+        if (nextItem == null) return
+        when (event.type) {
+            MediaPlayer.Event.Playing, MediaPlayer.Event.Buffering -> {
+                val buffered = event.type == MediaPlayer.Event.Playing ||
+                    event.buffering >= 100f
+                if (!buffered) return
+                // Pause so the cache stays hot. Do NOT seek — seeking HTTP
+                // restarts the download and throws away the pre-buffer.
+                if (mp.isPlaying) runCatching { mp.pause() }
+                nextReady = true
+                Log.i(TAG, "standby ready '${nextItem?.title}'")
+            }
+            MediaPlayer.Event.EncounteredError -> {
+                Log.w(TAG, "standby prepare failed '${nextItem?.title}'")
+                nextReady = false
+                nextPreparing = false
+            }
+            else -> Unit
+        }
+    }
+
     override fun setWindow(items: List<PlaybackMedia>, startIndex: Int, startPositionMs: Long) {
         if (items.isEmpty()) {
             stopInternal()
             window = emptyList()
             index = 0
             _currentUri.value = null
+            clearNext()
             return
         }
         window = items
         index = startIndex.coerceIn(0, items.lastIndex)
         loadAt(index, startPositionMs, autoPlay = playWhenReady)
+        // Next is prepared by PlaybackEngine.setNext from the host so we
+        // don't kick off two HTTP opens for the same item.
     }
 
     override fun play() {
         playWhenReady = true
         if (window.isEmpty()) return
-        if (mediaPlayer.media == null) {
+        if (active().media == null) {
             loadAt(index, pendingSeekMs.coerceAtLeast(0L), autoPlay = true)
             return
         }
-        mediaPlayer.play()
+        active().play()
     }
 
     override fun pause() {
         playWhenReady = false
-        if (mediaPlayer.isPlaying) mediaPlayer.pause()
+        if (active().isPlaying) active().pause()
     }
 
     override fun stop() {
@@ -153,10 +202,11 @@ class VlcPlaybackEngine(
         if (idx != this.index) {
             this.index = idx
             loadAt(idx, positionMs, autoPlay = playWhenReady)
-        } else if (mediaPlayer.media != null) {
-            val length = mediaPlayer.length
+            setNext(window.getOrNull(idx + 1))
+        } else if (active().media != null) {
+            val length = active().length
             if (length > 0) {
-                mediaPlayer.time = positionMs.coerceIn(0L, length)
+                active().time = positionMs.coerceIn(0L, length)
             } else {
                 pendingSeekMs = positionMs.coerceAtLeast(0L)
             }
@@ -166,24 +216,26 @@ class VlcPlaybackEngine(
     }
 
     override fun seekToNext() {
+        if (playPreparedNext()) return
         if (window.isEmpty()) return
         if (index >= window.lastIndex) return
         index += 1
         loadAt(index, 0L, autoPlay = playWhenReady)
+        setNext(window.getOrNull(index + 1))
         dispatch { onMediaTransition(PlaybackEngine.TransitionReason.SEEK) }
     }
 
     override fun prepare() = Unit
 
     override fun getPositionMs(): Long {
-        val t = mediaPlayer.time
+        val t = active().time
         if (t > 0L) return t
-        val len = mediaPlayer.length
+        val len = active().length
         if (len <= 0L) return 0L
-        return (mediaPlayer.position * len).toLong().coerceAtLeast(0L)
+        return (active().position * len).toLong().coerceAtLeast(0L)
     }
 
-    override fun getDurationMs(): Long = mediaPlayer.length.coerceAtLeast(0L)
+    override fun getDurationMs(): Long = active().length.coerceAtLeast(0L)
 
     override fun getCurrentIndex(): Int = index
 
@@ -199,15 +251,34 @@ class VlcPlaybackEngine(
 
     override fun isBuffering(): Boolean = buffering
 
+    override fun setNext(item: PlaybackMedia?) {
+        if (item == null) {
+            clearNext()
+            return
+        }
+        if (nextItem?.uri == item.uri && (standby().media != null || nextPreparing)) {
+            return
+        }
+        prepareStandby(item)
+    }
+
+    override fun hasPreparedNext(): Boolean = nextItem != null && standby().media != null
+
+    override fun playPreparedNext(): Boolean = swapToPreparedNext()
+
     override fun release() {
         listeners.clear()
         loadGeneration += 1
-        runCatching {
-            mediaPlayer.setEventListener(null)
-            mediaPlayer.stop()
-            mediaPlayer.release()
+        nextGeneration += 1
+        players.forEach { mp ->
+            runCatching {
+                mp.setEventListener(null)
+                mp.stop()
+                mp.release()
+            }
         }
         closeDescriptors()
+        closeNextDescriptors()
         runCatching { libVLC.release() }
         ioThread.quitSafely()
     }
@@ -269,14 +340,129 @@ class VlcPlaybackEngine(
             return
         }
         applyStreamOptions(media, item)
-        mediaPlayer.media = media
+        active().media = media
         media.release()
         dispatch { onMediaTransition(PlaybackEngine.TransitionReason.PLAYLIST) }
         Log.i(
             TAG,
             "attached uri=${item.uri} network=${item.isNetwork} autoPlay=$playWhenReady"
         )
-        if (playWhenReady) mediaPlayer.play()
+        if (playWhenReady) active().play()
+    }
+
+    private fun prepareStandby(item: PlaybackMedia) {
+        nextGeneration += 1
+        val gen = nextGeneration
+        nextItem = item
+        nextReady = false
+        nextPreparing = true
+        ioHandler.post {
+            val opened = runCatching { openInput(item) }
+            mainHandler.post {
+                if (gen != nextGeneration) {
+                    opened.getOrNull()?.close()
+                    return@post
+                }
+                opened.fold(
+                    onSuccess = { input -> attachStandby(item, input, gen) },
+                    onFailure = { e ->
+                        Log.w(TAG, "standby open failed ${item.uri}: ${e.message}")
+                        if (gen == nextGeneration) {
+                            nextReady = false
+                            nextPreparing = false
+                        }
+                    }
+                )
+            }
+        }
+    }
+
+    private fun attachStandby(item: PlaybackMedia, input: OpenedInput, gen: Int) {
+        if (gen != nextGeneration) {
+            input.close()
+            return
+        }
+        closeNextDescriptors()
+        when (input) {
+            is OpenedInput.ContentAfd -> nextAfd = input.afd
+            is OpenedInput.ContentPfd -> nextPfd = input.pfd
+            else -> Unit
+        }
+        val media = try {
+            mediaFromOpened(item, input)
+        } catch (e: Exception) {
+            input.close()
+            Log.w(TAG, "standby media failed ${item.uri}", e)
+            nextReady = false
+            nextPreparing = false
+            return
+        }
+        applyStreamOptions(media, item)
+        val sp = standby()
+        runCatching { sp.stop() }
+        sp.media = media
+        media.release()
+        runCatching { sp.volume = 0 }
+        Log.i(TAG, "standby attached '${item.title}' network=${item.isNetwork}")
+        nextPreparing = false
+        if (item.isNetwork) {
+            // Pull bytes into VLC's network cache (silent), then pause in onStandbyEvent.
+            sp.play()
+        } else {
+            // Local FD/path is already open — decoder start on swap is immediate.
+            nextReady = true
+        }
+    }
+
+    private fun swapToPreparedNext(): Boolean {
+        val nxt = nextItem ?: return false
+        val sp = standby()
+        if (sp.media == null) return false
+        val wasPlaying = sp.isPlaying
+        if (!nextReady) {
+            runCatching { sp.volume = 0 }
+            if (!wasPlaying) runCatching { sp.play() }
+        }
+
+        val old = active()
+        eventGeneration = -1
+        loadGeneration += 1
+        runCatching { old.stop() }
+        runCatching { old.media = null }
+        closeDescriptors()
+        currentAfd = nextAfd
+        currentPfd = nextPfd
+        nextAfd = null
+        nextPfd = null
+
+        activeSlot = 1 - activeSlot
+        window = listOf(nxt)
+        index = 0
+        _currentUri.value = nxt.uri
+        nextItem = null
+        nextReady = false
+        nextPreparing = false
+        nextGeneration += 1
+        eventGeneration = loadGeneration
+        playWhenReady = true
+        val np = active()
+        runCatching { np.volume = 100 }
+        if (!wasPlaying && !np.isPlaying) np.play()
+        _isPlaying.value = true
+        buffering = false
+        Log.i(TAG, "swap → '${nxt.title}'")
+        dispatch { onMediaTransition(PlaybackEngine.TransitionReason.AUTO) }
+        return true
+    }
+
+    private fun clearNext() {
+        nextGeneration += 1
+        nextItem = null
+        nextReady = false
+        nextPreparing = false
+        runCatching { standby().stop() }
+        runCatching { standby().media = null }
+        closeNextDescriptors()
     }
 
     private fun openInput(item: PlaybackMedia): OpenedInput {
@@ -324,9 +510,6 @@ class VlcPlaybackEngine(
             media.addOption(":http-header=$k: $v")
         }
         if (item.isNetwork) {
-            // On-demand file (Jellyfin / Subsonic), NOT a live pipe.
-            // :http-continuous makes VLC never fire EndReached.
-            // :http-reconnect restarts the HTTP GET and chops the audio.
             media.addOption(":network-caching=$NETWORK_CACHE_MS")
         } else {
             media.addOption(":file-caching=$FILE_CACHE_MS")
@@ -340,12 +523,20 @@ class VlcPlaybackEngine(
         currentPfd = null
     }
 
+    private fun closeNextDescriptors() {
+        runCatching { nextAfd?.close() }
+        runCatching { nextPfd?.close() }
+        nextAfd = null
+        nextPfd = null
+    }
+
     private fun stopInternal() {
         loadGeneration += 1
         eventGeneration = loadGeneration
-        runCatching { mediaPlayer.stop() }
-        runCatching { mediaPlayer.media = null }
+        runCatching { active().stop() }
+        runCatching { active().media = null }
         closeDescriptors()
+        clearNext()
         _isPlaying.value = false
     }
 

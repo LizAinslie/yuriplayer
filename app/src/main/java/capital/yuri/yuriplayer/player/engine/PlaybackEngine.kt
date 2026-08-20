@@ -38,6 +38,21 @@ interface PlaybackEngine {
     /** True while the backend is filling buffers (HTTP underrun, demux, …). */
     fun isBuffering(): Boolean = false
 
+    /**
+     * Pre-buffer [item] as the upcoming track without touching what's playing.
+     * Pass null to drop a previously prepared next.
+     */
+    fun setNext(item: PlaybackMedia?) {}
+
+    /** True when a next item is loaded/buffered and [playPreparedNext] will start it immediately. */
+    fun hasPreparedNext(): Boolean = false
+
+    /**
+     * Switch to the pre-buffered next item with no reload.
+     * @return false if nothing was prepared (caller should load a new window).
+     */
+    fun playPreparedNext(): Boolean = false
+
     fun release()
 
     fun addListener(listener: Listener)
@@ -47,6 +62,11 @@ interface PlaybackEngine {
         fun onIsPlayingChanged(playing: Boolean) {}
         fun onMediaTransition(reason: TransitionReason) {}
         fun onEnded() {}
+        /**
+         * Engine already started the pre-buffered next item (gapless / dual-player swap).
+         * Host should advance queue state and call [setNext] — do **not** reload current.
+         */
+        fun onAutoAdvanced() {}
         fun onError(message: String, recoverable: Boolean) {}
         fun onPlaybackStateChanged(state: PlaybackState) {}
     }
@@ -110,29 +130,28 @@ fun resolvePlayableUri(song: Song): Uri {
     return song.contentUri
 }
 
-/** Upgrade legacy `/Audio/{id}/stream` rows to `/universal` so players get a real file. */
+/**
+ * Normalize Jellyfin catalog URIs to the direct `/Audio/{id}/stream?static=true`
+ * URL that actually plays. Rows stored as `/universal` (DeviceId mismatch → 401)
+ * or `stream.$ext` are rewritten at play time so a rescan isn't required.
+ */
 fun jellyfinPlayableUri(uri: Uri, itemId: String): Uri {
-    val raw = uri.toString()
-    if (raw.contains("/universal", ignoreCase = true)) return uri
+    val scheme = uri.scheme?.lowercase() ?: return uri
+    if (scheme != "http" && scheme != "https") return uri
+    val host = uri.encodedAuthority ?: return uri
     val apiKey = uri.getQueryParameter("api_key")
         ?: uri.getQueryParameter("ApiKey")
         ?: return uri
-    val userId = uri.getQueryParameter("UserId")
-    val root = "${uri.scheme}://${uri.encodedAuthority}"
     val id = itemId.ifBlank {
         uri.getQueryParameter("_id")
-            ?: uri.pathSegments.getOrNull(uri.pathSegments.indexOf("Audio") + 1)
-            ?: return uri
-    }
-    return Uri.parse(buildString {
-        append(root)
-        append("/Audio/")
-        append(id)
-        append("/universal?Static=true&EnableRedirection=true&DeviceId=YuriPlayer")
-        append("&_id=").append(id)
-        append("&api_key=").append(Uri.encode(apiKey))
-        if (!userId.isNullOrBlank()) append("&UserId=").append(Uri.encode(userId))
-    })
+            ?: uri.pathSegments.let { segs ->
+                val i = segs.indexOfFirst { it.equals("Audio", true) }
+                segs.getOrNull(i + 1)
+            }
+    } ?: return uri
+    return Uri.parse(
+        "$scheme://$host/Audio/$id/stream?static=true&api_key=${Uri.encode(apiKey)}&_id=$id"
+    )
 }
 
 fun isVirtualLibraryPath(path: String?): Boolean {

@@ -81,6 +81,13 @@ class Media3PlaybackEngine(
                 else -> PlaybackEngine.TransitionReason.OTHER
             }
             dispatch { onMediaTransition(r) }
+            if (reason == Player.MEDIA_ITEM_TRANSITION_REASON_AUTO) {
+                // Don't mutate the playlist inside the transition callback.
+                mainHandler.post {
+                    compactPlayed()
+                    listeners.toList().forEach { runCatching { it.onAutoAdvanced() } }
+                }
+            }
         }
 
         override fun onPlaybackStateChanged(playbackState: Int) {
@@ -120,6 +127,8 @@ class Media3PlaybackEngine(
         .also {
             it.repeatMode = Player.REPEAT_MODE_OFF
             it.addListener(playerListener)
+            // Prefetch the next playlist item so skip / auto-advance is immediate.
+            it.preloadConfiguration = ExoPlayer.PreloadConfiguration(NEXT_PRELOAD_US)
         }
 
     /** Exposed for MediaSession on Android. */
@@ -140,17 +149,26 @@ class Media3PlaybackEngine(
             _currentUri.value = null
             return
         }
-        // Apply headers from the first network item (session-scoped token)
-        val headers = items.firstOrNull { it.headers.isNotEmpty() }?.headers.orEmpty()
-        if (headers.isNotEmpty()) {
-            httpFactory.setDefaultRequestProperties(headers)
-        }
+        applyHeaders(items)
         val mediaItems = items.map { it.toMediaItem() }
         val idx = startIndex.coerceIn(0, mediaItems.lastIndex)
         player.setMediaItems(mediaItems, idx, startPositionMs.coerceAtLeast(0L))
         player.prepare()
         _currentUri.value = items.getOrNull(idx)?.uri
         Log.i(TAG, "setWindow size=${items.size} start=$idx network=${items[idx].isNetwork}")
+    }
+
+    private fun applyHeaders(items: List<PlaybackMedia>) {
+        val headers = items.firstOrNull { it.headers.isNotEmpty() }?.headers.orEmpty()
+        httpFactory.setDefaultRequestProperties(headers)
+    }
+
+    /** Drop already-played items so current is always index 0 and next is index 1. */
+    private fun compactPlayed() {
+        val idx = player.currentMediaItemIndex
+        if (idx > 0 && player.mediaItemCount > idx) {
+            player.removeMediaItems(0, idx)
+        }
     }
 
     override fun play() {
@@ -204,6 +222,49 @@ class Media3PlaybackEngine(
 
     override fun isBuffering(): Boolean = buffering
 
+    override fun setNext(item: PlaybackMedia?) {
+        if (player.mediaItemCount <= 0) {
+            if (item != null) {
+                applyHeaders(listOf(item))
+                player.setMediaItems(listOf(item.toMediaItem()), 0, 0L)
+                player.prepare()
+                _currentUri.value = item.uri
+            }
+            return
+        }
+        compactPlayed()
+        val queuedId = if (player.mediaItemCount > 1) {
+            player.getMediaItemAt(1).mediaId
+        } else {
+            null
+        }
+        if (item == null) {
+            while (player.mediaItemCount > 1) {
+                player.removeMediaItem(player.mediaItemCount - 1)
+            }
+            return
+        }
+        // Same upcoming item is already in the window — keep its buffer.
+        if (queuedId == item.mediaId && player.mediaItemCount == 2) return
+        while (player.mediaItemCount > 1) {
+            player.removeMediaItem(player.mediaItemCount - 1)
+        }
+        applyHeaders(listOf(item))
+        player.addMediaItem(item.toMediaItem())
+        if (player.playbackState == Player.STATE_IDLE) player.prepare()
+        Log.i(TAG, "setNext '${item.title}' network=${item.isNetwork}")
+    }
+
+    override fun hasPreparedNext(): Boolean = player.hasNextMediaItem()
+
+    override fun playPreparedNext(): Boolean {
+        if (!player.hasNextMediaItem()) return false
+        player.seekToNextMediaItem()
+        player.playWhenReady = true
+        mainHandler.post { compactPlayed() }
+        return true
+    }
+
     override fun release() {
         listeners.clear()
         player.release()
@@ -241,6 +302,7 @@ class Media3PlaybackEngine(
 
     companion object {
         private const val TAG = "Media3Engine"
+        private const val NEXT_PRELOAD_US = 15_000_000L
 
         val DESCRIPTOR = PlaybackEngineDescriptor(
             id = "media3",

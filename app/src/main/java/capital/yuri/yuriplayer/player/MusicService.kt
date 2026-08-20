@@ -106,6 +106,7 @@ class MusicService : Service() {
             onPrev = { skipToPrevious(forceTrackChange = false) },
             onSeek = { pos -> seekTo(pos) },
             onEnded = { onEngineEnded() },
+            onAutoAdvanced = { onEngineAutoAdvanced() },
             onPlayingChanged = { playing ->
                 _isPlaying.value = playing
                 updateForegroundNotification()
@@ -214,12 +215,11 @@ class MusicService : Service() {
         )
 
         try {
-            // Single-item window. Queue advance is MusicService-owned (onEnded / skip).
             windowGeneration += 1
             endedForWindow = -1
             hooks.playWindow(
                 song = current,
-                next = null,
+                next = nextSong,
                 startPositionMs = startPositionMs.coerceAtLeast(0L),
                 autoPlay = autoPlay
             )
@@ -259,6 +259,51 @@ class MusicService : Service() {
                 updateForegroundNotification()
                 rebufferWindow(0L, autoPlay = autoPlay, forceReload = true)
             }
+        }
+    }
+
+    /** Queue already matches the engine (pre-buffered next is now current). */
+    private fun applyAdvanceKeepEngine(result: QueueManager.AdvanceResult) {
+        clearStickySeek()
+        pendingRemoteRestore = null
+        when {
+            result.finished -> {
+                engineHooks?.pause()
+                _nowPlaying.value = queueManager.currentSong()
+            }
+            result.seekToStart -> engineHooks?.seekTo(0L)
+            result.reload -> hardRestartCurrent(autoPlay = true)
+            result.song != null -> {
+                _nowPlaying.value = result.song
+                maybeRecordHistory(result.song)
+                syncPreparedNext()
+            }
+        }
+        updateForegroundNotification()
+        persistState()
+    }
+
+    private fun syncPreparedNext() {
+        val hooks = engineHooks ?: return
+        if (!hooks.active) return
+        if (isRepeatOne()) {
+            hooks.setNext(null)
+            return
+        }
+        hooks.setNext(queueManager.peekNext())
+    }
+
+    private fun onEngineAutoAdvanced() {
+        if (advancing) return
+        val gen = windowGeneration
+        if (endedForWindow == gen) return
+        endedForWindow = gen
+        windowGeneration += 1
+        advancing = true
+        try {
+            applyAdvanceKeepEngine(queueManager.advance(userInitiated = false))
+        } finally {
+            advancing = false
         }
     }
 
@@ -313,16 +358,19 @@ class MusicService : Service() {
 
     fun addToHotQueue(song: Song) {
         queueManager.addToQueue(song)
+        syncPreparedNext()
         persistState()
     }
 
     fun addToHotQueue(songs: List<Song>) {
         queueManager.addToQueue(songs)
+        syncPreparedNext()
         persistState()
     }
 
     fun clearHotQueue() {
         queueManager.clearHotQueue()
+        syncPreparedNext()
         persistState()
     }
 
@@ -330,6 +378,8 @@ class MusicService : Service() {
         val needReload = queueManager.removeFromQueue(index)
         if (needReload) {
             rebufferWindow(0L, autoPlay = engineHooks?.getPlayWhenReady() == true, forceReload = true)
+        } else {
+            syncPreparedNext()
         }
         persistState()
     }
@@ -338,17 +388,21 @@ class MusicService : Service() {
         val needReload = queueManager.removeFromContext(index)
         if (needReload) {
             rebufferWindow(0L, autoPlay = engineHooks?.getPlayWhenReady() == true, forceReload = true)
+        } else {
+            syncPreparedNext()
         }
         persistState()
     }
 
     fun moveHot(from: Int, to: Int) {
         queueManager.moveInQueue(from, to)
+        syncPreparedNext()
         persistState()
     }
 
     fun moveCold(from: Int, to: Int) {
         queueManager.moveInContext(from, to)
+        syncPreparedNext()
         persistState()
     }
 
@@ -356,6 +410,8 @@ class MusicService : Service() {
         val needReload = queueManager.moveColdToHot(index)
         if (needReload) {
             rebufferWindow(0L, autoPlay = engineHooks?.getPlayWhenReady() == true, forceReload = true)
+        } else {
+            syncPreparedNext()
         }
         persistState()
     }
@@ -368,16 +424,19 @@ class MusicService : Service() {
 
     fun setShuffle(enabled: Boolean) {
         queueManager.setShuffle(enabled)
+        syncPreparedNext()
         persistState()
     }
 
     fun cycleRepeatMode() {
         queueManager.cycleRepeatMode()
+        syncPreparedNext()
         persistState()
     }
 
     fun setRepeatMode(mode: RepeatMode) {
         queueManager.setRepeatMode(mode)
+        syncPreparedNext()
         persistState()
     }
 
@@ -422,6 +481,20 @@ class MusicService : Service() {
         if (advancing) return
         userSeekGuardUntilElapsed = 0L
         clearStickySeek()
+        val hooks = engineHooks
+        if (hooks != null && hooks.hasPreparedNext()) {
+            advancing = true
+            try {
+                if (hooks.playPreparedNext()) {
+                    windowGeneration += 1
+                    endedForWindow = windowGeneration
+                    applyAdvanceKeepEngine(queueManager.advance(userInitiated = true))
+                    return
+                }
+            } finally {
+                advancing = false
+            }
+        }
         advancing = true
         try {
             applyAdvance(queueManager.advance(userInitiated = true))

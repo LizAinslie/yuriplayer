@@ -177,21 +177,17 @@ class JellyfinClient(
 
     fun streamUrl(session: Session, itemId: String, container: String? = null): String {
         val root = session.baseUrl.trimEnd('/')
-        // /universal + Static=true is a real file (Content-Length) instead of a
-        // chunked live pipe, so VLC/Media3 can buffer and fire end-of-track.
+        // Direct original-file stream. /universal 401s unless DeviceId matches the
+        // SDK session (we authenticate with a UUID, not "YuriPlayer").
         return buildString {
             append(root)
             append("/Audio/")
             append(itemId)
-            append("/universal")
-            append("?UserId=").append(Uri.encode(session.userId))
-            append("&DeviceId=YuriPlayer")
+            append("/stream?static=true")
             append("&api_key=").append(Uri.encode(session.accessToken))
-            append("&Static=true")
-            append("&EnableRedirection=true")
             append("&_id=").append(itemId)
-            val c = container?.trim()?.takeIf { it.isNotEmpty() }
-            if (c != null) append("&Container=").append(Uri.encode(c))
+            val ext = containerExt(container)
+            if (ext != null) append("&Container=").append(ext)
         }
     }
 
@@ -274,6 +270,25 @@ class JellyfinClient(
             ItemFields.OVERVIEW,
             ItemFields.TAGS
         )
+
+        private fun containerExt(container: String?): String? {
+            val raw = container?.trim()?.lowercase()?.substringBefore(',') ?: return null
+            if (raw.isEmpty()) return null
+            val c = raw.removePrefix("audio/")
+            return when (c) {
+                "mpeg", "mp3", "mpga" -> "mp3"
+                "x-flac", "flac" -> "flac"
+                "mp4", "m4a", "aac", "x-m4a" -> "m4a"
+                "ogg", "vorbis", "oga" -> "ogg"
+                "opus" -> "opus"
+                "wav", "x-wav" -> "wav"
+                "aiff", "aif" -> "aiff"
+                "wma", "x-ms-wma" -> "wma"
+                "ape" -> "ape"
+                "wv", "wavpack" -> "wv"
+                else -> c.takeIf { it.matches(Regex("[a-z0-9]{1,8}")) }
+            }
+        }
 
         fun cleanTrackTitle(raw: String?, trackNumber: Int?): String? {
             if (raw.isNullOrBlank()) return raw

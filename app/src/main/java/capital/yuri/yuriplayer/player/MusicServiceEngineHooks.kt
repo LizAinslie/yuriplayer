@@ -23,6 +23,7 @@ internal class MusicServiceEngineHooks(
     onPrev: () -> Unit,
     onSeek: (Long) -> Unit,
     onEnded: () -> Unit,
+    onAutoAdvanced: () -> Unit,
     onPlayingChanged: (Boolean) -> Unit
 ) {
     private val host = MusicServiceLocalEngine(
@@ -35,6 +36,7 @@ internal class MusicServiceEngineHooks(
         onPrev = onPrev,
         onSeek = onSeek,
         onEnded = onEnded,
+        onAutoAdvanced = onAutoAdvanced,
         onPlayingChanged = onPlayingChanged
     )
 
@@ -47,8 +49,16 @@ internal class MusicServiceEngineHooks(
     fun playWindow(song: Song, next: Song?, startPositionMs: Long, autoPlay: Boolean) {
         active = true
         host.playWindow(song, next, startPositionMs, autoPlay)
-        Log.i(TAG, "window via ${host.engineId} '${song.displayTitle}'")
+        Log.i(TAG, "window via ${host.engineId} '${song.displayTitle}' next=${next?.displayTitle}")
     }
+
+    fun setNext(song: Song?) {
+        if (active) host.setNext(song)
+    }
+
+    fun hasPreparedNext(): Boolean = active && host.hasPreparedNext()
+
+    fun playPreparedNext(): Boolean = active && host.playPreparedNext()
 
     fun deactivate() {
         if (!active) return
