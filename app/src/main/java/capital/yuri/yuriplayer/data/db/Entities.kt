@@ -53,9 +53,36 @@ data class PlaylistEntity(
     @PrimaryKey val id: String,
     val name: String,
     val description: String? = null,
+    /**
+     * Legacy single custom image. Prefer [activeCoverId] + [PlaylistCoverEntity]
+     * when present; this remains the fast list-thumb path and migration fallback.
+     */
     val customImageUri: String? = null,
+    /** Active [PlaylistCoverEntity.id] for public display. */
+    val activeCoverId: String? = null,
     val createdAtMs: Long = System.currentTimeMillis(),
     val updatedAtMs: Long = System.currentTimeMillis()
+)
+
+/**
+ * One custom cover image for a playlist. Multiple rows per playlist are allowed.
+ * [isSecret] covers are kept out of the default active slot unless the user
+ * explicitly sets them active (handy for private / alternate art).
+ */
+@Entity(
+    tableName = "playlist_covers",
+    indices = [
+        Index(value = ["playlistId"]),
+        Index(value = ["playlistId", "sortOrder"])
+    ]
+)
+data class PlaylistCoverEntity(
+    @PrimaryKey val id: String,
+    val playlistId: String,
+    val uri: String,
+    val isSecret: Boolean = false,
+    val sortOrder: Int = 0,
+    val createdAtMs: Long = System.currentTimeMillis()
 )
 
 @Entity(
