@@ -8,10 +8,9 @@ import kotlinx.coroutines.withContext
 /**
  * Fast discography for the artist page.
  *
- * Full [CatalogRepository.albumItemsForArtist] expands every release (slow on
- * large artists + multi-source). The horizontal discography row only needs
- * name / year / trackCount / one seed for art — open the album page for the
- * full track list.
+ * Full expand only happens when an album is opened. Rows from the catalog can
+ * still fragment into multiple albumKeys for the same release — group by
+ * [albumKey] so the LazyRow never sees two cards with the same name|artist|year.
  */
 suspend fun lightAlbumItemsForArtist(
     dao: CatalogDao,
@@ -21,21 +20,27 @@ suspend fun lightAlbumItemsForArtist(
 
     val rows = dao.getAlbumsForArtist(artistKey)
     if (rows.isNotEmpty()) {
-        return@withContext rows.map { row ->
-            val seed = dao.getOneTrackForAlbum(row.albumKey)?.toLightSong()
-            AlbumItem(
-                name = row.name,
-                artist = row.artist,
-                trackCount = row.trackCount,
-                songs = listOfNotNull(seed)
+        return@withContext rows
+            .groupBy { albumKey(it.name, it.artist) }
+            .map { (_, group) ->
+                val row = group.maxByOrNull { it.trackCount } ?: group.first()
+                val seed = dao.getOneTrackForAlbum(row.albumKey)?.toLightSong()
+                    ?: group.asSequence()
+                        .mapNotNull { dao.getOneTrackForAlbum(it.albumKey)?.toLightSong() }
+                        .firstOrNull()
+                AlbumItem(
+                    name = row.name,
+                    artist = row.artist,
+                    trackCount = group.maxOf { it.trackCount },
+                    songs = listOfNotNull(seed)
+                )
+            }
+            .sortedWith(
+                compareByDescending<AlbumItem> { it.songs.firstOrNull()?.year ?: Int.MIN_VALUE }
+                    .thenBy(String.CASE_INSENSITIVE_ORDER) { it.displayName }
             )
-        }.sortedWith(
-            compareByDescending<AlbumItem> { it.songs.firstOrNull()?.year ?: Int.MIN_VALUE }
-                .thenBy(String.CASE_INSENSITIVE_ORDER) { it.displayName }
-        )
     }
 
-    // No rollup rows yet — group tracks lightly without multi-key expand
     dao.getTracksForArtist(artistKey)
         .map { it.toLightSong() }
         .groupBy { albumKey(it.album, it.effectiveAlbumArtist) }
@@ -45,7 +50,7 @@ suspend fun lightAlbumItemsForArtist(
                 name = sorted.firstOrNull()?.album,
                 artist = sorted.firstOrNull()?.effectiveAlbumArtist,
                 trackCount = sorted.size,
-                songs = sorted.take(1) // seed only for art
+                songs = sorted.take(1)
             )
         }
         .sortedWith(
