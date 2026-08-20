@@ -127,6 +127,17 @@ android {
         buildConfig = true
     }
 
+    packaging {
+        jniLibs {
+            // LibVLC ships its own .so set; avoid merge conflicts with other natives
+            pickFirsts += listOf(
+                "lib/**/libc++_shared.so",
+                "lib/**/libvlc.so",
+                "lib/**/libvlcjni.so"
+            )
+        }
+    }
+
     sourceSets {
         getByName("debug") {
             java.srcDir("build/generated/ksp/debug/java")
@@ -229,6 +240,9 @@ dependencies {
     implementation(libs.androidx.media3.session)
     implementation(libs.androidx.media3.ui)
     implementation(libs.androidx.media3.common)
+
+    // LibVLC — local FLAC/APE and other formats Media3 often rejects
+    implementation(libs.libvlc.all)
 
     implementation(libs.koin.android)
     implementation(libs.koin.androidx.compose)
