@@ -390,7 +390,7 @@ class MusicRepository(
         val year: Int? = null,
         val genre: String? = null,
         val pathHint: String? = null
-    }
+    )
 
     private fun FileTags.withFilenameFallback(fileName: String?, persistPath: String?): FileTags {
         val inferred = FilenameMetadataParser.parse(
