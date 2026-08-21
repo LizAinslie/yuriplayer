@@ -20,7 +20,9 @@ data class Track(
     val year: Int? = null,
     val genre: String? = null,
     val artworkUri: String? = null,
-    val path: String? = null
+    val path: String? = null,
+    /** Local library id `"local"` or a remote account id. */
+    val sourceId: String? = null
 ) {
     val displayTitle: String
         get() = title?.takeIf { it.isNotBlank() }

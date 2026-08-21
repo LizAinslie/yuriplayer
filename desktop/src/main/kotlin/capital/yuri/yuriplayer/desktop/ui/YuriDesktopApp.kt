@@ -200,12 +200,6 @@ fun YuriDesktopApp(session: DesktopSession) {
             pinItems + rest.filter { it.id !in pinIds }
         }
         val selectedLibraryId = (route as? Route.Album)?.album?.id
-        val visibleAlbums = remember(albums, query) {
-            if (query.isBlank()) albums
-            else albums.filter {
-                it.title.contains(query, true) || it.artist.contains(query, true)
-            }
-        }
 
         DesktopBentoLayout(
             nav = nav,
@@ -328,11 +322,16 @@ fun YuriDesktopApp(session: DesktopSession) {
                     },
                     onPlayTracks = { list, i -> session.player.play(list, i) }
                 )
-                Route.Search -> LibraryGrid(
-                    albums = visibleAlbums,
-                    status = if (query.isBlank()) "Search albums and artists" else "${visibleAlbums.size} matches",
-                    emptyHint = if (query.isBlank()) "Type in the search bar." else "Nothing matches.",
-                    onOpen = ::openAlbum
+                Route.Search -> DesktopExplore(
+                    session = session,
+                    query = query,
+                    tracks = tracks,
+                    albums = albums,
+                    playlists = playlists,
+                    onOpenAlbum = ::openAlbum,
+                    onOpenPlaylist = { push(Route.Playlist(it.id)) },
+                    onOpenArtist = { name -> query = name },
+                    onPlaySongs = { list, i -> session.player.play(list, i) }
                 )
                 is Route.Album -> {
                     val live = albums.firstOrNull { it.id == r.album.id } ?: r.album

@@ -555,6 +555,23 @@ class DesktopSession {
 
     fun extraScan(path: String) = addFolder(path)
 
+    suspend fun searchRemotes(query: String, sourceIds: Set<String>?): List<Track> {
+        val q = query.trim()
+        if (q.isEmpty()) return emptyList()
+        val remotes = sources.remotes.value.filter { it.enabled }
+            .filter { sourceIds == null || it.id in sourceIds }
+        val out = ArrayList<Track>()
+        for (remote in remotes) {
+            val result = when (remote.kind) {
+                SourceKind.JELLYFIN -> jellyfin.searchTracks(remote, q)
+                SourceKind.SUBSONIC -> subsonic.searchTracks(remote, q)
+                SourceKind.LOCAL -> continue
+            }
+            result.onSuccess { out += it }
+        }
+        return out
+    }
+
     fun release() {
         ticker?.cancel()
         media.release()

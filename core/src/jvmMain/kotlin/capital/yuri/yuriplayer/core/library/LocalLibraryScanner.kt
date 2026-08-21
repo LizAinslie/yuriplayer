@@ -9,6 +9,7 @@ import java.util.logging.Level
 import java.util.logging.Logger
 
 object LocalLibraryScanner {
+    const val SOURCE_LOCAL = "local"
     private val AUDIO_EXTENSIONS = setOf(
         "flac", "mp3", "ogg", "opus", "m4a", "mp4", "aac",
         "wav", "aiff", "aif", "wma", "alac"
@@ -76,7 +77,8 @@ object LocalLibraryScanner {
                 year = field(FieldKey.YEAR)?.take(4)?.toIntOrNull(),
                 genre = field(FieldKey.GENRE),
                 artworkUri = resolveCover(file, audio, coverByDir),
-                path = file.absolutePath
+                path = file.absolutePath,
+                sourceId = SOURCE_LOCAL
             )
         } catch (_: Exception) {
             Track(
@@ -84,7 +86,8 @@ object LocalLibraryScanner {
                 uri = file.toURI().toString(),
                 title = fallbackTitle,
                 artworkUri = resolveCover(file, null, coverByDir),
-                path = file.absolutePath
+                path = file.absolutePath,
+                sourceId = SOURCE_LOCAL
             )
         }
     }

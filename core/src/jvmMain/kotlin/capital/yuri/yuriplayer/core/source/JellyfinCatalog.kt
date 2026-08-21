@@ -116,6 +116,30 @@ class JellyfinCatalog(
             out
         }
 
+    suspend fun searchTracks(account: RemoteAccount, query: String, limit: Int = 80): Result<List<Track>> =
+        runCatching {
+            val token = account.accessToken ?: error("Not signed in")
+            val userId = account.userId ?: error("Not signed in")
+            val root = normalizeBaseUrl(account.baseUrl)
+            val requestUrl = url(root) {
+                path("Users", userId, "Items")
+                param("SearchTerm", query)
+                param("IncludeItemTypes", "Audio")
+                param("Recursive", "true")
+                param("Fields", "Album,AlbumArtist,Artists,RunTimeTicks,IndexNumber,ParentIndexNumber,ProductionYear,Genres,PrimaryImageAspectRatio,Container")
+                param("EnableImageTypes", "Primary")
+                param("ImageTypeLimit", "1")
+                param("Limit", limit)
+            }
+            val response = http.get(requestUrl) {
+                header("X-Emby-Authorization", authHeader(token))
+                header("X-Emby-Token", token)
+            }
+            if (!response.status.isSuccess()) error("Search HTTP ${response.status.value}")
+            val page = json.decodeFromString<ItemsResponse>(response.bodyAsText())
+            page.items.mapNotNull { toTrack(account.copy(baseUrl = root), it) }
+        }
+
     private fun toTrack(account: RemoteAccount, item: JfItem): Track? {
         val id = item.id ?: return null
         val token = account.accessToken ?: return null
@@ -150,7 +174,8 @@ class JellyfinCatalog(
             trackNumber = item.indexNumber,
             discNumber = item.parentIndexNumber,
             year = item.year,
-            artworkUri = art
+            artworkUri = art,
+            sourceId = account.id
         )
     }
 

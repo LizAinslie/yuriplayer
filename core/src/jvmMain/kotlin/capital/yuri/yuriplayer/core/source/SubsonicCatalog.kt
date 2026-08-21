@@ -52,7 +52,7 @@ class SubsonicCatalog(
                 for (album in page) {
                     kotlinx.coroutines.currentCoroutineContext().ensureActive()
                     val id = album.id ?: continue
-                    out += songsForAlbum(session, id, album)
+                    out += songsForAlbum(session, id, album, account.id)
                     if (out.size >= maxSongs) break
                 }
                 offset += page.size
@@ -69,7 +69,7 @@ class SubsonicCatalog(
             for (album in albums) {
                 kotlinx.coroutines.currentCoroutineContext().ensureActive()
                 val id = album.id ?: continue
-                out += songsForAlbum(session, id, album)
+                out += songsForAlbum(session, id, album, account.id)
             }
             out
         }
@@ -92,7 +92,8 @@ class SubsonicCatalog(
     private suspend fun songsForAlbum(
         session: Session,
         albumId: String,
-        albumRef: SubsonicAlbum
+        albumRef: SubsonicAlbum,
+        sourceId: String
     ): List<Track> {
         val body = apiGet(session, "getAlbum") { param("id", albumId) }
         val album = json.decodeFromString<SubsonicResponse>(body).subsonicResponse.album
@@ -115,10 +116,43 @@ class SubsonicCatalog(
                 discNumber = child.discNumber,
                 year = child.year ?: album.year,
                 genre = child.genre,
-                artworkUri = coverUrl(session, child.coverArt) ?: cover
+                artworkUri = coverUrl(session, child.coverArt) ?: cover,
+                sourceId = sourceId
             )
         }
     }
+
+    suspend fun searchTracks(account: RemoteAccount, query: String, limit: Int = 80): Result<List<Track>> =
+        runCatching {
+            val session = sessionOf(account)
+            val body = apiGet(session, "search3") {
+                param("query", query)
+                param("songCount", limit)
+                param("albumCount", 12)
+                param("artistCount", 12)
+            }
+            val songs = json.decodeFromString<SubsonicResponse>(body)
+                .subsonicResponse.searchResult3?.song.orEmpty()
+            songs.mapNotNull { child ->
+                if (child.isDir == true) return@mapNotNull null
+                val sid = child.id ?: return@mapNotNull null
+                Track(
+                    id = "subsonic:$sid",
+                    uri = streamUrl(session, sid),
+                    title = child.title ?: child.name,
+                    artist = child.artist,
+                    albumArtist = child.artist,
+                    album = child.album,
+                    durationMs = child.duration?.times(1000L),
+                    trackNumber = child.track,
+                    discNumber = child.discNumber,
+                    year = child.year,
+                    genre = child.genre,
+                    artworkUri = coverUrl(session, child.coverArt),
+                    sourceId = account.id
+                )
+            }
+        }
 
     fun streamUrl(session: Session, id: String): String =
         restUrl(session, "stream") {
@@ -189,7 +223,13 @@ class SubsonicCatalog(
         val type: String? = null,
         val error: SubsonicError? = null,
         val albumList2: SubsonicAlbumList? = null,
-        val album: SubsonicAlbumDetail? = null
+        val album: SubsonicAlbumDetail? = null,
+        val searchResult3: SubsonicSearchResult? = null
+    )
+
+    @Serializable
+    private data class SubsonicSearchResult(
+        val song: List<SubsonicChild> = emptyList()
     )
 
     @Serializable
