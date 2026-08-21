@@ -7,6 +7,7 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -149,8 +150,8 @@ fun HomeFeedScreen(
                 HomeRow(title = "Random albums") {
                     stuffAlbums.shuffled().take(10).forEach { album ->
                         CoverTile(
-                            title = album.name,
-                            subtitle = album.artist,
+                            title = album.displayName,
+                            subtitle = album.displayArtist,
                             onClick = { onOpenAlbum(album) },
                             art = { AlbumArt(song = album.songs.firstOrNull(), size = 112.dp, corner = 8.dp) }
                         )
@@ -163,10 +164,10 @@ fun HomeFeedScreen(
                 HomeRow(title = "Random artists") {
                     stuffArtists.shuffled().take(10).forEach { artist ->
                         CoverTile(
-                            title = artist.name,
+                            title = artist.displayName,
                             subtitle = "${artist.albumCount} albums",
                             onClick = { onOpenArtist(artist) },
-                            art = { ArtistArt(artistName = artist.name, size = 112.dp, circular = true) }
+                            art = { ArtistArt(artistName = artist.displayName, size = 112.dp, circular = true) }
                         )
                     }
                 }
@@ -222,7 +223,7 @@ fun HomeFeedScreen(
 @Composable
 private fun HomeRow(
     title: String,
-    content: @Composable Row.() -> Unit
+    content: @Composable RowScope.() -> Unit
 ) {
     Column(Modifier.fillMaxWidth().padding(top = 8.dp)) {
         Text(
