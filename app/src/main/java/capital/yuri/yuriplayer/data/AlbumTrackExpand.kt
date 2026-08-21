@@ -146,6 +146,21 @@ suspend fun expandAlbumTracksByName(
         return false
     }
 
+    extraSeedSongs.take(4).forEach { seed ->
+        val q = seed.title?.trim().orEmpty()
+        if (q.length < 3) return@forEach
+        dao.searchTracks(q.take(48), limit = 80).forEach { t ->
+            if (!artistOk(t)) return@forEach
+            val titleHit = TrackIdentity.titlesNearlyMatch(t.title, seed.title, minLen = 6)
+            val albumHit = TrackIdentity.albumsNearlyMatch(t.album, name)
+            if (!titleHit && !albumHit) return@forEach
+            put(t)
+            if (t.albumKey.isNotBlank()) {
+                dao.getTracksForAlbum(t.albumKey).forEach { put(it) }
+            }
+        }
+    }
+
     val filtered = bySongKey.values.filter { albumOk(it) && artistOk(it) }
     val dropped = bySongKey.size - filtered.size
     if (dropped > 0) {
@@ -189,7 +204,7 @@ suspend fun expandAlbumTracksByName(
 fun dedupeAlbumPageTracks(tracks: List<Song>): List<Song> {
     if (tracks.isEmpty()) return emptyList()
     val unique = tracks.distinctBy { it.songKey }
-    val groups = unique.groupBy { albumPageIdentity(it) }
+    val groups = collapseNearTitleGroups(unique.groupBy { albumPageIdentity(it) })
     val albumHint = tracks.firstOrNull()?.album
     if (groups.any { it.value.size > 1 } || groups.size != tracks.size) {
         AlbumLog.identityGroups(albumHint, groups)
@@ -201,6 +216,41 @@ fun dedupeAlbumPageTracks(tracks: List<Song>): List<Song> {
             } ?: group.first()
             TrackIdentity.withRichestDisplay(preferred, group)
         }
+}
+
+private fun collapseNearTitleGroups(
+    groups: Map<String, List<Song>>
+): Map<String, List<Song>> {
+    if (groups.size <= 1) return groups
+    val entries = groups.entries.toList()
+    val used = BooleanArray(entries.size)
+    val out = LinkedHashMap<String, List<Song>>()
+    for (i in entries.indices) {
+        if (used[i]) continue
+        used[i] = true
+        val bucket = entries[i].value.toMutableList()
+        val sample = bucket.first()
+        val disc = sample.discNumber ?: 1
+        val tn = sample.trackNumber
+        for (j in i + 1 until entries.size) {
+            if (used[j]) continue
+            val other = entries[j].value.first()
+            val sameSlot = tn != null && tn > 0 &&
+                other.trackNumber == tn &&
+                (other.discNumber ?: 1) == disc
+            val minLen = if (sameSlot) 6 else 16
+            if (!TrackIdentity.titlesNearlyMatch(sample.title, other.title, minLen = minLen)) {
+                continue
+            }
+            if (!sameSlot && tn != null && other.trackNumber != null && other.trackNumber != tn) {
+                continue
+            }
+            used[j] = true
+            bucket += entries[j].value
+        }
+        out[entries[i].key] = bucket
+    }
+    return out
 }
 
 internal fun albumPageIdentity(song: Song): String {

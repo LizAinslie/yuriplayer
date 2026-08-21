@@ -294,6 +294,20 @@ object TrackIdentity {
         return na.isNotEmpty() && na == nb
     }
 
+    fun titlesNearlyMatch(
+        a: String?,
+        b: String?,
+        maxDist: Int = 2,
+        minLen: Int = 10
+    ): Boolean {
+        if (titlesMatch(a, b)) return true
+        val na = normalizeTitle(a)
+        val nb = normalizeTitle(b)
+        if (na.length < minLen || nb.length < minLen) return false
+        if (kotlin.math.abs(na.length - nb.length) > maxDist) return false
+        return editDistanceAtMost(na, nb, maxDist) <= maxDist
+    }
+
     fun albumsMatch(a: String?, b: String?): Boolean {
         val na = normalizeToken(a)
         val nb = normalizeToken(b)

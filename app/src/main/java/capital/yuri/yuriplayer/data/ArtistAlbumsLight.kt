@@ -184,7 +184,7 @@ private fun clusterNearDuplicateAlbums(items: List<AlbumItem>): List<AlbumItem> 
             if (used[j]) continue
             val b = exact[j]
             if (artistKey(b.artist) != artistA) continue
-            if (!TrackIdentity.albumsNearlyMatch(a.name, b.name)) continue
+            if (!sameRelease(a, b)) continue
             used[j] = true
             members += b
         }
@@ -198,6 +198,20 @@ private fun clusterNearDuplicateAlbums(items: List<AlbumItem>): List<AlbumItem> 
         out += pick.copy(trackCount = members.maxOf { it.trackCount })
     }
     return out
+}
+
+private fun sameRelease(a: AlbumItem, b: AlbumItem): Boolean {
+    if (!TrackIdentity.albumsNearlyMatch(a.name, b.name)) return false
+    val sa = a.songs.firstOrNull()
+    val sb = b.songs.firstOrNull()
+    if (sa == null || sb == null) return true
+    if (albumPageIdentity(sa) == albumPageIdentity(sb)) return true
+    if (TrackIdentity.titlesNearlyMatch(sa.title, sb.title, minLen = 6)) return true
+    // Same slot on the release (track 1 vs track 1) + close titles
+    val sameSlot = (sa.trackNumber ?: 0) > 0 &&
+        sa.trackNumber == sb.trackNumber &&
+        (sa.discNumber ?: 1) == (sb.discNumber ?: 1)
+    return sameSlot && TrackIdentity.titlesNearlyMatch(sa.title, sb.title, minLen = 4)
 }
 
 internal fun CatalogTrackEntity.toLightSong(): Song = Song(
