@@ -1,7 +1,8 @@
 package capital.yuri.yuriplayer.network
 
 import io.ktor.client.HttpClient
-import io.ktor.client.engine.android.Android
+import io.ktor.client.engine.cio.CIO
+import io.ktor.client.plugins.HttpTimeout
 import io.ktor.client.plugins.contentnegotiation.ContentNegotiation
 import io.ktor.client.plugins.defaultRequest
 import io.ktor.client.plugins.logging.BinaryLogBodyFilter
@@ -18,7 +19,10 @@ import io.ktor.http.charset
 import io.ktor.serialization.kotlinx.json.json
 import io.ktor.utils.io.ByteReadChannel
 import kotlinx.serialization.json.Json
+import org.koin.core.qualifier.named
 import org.koin.dsl.module
+
+const val IMAGES_CLIENT = "ktor.images"
 
 val httpModule = module {
     single {
@@ -31,8 +35,13 @@ val httpModule = module {
 
     single {
         val json: Json = get()
-        HttpClient(Android) {
+        HttpClient(CIO) {
             expectSuccess = false
+            install(HttpTimeout) {
+                connectTimeoutMillis = 15_000
+                socketTimeoutMillis = 30_000
+                requestTimeoutMillis = 45_000
+            }
             install(ContentNegotiation) {
                 json(json)
             }
@@ -52,9 +61,24 @@ val httpModule = module {
                     "YuriPlayer/1.0 (https://github.com/LizAinslie/yuriplayer)"
                 )
             }
-            engine {
-                connectTimeout = 15_000
-                socketTimeout = 30_000
+        }
+    }
+
+    /** Coil-only client: no BODY logging, isolated from API request jobs. */
+    single(named(IMAGES_CLIENT)) {
+        HttpClient(CIO) {
+            expectSuccess = false
+            followRedirects = true
+            install(HttpTimeout) {
+                connectTimeoutMillis = 15_000
+                socketTimeoutMillis = 30_000
+                requestTimeoutMillis = 45_000
+            }
+            defaultRequest {
+                header(
+                    "User-Agent",
+                    "YuriPlayer/1.0 (https://github.com/LizAinslie/yuriplayer)"
+                )
             }
         }
     }

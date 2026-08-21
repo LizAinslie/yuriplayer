@@ -8,6 +8,7 @@ import androidx.core.content.ContextCompat
 import capital.yuri.yuriplayer.data.LibraryIndex
 import capital.yuri.yuriplayer.data.LibrarySettings
 import capital.yuri.yuriplayer.di.appModule
+import capital.yuri.yuriplayer.network.IMAGES_CLIENT
 import capital.yuri.yuriplayer.network.httpModule
 import capital.yuri.yuriplayer.player.MusicService
 import coil3.ImageLoader
@@ -16,11 +17,15 @@ import coil3.SingletonImageLoader
 import coil3.network.CacheStrategy
 import coil3.network.ktor3.KtorNetworkFetcherFactory
 import io.ktor.client.HttpClient
+import kotlinx.coroutines.CoroutineExceptionHandler
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
 import org.koin.android.ext.android.get
 import org.koin.android.ext.koin.androidContext
 import org.koin.android.ext.koin.androidLogger
 import org.koin.core.context.startKoin
 import org.koin.core.logger.Level
+import org.koin.core.qualifier.named
 
 class YuriPlayerApp : Application(), SingletonImageLoader.Factory {
     override fun onCreate() {
@@ -52,10 +57,15 @@ class YuriPlayerApp : Application(), SingletonImageLoader.Factory {
 
     override fun newImageLoader(context: PlatformContext): ImageLoader =
         ImageLoader.Builder(context)
+            .coroutineContext(
+                SupervisorJob() + Dispatchers.IO + CoroutineExceptionHandler { _, t ->
+                    android.util.Log.w("Coil", "image load cancelled", t)
+                }
+            )
             .components {
                 add(
                     KtorNetworkFetcherFactory(
-                        httpClient = { get<HttpClient>() },
+                        httpClient = { get<HttpClient>(named(IMAGES_CLIENT)) },
                         cacheStrategy = { CacheStrategy.DEFAULT }
                     )
                 )
