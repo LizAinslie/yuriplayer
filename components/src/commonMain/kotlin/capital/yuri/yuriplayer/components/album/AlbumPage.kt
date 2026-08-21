@@ -1,6 +1,7 @@
 package capital.yuri.yuriplayer.components.album
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -47,6 +48,7 @@ fun AlbumPage(
     onTrack: (Int) -> Unit,
     onEdit: () -> Unit = {},
     onEditTrack: (Int) -> Unit = {},
+    onArtist: (String) -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val coverColors by rememberCoverColors(
@@ -64,11 +66,11 @@ fun AlbumPage(
             val widthClass = windowWidthClass(maxWidth)
             when (widthClass) {
                 WindowWidthClass.Compact -> AlbumPageCompact(
-                    album, playing, onBack, onPlay, onTrack, onEdit, onEditTrack
+                    album, playing, onBack, onPlay, onTrack, onEdit, onEditTrack, onArtist
                 )
                 WindowWidthClass.Medium,
                 WindowWidthClass.Expanded -> AlbumPageWide(
-                    album, playing, onBack, onPlay, onTrack, onEdit, onEditTrack
+                    album, playing, onBack, onPlay, onTrack, onEdit, onEditTrack, onArtist
                 )
             }
         }
@@ -83,7 +85,8 @@ private fun AlbumPageCompact(
     onPlay: () -> Unit,
     onTrack: (Int) -> Unit,
     onEdit: () -> Unit,
-    onEditTrack: (Int) -> Unit
+    onEditTrack: (Int) -> Unit,
+    onArtist: (String) -> Unit
 ) {
     Column(Modifier.fillMaxSize()) {
         Row(verticalAlignment = Alignment.CenterVertically) {
@@ -108,7 +111,7 @@ private fun AlbumPageCompact(
                 .aspectRatio(1f),
             corner = 12.dp
         )
-        AlbumMeta(album, playing, onPlay, Modifier.padding(20.dp))
+        AlbumMeta(album, playing, onPlay, onArtist, Modifier.padding(20.dp))
         TrackList(album, onTrack, onEditTrack)
     }
 }
@@ -121,7 +124,8 @@ private fun AlbumPageWide(
     onPlay: () -> Unit,
     onTrack: (Int) -> Unit,
     onEdit: () -> Unit,
-    onEditTrack: (Int) -> Unit
+    onEditTrack: (Int) -> Unit,
+    onArtist: (String) -> Unit
 ) {
     Row(Modifier.fillMaxSize().padding(24.dp)) {
         Column(
@@ -148,7 +152,7 @@ private fun AlbumPageWide(
                 corner = 12.dp
             )
             Spacer(Modifier.height(16.dp))
-            AlbumMeta(album, playing, onPlay)
+            AlbumMeta(album, playing, onPlay, onArtist)
         }
         TrackList(album, onTrack, onEditTrack, modifier = Modifier.weight(1f))
     }
@@ -159,6 +163,7 @@ private fun AlbumMeta(
     album: AlbumPageModel,
     playing: Boolean,
     onPlay: () -> Unit,
+    onArtist: (String) -> Unit,
     modifier: Modifier = Modifier
 ) {
     Column(modifier) {
@@ -171,7 +176,8 @@ private fun AlbumMeta(
         Text(
             album.artist,
             style = MaterialTheme.typography.bodyLarge,
-            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f)
+            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f),
+            modifier = Modifier.clickable { onArtist(album.artist) }
         )
         val bits = buildList {
             album.year?.let { add(it.toString()) }

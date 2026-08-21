@@ -79,8 +79,8 @@ fun BottomPlayerBar(
         Box(
             Modifier
                 .fillMaxWidth()
-                .padding(horizontal = 12.dp, vertical = 8.dp)
-                .height(72.dp)
+                .padding(horizontal = 12.dp, vertical = 10.dp)
+                .height(84.dp)
         ) {
             Row(
                 Modifier.align(Alignment.CenterStart).widthIn(max = 360.dp),
@@ -165,12 +165,17 @@ fun BottomPlayerBar(
                     IconButton(onClick = onCycleRepeat, modifier = Modifier.size(36.dp)) {
                         Icon(
                             if (repeat == RepeatMode.ONE) Icons.Default.RepeatOne else Icons.Default.Repeat,
-                            contentDescription = "Repeat",
+                            contentDescription = when (repeat) {
+                                RepeatMode.OFF -> "Repeat off"
+                                RepeatMode.ALL -> "Repeat all"
+                                RepeatMode.ONE -> "Repeat one"
+                            },
                             modifier = Modifier.size(18.dp),
                             tint = if (repeat != RepeatMode.OFF) accent else muted
                         )
                     }
                 }
+                Spacer(Modifier.height(8.dp))
                 Row(
                     Modifier.fillMaxWidth(),
                     verticalAlignment = Alignment.CenterVertically

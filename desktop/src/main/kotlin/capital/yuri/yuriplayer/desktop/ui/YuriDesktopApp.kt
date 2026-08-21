@@ -40,6 +40,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import capital.yuri.yuriplayer.components.album.AlbumPage
 import capital.yuri.yuriplayer.components.art.CoverArt
+import capital.yuri.yuriplayer.components.artist.ArtistPage
 import capital.yuri.yuriplayer.components.layout.DesktopBentoLayout
 import capital.yuri.yuriplayer.components.layout.DesktopNav
 import capital.yuri.yuriplayer.components.layout.LibraryFilter
@@ -47,6 +48,7 @@ import capital.yuri.yuriplayer.components.layout.LibraryRailItem
 import capital.yuri.yuriplayer.components.list.AlbumCard
 import capital.yuri.yuriplayer.components.model.AlbumPageModel
 import capital.yuri.yuriplayer.components.model.albums
+import capital.yuri.yuriplayer.components.model.artistPage
 import capital.yuri.yuriplayer.components.model.toCover
 import capital.yuri.yuriplayer.components.model.toRow
 import capital.yuri.yuriplayer.components.player.BottomPlayerBar
@@ -63,6 +65,7 @@ private sealed class Route {
     data object Search : Route()
     data class Album(val album: AlbumPageModel) : Route()
     data class Playlist(val id: String) : Route()
+    data class Artist(val name: String) : Route()
 }
 
 @Composable
@@ -121,6 +124,7 @@ fun YuriDesktopApp(session: DesktopSession) {
         }
 
         fun openAlbum(album: AlbumPageModel) = push(Route.Album(album))
+        fun openArtist(name: String) = push(Route.Artist(name))
 
         val recency = remember(history) {
             history.mapIndexed { i, t -> t.id to i }.toMap()
@@ -229,9 +233,9 @@ fun YuriDesktopApp(session: DesktopSession) {
                         push(Route.Playlist(item.id.removePrefix("playlist:")))
                     }
                     item.id.startsWith("artist:") -> {
-                        query = item.title
-                        push(Route.Search)
+                        openArtist(item.id.removePrefix("artist:").ifBlank { item.title })
                     }
+                    item.circular -> openArtist(item.title)
                     else -> albums.firstOrNull { it.id == item.id }?.let { openAlbum(it) }
                 }
             },
@@ -316,10 +320,7 @@ fun YuriDesktopApp(session: DesktopSession) {
                     status = engineMessage ?: status,
                     onOpenAlbum = ::openAlbum,
                     onOpenPlaylist = { push(Route.Playlist(it.id)) },
-                    onOpenArtist = { name ->
-                        query = name
-                        push(Route.Search)
-                    },
+                    onOpenArtist = ::openArtist,
                     onPlayTracks = { list, i -> session.player.play(list, i) }
                 )
                 Route.Search -> DesktopExplore(
@@ -330,7 +331,7 @@ fun YuriDesktopApp(session: DesktopSession) {
                     playlists = playlists,
                     onOpenAlbum = ::openAlbum,
                     onOpenPlaylist = { push(Route.Playlist(it.id)) },
-                    onOpenArtist = { name -> query = name },
+                    onOpenArtist = ::openArtist,
                     onPlaySongs = { list, i -> session.player.play(list, i) }
                 )
                 is Route.Album -> {
@@ -355,7 +356,39 @@ fun YuriDesktopApp(session: DesktopSession) {
                         onEdit = { editAlbum = live },
                         onEditTrack = { i ->
                             albumTracks.getOrNull(i)?.let { editSong = it }
+                        },
+                        onArtist = ::openArtist
+                    )
+                }
+                is Route.Artist -> {
+                    val model = remember(r.name, tracks, liked, history) {
+                        tracks.artistPage(r.name, liked, history)
+                    }
+                    val artistTracks = remember(r.name, tracks) {
+                        tracks.filter {
+                            it.displayArtist.equals(r.name, true) ||
+                                it.albumArtist.equals(r.name, true)
                         }
+                    }
+                    ArtistPage(
+                        artist = model,
+                        playing = playing && artistTracks.any { it.id == current?.id },
+                        onPlay = {
+                            if (artistTracks.isNotEmpty()) session.player.play(artistTracks, 0)
+                        },
+                        onShuffle = {
+                            if (artistTracks.isNotEmpty()) {
+                                if (!shuffle) session.player.toggleShuffle()
+                                session.player.play(artistTracks, 0)
+                            }
+                        },
+                        onTrack = { i ->
+                            val popularIds = model.popular.map { it.id }
+                            val list = popularIds.mapNotNull { id -> artistTracks.firstOrNull { it.id == id } }
+                                .ifEmpty { artistTracks }
+                            if (i in list.indices) session.player.play(list, i)
+                        },
+                        onOpenAlbum = ::openAlbum
                     )
                 }
                 is Route.Playlist -> {
