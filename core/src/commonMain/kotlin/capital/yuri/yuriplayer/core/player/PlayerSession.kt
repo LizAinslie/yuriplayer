@@ -21,6 +21,9 @@ class PlayerSession(
     private val _current = MutableStateFlow<Track?>(null)
     val current: StateFlow<Track?> = _current.asStateFlow()
 
+    private val _history = MutableStateFlow<List<Track>>(emptyList())
+    val history: StateFlow<List<Track>> = _history.asStateFlow()
+
     val isPlaying: StateFlow<Boolean> = engine.isPlaying
 
     private val listener = object : PlaybackEngine.Listener {
@@ -32,6 +35,7 @@ class PlayerSession(
             val q = _queue.value
             val i = _index.value + 1
             if (i in q.indices) {
+                recordHistory(_current.value)
                 _index.value = i
                 _current.value = q[i]
                 warmSuccessor()
@@ -66,6 +70,7 @@ class PlayerSession(
         val q = _queue.value
         if (q.isEmpty()) return
         if (engine.playPreparedNext()) {
+            recordHistory(_current.value)
             val i = (_index.value + 1).coerceAtMost(q.lastIndex)
             _index.value = i
             _current.value = q[i]
@@ -90,6 +95,15 @@ class PlayerSession(
 
     fun seekTo(positionMs: Long) = engine.seekTo(positionMs.coerceAtLeast(0))
 
+    fun skipTo(index: Int) {
+        if (index in _queue.value.indices) loadAt(index, 0L, play = true)
+    }
+
+    fun playTrack(track: Track, context: List<Track> = _queue.value.ifEmpty { listOf(track) }) {
+        val i = context.indexOfFirst { it.id == track.id }.coerceAtLeast(0)
+        play(if (context.isNotEmpty()) context else listOf(track), i)
+    }
+
     fun positionMs(): Long = engine.getPositionMs()
     fun durationMs(): Long = engine.getDurationMs()
 
@@ -101,12 +115,19 @@ class PlayerSession(
     private fun loadAt(i: Int, startMs: Long, play: Boolean) {
         val q = _queue.value
         val track = q.getOrNull(i) ?: return
+        recordHistory(_current.value)
         _index.value = i
         _current.value = track
         val next = q.getOrNull(i + 1)
         engine.load(track.toPlaybackMedia(), next?.toPlaybackMedia(), startMs)
         if (play) engine.play() else engine.pause()
         warmSuccessor()
+    }
+
+    private fun recordHistory(track: Track?) {
+        if (track == null) return
+        val next = listOf(track) + _history.value.filterNot { it.id == track.id }
+        _history.value = next.take(HISTORY_CAP)
     }
 
     private fun warmSuccessor() {
@@ -117,5 +138,6 @@ class PlayerSession(
 
     companion object {
         const val RESTART_WINDOW_MS = 3_000L
+        private const val HISTORY_CAP = 50
     }
 }

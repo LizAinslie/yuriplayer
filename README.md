@@ -8,8 +8,9 @@ A multi-platform Jetpack Compose music player for Android and desktop
 | Module | What |
 | --- | --- |
 | `:core` | Kotlin Multiplatform. Playback engine SPI, queue host, OS path conventions, local library scan (JVM). |
+| `:components` | Shared Compose Multiplatform UI: cover art, album page (phone/tablet/desktop), player bar, now-playing sidebar. |
 | `:app` | Android client. |
-| `:desktop` | Compose Desktop client (Material 3). LibVLC via vlcj. |
+| `:desktop` | Compose Desktop client (Material 3). LibVLC via vlcj. Spotify-style shell: album grid, right now-playing/queue/history, bottom transport. |
 
 ## Desktop
 

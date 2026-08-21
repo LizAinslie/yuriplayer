@@ -30,5 +30,6 @@ dependencyResolutionManagement {
 
 rootProject.name = "Yuri Player"
 include(":core")
+include(":components")
 include(":app")
 include(":desktop")

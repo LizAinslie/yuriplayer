@@ -14,6 +14,7 @@ kotlin {
 
 dependencies {
     implementation(project(":core"))
+    implementation(project(":components"))
     implementation(compose.desktop.currentOs)
     implementation(compose.material3)
     implementation(compose.materialIconsExtended)
@@ -24,6 +25,9 @@ dependencies {
     implementation(libs.dbus.java.transport.native.unix)
     implementation(libs.jna)
     implementation(libs.jna.platform)
+    implementation(libs.coil.compose)
+    implementation(libs.coil.network.ktor3)
+    implementation(libs.ktor.client.cio)
 }
 
 compose.desktop {

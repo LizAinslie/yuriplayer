@@ -369,6 +369,95 @@ fun AlbumDetailScreen(
                     }
                 }
         ) {
+            val compact = maxWidth < 600.dp
+            if (!compact) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .statusBarsPadding()
+                        .padding(start = 12.dp, end = 8.dp, top = 8.dp)
+                ) {
+                    Column(
+                        modifier = Modifier
+                            .width(300.dp)
+                            .padding(end = 16.dp)
+                    ) {
+                        IconButton(onClick = onBack) {
+                            Icon(
+                                Icons.AutoMirrored.Filled.ArrowBack,
+                                contentDescription = "Back",
+                                tint = scheme.onBackground
+                            )
+                        }
+                        SpotifyAlbumHero(
+                            album = liveAlbum,
+                            metaLine = metaLine,
+                            showPause = showPause,
+                            shuffleEnabled = shuffleEnabled,
+                            albumSaved = albumSaved,
+                            onPrimary = onPrimary,
+                            onToggleShuffle = onToggleShuffle,
+                            onFavorite = {
+                                val now = pinStore.toggleAlbum(liveAlbum)
+                                Toast.makeText(
+                                    context,
+                                    if (now) "Album + tracks added to My Stuff"
+                                    else "Album removed from My Stuff",
+                                    Toast.LENGTH_SHORT
+                                ).show()
+                                onFavorite()
+                            },
+                            onMore = { showMenu = true },
+                            onOpenArtist = onOpenArtist,
+                            onCoverLongPress = { showCoverPicker = true }
+                        )
+                    }
+                    LazyColumn(
+                        state = listState,
+                        modifier = Modifier.weight(1f).fillMaxSize(),
+                        contentPadding = PaddingValues(top = 8.dp, bottom = 96.dp)
+                    ) {
+                        discs.forEach { (disc, tracks) ->
+                            if (multiDisc) {
+                                item(key = "disc-$disc") {
+                                    DiscSectionHeader(discNumber = disc ?: 1)
+                                }
+                            }
+                            itemsIndexed(
+                                tracks,
+                                key = { i, s -> "${s.songKey}#$i#${s.trackNumber}" }
+                            ) { _, song ->
+                                val globalIndex = liveAlbum.songs.indexOfFirst {
+                                    it.songKey == song.songKey ||
+                                        (it.path != null && it.path == song.path) ||
+                                        it.id == song.id
+                                }.coerceAtLeast(0)
+                                SwipeAddSongRow(
+                                    song = song,
+                                    onClick = { onPlayAlbum(liveAlbum.songs, globalIndex) },
+                                    onSwipeAdd = {
+                                        onAddSongToQueue(song)
+                                        Toast.makeText(context, "Added to queue", Toast.LENGTH_SHORT).show()
+                                    },
+                                    showTrackNumber = true,
+                                    isPlaying = song.isSameAs(nowPlaying),
+                                    isPlaybackActive = isPlaying,
+                                    isHighlighted = highlightSongKey != null &&
+                                        (song.songKey == highlightSongKey),
+                                    transparentSurface = true,
+                                    showHeart = true,
+                                    hideGoToAlbum = true,
+                                    onEditMetadata = { onEditSong(song) }
+                                )
+                            }
+                        }
+                        if (expanding && liveAlbum.songs.size < expectedTrackCount) {
+                            val extra = (expectedTrackCount - liveAlbum.songs.size).coerceIn(1, 16)
+                            items(extra) { SongRowSkeleton() }
+                        }
+                    }
+                }
+            } else {
             Column(modifier = Modifier.fillMaxSize()) {
                 Box(
                     modifier = Modifier
@@ -491,6 +580,7 @@ fun AlbumDetailScreen(
                         items(extra) { SongRowSkeleton() }
                     }
                 }
+            }
             }
 
             if (showMenu) {
