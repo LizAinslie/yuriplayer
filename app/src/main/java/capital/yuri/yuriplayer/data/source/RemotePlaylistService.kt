@@ -5,6 +5,7 @@ import capital.yuri.yuriplayer.data.Playlist
 import capital.yuri.yuriplayer.data.PlaylistRepository
 import capital.yuri.yuriplayer.data.Song
 import capital.yuri.yuriplayer.data.db.CatalogSources
+import capital.yuri.yuriplayer.data.db.SourceInstanceEntity
 
 data class RemotePlaylist(
     val sourceType: String,

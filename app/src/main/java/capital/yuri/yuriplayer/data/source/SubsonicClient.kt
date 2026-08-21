@@ -267,7 +267,7 @@ class SubsonicClient(
                 parameter("id", playlistId)
             }
             val detail = json.decodeFromString<SubsonicResponse>(body).subsonicResponse.playlist
-            detail?.entry.orEmpty().mapNotNull { it.toSong(session, albumCoverArt = detail.coverArt) }
+            detail?.entry.orEmpty().mapNotNull { it.toSong(session, albumCoverArt = detail?.coverArt) }
         }.onFailure { Log.w(TAG, "playlistSongs failed: ${it.message}") }
 
     fun streamUrl(session: Session, id: String): String {
