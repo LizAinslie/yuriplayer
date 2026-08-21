@@ -13,6 +13,7 @@ import capital.yuri.yuriplayer.player.MusicService
 import coil3.ImageLoader
 import coil3.PlatformContext
 import coil3.SingletonImageLoader
+import coil3.network.CacheStrategy
 import coil3.network.ktor3.KtorNetworkFetcherFactory
 import io.ktor.client.HttpClient
 import org.koin.android.ext.android.get
@@ -52,7 +53,12 @@ class YuriPlayerApp : Application(), SingletonImageLoader.Factory {
     override fun newImageLoader(context: PlatformContext): ImageLoader =
         ImageLoader.Builder(context)
             .components {
-                add(KtorNetworkFetcherFactory { get<HttpClient>() })
+                add(
+                    KtorNetworkFetcherFactory(
+                        httpClient = { get<HttpClient>() },
+                        cacheStrategy = { CacheStrategy.DEFAULT }
+                    )
+                )
             }
             .build()
 
