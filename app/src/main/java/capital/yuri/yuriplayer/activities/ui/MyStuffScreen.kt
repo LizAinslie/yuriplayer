@@ -57,6 +57,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -73,6 +74,7 @@ import capital.yuri.yuriplayer.data.StuffPinKind
 import capital.yuri.yuriplayer.data.albumKey
 import capital.yuri.yuriplayer.data.artistKey
 import capital.yuri.yuriplayer.player.PlayerController
+import capital.yuri.yuriplayer.ui.TestTags
 import capital.yuri.yuriplayer.ui.formatTrackCount
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
@@ -169,6 +171,7 @@ fun MyStuffScreen(
             NavigationBarItem(
                 selected = tab == MyStuffTab.Pins,
                 onClick = { tab = MyStuffTab.Pins },
+                modifier = Modifier.testTag(TestTags.MYSTUFF_PINS),
                 icon = {
                     Icon(
                         if (tab == MyStuffTab.Pins) Icons.Filled.PushPin else Icons.Outlined.PushPin,
@@ -180,6 +183,7 @@ fun MyStuffScreen(
             NavigationBarItem(
                 selected = tab == MyStuffTab.Collection,
                 onClick = { tab = MyStuffTab.Collection },
+                modifier = Modifier.testTag(TestTags.MYSTUFF_CATALOG),
                 icon = {
                     Icon(
                         if (tab == MyStuffTab.Collection) Icons.Filled.Favorite else Icons.Outlined.FavoriteBorder,
@@ -191,6 +195,7 @@ fun MyStuffScreen(
             NavigationBarItem(
                 selected = tab == MyStuffTab.Playlists,
                 onClick = { tab = MyStuffTab.Playlists },
+                modifier = Modifier.testTag(TestTags.MYSTUFF_PLAYLISTS),
                 icon = {
                     Icon(
                         if (tab == MyStuffTab.Playlists) Icons.Filled.QueueMusic else Icons.Outlined.QueueMusic,

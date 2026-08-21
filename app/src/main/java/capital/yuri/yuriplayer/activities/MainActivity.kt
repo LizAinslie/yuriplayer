@@ -59,6 +59,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.zIndex
 import androidx.core.content.ContextCompat
@@ -88,6 +89,7 @@ import capital.yuri.yuriplayer.activities.ui.SettingsScreen
 import capital.yuri.yuriplayer.activities.ui.SongNavActions
 import capital.yuri.yuriplayer.activities.ui.StatusBarColorStack
 import capital.yuri.yuriplayer.activities.ui.theme.YuriPlayerTheme
+import capital.yuri.yuriplayer.ui.TestTags
 import capital.yuri.yuriplayer.data.ActivityTitleFormat
 import capital.yuri.yuriplayer.data.AlbumItem
 import capital.yuri.yuriplayer.data.ArtistItem
@@ -667,7 +669,14 @@ fun YuriApp(
                                 ) {
                                     TopTab.entries.forEach { tab ->
                                         val selected = topTab == tab
-                                        IconButton(onClick = { topTab = tab }) {
+                                        val tag = when (tab) {
+                                            TopTab.MyStuff -> TestTags.TAB_MY_STUFF
+                                            TopTab.Explore -> TestTags.TAB_EXPLORE
+                                        }
+                                        IconButton(
+                                            onClick = { topTab = tab },
+                                            modifier = Modifier.testTag(tag)
+                                        ) {
                                             Icon(
                                                 imageVector = tab.icon,
                                                 contentDescription = tab.label,
@@ -684,7 +693,10 @@ fun YuriApp(
                                     // Never auto-starts on tab enter — only explicit menu actions.
                                     ExploreScanMenu()
                                 }
-                                IconButton(onClick = { pushDetail(DetailRoute.Settings) }) {
+                                IconButton(
+                                    onClick = { pushDetail(DetailRoute.Settings) },
+                                    modifier = Modifier.testTag(TestTags.SETTINGS)
+                                ) {
                                     Icon(Icons.Default.Settings, contentDescription = "Settings")
                                 }
                             }

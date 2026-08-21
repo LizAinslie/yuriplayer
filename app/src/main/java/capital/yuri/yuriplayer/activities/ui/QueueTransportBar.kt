@@ -22,8 +22,10 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.dp
 import capital.yuri.yuriplayer.data.PlayerThemeStore
+import capital.yuri.yuriplayer.ui.TestTags
 import org.koin.compose.koinInject
 
 /**
@@ -58,7 +60,10 @@ fun QueueTransportBar(
             horizontalArrangement = Arrangement.SpaceEvenly,
             verticalAlignment = Alignment.CenterVertically
         ) {
-            IconButton(onClick = onPrev) {
+            IconButton(
+                onClick = onPrev,
+                modifier = Modifier.testTag(TestTags.QUEUE_SKIP_PREV)
+            ) {
                 Icon(
                     Icons.Default.SkipPrevious,
                     "Previous",
@@ -71,6 +76,7 @@ fun QueueTransportBar(
                 modifier = Modifier
                     .size(56.dp)
                     .background(accent, CircleShape)
+                    .testTag(TestTags.QUEUE_PLAY_PAUSE)
             ) {
                 Icon(
                     if (playing) Icons.Default.Pause else Icons.Default.PlayArrow,
@@ -79,7 +85,10 @@ fun QueueTransportBar(
                     tint = onAccent
                 )
             }
-            IconButton(onClick = onNext) {
+            IconButton(
+                onClick = onNext,
+                modifier = Modifier.testTag(TestTags.QUEUE_SKIP_NEXT)
+            ) {
                 Icon(
                     Icons.Default.SkipNext,
                     "Next",

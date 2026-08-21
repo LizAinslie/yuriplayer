@@ -56,6 +56,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -73,6 +74,7 @@ import capital.yuri.yuriplayer.player.radio.RadioAlgorithmId
 import capital.yuri.yuriplayer.player.radio.RadioSession
 import capital.yuri.yuriplayer.player.radio.RadioSessionKind
 import capital.yuri.yuriplayer.player.radio.RadioSourcePrefs
+import capital.yuri.yuriplayer.ui.TestTags
 import org.koin.compose.koinInject
 import java.util.Locale
 import java.util.concurrent.TimeUnit
@@ -289,7 +291,7 @@ fun NowPlayingScreen(
 
     MaterialTheme(colorScheme = scheme) {
         Surface(
-            modifier = Modifier.fillMaxSize(),
+            modifier = Modifier.fillMaxSize().testTag(TestTags.NOW_PLAYING),
             color = scheme.background.copy(
                 alpha = 1f - maxOf(dismissFrac, topPull / dismissThreshold) * 0.2f
             )
@@ -382,7 +384,10 @@ fun NowPlayingScreen(
                         modifier = Modifier.fillMaxWidth(),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        IconButton(onClick = onCollapse) {
+                        IconButton(
+                            onClick = onCollapse,
+                            modifier = Modifier.testTag(TestTags.NP_CLOSE)
+                        ) {
                             Icon(Icons.Default.ExpandMore, "Close", tint = scheme.onBackground)
                         }
                         Spacer(modifier = Modifier.weight(1f))
@@ -453,17 +458,20 @@ fun NowPlayingScreen(
                                 text = m.title,
                                 style = MaterialTheme.typography.headlineSmall,
                                 fontWeight = FontWeight.Bold,
-                                color = scheme.onBackground
+                                color = scheme.onBackground,
+                                modifier = Modifier.testTag(TestTags.NP_TITLE)
                             )
                             MarqueeText(
                                 text = m.artist,
                                 style = MaterialTheme.typography.titleMedium,
-                                color = scheme.onBackground.copy(alpha = 0.65f)
+                                color = scheme.onBackground.copy(alpha = 0.65f),
+                                modifier = Modifier.testTag(TestTags.NP_ARTIST)
                             )
                             MarqueeText(
                                 text = m.album,
                                 style = MaterialTheme.typography.bodyMedium,
-                                color = scheme.onBackground.copy(alpha = 0.5f)
+                                color = scheme.onBackground.copy(alpha = 0.5f),
+                                modifier = Modifier.testTag(TestTags.NP_ALBUM)
                             )
                         }
                     }
@@ -524,7 +532,10 @@ fun NowPlayingScreen(
                                 else scheme.onBackground.copy(alpha = 0.7f)
                             )
                         }
-                        IconButton(onClick = { requestSkipPrev() }) {
+                        IconButton(
+                            onClick = { requestSkipPrev() },
+                            modifier = Modifier.testTag(TestTags.NP_SKIP_PREV)
+                        ) {
                             Icon(
                                 Icons.Default.SkipPrevious,
                                 "Previous",
@@ -537,6 +548,7 @@ fun NowPlayingScreen(
                             modifier = Modifier
                                 .size(72.dp)
                                 .background(scheme.primary, shape = MaterialTheme.shapes.extraLarge)
+                                .testTag(TestTags.NP_PLAY_PAUSE)
                         ) {
                             Icon(
                                 if (playing) Icons.Default.Pause else Icons.Default.PlayArrow,
@@ -545,7 +557,10 @@ fun NowPlayingScreen(
                                 tint = scheme.onPrimary
                             )
                         }
-                        IconButton(onClick = { requestSkipNext() }) {
+                        IconButton(
+                            onClick = { requestSkipNext() },
+                            modifier = Modifier.testTag(TestTags.NP_SKIP_NEXT)
+                        ) {
                             Icon(
                                 Icons.Default.SkipNext,
                                 "Next",

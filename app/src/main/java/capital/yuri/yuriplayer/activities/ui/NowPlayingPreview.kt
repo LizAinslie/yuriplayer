@@ -29,9 +29,11 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.dp
 import capital.yuri.yuriplayer.data.PlayerThemeStore
 import capital.yuri.yuriplayer.data.Song
+import capital.yuri.yuriplayer.ui.TestTags
 import org.koin.compose.koinInject
 
 /**
@@ -78,6 +80,7 @@ fun NowPlayingPreview(
         contentColor = ambient.onBackground,
         modifier = modifier
             .fillMaxWidth()
+            .testTag(TestTags.MINI_PLAYER)
             .then(
                 if (enableSwipeUp) {
                     Modifier.pointerInput(Unit) {
@@ -121,15 +124,20 @@ fun NowPlayingPreview(
                     MarqueeText(
                         text = song?.displayTitle ?: "Not playing",
                         style = MaterialTheme.typography.bodyMedium,
-                        color = ambient.onBackground
+                        color = ambient.onBackground,
+                        modifier = Modifier.testTag(TestTags.MINI_TITLE)
                     )
                     MarqueeText(
                         text = song?.displayArtist ?: "",
                         style = MaterialTheme.typography.bodySmall,
-                        color = ambient.onBackground.copy(alpha = 0.6f)
+                        color = ambient.onBackground.copy(alpha = 0.6f),
+                        modifier = Modifier.testTag(TestTags.MINI_ARTIST)
                     )
                 }
-                IconButton(onClick = onToggle) {
+                IconButton(
+                    onClick = onToggle,
+                    modifier = Modifier.testTag(TestTags.MINI_PLAY_PAUSE)
+                ) {
                     Box(
                         modifier = Modifier
                             .size(40.dp)

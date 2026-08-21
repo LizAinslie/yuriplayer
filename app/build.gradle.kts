@@ -122,6 +122,12 @@ android {
         sourceCompatibility = JavaVersion.VERSION_11
         targetCompatibility = JavaVersion.VERSION_11
     }
+
+    testOptions {
+        // Keep the user's library / logins. Do not enable orchestrator
+        // clearPackageData — these tests run against familiar on-device data.
+        animationsDisabled = true
+    }
     buildFeatures {
         compose = true
         buildConfig = true

@@ -1,0 +1,21 @@
+appId: capital.yuri.yuriplayer
+---
+# On-device smoke. Uses whatever library/sources you already signed into.
+- launchApp:
+    appId: capital.yuri.yuriplayer
+    clearState: false
+- assertVisible:
+    id: tab_my_stuff
+- tapOn:
+    id: mystuff_catalog
+- assertVisible:
+    id: catalog_title
+- tapOn:
+    id: tab_explore
+- tapOn:
+    id: tab_my_stuff
+- tapOn:
+    id: settings
+- assertVisible:
+    id: settings_playback_engine
+- back

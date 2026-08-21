@@ -48,6 +48,7 @@ import capital.yuri.yuriplayer.data.source.SourceType
 import capital.yuri.yuriplayer.data.theme.ArtColorVariant
 import capital.yuri.yuriplayer.player.engine.PlaybackEngineCatalog
 import capital.yuri.yuriplayer.player.engine.PlaybackEngineId
+import capital.yuri.yuriplayer.ui.TestTags
 import org.koin.compose.koinInject
 
 private sealed class SettingsPage {
@@ -230,6 +231,7 @@ private fun SettingsHubScreen(
                 title = "Playback engine",
                 subtitle = engineDesc.displayName,
                 icon = Icons.Default.SettingsInputComponent,
+                testTag = TestTags.SETTINGS_PLAYBACK_ENGINE,
                 onClick = onOpenPlaybackEngine
             )
             SettingsNavRow(
@@ -338,6 +340,7 @@ private fun PlaybackEngineSettingsScreen(onBack: () -> Unit) {
                         selected == id -> "Selected"
                         else -> null
                     },
+                    testTag = "engine_${desc.id}",
                     onClick = {
                         if (!enabled) return@SettingsNavRow
                         settings.setPlaybackEngineId(id)

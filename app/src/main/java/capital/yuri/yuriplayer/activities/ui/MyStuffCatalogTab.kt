@@ -43,6 +43,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -62,6 +63,7 @@ import capital.yuri.yuriplayer.data.source.LibraryFaviconStore
 import capital.yuri.yuriplayer.data.source.RemotePlaylist
 import capital.yuri.yuriplayer.data.source.RemotePlaylistService
 import capital.yuri.yuriplayer.data.source.SourceInstanceRepository
+import capital.yuri.yuriplayer.ui.TestTags
 import capital.yuri.yuriplayer.ui.formatTrackCount
 import coil3.compose.AsyncImage
 import coil3.request.ImageRequest
@@ -316,7 +318,9 @@ private fun CatalogHub(
                 "Catalog",
                 style = MaterialTheme.typography.headlineMedium,
                 fontWeight = FontWeight.Bold,
-                modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp)
+                modifier = Modifier
+                    .padding(horizontal = 16.dp, vertical = 12.dp)
+                    .testTag(TestTags.CATALOG_TITLE)
             )
         }
         item {

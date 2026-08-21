@@ -1,0 +1,16 @@
+appId: capital.yuri.yuriplayer
+---
+# Queue a song first. Skip next then prev (Spotify 3s rule → previous track).
+- launchApp:
+    appId: capital.yuri.yuriplayer
+    clearState: false
+- tapOn:
+    id: mini_player
+- assertVisible:
+    id: now_playing
+- tapOn:
+    id: np_skip_next
+- tapOn:
+    id: np_skip_prev
+- tapOn:
+    id: np_close
