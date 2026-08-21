@@ -69,13 +69,7 @@ data class Song(
             .distinctBy { it.lowercase() }
 
     val creditArtists: List<String>
-        get() {
-            val fromArtist = parseArtistCredits(artist)
-            if (fromArtist.isNotEmpty()) return fromArtist
-            val fromAlbum = parseArtistCredits(albumArtist)
-            if (fromAlbum.isNotEmpty()) return fromAlbum
-            return emptyList()
-        }
+        get() = allCreditsForSong(this).map { it.name }
 
     val isTagged: Boolean
         get() = artist.isMeaningfulTag() ||

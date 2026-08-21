@@ -172,6 +172,7 @@ private fun parseImageUri(raw: String?): Uri? {
 fun ArtistDetailScreen(
     artist: ArtistItem,
     albums: List<AlbumItem>,
+    appearsOn: List<AlbumItem> = emptyList(),
     onBack: () -> Unit,
     onOpenAlbum: (AlbumItem) -> Unit,
     onPlaySongs: (List<Song>, Int) -> Unit,
@@ -192,7 +193,9 @@ fun ArtistDetailScreen(
     var themeColors by remember { mutableStateOf(fallbackPlayerColors(base)) }
     var filter by remember { mutableStateOf(ArtistReleaseFilter.All) }
     var showAll by remember { mutableStateOf(false) }
+    var showAllAppearsOn by remember { mutableStateOf(false) }
     var discographyFilters by remember { mutableStateOf(DiscographyFilters()) }
+    var appearsOnFilters by remember { mutableStateOf(DiscographyFilters()) }
     var showMenu by remember { mutableStateOf(false) }
     var showDataSources by remember { mutableStateOf(false) }
     var fetchKind by remember { mutableStateOf<ArtistImageKind?>(null) }
@@ -289,6 +292,25 @@ fun ArtistDetailScreen(
                 compareByDescending<AlbumItem> { it.releaseYear() ?: Int.MIN_VALUE }
                     .thenBy(String.CASE_INSENSITIVE_ORDER) { it.displayName }
             )
+    }
+    val sortedAppearsOn = remember(appearsOn) {
+        appearsOn
+            .groupBy { albumKey(it.name, it.artist) }
+            .map { (_, group) -> group.maxByOrNull { it.trackCount } ?: group.first() }
+            .sortedWith(
+                compareByDescending<AlbumItem> { it.releaseYear() ?: Int.MIN_VALUE }
+                    .thenBy(String.CASE_INSENSITIVE_ORDER) { it.displayName }
+            )
+    }
+    val filteredAppearsOn = remember(sortedAppearsOn, filter) {
+        when (filter) {
+            ArtistReleaseFilter.All -> sortedAppearsOn
+            ArtistReleaseFilter.Albums -> sortedAppearsOn.filter {
+                it.releaseType() == ReleaseType.ALBUM || it.releaseType() == ReleaseType.COMPILATION
+            }
+            ArtistReleaseFilter.EPs -> sortedAppearsOn.filter { it.releaseType() == ReleaseType.EP }
+            ArtistReleaseFilter.Singles -> sortedAppearsOn.filter { it.releaseType() == ReleaseType.SINGLE }
+        }
     }
     val filtered = remember(sortedAlbums, filter) {
         when (filter) {
@@ -409,6 +431,23 @@ fun ArtistDetailScreen(
             }
         }
 
+        if (showAllAppearsOn) {
+            DiscographyAllScreen(
+                artistName = artist.displayName,
+                albums = sortedAppearsOn,
+                filters = appearsOnFilters,
+                onFiltersChange = { appearsOnFilters = it },
+                titleColor = base.onBackground,
+                mutedColor = base.onBackground.copy(alpha = 0.6f),
+                onBack = { showAllAppearsOn = false },
+                onOpenAlbum = onOpenAlbum,
+                onPlaySongs = onPlaySongs,
+                onAddToQueue = onAddToQueue,
+                heading = "Appears on"
+            )
+            return@CompositionLocalProvider
+        }
+
         if (showAll) {
             DiscographyAllScreen(
                 artistName = artist.displayName,
@@ -420,7 +459,8 @@ fun ArtistDetailScreen(
                 onBack = { showAll = false },
                 onOpenAlbum = onOpenAlbum,
                 onPlaySongs = onPlaySongs,
-                onAddToQueue = onAddToQueue
+                onAddToQueue = onAddToQueue,
+                heading = "Discography"
             )
             return@CompositionLocalProvider
         }
@@ -581,6 +621,60 @@ fun ArtistDetailScreen(
                     }
                 }
 
+                if (sortedAppearsOn.isNotEmpty()) {
+                    item {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 16.dp, vertical = 4.dp)
+                                .padding(top = 8.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(
+                                "Appears on",
+                                style = MaterialTheme.typography.titleMedium,
+                                fontWeight = FontWeight.Bold,
+                                color = base.onBackground,
+                                modifier = Modifier.weight(1f)
+                            )
+                            TextButton(
+                                onClick = {
+                                    appearsOnFilters = DiscographyFilters.fromPageFilter(filter)
+                                    showAllAppearsOn = true
+                                }
+                            ) {
+                                Text("Show all", color = accent)
+                            }
+                        }
+                    }
+                    item {
+                        if (filteredAppearsOn.isEmpty()) {
+                            Text(
+                                "No appearances in this filter.",
+                                modifier = Modifier.padding(16.dp),
+                                color = base.onBackground.copy(alpha = 0.55f)
+                            )
+                        } else {
+                            LazyRow(
+                                contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
+                                horizontalArrangement = Arrangement.spacedBy(14.dp)
+                            ) {
+                                itemsIndexed(
+                                    filteredAppearsOn,
+                                    key = { i, a -> "ao-${releaseLazyKey(a, i)}" }
+                                ) { _, album ->
+                                    ArtistReleaseCard(
+                                        album = album,
+                                        titleColor = base.onBackground,
+                                        mutedColor = base.onBackground.copy(alpha = 0.55f),
+                                        onClick = { onOpenAlbum(album) }
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+
                 item {
                     ArtistUpcomingShows(
                         events = events,
@@ -652,7 +746,8 @@ private fun DiscographyAllScreen(
     onBack: () -> Unit,
     onOpenAlbum: (AlbumItem) -> Unit,
     onPlaySongs: (List<Song>, Int) -> Unit,
-    onAddToQueue: (Song) -> Unit
+    onAddToQueue: (Song) -> Unit,
+    heading: String = "Discography"
 ) {
     val context = LocalContext.current
     var filterMenuOpen by remember { mutableStateOf(false) }
@@ -683,7 +778,7 @@ private fun DiscographyAllScreen(
             }
             Column(modifier = Modifier.weight(1f)) {
                 Text(
-                    "Discography",
+                    heading,
                     style = MaterialTheme.typography.titleMedium,
                     fontWeight = FontWeight.Bold,
                     color = titleColor

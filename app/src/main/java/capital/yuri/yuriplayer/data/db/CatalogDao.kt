@@ -139,6 +139,32 @@ interface CatalogDao {
     @Query("SELECT * FROM catalog_tracks WHERE artistKey = :artistKey ORDER BY album, trackNumber, title")
     suspend fun getTracksForArtist(artistKey: String): List<CatalogTrackEntity>
 
+    @Query(
+        """
+        SELECT t.* FROM catalog_tracks t
+        INNER JOIN catalog_credits c
+          ON c.subjectType = 'TRACK' AND c.subjectKey = t.songKey
+        WHERE c.artistKey = :artistKey AND c.role = :role
+        ORDER BY t.album, t.trackNumber, t.title
+        """
+    )
+    suspend fun getTracksByCreditRole(artistKey: String, role: String): List<CatalogTrackEntity>
+
+    @Query(
+        """
+        SELECT * FROM catalog_tracks
+        WHERE IFNULL(artist, '') LIKE '%' || :name || '%' COLLATE NOCASE
+           OR IFNULL(albumArtist, '') LIKE '%' || :name || '%' COLLATE NOCASE
+           OR IFNULL(title, '') LIKE '%' || :name || '%' COLLATE NOCASE
+           OR IFNULL(album, '') LIKE '%' || :name || '%' COLLATE NOCASE
+        LIMIT :limit
+        """
+    )
+    suspend fun getTracksMentioning(name: String, limit: Int = 8000): List<CatalogTrackEntity>
+
+    @Query("DELETE FROM catalog_credits")
+    suspend fun deleteAllCredits()
+
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun upsertTracks(tracks: List<CatalogTrackEntity>)
 
@@ -278,7 +304,8 @@ interface CatalogDao {
 
     @Query(
         "DELETE FROM catalog_artists WHERE artistKey NOT IN " +
-            "(SELECT DISTINCT artistKey FROM catalog_tracks WHERE artistKey IS NOT NULL)"
+            "(SELECT DISTINCT artistKey FROM catalog_tracks WHERE artistKey IS NOT NULL " +
+            "UNION SELECT DISTINCT artistKey FROM catalog_credits WHERE artistKey IS NOT NULL)"
     )
     suspend fun deleteOrphanArtists()
 

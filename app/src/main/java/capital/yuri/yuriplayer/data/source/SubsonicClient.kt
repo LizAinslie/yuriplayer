@@ -293,7 +293,12 @@ class SubsonicClient(
         val albumArtistName = albumArtist?.takeIf { it.isNotBlank() }
             ?: artists?.firstOrNull()?.name
             ?: artist?.takeIf { it.isNotBlank() }
+        val extras = structuredArtists.filter { name ->
+            albumArtistName == null || !name.equals(albumArtistName, ignoreCase = true)
+        }
         val trackArtistName = when {
+            extras.isNotEmpty() && !albumArtistName.isNullOrBlank() ->
+                "$albumArtistName feat. ${extras.joinToString("; ")}"
             structuredArtists.isNotEmpty() -> structuredArtists.joinToString("; ")
             else -> artist?.takeIf { it.isNotBlank() }
         }

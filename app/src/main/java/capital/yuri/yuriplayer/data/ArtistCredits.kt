@@ -4,10 +4,10 @@ package capital.yuri.yuriplayer.data
  * Split a raw artist tag into primary vs featured credits.
  *
  * Separators:
- *  - `;` always splits peers (same role)
+ *  - `;` always splits peers
  *  - `feat.` / `ft.` / `featuring` starts the featured list
- *
- * Commas and `&` stay inside names ("Earth, Wind & Fire").
+ *  - commas/`&` in the *primary* blob stay inside names ("Earth, Wind & Fire")
+ *  - commas/`&`/`x` in a *feat.* blob split guest lists ("Miku, Rin & Luka")
  */
 enum class ArtistRole {
     PRIMARY,
@@ -21,21 +21,94 @@ data class ArtistCredit(
 )
 
 private val FEAT_SPLIT = Regex("""(?i)\s+(?:feat\.?|ft\.?|featuring)\s+""")
+private val FEAT_IN_PARENS = Regex(
+    """(?i)[\(\[\{]\s*(?:feat\.?|ft\.?|featuring)\s+([^\)\]\}]+)[\)\]\}]"""
+)
+private val FEAT_SUFFIX = Regex("""(?i)\s+(?:feat\.?|ft\.?|featuring)\s+(.+)$""")
+private val FEAT_BLOB_SPLIT = Regex("""\s*(?:;|,|&|×)\s+|\s+(?:and|x)\s+""", RegexOption.IGNORE_CASE)
 
 fun parseArtistCreditList(raw: String?): List<ArtistCredit> {
     if (raw.isNullOrBlank()) return emptyList()
     val parts = raw.split(FEAT_SPLIT, limit = 2)
     val out = ArrayList<ArtistCredit>()
-    fun addBlob(blob: String, role: ArtistRole) {
+    fun addPrimary(blob: String) {
         blob.split(';').map { it.trim() }.filter { it.isNotEmpty() }.forEach { name ->
             if (out.none { it.name.equals(name, ignoreCase = true) }) {
-                out += ArtistCredit(name = name, role = role, position = out.size)
+                out += ArtistCredit(name = name, role = ArtistRole.PRIMARY, position = out.size)
             }
         }
     }
-    addBlob(parts[0], ArtistRole.PRIMARY)
-    parts.getOrNull(1)?.let { addBlob(it, ArtistRole.FEATURED) }
+    fun addFeatured(blob: String) {
+        splitFeatBlob(blob).forEach { name ->
+            if (out.none { it.name.equals(name, ignoreCase = true) }) {
+                out += ArtistCredit(name = name, role = ArtistRole.FEATURED, position = out.size)
+            }
+        }
+    }
+    addPrimary(parts[0])
+    parts.getOrNull(1)?.let { addFeatured(it) }
     return out
+}
+
+fun splitFeatBlob(blob: String): List<String> {
+    var t = blob.trim()
+    t = t.replace(Regex("""[\(\[\{].*$"""), "").trim()
+    return t.split(FEAT_BLOB_SPLIT)
+        .map { it.trim().trim('.', '-', '/') }
+        .filter { it.length >= 2 }
+        .distinctBy { it.lowercase() }
+}
+
+fun featuredFromText(text: String?): List<String> {
+    if (text.isNullOrBlank()) return emptyList()
+    val found = LinkedHashSet<String>()
+    FEAT_IN_PARENS.findAll(text).forEach { found += splitFeatBlob(it.groupValues[1]) }
+    FEAT_SUFFIX.find(text)?.let { found += splitFeatBlob(it.groupValues[1]) }
+    return found.toList()
+}
+
+/**
+ * Full credit list for a song: album-artist primaries, extra track artists as
+ * featured, plus `feat.` parsed from the title and album title.
+ */
+fun allCreditsForSong(song: Song): List<ArtistCredit> {
+    val albumParsed = parseArtistCreditList(song.albumArtist)
+    val artistParsed = parseArtistCreditList(song.artist)
+    val titleFeats = featuredFromText(song.title)
+    val albumFeats = featuredFromText(song.album)
+
+    val primaries = LinkedHashSet<String>()
+    albumParsed.filter { it.role == ArtistRole.PRIMARY }.forEach { primaries += it.name }
+    if (primaries.isEmpty()) {
+        artistParsed.firstOrNull { it.role == ArtistRole.PRIMARY }?.let { primaries += it.name }
+    }
+    if (primaries.isEmpty()) {
+        primaryArtistName(song.effectiveAlbumArtist)?.let { primaries += it }
+    }
+
+    fun isPrimary(name: String) = primaries.any { it.equals(name, ignoreCase = true) }
+
+    val featured = LinkedHashSet<String>()
+    fun addFeat(name: String) {
+        val n = name.trim()
+        if (n.length >= 2 && !isPrimary(n)) featured += n
+    }
+    albumParsed.filter { it.role == ArtistRole.FEATURED }.forEach { addFeat(it.name) }
+    artistParsed.forEach { c ->
+        if (c.role == ArtistRole.FEATURED || !isPrimary(c.name)) addFeat(c.name)
+    }
+    titleFeats.forEach { addFeat(it) }
+    albumFeats.forEach { addFeat(it) }
+
+    val out = ArrayList<ArtistCredit>(primaries.size + featured.size)
+    primaries.forEach { n -> out += ArtistCredit(n, ArtistRole.PRIMARY, out.size) }
+    featured.forEach { n -> out += ArtistCredit(n, ArtistRole.FEATURED, out.size) }
+    return out
+}
+
+fun isCombinedArtistName(name: String?): Boolean {
+    if (name.isNullOrBlank()) return false
+    return FEAT_SPLIT.containsMatchIn(name)
 }
 
 /** Names only (primary then featured) — for linking. */

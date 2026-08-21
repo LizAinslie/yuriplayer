@@ -15,6 +15,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.withStyle
 import capital.yuri.yuriplayer.data.Song
+import capital.yuri.yuriplayer.data.allCreditsForSong
 
 /**
  * Renders track artist credits as comma-separated tappable names (Spotify-style).
@@ -30,7 +31,9 @@ fun ArtistCreditsText(
     maxLines: Int = 1,
     onArtistClick: (String) -> Unit
 ) {
-    val credits = remember(song.artist, song.albumArtist) { song.creditArtists }
+    val credits = remember(song.artist, song.albumArtist, song.title, song.album) {
+        allCreditsForSong(song).map { it.name }
+    }
     if (credits.isEmpty()) {
         Text(
             text = song.displayArtist,

@@ -48,10 +48,11 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import capital.yuri.yuriplayer.data.AlbumItem
 import capital.yuri.yuriplayer.data.ArtistItem
+import capital.yuri.yuriplayer.data.Song
+import capital.yuri.yuriplayer.data.allCreditsForSong
 import capital.yuri.yuriplayer.data.MyStuffPinStore
 import capital.yuri.yuriplayer.data.Playlist
 import capital.yuri.yuriplayer.data.PlaylistRepository
-import capital.yuri.yuriplayer.data.Song
 import capital.yuri.yuriplayer.data.StuffPin
 import capital.yuri.yuriplayer.data.StuffPinKind
 import capital.yuri.yuriplayer.data.albumKey
@@ -201,11 +202,42 @@ fun MediaSheetBottomPad() {
 }
 
 private fun songArtistNames(song: Song): List<String> {
-    val credits = song.creditArtists
-    if (credits.isNotEmpty()) return credits
-    val single = song.effectiveAlbumArtist?.takeIf { it.isNotBlank() }
-        ?: song.artist?.takeIf { it.isNotBlank() }
+    val credits = allCreditsForSong(song).map { it.name.trim() }.filter { it.isNotEmpty() }
+    if (credits.isNotEmpty()) return credits.distinctBy { it.lowercase() }
+    val single = song.primaryArtist.takeIf { it.isNotBlank() && it != "Unknown Artist" }
     return listOfNotNull(single)
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun GoToArtistSheet(
+    songTitle: String,
+    artists: List<String>,
+    onPick: (String) -> Unit,
+    onDismiss: () -> Unit
+) {
+    ModalBottomSheet(
+        onDismissRequest = onDismiss,
+        sheetState = rememberModalBottomSheetState()
+    ) {
+        Text(
+            "Go to artist",
+            style = MaterialTheme.typography.titleMedium,
+            fontWeight = FontWeight.SemiBold,
+            modifier = Modifier.padding(horizontal = 20.dp, vertical = 8.dp)
+        )
+        Text(
+            songTitle,
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.55f),
+            modifier = Modifier.padding(horizontal = 20.dp)
+        )
+        HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
+        artists.forEach { name ->
+            MediaSheetItem(name) { onPick(name) }
+        }
+        MediaSheetBottomPad()
+    }
 }
 
 /** Shared song sheet — Sources is always available; multi badge is separate. */
@@ -257,35 +289,19 @@ fun SongContextSheet(
     }
 
     if (showArtistPicker) {
-        ModalBottomSheet(
-            onDismissRequest = {
+        GoToArtistSheet(
+            songTitle = song.displayTitle,
+            artists = artists,
+            onPick = { name ->
                 showArtistPicker = false
                 onDismiss()
+                goToArtist(name)
             },
-            sheetState = rememberModalBottomSheetState()
-        ) {
-            Text(
-                "Go to artist",
-                style = MaterialTheme.typography.titleMedium,
-                fontWeight = FontWeight.SemiBold,
-                modifier = Modifier.padding(horizontal = 20.dp, vertical = 8.dp)
-            )
-            Text(
-                song.displayTitle,
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.55f),
-                modifier = Modifier.padding(horizontal = 20.dp)
-            )
-            HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
-            artists.forEach { name ->
-                MediaSheetItem(name) {
-                    showArtistPicker = false
-                    onDismiss()
-                    goToArtist(name)
-                }
+            onDismiss = {
+                showArtistPicker = false
+                onDismiss()
             }
-            MediaSheetBottomPad()
-        }
+        )
         return
     }
 

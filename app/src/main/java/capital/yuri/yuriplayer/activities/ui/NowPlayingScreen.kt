@@ -62,6 +62,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import capital.yuri.yuriplayer.data.PlayerThemeStore
 import capital.yuri.yuriplayer.data.Song
+import capital.yuri.yuriplayer.data.allCreditsForSong
 import capital.yuri.yuriplayer.player.ColdSourceType
 import capital.yuri.yuriplayer.player.PlayerController
 import capital.yuri.yuriplayer.player.QueueLane
@@ -182,6 +183,7 @@ fun NowPlayingScreen(
 
     var showQueue by remember { mutableStateOf(false) }
     var showSongMenu by remember { mutableStateOf(false) }
+    var artistPick by remember { mutableStateOf<List<String>?>(null) }
     var showRadioSettings by remember { mutableStateOf(false) }
     var sliderPosition by remember { mutableFloatStateOf(0f) }
     var sliding by remember { mutableStateOf(false) }
@@ -602,6 +604,21 @@ fun NowPlayingScreen(
                 }
             }
 
+            if (artistPick != null && song != null) {
+                val names = artistPick.orEmpty()
+                val songNav = LocalSongNav.current
+                GoToArtistSheet(
+                    songTitle = song.displayTitle,
+                    artists = names,
+                    onPick = { name ->
+                        artistPick = null
+                        showSongMenu = false
+                        songNav.openArtistByName(name)
+                    },
+                    onDismiss = { artistPick = null }
+                )
+            }
+
             if (showSongMenu && song != null) {
                 ModalBottomSheet(
                     onDismissRequest = { showSongMenu = false },
@@ -622,8 +639,13 @@ fun NowPlayingScreen(
                     MediaSheetItem(
                         label = "Go to artist",
                         onClick = {
-                            showSongMenu = false
-                            onGoToArtist(song)
+                            val names = allCreditsForSong(song).map { it.name }
+                            if (names.size > 1) {
+                                artistPick = names
+                            } else {
+                                showSongMenu = false
+                                onGoToArtist(song)
+                            }
                         }
                     )
                     MediaSheetItem(

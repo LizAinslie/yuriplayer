@@ -103,7 +103,9 @@ import capital.yuri.yuriplayer.data.Song
 import capital.yuri.yuriplayer.data.StuffPin
 import capital.yuri.yuriplayer.data.StuffPinKind
 import capital.yuri.yuriplayer.data.albumKey
+import capital.yuri.yuriplayer.data.allCreditsForSong
 import capital.yuri.yuriplayer.data.artistKey
+import capital.yuri.yuriplayer.data.ArtistRole
 import capital.yuri.yuriplayer.data.primaryArtistName
 import capital.yuri.yuriplayer.player.ColdSource
 import capital.yuri.yuriplayer.player.ColdSourceType
@@ -529,27 +531,28 @@ fun YuriApp(
     }
 
     fun openArtistForSong(song: Song) {
-        val name = song.effectiveAlbumArtist ?: song.artist
+        val credits = allCreditsForSong(song)
+        val name = credits.firstOrNull { it.role == ArtistRole.PRIMARY }?.name
+            ?: credits.firstOrNull()?.name
+            ?: song.effectiveAlbumArtist
+            ?: song.artist
         if (name.isNullOrBlank()) {
             Toast.makeText(context, "No artist tag", Toast.LENGTH_SHORT).show()
             return
         }
-        val key = artistKey(name) ?: name.lowercase()
-        scope.launch {
-            val fromCatalog = withContext(Dispatchers.IO) { catalog.artistItemForKey(key) }
-            openArtistResolved(fromCatalog ?: resolveArtistLocal(name))
-        }
+        openArtistByName(name)
     }
 
     fun openArtistByName(name: String) {
-        if (name.isBlank()) {
+        val resolved = primaryArtistName(name) ?: name
+        if (resolved.isBlank()) {
             Toast.makeText(context, "No artist tag", Toast.LENGTH_SHORT).show()
             return
         }
-        val key = artistKey(name) ?: name.lowercase()
+        val key = artistKey(resolved) ?: resolved.lowercase()
         scope.launch {
-            val fromCatalog = withContext(Dispatchers.IO) { catalog.artistItemForKey(key) }
-            openArtistResolved(fromCatalog ?: resolveArtistLocal(name))
+            val fromCatalog = withContext(Dispatchers.IO) { catalog.artistItemForKey(key, resolved) }
+            openArtistResolved(fromCatalog ?: resolveArtistLocal(resolved))
         }
     }
 
@@ -749,15 +752,22 @@ fun YuriApp(
                             val aKey = artistKey(d.artist.name) ?: d.artist.displayName.lowercase()
                             var liveArtist by remember(aKey) { mutableStateOf(d.artist) }
                             var albums by remember(aKey) { mutableStateOf<List<AlbumItem>>(emptyList()) }
+                            var appearsOn by remember(aKey) { mutableStateOf<List<AlbumItem>>(emptyList()) }
                             LaunchedEffect(aKey) {
                                 val fromCatalog = withContext(Dispatchers.IO) {
-                                    catalog.artistItemForKey(aKey)
+                                    catalog.artistItemForKey(aKey, d.artist.displayName)
                                 }
                                 val catalogAlbums = withContext(Dispatchers.IO) {
-                                    catalog.albumItemsForArtist(aKey)
+                                    catalog.albumItemsForArtist(
+                                        aKey,
+                                        fromCatalog?.displayName ?: d.artist.displayName
+                                    )
+                                }
+                                val guestAlbums = withContext(Dispatchers.IO) {
+                                    catalog.appearsOnAlbumItems(aKey, fromCatalog?.displayName ?: d.artist.displayName)
                                 }
                                 val localAlbums = library.albums(taggedOnly = false).filter {
-                                    it.artist.equals(d.artist.name, ignoreCase = true)
+                                    artistKey(it.artist) == aKey
                                 }
                                 liveArtist = fromCatalog ?: d.artist
                                 albums = when {
@@ -765,13 +775,16 @@ fun YuriApp(
                                     localAlbums.isNotEmpty() -> localAlbums
                                     else -> emptyList()
                                 }
+                                appearsOn = guestAlbums
                                 if (settings.isNetworkMetadataEnabled()) {
                                     albums.forEach { enrichment.enrichAlbumAsync(it) }
+                                    appearsOn.forEach { enrichment.enrichAlbumAsync(it) }
                                 }
                             }
                             ArtistDetailScreen(
                                 artist = liveArtist,
                                 albums = albums,
+                                appearsOn = appearsOn,
                                 onBack = { popDetail() },
                                 onOpenAlbum = { openAlbumResolved(it) },
                                 onPlaySongs = { songs, i ->

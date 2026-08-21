@@ -82,14 +82,22 @@ class CatalogRepository(
         withContext(Dispatchers.IO) {
             val q = query.trim()
             if (q.isEmpty()) return@withContext emptyList()
-            dao.searchArtists(q, limit).map { row ->
-                ArtistItem(
-                    name = row.displayName,
+            val seen = LinkedHashSet<String>()
+            val out = ArrayList<ArtistItem>()
+            for (row in dao.searchArtists(q, limit * 3)) {
+                if (isCombinedArtistName(row.displayName)) continue
+                val name = primaryArtistName(row.displayName) ?: row.displayName
+                val key = artistKey(name) ?: continue
+                if (!seen.add(key)) continue
+                out += ArtistItem(
+                    name = name,
                     trackCount = row.trackCount,
                     albumCount = row.albumCount,
                     songs = emptyList()
                 )
+                if (out.size >= limit) break
             }
+            out
         }
 
     suspend fun tracksForAlbum(albumKey: String): List<Song> = withContext(Dispatchers.IO) {
@@ -99,8 +107,18 @@ class CatalogRepository(
 
     suspend fun tracksForArtist(artistKey: String): List<Song> = withContext(Dispatchers.IO) {
         if (artistKey.isBlank()) return@withContext emptyList()
-        dedupeLogicalTracks(dao.getTracksForArtist(artistKey).map { it.toSong() })
+        dedupeLogicalTracks(primaryTracksForArtistLocked(artistKey))
     }
+
+    /** Releases this artist owns (primary). Local + remote copies merge by albumKey. */
+    suspend fun albumItemsForArtist(artistKey: String, displayName: String? = null): List<AlbumItem> =
+        lightAlbumItemsForArtist(dao, artistKey, displayName)
+
+    /** Guest appearances on other artists' releases. */
+    suspend fun appearsOnAlbumItems(artistKey: String, displayName: String? = null): List<AlbumItem> =
+        withContext(Dispatchers.IO) {
+            lightAppearsOnForArtist(dao, artistKey, displayName)
+        }
 
     suspend fun albumItemForKey(albumKey: String): AlbumItem? = withContext(Dispatchers.IO) {
         albumItemForKeyLocked(albumKey)
@@ -122,23 +140,25 @@ class CatalogRepository(
     private suspend fun expandAlbumTracksLocked(albumKey: String): List<Song> =
         expandAlbumTracks(dao, albumKey)
 
-    suspend fun artistItemForKey(artistKey: String): ArtistItem? = withContext(Dispatchers.IO) {
+    suspend fun artistItemForKey(artistKey: String, hintName: String? = null): ArtistItem? = withContext(Dispatchers.IO) {
         if (artistKey.isBlank()) return@withContext null
-        val row = dao.getArtist(artistKey)
-        val tracks = dedupeLogicalTracks(dao.getTracksForArtist(artistKey).map { it.toSong() })
+        val row = dao.getArtist(artistKey)?.takeUnless { isCombinedArtistName(it.displayName) }
+        val tracks = dedupeLogicalTracks(primaryTracksForArtistLocked(artistKey, hintName ?: row?.displayName))
         if (row == null && tracks.isEmpty()) return@withContext null
         val albums = tracks.mapNotNull { TrackIdentity.normalizeToken(it.album).takeIf { n -> n.isNotEmpty() } }.toSet()
+        val name = primaryArtistName(row?.displayName)
+            ?: row?.displayName
+            ?: primaryArtistName(hintName)
+            ?: hintName
+            ?: primaryArtistName(tracks.firstOrNull()?.effectiveAlbumArtist)
+            ?: tracks.firstOrNull()?.effectiveAlbumArtist
         ArtistItem(
-            name = row?.displayName ?: tracks.firstOrNull()?.effectiveAlbumArtist,
+            name = name,
             trackCount = if (tracks.isNotEmpty()) tracks.size else (row?.trackCount ?: 0),
             albumCount = if (albums.isNotEmpty()) albums.size else (row?.albumCount ?: 0),
             songs = tracks
         )
     }
-
-    /** Light discography for artist page (seed + counts only). Full expand on album open. */
-    suspend fun albumItemsForArtist(artistKey: String): List<AlbumItem> =
-        lightAlbumItemsForArtist(dao, artistKey)
 
     suspend fun coverCandidatesForAlbum(albumKey: String, tracks: List<Song> = emptyList()): List<CoverCandidate> =
         withContext(Dispatchers.IO) {
@@ -317,6 +337,9 @@ class CatalogRepository(
     }
 
     private suspend fun rebuildRollupsLocked() {
+        normalizeTrackIdentityLocked()
+        persistCreditsLocked(dao.getAllTracks().map { it.toSong() }, replaceAll = true)
+
         val prevAlbums = dao.getAllAlbums().associateBy { it.albumKey }
         val prevArtists = dao.getAllArtists().associateBy { it.artistKey }
 
@@ -461,13 +484,16 @@ class CatalogRepository(
     suspend fun coverPathForAlbum(albumKey: String): String? =
         dao.getAlbum(albumKey)?.coverPath
 
-    private suspend fun persistCreditsLocked(songs: List<Song>) {
+    private suspend fun persistCreditsLocked(songs: List<Song>, replaceAll: Boolean = false) {
         if (songs.isEmpty()) return
+        if (replaceAll) dao.deleteAllCredits()
         val credits = ArrayList<CatalogCreditEntity>()
         val albumSeen = HashSet<String>()
+        val artistStubs = LinkedHashMap<String, CatalogArtistEntity>()
+        val existingArtists = dao.getAllArtists().associateBy { it.artistKey }
         for (song in songs) {
-            dao.deleteCredits("TRACK", song.songKey)
-            parseArtistCreditList(song.artist ?: song.effectiveAlbumArtist).forEach { c ->
+            if (!replaceAll) dao.deleteCredits("TRACK", song.songKey)
+            allCreditsForSong(song).forEach { c ->
                 val key = artistKey(c.name) ?: return@forEach
                 credits += CatalogCreditEntity(
                     subjectType = "TRACK",
@@ -477,10 +503,19 @@ class CatalogRepository(
                     role = c.role.name,
                     position = c.position
                 )
+                if (key !in existingArtists && key !in artistStubs) {
+                    artistStubs[key] = CatalogArtistEntity(
+                        artistKey = key,
+                        displayName = c.name,
+                        trackCount = 0,
+                        albumCount = 0,
+                        updatedAtMs = System.currentTimeMillis()
+                    )
+                }
             }
             val aKey = albumKey(song.album, song.effectiveAlbumArtist)
             if (aKey.isNotBlank() && albumSeen.add(aKey)) {
-                dao.deleteCredits("ALBUM", aKey)
+                if (!replaceAll) dao.deleteCredits("ALBUM", aKey)
                 parseArtistCreditList(song.albumArtist ?: song.effectiveAlbumArtist).forEach { c ->
                     val key = artistKey(c.name) ?: return@forEach
                     credits += CatalogCreditEntity(
@@ -495,13 +530,49 @@ class CatalogRepository(
             }
             song.musicBrainzArtistId?.takeIf { it.isNotBlank() }?.let { mbid ->
                 val key = artistKey(song.effectiveAlbumArtist) ?: return@let
-                val existing = dao.getArtist(key)
+                val existing = existingArtists[key] ?: dao.getArtist(key)
                 if (existing != null && existing.mbid.isNullOrBlank()) {
                     dao.upsertArtist(existing.copy(mbid = mbid, updatedAtMs = System.currentTimeMillis()))
                 }
             }
         }
-        if (credits.isNotEmpty()) dao.upsertCredits(credits)
+        if (artistStubs.isNotEmpty()) dao.upsertArtists(artistStubs.values.toList())
+        if (credits.isNotEmpty()) credits.chunked(500).forEach { dao.upsertCredits(it) }
+    }
+
+    private suspend fun normalizeTrackIdentityLocked() {
+        val tracks = dao.getAllTracks()
+        val changed = ArrayList<CatalogTrackEntity>()
+        for (row in tracks) {
+            val song = row.toSong()
+            val newAlbum = albumKey(song.album, song.effectiveAlbumArtist).takeIf { !song.album.isNullOrBlank() }
+            val newArtist = artistKey(song.effectiveAlbumArtist)
+            if (row.albumKey != newAlbum || row.artistKey != newArtist) {
+                changed += row.copy(albumKey = newAlbum, artistKey = newArtist)
+            }
+        }
+        if (changed.isEmpty()) return
+        changed.chunked(400).forEach { dao.upsertTracks(it) }
+        Log.i(TAG, "normalized identity on ${changed.size} tracks")
+    }
+
+    private suspend fun primaryTracksForArtistLocked(artistKey: String, hintName: String? = null): List<Song> {
+        val out = LinkedHashMap<String, Song>()
+        dao.getTracksForArtist(artistKey).map { it.toSong() }.forEach { out[it.songKey] = it }
+        dao.getTracksByCreditRole(artistKey, ArtistRole.PRIMARY.name)
+            .map { it.toSong() }
+            .forEach { out.putIfAbsent(it.songKey, it) }
+        val name = dao.getArtist(artistKey)?.displayName ?: hintName
+        if (!name.isNullOrBlank() && name.length >= 3) {
+            dao.getTracksMentioning(name).forEach { entity ->
+                val song = entity.toSong()
+                val hit = allCreditsForSong(song).any {
+                    it.role == ArtistRole.PRIMARY && artistKey(it.name) == artistKey
+                }
+                if (hit) out.putIfAbsent(entity.songKey, song)
+            }
+        }
+        return out.values.toList()
     }
 
     private fun Song.toLocalTrackEntity(seenAt: Long) = toTrackEntity(

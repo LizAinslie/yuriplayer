@@ -273,18 +273,19 @@ class LibraryIndex(
         } else _songs.value
 
         return source
-            .groupBy { normalizeKey(it.effectiveAlbumArtist) }
-            .mapNotNull { (artistKeyNorm, tracks) ->
-                if (artistKeyNorm == null) return@mapNotNull null
+            .groupBy { artistKey(it.effectiveAlbumArtist) }
+            .mapNotNull { (key, tracks) ->
+                if (key.isNullOrBlank()) return@mapNotNull null
                 val displayName = tracks
-                    .mapNotNull { it.effectiveAlbumArtist }
+                    .mapNotNull { primaryArtistName(it.effectiveAlbumArtist) ?: it.effectiveAlbumArtist }
                     .groupingBy { it }.eachCount()
                     .maxByOrNull { it.value }
                     ?.key
+                if (isCombinedArtistName(displayName)) return@mapNotNull null
                 val deduped = tracks.distinctBy {
                     it.path?.lowercase() ?: it.contentUri.toString()
                 }
-                val albumKeys = deduped.mapNotNull { normalizeKey(it.album) }.toSet()
+                val albumKeys = deduped.mapNotNull { albumKey(it.album, it.effectiveAlbumArtist) }.toSet()
                 ArtistItem(
                     name = displayName,
                     trackCount = deduped.size,
