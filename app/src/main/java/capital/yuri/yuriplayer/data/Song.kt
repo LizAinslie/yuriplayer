@@ -2,6 +2,7 @@ package capital.yuri.yuriplayer.data
 
 import android.net.Uri
 import capital.yuri.yuriplayer.data.json.UriAsStringSerializer
+import capital.yuri.yuriplayer.data.text.StringSimilarity
 import kotlinx.serialization.Serializable
 import java.io.File
 import java.text.Normalizer
@@ -301,6 +302,8 @@ object TrackIdentity {
         minLen: Int = 10
     ): Boolean {
         if (titlesMatch(a, b)) return true
+        if (a.isNullOrBlank() || b.isNullOrBlank()) return false
+        if (StringSimilarity.likelySame(a, b, StringSimilarity.Kind.TITLE)) return true
         val na = normalizeTitle(a)
         val nb = normalizeTitle(b)
         if (na.length < minLen || nb.length < minLen) return false
@@ -320,11 +323,8 @@ object TrackIdentity {
      */
     fun albumsNearlyMatch(a: String?, b: String?): Boolean {
         if (albumsMatch(a, b)) return true
-        val na = normalizeToken(a)
-        val nb = normalizeToken(b)
-        if (na.length < 16 || nb.length < 16) return false
-        if (kotlin.math.abs(na.length - nb.length) > 2) return false
-        return editDistanceAtMost(na, nb, 2) <= 2
+        if (a.isNullOrBlank() || b.isNullOrBlank()) return false
+        return StringSimilarity.likelySame(a, b, StringSimilarity.Kind.ALBUM)
     }
 
     fun albumArtistsMatch(a: String?, b: String?): Boolean {
