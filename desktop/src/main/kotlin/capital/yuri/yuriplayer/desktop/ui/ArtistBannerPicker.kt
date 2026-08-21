@@ -7,7 +7,6 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
-import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -15,8 +14,10 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.GridItemSpan
+import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
+import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
@@ -60,13 +61,15 @@ fun ArtistBannerPicker(
         loading = false
     }
 
-    val sections = remember(candidates) { groupCandidates(candidates) }
+    val sections = remember(candidates) {
+        candidates.groupBy { sourceLabel(it.sourceId) }.toList()
+    }
 
-    InWindowPanel(onDismiss = onDismiss, modifier = Modifier.width(680.dp).heightIn(max = 560.dp)) {
+    InWindowPanel(onDismiss = onDismiss, modifier = Modifier.width(640.dp).heightIn(max = 560.dp)) {
         Column(Modifier.padding(20.dp)) {
             Text("Choose a header", style = MaterialTheme.typography.titleLarge)
             Text(
-                "Wide shots first · $artistName",
+                artistName,
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.55f),
                 modifier = Modifier.padding(top = 4.dp, bottom = 12.dp)
@@ -81,35 +84,24 @@ fun ArtistBannerPicker(
                     "Couldn't find headers for $artistName",
                     color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.55f)
                 )
-                else -> LazyColumn(
+                else -> LazyVerticalGrid(
+                    columns = GridCells.Fixed(3),
                     modifier = Modifier.heightIn(max = 420.dp).fillMaxWidth(),
-                    verticalArrangement = Arrangement.spacedBy(14.dp),
+                    horizontalArrangement = Arrangement.spacedBy(10.dp),
+                    verticalArrangement = Arrangement.spacedBy(12.dp),
                     contentPadding = PaddingValues(bottom = 8.dp)
                 ) {
-                    sections.forEach { section ->
-                        item(key = "h-${section.title}") {
+                    sections.forEach { (title, items) ->
+                        item(span = { GridItemSpan(3) }, key = "h-$title") {
                             Text(
-                                section.title,
+                                title,
                                 style = MaterialTheme.typography.labelLarge,
                                 color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f),
-                                modifier = Modifier.padding(bottom = 2.dp)
+                                modifier = Modifier.padding(top = 4.dp)
                             )
                         }
-                        items(section.rows, key = { row -> row.joinToString { it.url } }) { row ->
-                            Row(
-                                Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.spacedBy(10.dp)
-                            ) {
-                                row.forEach { c ->
-                                    BannerTile(
-                                        candidate = c,
-                                        wide = section.wide,
-                                        onClick = { onPicked(c) },
-                                        modifier = Modifier.weight(1f)
-                                    )
-                                }
-                                if (row.size == 1) Box(Modifier.weight(1f))
-                            }
+                        items(items, key = { it.url }) { c ->
+                            BannerTile(c) { onPicked(c) }
                         }
                     }
                 }
@@ -124,16 +116,14 @@ fun ArtistBannerPicker(
 @Composable
 private fun BannerTile(
     candidate: ArtistImageCandidate,
-    wide: Boolean,
-    onClick: () -> Unit,
-    modifier: Modifier = Modifier
+    onClick: () -> Unit
 ) {
     val shape = RoundedCornerShape(10.dp)
-    Column(modifier) {
+    Column {
         Box(
             Modifier
                 .fillMaxWidth()
-                .aspectRatio(if (wide) 3f else 1f)
+                .aspectRatio(1f)
                 .clip(shape)
                 .clipToBounds()
                 .border(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.35f), shape)
@@ -157,32 +147,6 @@ private fun BannerTile(
             modifier = Modifier.padding(top = 4.dp)
         )
     }
-}
-
-private data class BannerSection(
-    val title: String,
-    val wide: Boolean,
-    val rows: List<List<ArtistImageCandidate>>
-)
-
-private fun groupCandidates(list: List<ArtistImageCandidate>): List<BannerSection> {
-    val wide = list.filter { it.isWide() }
-    val rest = list.filterNot { it.isWide() }
-    return buildList {
-        if (wide.isNotEmpty()) add(BannerSection("Headers", true, wide.chunked(2)))
-        rest.groupBy { sourceLabel(it.sourceId) }.forEach { (title, items) ->
-            add(BannerSection(title, false, items.chunked(2)))
-        }
-    }
-}
-
-private fun ArtistImageCandidate.isWide(): Boolean {
-    val w = width ?: 0
-    val h = height ?: 0
-    val ratio = if (h > 0) w.toFloat() / h else 0f
-    if (ratio >= 1.6f) return true
-    val l = label.lowercase()
-    return "banner" in l || "fanart" in l || "backdrop" in l || "wide" in l
 }
 
 private fun sourceLabel(id: String) = when (id.lowercase()) {
