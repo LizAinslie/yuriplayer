@@ -3,9 +3,10 @@ package capital.yuri.yuriplayer.data.source
 import android.net.Uri
 import android.util.Log
 import capital.yuri.yuriplayer.data.Song
+import capital.yuri.yuriplayer.http.UrlScope
+import capital.yuri.yuriplayer.http.url
 import io.ktor.client.HttpClient
 import io.ktor.client.request.get
-import io.ktor.client.request.parameter
 import io.ktor.client.statement.bodyAsText
 import io.ktor.http.isSuccess
 import kotlinx.serialization.SerialName
@@ -76,9 +77,9 @@ class SubsonicClient(
         pageSize: Int = 100
     ): Result<AlbumPage> = runCatching {
         val body = apiGet(session, "getAlbumList2") {
-            parameter("type", "alphabeticalByName")
-            parameter("size", pageSize.coerceIn(1, 500))
-            parameter("offset", offset.coerceAtLeast(0))
+            param("type", "alphabeticalByName")
+            param("size", pageSize.coerceIn(1, 500))
+            param("offset", offset.coerceAtLeast(0))
         }
         val list = json.decodeFromString<SubsonicResponse>(body)
             .subsonicResponse.albumList2?.album.orEmpty()
@@ -103,7 +104,7 @@ class SubsonicClient(
     suspend fun listSongsForAlbum(session: Session, albumId: String): Result<List<Song>> =
         runCatching {
             val body = apiGet(session, "getAlbum") {
-                parameter("id", albumId)
+                param("id", albumId)
             }
             val album = json.decodeFromString<SubsonicResponse>(body)
                 .subsonicResponse.album ?: return@runCatching emptyList()
@@ -187,14 +188,14 @@ class SubsonicClient(
         val action = if (session.openSubsonic) "getSimilarSongs2" else "getSimilarSongs"
         val body = runCatching {
             apiGet(session, action) {
-                parameter("id", seedId)
-                parameter("count", count.coerceIn(1, 200))
+                param("id", seedId)
+                param("count", count.coerceIn(1, 200))
             }
         }.getOrElse {
             if (action == "getSimilarSongs2") {
                 apiGet(session, "getSimilarSongs") {
-                    parameter("id", seedId)
-                    parameter("count", count.coerceIn(1, 200))
+                    param("id", seedId)
+                    param("count", count.coerceIn(1, 200))
                 }
             } else throw it
         }
@@ -214,10 +215,10 @@ class SubsonicClient(
         count: Int = 12
     ): Result<List<ArtistHit>> = runCatching {
         val body = apiGet(session, "search3") {
-            parameter("query", query)
-            parameter("artistCount", count.coerceIn(1, 40))
-            parameter("albumCount", 0)
-            parameter("songCount", 0)
+            param("query", query)
+            param("artistCount", count.coerceIn(1, 40))
+            param("albumCount", 0)
+            param("songCount", 0)
         }
         val artists = json.decodeFromString<SubsonicResponse>(body)
             .subsonicResponse.searchResult3?.artist.orEmpty()
@@ -264,59 +265,53 @@ class SubsonicClient(
     suspend fun playlistSongs(session: Session, playlistId: String): Result<List<Song>> =
         runCatching {
             val body = apiGet(session, "getPlaylist") {
-                parameter("id", playlistId)
+                param("id", playlistId)
             }
             val detail = json.decodeFromString<SubsonicResponse>(body).subsonicResponse.playlist
             detail?.entry.orEmpty().mapNotNull { it.toSong(session, albumCoverArt = detail.coverArt) }
         }.onFailure { Log.w(TAG, "playlistSongs failed: ${it.message}") }
 
-    fun streamUrl(session: Session, id: String): String {
-        val (token, salt) = tokenPair(session.password)
-        return buildString {
-            append(session.baseUrl.trimEnd('/'))
-            append("/rest/stream.view")
-            append("?u=").append(Uri.encode(session.username))
-            append("&t=").append(token)
-            append("&s=").append(salt)
-            append("&v=").append(API_VERSION)
-            append("&c=").append(Uri.encode(session.clientName))
-            append("&id=").append(Uri.encode(id))
-            append("&format=raw")
+    fun streamUrl(session: Session, id: String): String =
+        restUrl(session, "stream") {
+            param("id", id)
+            param("format", "raw")
         }
-    }
 
     fun coverUrl(session: Session, coverArtId: String?, size: Int = 300): String? {
         if (coverArtId.isNullOrBlank()) return null
+        return restUrl(session, "getCoverArt") {
+            param("id", coverArtId)
+            param("size", size)
+        }
+    }
+
+    private fun restUrl(
+        session: Session,
+        action: String,
+        extra: UrlScope.() -> Unit = {}
+    ): String {
         val (token, salt) = tokenPair(session.password)
-        return buildString {
-            append(session.baseUrl.trimEnd('/'))
-            append("/rest/getCoverArt.view")
-            append("?u=").append(Uri.encode(session.username))
-            append("&t=").append(token)
-            append("&s=").append(salt)
-            append("&v=").append(API_VERSION)
-            append("&c=").append(Uri.encode(session.clientName))
-            append("&id=").append(Uri.encode(coverArtId))
-            append("&size=").append(size)
+        return url(session.baseUrl) {
+            path("rest", "$action.view")
+            param("u", session.username)
+            param("t", token)
+            param("s", salt)
+            param("v", API_VERSION)
+            param("c", session.clientName)
+            extra()
         }
     }
 
     private suspend fun apiGet(
         session: Session,
         action: String,
-        extra: io.ktor.client.request.HttpRequestBuilder.() -> Unit = {}
+        extra: UrlScope.() -> Unit = {}
     ): String {
-        val root = session.baseUrl.trimEnd('/')
-        val (token, salt) = tokenPair(session.password)
-        val response = http.get("$root/rest/$action.view") {
-            parameter("u", session.username)
-            parameter("t", token)
-            parameter("s", salt)
-            parameter("v", API_VERSION)
-            parameter("c", session.clientName)
-            parameter("f", "json")
+        val requestUrl = restUrl(session, action) {
+            param("f", "json")
             extra()
         }
+        val response = http.get(requestUrl)
         if (!response.status.isSuccess()) {
             error("$action HTTP ${response.status.value}")
         }
