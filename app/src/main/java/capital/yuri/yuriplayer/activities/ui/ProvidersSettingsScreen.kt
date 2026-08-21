@@ -23,6 +23,7 @@ import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -221,6 +222,31 @@ fun ProviderEditorScreen(
 
     val title = if (existingId == null) "Add provider" else "Edit provider"
 
+    fun runTest() {
+        if (testing) return
+        scope.launch {
+            testing = true
+            status = null
+            val result = withContext(Dispatchers.IO) {
+                when (type) {
+                    SourceType.JELLYFIN ->
+                        jellyfin.authenticate(url, username, password)
+                            .map { "Connected as user ${it.userId.take(8)}…" }
+                    else -> {
+                        val session = SubsonicClient.Session(
+                            baseUrl = SourceInstanceRepository.normalizeBaseUrl(url),
+                            username = username,
+                            password = password
+                        )
+                        subsonic.ping(session).map { "Ping ok" }
+                    }
+                }
+            }
+            status = result.getOrElse { e -> "Failed: ${e.message ?: e}" }
+            testing = false
+        }
+    }
+
     Column(
         modifier = Modifier
             .fillMaxSize()
@@ -305,6 +331,13 @@ fun ProviderEditorScreen(
                     },
                     modifier = Modifier.fillMaxWidth()
                 )
+                Spacer(modifier = Modifier.height(12.dp))
+                OutlinedButton(
+                    onClick = { runTest() },
+                    enabled = !testing && url.isNotBlank() && username.isNotBlank()
+                ) {
+                    Text(if (testing) "Testing…" else "Test connection")
+                }
             }
         }
 
@@ -354,30 +387,7 @@ fun ProviderEditorScreen(
             SettingsNavRow(
                 title = if (testing) "Testing…" else "Test connection",
                 subtitle = "Authenticate against the server",
-                onClick = {
-                    if (testing) return@SettingsNavRow
-                    scope.launch {
-                        testing = true
-                        status = null
-                        val result = withContext(Dispatchers.IO) {
-                            when (type) {
-                                SourceType.JELLYFIN ->
-                                    jellyfin.authenticate(url, username, password)
-                                        .map { "Connected as user ${it.userId.take(8)}…" }
-                                else -> {
-                                    val session = SubsonicClient.Session(
-                                        baseUrl = SourceInstanceRepository.normalizeBaseUrl(url),
-                                        username = username,
-                                        password = password
-                                    )
-                                    subsonic.ping(session).map { "Ping ok" }
-                                }
-                            }
-                        }
-                        status = result.getOrElse { e -> "Failed: ${e.message ?: e}" }
-                        testing = false
-                    }
-                }
+                onClick = { runTest() }
             )
             SettingsNavRow(
                 title = "Save",

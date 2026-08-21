@@ -13,6 +13,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Cloud
 import androidx.compose.material.icons.filled.ColorLens
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.LibraryMusic
@@ -34,6 +35,7 @@ enum class SettingsCategory(val label: String, val icon: ImageVector) {
     Appearance("Appearance", Icons.Default.ColorLens),
     Playback("Playback", Icons.Default.PlayArrow),
     Library("Library", Icons.Default.LibraryMusic),
+    Providers("Providers", Icons.Default.Cloud),
     About("About", Icons.Default.Info)
 }
 

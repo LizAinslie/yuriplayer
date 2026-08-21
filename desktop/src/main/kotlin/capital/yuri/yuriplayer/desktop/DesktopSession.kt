@@ -26,6 +26,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.swing.Swing
+import kotlinx.coroutines.withContext
 import java.io.File
 import java.util.UUID
 
@@ -127,43 +128,101 @@ class DesktopSession {
     }
 
     fun addJellyfin(name: String, baseUrl: String, username: String, password: String) {
-        scope.launch(Dispatchers.IO) {
-            _scanMessage.value = "Signing in to Jellyfin…"
-            val seed = RemoteAccount(
-                id = UUID.randomUUID().toString(),
-                kind = SourceKind.JELLYFIN,
-                name = name.ifBlank { "Jellyfin" },
-                baseUrl = baseUrl,
-                username = username,
-                secret = password
-            )
-            jellyfin.authenticate(seed)
-                .onSuccess {
-                    sources.upsertRemote(it)
-                    rescan()
-                }
-                .onFailure { _scanMessage.value = "Jellyfin: ${it.message}" }
-        }
+        saveRemote(
+            existingId = null,
+            kind = SourceKind.JELLYFIN,
+            name = name,
+            baseUrl = baseUrl,
+            username = username,
+            password = password,
+            enabled = true
+        )
     }
 
     fun addSubsonic(name: String, baseUrl: String, username: String, password: String) {
+        saveRemote(
+            existingId = null,
+            kind = SourceKind.SUBSONIC,
+            name = name,
+            baseUrl = baseUrl,
+            username = username,
+            password = password,
+            enabled = true
+        )
+    }
+
+    fun saveRemote(
+        existingId: String?,
+        kind: SourceKind,
+        name: String,
+        baseUrl: String,
+        username: String,
+        password: String,
+        enabled: Boolean,
+        onDone: (ok: Boolean, message: String) -> Unit = { ok, msg ->
+            if (!ok) _scanMessage.value = msg
+        }
+    ) {
         scope.launch(Dispatchers.IO) {
-            _scanMessage.value = "Signing in to Subsonic…"
+            val existing = existingId?.let { id -> sources.remotes.value.firstOrNull { it.id == id } }
             val seed = RemoteAccount(
-                id = UUID.randomUUID().toString(),
-                kind = SourceKind.SUBSONIC,
-                name = name.ifBlank { "Subsonic" },
+                id = existing?.id ?: UUID.randomUUID().toString(),
+                kind = kind,
+                name = name.ifBlank {
+                    if (kind == SourceKind.JELLYFIN) "Jellyfin" else "Subsonic"
+                },
                 baseUrl = baseUrl,
                 username = username,
-                secret = password
+                secret = password.ifBlank { existing?.secret.orEmpty() },
+                enabled = enabled,
+                accessToken = existing?.accessToken,
+                userId = existing?.userId
             )
-            subsonic.ping(seed)
-                .onSuccess {
-                    sources.upsertRemote(it)
+            val result = when (kind) {
+                SourceKind.JELLYFIN -> jellyfin.authenticate(seed)
+                SourceKind.SUBSONIC -> subsonic.ping(seed)
+                SourceKind.LOCAL -> Result.failure(IllegalArgumentException("Not a remote provider"))
+            }
+            result
+                .onSuccess { signed ->
+                    sources.upsertRemote(signed.copy(enabled = enabled, name = seed.name))
                     rescan()
+                    withContext(Dispatchers.Swing) { onDone(true, "Saved") }
                 }
-                .onFailure { _scanMessage.value = "Subsonic: ${it.message}" }
+                .onFailure {
+                    withContext(Dispatchers.Swing) {
+                        onDone(false, it.message ?: "Could not reach server")
+                    }
+                }
         }
+    }
+
+    suspend fun testConnection(
+        kind: SourceKind,
+        url: String,
+        username: String,
+        password: String
+    ): Result<String> {
+        val seed = RemoteAccount(
+            id = "test",
+            kind = kind,
+            name = "",
+            baseUrl = url,
+            username = username,
+            secret = password
+        )
+        return when (kind) {
+            SourceKind.JELLYFIN -> jellyfin.authenticate(seed).map { signed ->
+                val who = signed.userId?.take(8)?.plus("…") ?: signed.username
+                "Connected as $who"
+            }
+            SourceKind.SUBSONIC -> subsonic.ping(seed).map { "Ping ok" }
+            SourceKind.LOCAL -> Result.failure(IllegalArgumentException("Not a remote provider"))
+        }
+    }
+
+    fun setRemoteEnabled(id: String, enabled: Boolean) {
+        sources.setRemoteEnabled(id, enabled)
     }
 
     fun removeRemote(id: String) {
