@@ -305,8 +305,9 @@ class VlcPlaybackEngine(
         if (sp.media == null) return
         nextWarming = true
         if (sp.isPlaying) return
-        runCatching { sp.volume = 0 }
-        runCatching { sp.play() }
+        if (silenceStandby(sp)) {
+            runCatching { sp.play() }
+        }
         Log.i(TAG, "warmup next '${item.title}'")
     }
 
@@ -450,7 +451,7 @@ class VlcPlaybackEngine(
         val sp = standby()
         runCatching { sp.stop() }
         bindMedia(sp, media, isNext = true)
-        runCatching { sp.volume = 0 }
+        silenceStandby(sp)
         Log.i(TAG, "standby attached '${item.title}' network=${item.isNetwork}")
         nextPreparing = false
         nextReady = true
@@ -483,13 +484,13 @@ class VlcPlaybackEngine(
         nextPreparing = false
         nextWarming = false
         nextGeneration += 1
+        val np = active()
+        // Stop dummy warmup while events are still ignored, then speaker from 0.
+        if (np.isPlaying) runCatching { np.stop() }
+        enableSpeaker(np)
         eventGeneration = loadGeneration
         playWhenReady = true
-        val np = active()
-        runCatching { np.volume = 100 }
-        val warmed = runCatching { np.time }.getOrDefault(0L)
-        if (!np.isPlaying) np.play()
-        if (warmed > 1_000L) runCatching { np.time = 0L }
+        np.play()
         _isPlaying.value = true
         buffering = false
         Log.i(TAG, "swap → '${nxt.title}'")
@@ -560,6 +561,21 @@ class VlcPlaybackEngine(
         }
     }
 
+    private fun silenceStandby(mp: MediaPlayer): Boolean {
+        runCatching { mp.volume = 0 }
+        val dummy = runCatching { mp.setAudioOutput("dummy") }.getOrDefault(false)
+        if (!dummy) Log.w(TAG, "dummy aout unavailable — warmup will not play()")
+        return dummy
+    }
+
+    private fun enableSpeaker(mp: MediaPlayer) {
+        val ok = SPEAKER_AOUTS.any { name ->
+            runCatching { mp.setAudioOutput(name) }.getOrDefault(false)
+        }
+        if (!ok) Log.w(TAG, "could not set speaker aout")
+        runCatching { mp.volume = 100 }
+    }
+
     private fun bindMedia(mp: MediaPlayer, media: Media, isNext: Boolean) {
         unbindMedia(mp, isNext)
         mp.media = media
@@ -624,6 +640,7 @@ class VlcPlaybackEngine(
         private const val FILE_CACHE_MS = 1500
         private const val NETWORK_CACHE_MS = 6000
         private const val PREFETCH_BYTES = 4 * 1024 * 1024
+        private val SPEAKER_AOUTS = arrayOf("android_audiotrack", "aaudio", "opensles")
 
         val DESCRIPTOR = PlaybackEngineDescriptor(
             id = "vlc",
