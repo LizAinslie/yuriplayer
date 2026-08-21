@@ -364,4 +364,34 @@ interface CatalogDao {
 
     @Query("SELECT * FROM catalog_credits WHERE subjectType = :subjectType AND subjectKey = :subjectKey ORDER BY position")
     suspend fun creditsFor(subjectType: String, subjectKey: String): List<CatalogCreditEntity>
+
+    @Query("SELECT * FROM artist_aliases")
+    suspend fun getAllAliases(): List<ArtistAliasEntity>
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun upsertAlias(alias: ArtistAliasEntity)
+
+    @Query("DELETE FROM artist_aliases WHERE aliasKey = :aliasKey")
+    suspend fun deleteAlias(aliasKey: String)
+
+    @Query("DELETE FROM artist_aliases WHERE canonicalKey = :canonicalKey OR aliasKey = :canonicalKey")
+    suspend fun deleteAliasesInvolving(canonicalKey: String)
+
+    @Query("UPDATE artist_aliases SET canonicalKey = :intoKey WHERE canonicalKey = :fromKey")
+    suspend fun retargetAliases(fromKey: String, intoKey: String)
+
+    @Query("UPDATE catalog_tracks SET artistKey = :intoKey WHERE artistKey = :fromKey")
+    suspend fun retargetTrackArtistKey(fromKey: String, intoKey: String)
+
+    @Query("UPDATE catalog_credits SET artistKey = :intoKey WHERE artistKey = :fromKey")
+    suspend fun retargetCreditArtistKey(fromKey: String, intoKey: String)
+
+    @Query("UPDATE catalog_albums SET artistKey = :intoKey WHERE artistKey = :fromKey")
+    suspend fun retargetAlbumArtistKey(fromKey: String, intoKey: String)
+
+    @Query(
+        "SELECT * FROM catalog_artists WHERE mbid IS NOT NULL AND mbid != '' " +
+            "ORDER BY mbid, trackCount DESC"
+    )
+    suspend fun artistsWithMbid(): List<CatalogArtistEntity>
 }

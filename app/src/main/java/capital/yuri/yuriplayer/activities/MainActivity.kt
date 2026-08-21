@@ -817,7 +817,11 @@ fun YuriApp(
                                         liveArtist.name ?: liveArtist.displayName
                                     )
                                 },
-                                onAddToQueue = { player.addToHotQueue(it) }
+                                onAddToQueue = { player.addToHotQueue(it) },
+                                onArtistMerged = { merged ->
+                                    popDetail()
+                                    openArtistResolved(merged)
+                                }
                             )
                         }
                         is DetailRoute.Playlist -> {

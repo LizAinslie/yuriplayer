@@ -146,15 +146,45 @@ fun foldTagToken(value: String): String {
 }
 
 fun albumKey(name: String?, artist: String?): String {
-    val a = foldTagToken(primaryArtistName(artist) ?: artist ?: "")
+    val a = artistKey(artist) ?: foldTagToken(primaryArtistName(artist) ?: artist ?: "")
     val n = foldTagToken(name ?: "")
     return "$a|$n"
 }
 
-fun artistKey(name: String?): String? {
+/** Folded artist key before user / MBID aliases. */
+fun rawArtistKey(name: String?): String? {
     val primary = primaryArtistName(name) ?: name ?: return null
     val t = foldTagToken(primary)
     return t.takeIf { it.isNotEmpty() }
+}
+
+fun artistKey(name: String?): String? {
+    val raw = rawArtistKey(name) ?: return null
+    return ArtistAliasResolver.resolve(raw)
+}
+
+/**
+ * In-memory alias map (Nightcord → 25時、ナイトコードで。).
+ * CatalogRepository loads Room rows into this at start / after merge.
+ */
+object ArtistAliasResolver {
+    @Volatile
+    private var map: Map<String, String> = emptyMap()
+
+    fun replace(aliases: Map<String, String>) {
+        map = aliases
+    }
+
+    fun resolve(key: String): String {
+        if (map.isEmpty()) return key
+        var cur = key
+        val seen = HashSet<String>(4)
+        while (true) {
+            val next = map[cur] ?: return cur
+            if (next == cur || !seen.add(cur)) return next
+            cur = next
+        }
+    }
 }
 
 /**

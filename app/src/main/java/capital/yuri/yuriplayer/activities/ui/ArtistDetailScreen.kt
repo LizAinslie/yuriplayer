@@ -48,6 +48,7 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Text
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
@@ -78,6 +79,7 @@ import androidx.compose.ui.unit.dp
 import capital.yuri.yuriplayer.data.AlbumItem
 import capital.yuri.yuriplayer.data.ArtistItem
 import capital.yuri.yuriplayer.data.ArtistProfileRepository
+import capital.yuri.yuriplayer.data.CatalogRepository
 import capital.yuri.yuriplayer.data.LibrarySettings
 import capital.yuri.yuriplayer.data.MyStuffPinStore
 import capital.yuri.yuriplayer.data.ReleaseType
@@ -177,12 +179,14 @@ fun ArtistDetailScreen(
     onOpenAlbum: (AlbumItem) -> Unit,
     onPlaySongs: (List<Song>, Int) -> Unit,
     onStartRadio: () -> Unit = {},
-    onAddToQueue: (Song) -> Unit = {}
+    onAddToQueue: (Song) -> Unit = {},
+    onArtistMerged: (ArtistItem) -> Unit = {}
 ) {
     val themeService: ThemeService = koinInject()
     val profileRepo: ArtistProfileRepository = koinInject()
     val artistInfo: ArtistInfoService = koinInject()
     val pinStore: MyStuffPinStore = koinInject()
+    val catalog: CatalogRepository = koinInject()
     val settings: LibrarySettings = koinInject()
     val entries by pinStore.entries.collectAsState()
     val colorRev by settings.colorPrefsRevision.collectAsState()
@@ -197,6 +201,7 @@ fun ArtistDetailScreen(
     var discographyFilters by remember { mutableStateOf(DiscographyFilters()) }
     var appearsOnFilters by remember { mutableStateOf(DiscographyFilters()) }
     var showMenu by remember { mutableStateOf(false) }
+    var showMerge by remember { mutableStateOf(false) }
     var showDataSources by remember { mutableStateOf(false) }
     var fetchKind by remember { mutableStateOf<ArtistImageKind?>(null) }
     var cropUri by remember { mutableStateOf<Uri?>(null) }
@@ -400,7 +405,21 @@ fun ArtistDetailScreen(
         if (showMenu) {
             ArtistContextSheet(
                 artist = artist,
-                onDismiss = { showMenu = false }
+                onDismiss = { showMenu = false },
+                onMerge = { showMerge = true }
+            )
+        }
+
+        if (showMerge) {
+            ArtistMergeSheet(
+                artist = artist,
+                catalog = catalog,
+                pinStore = pinStore,
+                onDismiss = { showMerge = false },
+                onMerged = { merged ->
+                    showMerge = false
+                    onArtistMerged(merged)
+                }
             )
         }
 
@@ -1138,6 +1157,136 @@ private fun ArtistReleaseCard(
             color = mutedColor,
             maxLines = 1,
             overflow = TextOverflow.Ellipsis
+        )
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun ArtistMergeSheet(
+    artist: ArtistItem,
+    catalog: CatalogRepository,
+    pinStore: MyStuffPinStore,
+    onDismiss: () -> Unit,
+    onMerged: (ArtistItem) -> Unit
+) {
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    var query by remember { mutableStateOf("") }
+    var hits by remember { mutableStateOf<List<ArtistItem>>(emptyList()) }
+    var pending by remember { mutableStateOf<ArtistItem?>(null) }
+    var busy by remember { mutableStateOf(false) }
+    val selfKey = remember(artist.name) { artistKey(artist.name) }
+
+    LaunchedEffect(query) {
+        if (query.trim().length < 2) {
+            hits = emptyList()
+            return@LaunchedEffect
+        }
+        hits = catalog.searchArtistsAsItems(query.trim(), limit = 20)
+            .filter { artistKey(it.name) != selfKey }
+    }
+
+    ModalBottomSheet(
+        onDismissRequest = onDismiss,
+        sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+    ) {
+        Column(modifier = Modifier.padding(horizontal = 20.dp)) {
+            Text(
+                "Merge into ${artist.displayName}",
+                style = MaterialTheme.typography.titleLarge,
+                fontWeight = FontWeight.Bold
+            )
+            Text(
+                "Search for a duplicate name (for example nightcord at 25:00). That artist’s albums and credits move here.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
+                modifier = Modifier.padding(top = 6.dp, bottom = 12.dp)
+            )
+            OutlinedTextField(
+                value = query,
+                onValueChange = { query = it },
+                modifier = Modifier.fillMaxWidth(),
+                singleLine = true,
+                enabled = !busy,
+                label = { Text("Artist name") }
+            )
+            Spacer(modifier = Modifier.height(8.dp))
+            hits.forEach { hit ->
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable(enabled = !busy) { pending = hit }
+                        .padding(vertical = 10.dp)
+                ) {
+                    Text(hit.displayName, fontWeight = FontWeight.SemiBold)
+                    Text(
+                        formatAlbumCount(hit.albumCount) + " · " + formatTrackCount(hit.trackCount),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
+                    )
+                }
+            }
+            if (query.trim().length >= 2 && hits.isEmpty()) {
+                Text(
+                    "No matching artists",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f),
+                    modifier = Modifier.padding(vertical = 12.dp)
+                )
+            }
+            Spacer(modifier = Modifier.height(24.dp))
+        }
+    }
+
+    val other = pending
+    if (other != null) {
+        androidx.compose.material3.AlertDialog(
+            onDismissRequest = { if (!busy) pending = null },
+            title = { Text("Keep which name?") },
+            text = {
+                Text(
+                    "Merge “${other.displayName}” and “${artist.displayName}” into one artist page."
+                )
+            },
+            confirmButton = {
+                TextButton(
+                    enabled = !busy,
+                    onClick = {
+                        busy = true
+                        scope.launch {
+                            val merged = catalog.mergeArtists(other.displayName, artist.displayName)
+                            if (merged != null) {
+                                pinStore.retargetArtist(other.name, merged)
+                                onMerged(merged)
+                                Toast.makeText(context, "Merged into ${merged.displayName}", Toast.LENGTH_SHORT).show()
+                            } else {
+                                busy = false
+                                Toast.makeText(context, "Merge failed", Toast.LENGTH_SHORT).show()
+                            }
+                        }
+                    }
+                ) { Text("Keep ${artist.displayName}") }
+            },
+            dismissButton = {
+                TextButton(
+                    enabled = !busy,
+                    onClick = {
+                        busy = true
+                        scope.launch {
+                            val merged = catalog.mergeArtists(artist.displayName, other.displayName)
+                            if (merged != null) {
+                                pinStore.retargetArtist(artist.name, merged)
+                                onMerged(merged)
+                                Toast.makeText(context, "Merged into ${merged.displayName}", Toast.LENGTH_SHORT).show()
+                            } else {
+                                busy = false
+                                Toast.makeText(context, "Merge failed", Toast.LENGTH_SHORT).show()
+                            }
+                        }
+                    }
+                ) { Text("Keep ${other.displayName}") }
+            }
         )
     }
 }

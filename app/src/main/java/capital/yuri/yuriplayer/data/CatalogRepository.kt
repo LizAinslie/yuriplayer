@@ -1,6 +1,7 @@
 package capital.yuri.yuriplayer.data
 
 import android.util.Log
+import capital.yuri.yuriplayer.data.db.ArtistAliasEntity
 import capital.yuri.yuriplayer.data.db.CatalogAlbumEntity
 import capital.yuri.yuriplayer.data.db.CatalogArtistEntity
 import capital.yuri.yuriplayer.data.db.CatalogCreditEntity
@@ -82,9 +83,11 @@ class CatalogRepository(
         withContext(Dispatchers.IO) {
             val q = query.trim()
             if (q.isEmpty()) return@withContext emptyList()
+            val aliasKeys = dao.getAllAliases().map { it.aliasKey }.toHashSet()
             val seen = LinkedHashSet<String>()
             val out = ArrayList<ArtistItem>()
             for (row in dao.searchArtists(q, limit * 3)) {
+                if (row.artistKey in aliasKeys) continue
                 if (isCombinedArtistName(row.displayName)) continue
                 val name = primaryArtistName(row.displayName) ?: row.displayName
                 val key = artistKey(name) ?: continue
@@ -438,6 +441,8 @@ class CatalogRepository(
     }
 
     private suspend fun rebuildRollupsLocked() {
+        loadAliasesLocked()
+        applyMbidAliasesLocked()
         normalizeTrackIdentityLocked()
         persistCreditsLocked(dao.getAllTracks().map { it.toSong() }, replaceAll = true)
 
@@ -470,7 +475,9 @@ class CatalogRepository(
             val existing = prevArtists[row.artistKey]
             CatalogArtistEntity(
                 artistKey = row.artistKey,
-                displayName = primaryArtistName(row.displayName) ?: row.displayName.ifBlank { row.artistKey },
+                displayName = existing?.displayName?.takeUnless { isCombinedArtistName(it) }
+                    ?: primaryArtistName(row.displayName)
+                    ?: row.displayName.ifBlank { row.artistKey },
                 trackCount = row.trackCount,
                 albumCount = row.albumCount,
                 bio = existing?.bio,
@@ -486,6 +493,99 @@ class CatalogRepository(
         dao.deleteOrphanAlbums()
         dao.deleteOrphanArtists()
         Log.i(TAG, "rollups rebuilt (SQL): albums=${albums.size} artists=${artists.size}")
+    }
+
+    suspend fun loadAliases() = withContext(Dispatchers.IO) {
+        loadAliasesLocked()
+    }
+
+    private suspend fun loadAliasesLocked() {
+        val rows = dao.getAllAliases()
+        ArtistAliasResolver.replace(rows.associate { it.aliasKey to it.canonicalKey })
+    }
+
+    /**
+     * Collapse [fromName] into [intoName]. [intoName] is the kept display name.
+     */
+    suspend fun mergeArtists(fromName: String, intoName: String): ArtistItem? =
+        withContext(Dispatchers.IO) {
+            val fromKey = rawArtistKey(fromName) ?: return@withContext null
+            val intoKey = ArtistAliasResolver.resolve(rawArtistKey(intoName) ?: return@withContext null)
+            if (fromKey == intoKey) return@withContext artistItemForKey(intoKey, intoName)
+            dao.upsertAlias(
+                ArtistAliasEntity(
+                    aliasKey = fromKey,
+                    canonicalKey = intoKey,
+                    aliasName = fromName,
+                    source = ArtistAliasEntity.SOURCE_USER
+                )
+            )
+            dao.retargetAliases(fromKey, intoKey)
+            loadAliasesLocked()
+            retargetArtistRowsLocked(fromKey, intoKey, intoName)
+            rebuildRollupsLocked()
+            artistItemForKey(intoKey, intoName)
+        }
+
+    private suspend fun retargetArtistRowsLocked(fromKey: String, intoKey: String, intoName: String) {
+        dao.retargetTrackArtistKey(fromKey, intoKey)
+        dao.retargetCreditArtistKey(fromKey, intoKey)
+        dao.retargetAlbumArtistKey(fromKey, intoKey)
+        val from = dao.getArtist(fromKey)
+        val into = dao.getArtist(intoKey)
+        when {
+            into != null -> {
+                dao.upsertArtist(
+                    into.copy(
+                        displayName = intoName,
+                        trackCount = maxOf(into.trackCount, from?.trackCount ?: 0),
+                        albumCount = maxOf(into.albumCount, from?.albumCount ?: 0),
+                        bio = into.bio ?: from?.bio,
+                        imageUri = into.imageUri ?: from?.imageUri,
+                        websiteUrl = into.websiteUrl ?: from?.websiteUrl,
+                        linksJson = into.linksJson ?: from?.linksJson,
+                        mbid = into.mbid ?: from?.mbid,
+                        updatedAtMs = System.currentTimeMillis()
+                    )
+                )
+                if (from != null) dao.deleteArtist(fromKey)
+            }
+            from != null -> {
+                dao.upsertArtist(
+                    from.copy(
+                        artistKey = intoKey,
+                        displayName = intoName,
+                        updatedAtMs = System.currentTimeMillis()
+                    )
+                )
+                dao.deleteArtist(fromKey)
+            }
+        }
+    }
+
+    private suspend fun applyMbidAliasesLocked() {
+        val groups = dao.artistsWithMbid().groupBy { it.mbid.orEmpty() }
+        var changed = false
+        for ((mbid, rows) in groups) {
+            if (mbid.isBlank() || rows.size < 2) continue
+            val canonical = rows.maxWith(
+                compareBy<CatalogArtistEntity> { it.trackCount }.thenBy { it.displayName }
+            )
+            for (other in rows) {
+                if (other.artistKey == canonical.artistKey) continue
+                dao.upsertAlias(
+                    ArtistAliasEntity(
+                        aliasKey = other.artistKey,
+                        canonicalKey = canonical.artistKey,
+                        aliasName = other.displayName,
+                        source = ArtistAliasEntity.SOURCE_MBID
+                    )
+                )
+                retargetArtistRowsLocked(other.artistKey, canonical.artistKey, canonical.displayName)
+                changed = true
+            }
+        }
+        if (changed) loadAliasesLocked()
     }
 
     suspend fun pruneRemoteSource(
@@ -630,10 +730,16 @@ class CatalogRepository(
                 }
             }
             song.musicBrainzArtistId?.takeIf { it.isNotBlank() }?.let { mbid ->
-                val key = artistKey(song.effectiveAlbumArtist) ?: return@let
-                val existing = existingArtists[key] ?: dao.getArtist(key)
-                if (existing != null && existing.mbid.isNullOrBlank()) {
-                    dao.upsertArtist(existing.copy(mbid = mbid, updatedAtMs = System.currentTimeMillis()))
+                listOfNotNull(
+                    artistKey(song.effectiveAlbumArtist),
+                    artistKey(song.artist)
+                ).distinct().forEach { key ->
+                    val existing = existingArtists[key] ?: dao.getArtist(key)
+                    if (existing != null && existing.mbid.isNullOrBlank()) {
+                        val next = existing.copy(mbid = mbid, updatedAtMs = System.currentTimeMillis())
+                        dao.upsertArtist(next)
+                        existingArtists[key] = next
+                    }
                 }
             }
         }

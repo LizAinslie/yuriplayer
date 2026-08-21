@@ -238,13 +238,11 @@ class JellyfinClient(
         }.distinctBy { it.lowercase() }
         val albumArtistName = albumArtist?.takeIf { it.isNotBlank() }
             ?: albumArtists?.mapNotNull { it.name }?.firstOrNull { !it.isNullOrBlank() }
-            ?: artistNames.firstOrNull()
         val extras = artistNames.filter { name ->
             albumArtistName == null || !name.equals(albumArtistName, ignoreCase = true)
         }
         val trackArtistName = when {
-            extras.isNotEmpty() && !albumArtistName.isNullOrBlank() ->
-                "$albumArtistName feat. ${extras.joinToString("; ")}"
+            extras.isNotEmpty() -> extras.joinToString("; ")
             artistNames.isNotEmpty() -> artistNames.joinToString("; ")
             else -> albumArtistName
         }

@@ -122,6 +122,27 @@ data class CatalogArtistEntity(
     val updatedAtMs: Long = System.currentTimeMillis()
 )
 
+/**
+ * Redirects one folded artistKey to another. User merges (Nightcord → 25時)
+ * and MusicBrainz-id collapses both write rows here.
+ */
+@Entity(
+    tableName = "artist_aliases",
+    indices = [Index(value = ["canonicalKey"])]
+)
+data class ArtistAliasEntity(
+    @PrimaryKey val aliasKey: String,
+    val canonicalKey: String,
+    val aliasName: String,
+    val source: String = SOURCE_USER,
+    val createdAtMs: Long = System.currentTimeMillis()
+) {
+    companion object {
+        const val SOURCE_USER = "USER"
+        const val SOURCE_MBID = "MBID"
+    }
+}
+
 enum class CreditSubject {
     TRACK,
     ALBUM

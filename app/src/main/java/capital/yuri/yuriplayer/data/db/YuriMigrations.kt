@@ -92,5 +92,24 @@ object YuriMigrations {
         }
     }
 
-    val ALL: Array<Migration> = arrayOf(MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9)
+    val MIGRATION_9_10 = object : Migration(9, 10) {
+        override fun migrate(db: SupportSQLiteDatabase) {
+            db.execSQL(
+                """
+                CREATE TABLE IF NOT EXISTS artist_aliases (
+                    aliasKey TEXT NOT NULL PRIMARY KEY,
+                    canonicalKey TEXT NOT NULL,
+                    aliasName TEXT NOT NULL,
+                    source TEXT NOT NULL,
+                    createdAtMs INTEGER NOT NULL
+                )
+                """.trimIndent()
+            )
+            db.execSQL(
+                "CREATE INDEX IF NOT EXISTS index_artist_aliases_canonicalKey ON artist_aliases(canonicalKey)"
+            )
+        }
+    }
+
+    val ALL: Array<Migration> = arrayOf(MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9, MIGRATION_9_10)
 }

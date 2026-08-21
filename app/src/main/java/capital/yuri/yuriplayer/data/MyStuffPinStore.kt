@@ -185,6 +185,19 @@ class MyStuffPinStore(context: Context) {
         return toggleEntry(pin)
     }
 
+    fun retargetArtist(fromName: String?, into: ArtistItem) {
+        val fromRaw = rawArtistKey(fromName) ?: return
+        val intoKey = artistKey(into.name) ?: return
+        val next = _entries.value.map { e ->
+            if (e.kind == StuffPinKind.ARTIST && (e.id == fromRaw || e.id == fromName)) {
+                e.copy(id = intoKey, title = into.displayName)
+            } else e
+        }.distinctBy { "${it.kind}:${it.id}" }
+        persistEntries(next)
+        val pinKeys = next.map { "${it.kind.name}:${it.id}" }
+        persistPinKeys(pinKeys)
+    }
+
     fun toggleSong(song: Song): Boolean {
         val pin = StuffPin(
             kind = StuffPinKind.SONG,

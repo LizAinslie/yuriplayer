@@ -503,7 +503,8 @@ fun ArtistContextSheet(
     onClearImage: (() -> Unit)? = null,
     onClearBanner: (() -> Unit)? = null,
     onOpenLinks: (() -> Unit)? = null,
-    onAddToMyStuff: (() -> Unit)? = null
+    onAddToMyStuff: (() -> Unit)? = null,
+    onMerge: (() -> Unit)? = null
 ) {
     val artistNav = LocalArtistNav.current
     val pinStore: MyStuffPinStore = koinInject()
@@ -592,6 +593,12 @@ fun ArtistContextSheet(
             MediaSheetItem("Links") {
                 onDismiss()
                 openLinks()
+            }
+        }
+        if (onMerge != null) {
+            MediaSheetItem("Merge with another artist") {
+                onDismiss()
+                onMerge()
             }
         }
         MediaSheetBottomPad()

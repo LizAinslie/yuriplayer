@@ -139,6 +139,7 @@ class ExploreSearchService(
         if (hydrated && _indexedCount.value > 0) return@withContext
         mutex.withLock {
             if (hydrated && _indexedCount.value > 0) return@withLock
+            runCatching { catalog.loadAliases() }
             val count = catalog.countRemoteTracks()
             _indexedCount.value = count
             hydrated = true

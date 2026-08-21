@@ -13,6 +13,7 @@ import androidx.room.RoomDatabase
         CatalogAlbumEntity::class,
         CatalogArtistEntity::class,
         CatalogCreditEntity::class,
+        ArtistAliasEntity::class,
         PlaylistPrefsEntity::class,
         PlaylistEntity::class,
         PlaylistCoverEntity::class,
@@ -23,7 +24,7 @@ import androidx.room.RoomDatabase
         SourceInstanceEntity::class,
         ScrobblerInstanceEntity::class
     ],
-    version = 9,
+    version = 10,
     exportSchema = false
 )
 abstract class YuriDatabase : RoomDatabase() {
