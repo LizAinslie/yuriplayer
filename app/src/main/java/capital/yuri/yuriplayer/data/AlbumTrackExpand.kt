@@ -205,7 +205,7 @@ suspend fun expandAlbumTracksByName(
             val albumHit = TrackIdentity.albumsNearlyMatch(t.album, name)
             if (!titleHit && !albumHit) return@forEach
             put(t)
-            if (t.albumKey.isNotBlank()) {
+            if (!t.albumKey.isNullOrBlank()) {
                 dao.getTracksForAlbum(t.albumKey).forEach { put(it) }
             }
         }
