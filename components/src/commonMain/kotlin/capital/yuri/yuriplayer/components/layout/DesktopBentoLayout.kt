@@ -2,7 +2,12 @@ package capital.yuri.yuriplayer.components.layout
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.gestures.detectHorizontalDragGestures
+import androidx.compose.foundation.gestures.Orientation
+import androidx.compose.foundation.gestures.draggable
+import androidx.compose.foundation.gestures.rememberDraggableState
+import androidx.compose.foundation.hoverable
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsHoveredAsState
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -40,10 +45,18 @@ import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.input.pointer.PointerIcon
+import androidx.compose.ui.input.pointer.pointerHoverIcon
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -107,18 +120,46 @@ fun DesktopBentoLayout(
                 .fillMaxWidth()
                 .padding(horizontal = 8.dp)
         ) {
+            val density = LocalDensity.current
             val totalPx = constraints.maxWidth.toFloat().coerceAtLeast(1f)
-            val gap = 8.dp
-            val handle = 6.dp
-            var leftF = leftFraction.coerceIn(0.12f, 0.4f)
-            var rightF = if (showSidebar) rightFraction.coerceIn(0.14f, 0.45f) else 0f
-            if (showSidebar && leftF + rightF > 0.72f) {
-                val scale = 0.72f / (leftF + rightF)
-                leftF *= scale
-                rightF *= scale
+            val handleW = 10.dp
+            val handlePx = with(density) { handleW.toPx() }
+            val minLeftPx = with(density) { 180.dp.toPx() }
+            val minRightPx = with(density) { 200.dp.toPx() }
+            val minCenterPx = with(density) { 280.dp.toPx() }
+            val handlesTotalPx = handlePx * if (showSidebar) 2 else 1
+
+            var leftDragPx by remember { mutableFloatStateOf(0f) }
+            var rightDragPx by remember { mutableFloatStateOf(0f) }
+            var draggingLeft by remember { mutableStateOf(false) }
+            var draggingRight by remember { mutableStateOf(false) }
+
+            val rightBasePx = if (showSidebar) {
+                (rightFraction * totalPx).coerceAtLeast(minRightPx)
+            } else {
+                0f
             }
-            val leftW = maxWidth * leftF
-            val rightW = maxWidth * rightF
+            val leftBasePx = (leftFraction * totalPx).coerceAtLeast(minLeftPx)
+
+            fun maxLeftPx(rightPx: Float) =
+                (totalPx - rightPx - minCenterPx - handlesTotalPx).coerceAtLeast(minLeftPx)
+
+            fun maxRightPx(leftPx: Float) =
+                (totalPx - leftPx - minCenterPx - handlesTotalPx).coerceAtLeast(minRightPx)
+
+            val leftPx = if (draggingLeft) {
+                (leftBasePx + leftDragPx).coerceIn(minLeftPx, maxLeftPx(rightBasePx))
+            } else {
+                leftBasePx.coerceIn(minLeftPx, maxLeftPx(rightBasePx))
+            }
+            val rightPx = if (!showSidebar) {
+                0f
+            } else if (draggingRight) {
+                (rightBasePx - rightDragPx).coerceIn(minRightPx, maxRightPx(leftPx))
+            } else {
+                rightBasePx.coerceIn(minRightPx, maxRightPx(leftPx))
+            }
+
             Row(Modifier.fillMaxSize(), verticalAlignment = Alignment.CenterVertically) {
                 LibraryRail(
                     filter = libraryFilter,
@@ -126,13 +167,23 @@ fun DesktopBentoLayout(
                     items = libraryItems,
                     selectedId = selectedLibraryId,
                     onItem = onLibraryItem,
-                    modifier = Modifier.width(leftW.coerceAtLeast(180.dp)).fillMaxHeight()
+                    modifier = Modifier.width(with(density) { leftPx.toDp() }).fillMaxHeight()
                 )
                 ResizeHandle(
-                    onDragPx = { dx ->
-                        onLeftFraction((leftFraction + dx / totalPx).coerceIn(0.14f, 0.38f), false)
+                    onDelta = { leftDragPx += it },
+                    onStart = {
+                        leftDragPx = 0f
+                        draggingLeft = true
                     },
-                    onDragEnd = { onLeftFraction(leftFraction, true) }
+                    onStop = {
+                        val px = (leftBasePx + leftDragPx).coerceIn(
+                            minLeftPx,
+                            maxLeftPx(rightBasePx)
+                        )
+                        onLeftFraction(px / totalPx, true)
+                        draggingLeft = false
+                        leftDragPx = 0f
+                    }
                 )
                 Surface(
                     modifier = Modifier.weight(1f).fillMaxHeight(),
@@ -143,13 +194,23 @@ fun DesktopBentoLayout(
                 }
                 if (showSidebar) {
                     ResizeHandle(
-                        onDragPx = { dx ->
-                            onRightFraction((rightFraction - dx / totalPx).coerceIn(0.16f, 0.42f), false)
+                        onDelta = { rightDragPx += it },
+                        onStart = {
+                            rightDragPx = 0f
+                            draggingRight = true
                         },
-                        onDragEnd = { onRightFraction(rightFraction, true) }
+                        onStop = {
+                            val px = (rightBasePx - rightDragPx).coerceIn(
+                                minRightPx,
+                                maxRightPx(leftPx)
+                            )
+                            onRightFraction(px / totalPx, true)
+                            draggingRight = false
+                            rightDragPx = 0f
+                        }
                     )
                     Surface(
-                        modifier = Modifier.width(rightW.coerceAtLeast(200.dp)).fillMaxHeight(),
+                        modifier = Modifier.width(with(density) { rightPx.toDp() }).fillMaxHeight(),
                         shape = MaterialTheme.shapes.large,
                         color = MaterialTheme.colorScheme.surface
                     ) {
@@ -164,21 +225,42 @@ fun DesktopBentoLayout(
 
 @Composable
 private fun ResizeHandle(
-    onDragPx: (Float) -> Unit,
-    onDragEnd: () -> Unit
+    onDelta: (Float) -> Unit,
+    onStart: () -> Unit,
+    onStop: () -> Unit
 ) {
+    val interaction = remember { MutableInteractionSource() }
+    val hovered by interaction.collectIsHoveredAsState()
+    val onDeltaState = rememberUpdatedState(onDelta)
+    val onStartState = rememberUpdatedState(onStart)
+    val onStopState = rememberUpdatedState(onStop)
+    val dragState = rememberDraggableState { delta -> onDeltaState.value(delta) }
     Box(
         Modifier
-            .width(6.dp)
+            .width(10.dp)
             .fillMaxHeight()
-            .pointerInput(Unit) {
-                detectHorizontalDragGestures(
-                    onDragEnd = { onDragEnd() },
-                    onDragCancel = { onDragEnd() },
-                    onHorizontalDrag = { _, dragAmount -> onDragPx(dragAmount) }
+            .hoverable(interaction)
+            .pointerHoverIcon(PointerIcon.Hand)
+            .draggable(
+                state = dragState,
+                orientation = Orientation.Horizontal,
+                startDragImmediately = true,
+                onDragStarted = { onStartState.value() },
+                onDragStopped = { onStopState.value() }
+            ),
+        contentAlignment = Alignment.Center
+    ) {
+        Box(
+            Modifier
+                .width(if (hovered) 4.dp else 2.dp)
+                .height(48.dp)
+                .clip(RoundedCornerShape(2.dp))
+                .background(
+                    if (hovered) MaterialTheme.colorScheme.primary
+                    else MaterialTheme.colorScheme.outline.copy(alpha = 0.45f)
                 )
-            }
-    )
+        )
+    }
 }
 
 @Composable

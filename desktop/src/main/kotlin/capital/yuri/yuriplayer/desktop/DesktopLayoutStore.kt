@@ -52,10 +52,10 @@ class DesktopLayoutStore(configDir: String) {
     companion object {
         const val DEFAULT_LEFT = 0.22f
         const val DEFAULT_RIGHT = 0.26f
-        const val MIN_LEFT = 0.14f
-        const val MAX_LEFT = 0.38f
-        const val MIN_RIGHT = 0.16f
-        const val MAX_RIGHT = 0.42f
+        const val MIN_LEFT = 0.10f
+        const val MAX_LEFT = 0.55f
+        const val MIN_RIGHT = 0.12f
+        const val MAX_RIGHT = 0.55f
         const val MIN_CENTER = 0.28f
     }
 }
