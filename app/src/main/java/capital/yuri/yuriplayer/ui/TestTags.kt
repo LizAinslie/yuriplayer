@@ -8,7 +8,8 @@ object TestTags {
     const val TAB_HOME = "tab_home"
     const val TAB_MY_STUFF = "tab_my_stuff"
     const val TAB_EXPLORE = "tab_explore"
-    const val TAB_SEARCH = "tab_search"
+    /** Alias — Explore used to be labeled Search. */
+    const val TAB_SEARCH = TAB_EXPLORE
     const val SETTINGS = "settings"
 
     const val MYSTUFF_PINS = "mystuff_pins"

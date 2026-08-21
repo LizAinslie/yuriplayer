@@ -239,7 +239,7 @@ fun ExploreScreen(
                         )
                         Spacer(modifier = Modifier.height(12.dp))
                         Text(
-                            "Search across every library",
+                            "Explore every library",
                             style = MaterialTheme.typography.titleMedium,
                             color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.55f)
                         )

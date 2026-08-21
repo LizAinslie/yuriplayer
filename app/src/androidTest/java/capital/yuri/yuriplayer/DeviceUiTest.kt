@@ -40,14 +40,14 @@ class DeviceUiTest {
         rule.waitForTag(TestTags.TAB_HOME)
         rule.onNodeWithTag(TestTags.TAB_HOME).assertIsDisplayed()
         rule.onNodeWithTag(TestTags.TAB_MY_STUFF).assertIsDisplayed()
-        rule.onNodeWithTag(TestTags.TAB_SEARCH).assertIsDisplayed()
+        rule.onNodeWithTag(TestTags.TAB_EXPLORE).assertIsDisplayed()
         rule.onNodeWithTag(TestTags.SETTINGS).assertIsDisplayed()
 
         rule.onNodeWithTag(TestTags.TAB_MY_STUFF).performClick()
         rule.waitForTag(TestTags.CATALOG_TITLE)
-        rule.onNodeWithTag(TestTags.CATALOG_TITLE).assertTextContains("Catalog")
+        rule.onNodeWithTag(TestTags.CATALOG_TITLE).assertTextContains("My Stuff")
 
-        rule.onNodeWithTag(TestTags.TAB_SEARCH).performClick()
+        rule.onNodeWithTag(TestTags.TAB_EXPLORE).performClick()
         rule.onNodeWithTag(TestTags.TAB_HOME).performClick()
         rule.onNodeWithTag(TestTags.MYSTUFF_PINS).assertIsDisplayed()
     }

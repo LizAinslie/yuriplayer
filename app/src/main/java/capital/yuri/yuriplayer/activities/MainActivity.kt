@@ -310,7 +310,7 @@ class MainActivity : ComponentActivity() {
 private enum class TopTab(val label: String) {
     Home("Home"),
     MyStuff("My Stuff"),
-    Search("Search")
+    Explore("Explore")
 }
 
 private sealed class DetailRoute {
@@ -668,9 +668,18 @@ fun YuriApp(
                 topBar = {
                     if (detail == null) {
                         TopAppBar(
-                            title = { Text(topTab.label) },
+                            title = {
+                                Text(
+                                    topTab.label,
+                                    modifier = if (topTab == TopTab.MyStuff) {
+                                        Modifier.testTag(TestTags.CATALOG_TITLE)
+                                    } else {
+                                        Modifier
+                                    }
+                                )
+                            },
                             actions = {
-                                if (topTab == TopTab.Search) {
+                                if (topTab == TopTab.Explore) {
                                     ExploreScanMenu()
                                 }
                                 IconButton(
@@ -724,16 +733,16 @@ fun YuriApp(
                                     label = { Text("My Stuff") }
                                 )
                                 NavigationBarItem(
-                                    selected = topTab == TopTab.Search,
-                                    onClick = { topTab = TopTab.Search },
-                                    modifier = Modifier.testTag(TestTags.TAB_SEARCH),
+                                    selected = topTab == TopTab.Explore,
+                                    onClick = { topTab = TopTab.Explore },
+                                    modifier = Modifier.testTag(TestTags.TAB_EXPLORE),
                                     icon = {
                                         Icon(
-                                            if (topTab == TopTab.Search) Icons.Filled.Search else Icons.Outlined.Search,
-                                            contentDescription = "Search"
+                                            if (topTab == TopTab.Explore) Icons.Filled.Search else Icons.Outlined.Search,
+                                            contentDescription = "Explore"
                                         )
                                     },
-                                    label = { Text("Search") }
+                                    label = { Text("Explore") }
                                 )
                             }
                         }
@@ -959,7 +968,7 @@ fun YuriApp(
                                 },
                                 onOpenSongAlbum = { openAlbumForSong(it) }
                             )
-                            TopTab.Search -> ExploreScreen(
+                            TopTab.Explore -> ExploreScreen(
                                 nowPlaying = currentSong,
                                 isPlaybackActive = playing,
                                 onPlay = { songs, index -> player.playSource(songs, index) },
