@@ -4,6 +4,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
@@ -81,7 +82,7 @@ fun SourcesPickerDialog(
     onPick: (Track) -> Unit
 ) {
     InWindowPanel(onDismiss = onDismiss, modifier = Modifier.width(420.dp).height(480.dp)) {
-        Column(Modifier.padding(20.dp)) {
+        Column(Modifier.fillMaxSize().padding(20.dp)) {
             Text("Sources", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
             Text(
                 title,

@@ -218,10 +218,14 @@ class DesktopSession {
     private fun startPersist() {
         persistJob = scope.launch {
             while (isActive) {
-                delay(5_000)
-                playbackStore.save(player.snapshot())
+                delay(2_000)
+                persistPlayback()
             }
         }
+    }
+
+    fun persistPlayback() {
+        playbackStore.save(player.snapshot())
     }
 
     fun playTrack(track: Track) {
@@ -829,7 +833,7 @@ class DesktopSession {
     fun release() {
         persistJob?.cancel()
         ticker?.cancel()
-        playbackStore.save(player.snapshot())
+        persistPlayback()
         media.release()
         player.release()
         runCatching { http.close() }

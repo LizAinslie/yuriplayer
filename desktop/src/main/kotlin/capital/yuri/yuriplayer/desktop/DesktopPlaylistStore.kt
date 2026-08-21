@@ -254,17 +254,27 @@ data class DesktopPlaylist(
     }
 
     fun tracks(library: List<Track>): List<Track> {
-        if (trackIds.isEmpty()) return emptyList()
         val byKey = HashMap<String, Track>()
-        for (t in library) {
+        fun index(t: Track) {
             byKey.putIfAbsent(t.id, t)
             byKey.putIfAbsent(t.catalogKey(), t)
         }
-        for (t in snapshots) {
-            byKey.putIfAbsent(t.id, t)
-            byKey.putIfAbsent(t.catalogKey(), t)
+        for (t in library) index(t)
+        for (t in snapshots) index(t)
+        val seen = HashSet<String>()
+        val out = ArrayList<Track>()
+        fun add(t: Track) {
+            if (t.playlistKeys().any { it in seen }) return
+            seen += t.playlistKeys()
+            out += t
         }
-        return trackIds.mapNotNull { byKey[it] }
+        for (key in trackIds) {
+            byKey[key]?.let(::add)
+        }
+        for (snap in snapshots) {
+            add(byKey[snap.id] ?: byKey[snap.catalogKey()] ?: snap)
+        }
+        return out
     }
 }
 

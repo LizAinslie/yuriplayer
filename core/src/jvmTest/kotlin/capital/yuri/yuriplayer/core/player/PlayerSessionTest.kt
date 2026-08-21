@@ -86,6 +86,8 @@ class PlayerSessionTest {
         assertEquals(listOf("1", "2", "3", "4"), other.queue.value.map { it.id })
         assertEquals(RepeatMode.ALL, other.repeat.value)
         assertFalse(other.isPlaying.value)
+        other.seekTo(45_000L)
+        assertEquals(45_000L, other.snapshot().positionMs)
     }
 }
 

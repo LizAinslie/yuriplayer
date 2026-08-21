@@ -36,6 +36,7 @@ class VlcjPlaybackEngine : PlaybackEngine {
     private val positionMs = AtomicLong(0)
     private val durationMs = AtomicLong(0)
     private val volumePercent = AtomicInteger(100)
+    private val pendingStartMs = AtomicLong(-1L)
     private val preparedNext = AtomicReference<PlaybackMedia?>(null)
     val nativeError: String?
 
@@ -68,6 +69,13 @@ class VlcjPlaybackEngine : PlaybackEngine {
         }
         player?.events()?.addMediaPlayerEventListener(object : MediaPlayerEventAdapter() {
             override fun playing(mediaPlayer: MediaPlayer) {
+                val pending = pendingStartMs.getAndSet(-1L)
+                if (pending > 0L) {
+                    mediaPlayer.controls().setTime(pending)
+                    positionMs.set(pending)
+                } else {
+                    positionMs.set(mediaPlayer.status().time().coerceAtLeast(0L))
+                }
                 _isPlaying.value = true
                 listeners.forEach { it.onIsPlayingChanged(true) }
             }
@@ -108,6 +116,8 @@ class VlcjPlaybackEngine : PlaybackEngine {
 
     override fun load(current: PlaybackMedia, successor: PlaybackMedia?, startPositionMs: Long) {
         preparedNext.set(successor)
+        pendingStartMs.set(if (startPositionMs > 0) startPositionMs else -1L)
+        positionMs.set(startPositionMs.coerceAtLeast(0L))
         onVlc {
             val p = player ?: run {
                 listeners.forEach { it.onError(nativeError ?: "No audio engine", false) }
@@ -115,7 +125,12 @@ class VlcjPlaybackEngine : PlaybackEngine {
             }
             val mrl = toMrl(current.uri)
             System.err.println("Vlcj load $mrl")
-            val ok = p.media().prepare(mrl, *mediaOptions(current))
+            val extra = if (startPositionMs > 0) {
+                arrayOf(":start-time=${startPositionMs / 1000.0}")
+            } else {
+                emptyArray()
+            }
+            val ok = p.media().prepare(mrl, *(mediaOptions(current) + extra))
             if (!ok) {
                 listeners.forEach { it.onError("Could not open ${current.title}", recoverable = true) }
                 return@onVlc
@@ -149,10 +164,17 @@ class VlcjPlaybackEngine : PlaybackEngine {
     }
 
     override fun seekTo(positionMs: Long) {
-        onVlc { player?.controls()?.setTime(positionMs) }
+        val ms = positionMs.coerceAtLeast(0L)
+        this.positionMs.set(ms)
+        pendingStartMs.set(-1L)
+        onVlc { player?.controls()?.setTime(ms) }
     }
 
-    override fun getPositionMs(): Long = positionMs.get()
+    override fun getPositionMs(): Long {
+        val pending = pendingStartMs.get()
+        if (pending > 0L) return pending
+        return positionMs.get()
+    }
 
     override fun getDurationMs(): Long = durationMs.get()
 

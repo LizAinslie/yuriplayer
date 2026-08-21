@@ -171,11 +171,20 @@ fun YuriDesktopApp(session: DesktopSession) {
             }
             item("Add to queue") { session.player.enqueue(track) }
             item("Sources") {
-                val group = tracks.filter { t ->
-                    t.id == track.id || t.catalogKey() == track.catalogKey() ||
-                        albums.any { a -> a.tracks.any { row -> track.id in row.sourceIds && t.id in row.sourceIds } }
-                }.ifEmpty { listOf(track) }
-                sourcesFor = group
+                val ids = HashSet<String>()
+                ids += track.id
+                ids += track.catalogKey()
+                val row = albums.asSequence()
+                    .mapNotNull { a -> a.tracks.firstOrNull { track.id in it.sourceIds || it.id == track.id } }
+                    .firstOrNull()
+                if (row != null) ids += row.sourceIds
+                val want = ids
+                sourcesFor = tracks.asSequence()
+                    .filter { it.id in want || it.catalogKey() in want }
+                    .distinctBy { it.id }
+                    .take(16)
+                    .toList()
+                    .ifEmpty { listOf(track) }
             }
             submenu("Go to") {
                 if (!onAlbumPage) {
@@ -406,7 +415,10 @@ fun YuriDesktopApp(session: DesktopSession) {
                     onPrev = session.player::previous,
                     onToggle = session.player::togglePlay,
                     onNext = session.player::next,
-                    onSeek = session.player::seekTo,
+                    onSeek = { ms ->
+                        session.player.seekTo(ms)
+                        session.persistPlayback()
+                    },
                     accent = playerColors?.accent ?: MaterialTheme.colorScheme.primary,
                     shuffle = shuffle,
                     repeat = repeat,
@@ -544,7 +556,10 @@ fun YuriDesktopApp(session: DesktopSession) {
                             tracks.firstOrNull { it.id == row.id }?.let { songMenu(it, onAlbumPage = true) }.orEmpty()
                         },
                         onSources = { row ->
-                            sourcesFor = tracks.filter { it.id in row.sourceIds.ifEmpty { listOf(row.id) } }
+                            val ids = row.sourceIds.ifEmpty { listOf(row.id) }.toHashSet()
+                            sourcesFor = tracks.filter { it.id in ids }
+                                .ifEmpty { tracks.filter { it.catalogKey() == row.id } }
+                                .ifEmpty { listOfNotNull(tracks.firstOrNull { it.id == row.id }) }
                         }
                     )
                 }
