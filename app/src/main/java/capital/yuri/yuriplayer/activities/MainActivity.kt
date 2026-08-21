@@ -362,13 +362,12 @@ fun YuriApp(
                 settings.setNetworkMetadataConsent(false)
                 showNetworkPrompt = false
             },
-            title = { Text("Online album metadata?") },
+            title = { Text("Find missing artwork?") },
             text = {
                 Text(
-                    "YuriPlayer can look up missing release years and album art " +
-                        "from MusicBrainz and the Cover Art Archive (e.g. VOIDSTAR). " +
-                        "This uses the internet. Nothing is uploaded — only public " +
-                        "catalog searches. You can change this later in Settings."
+                    "YuriPlayer can fill in missing album art and release years. " +
+                        "This uses the internet. Nothing is uploaded. " +
+                        "You can turn this off later in Settings."
                 )
             },
             confirmButton = {

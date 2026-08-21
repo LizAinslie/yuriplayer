@@ -65,7 +65,7 @@ class MetadataEnrichmentService(
         scope.launch {
             workLock.withLock {
                 _busy.value = true
-                _statusMessage.value = "Looking up metadata…"
+                _statusMessage.value = "Looking up artwork…"
                 try {
                     applyCachedToLibrary()
                     val albums = library.albums(taggedOnly = false)
@@ -81,13 +81,13 @@ class MetadataEnrichmentService(
                         enrichAlbum(album, force = false, probeEmbeddedArt = false)
                         done++
                         if (done % 5 == 0) {
-                            _statusMessage.value = "Metadata $done / ${albums.size}…"
+                            _statusMessage.value = "Artwork $done / ${albums.size}…"
                         }
                     }
-                    _statusMessage.value = if (done > 0) "Updated $done releases" else null
+                    _statusMessage.value = if (done > 0) "Updated $done albums" else null
                 } catch (e: Exception) {
                     Log.e(TAG, "enrichLibrary failed", e)
-                    _statusMessage.value = "Metadata lookup failed"
+                    _statusMessage.value = "Couldn't look up artwork"
                 } finally {
                     _busy.value = false
                 }
@@ -98,13 +98,13 @@ class MetadataEnrichmentService(
     fun enrichAlbumAsync(album: AlbumItem, force: Boolean = true) {
         scope.launch {
             _busy.value = true
-            _statusMessage.value = "Fetching metadata for ${album.displayName}…"
+            _statusMessage.value = "Looking up ${album.displayName}…"
             try {
                 enrichAlbum(album, force = force, probeEmbeddedArt = true)
-                _statusMessage.value = "Done: ${album.displayName}"
+                _statusMessage.value = "Updated ${album.displayName}"
             } catch (e: Exception) {
                 Log.w(TAG, "enrichAlbum failed ${album.displayName}", e)
-                _statusMessage.value = "Failed: ${album.displayName}"
+                _statusMessage.value = "Couldn't update ${album.displayName}"
             } finally {
                 _busy.value = false
             }
@@ -116,15 +116,15 @@ class MetadataEnrichmentService(
         scope.launch {
             workLock.withLock {
                 _busy.value = true
-                _statusMessage.value = "Fetching metadata for ${albums.size} releases…"
+                _statusMessage.value = "Looking up ${albums.size} albums…"
                 try {
                     for (album in albums) {
                         enrichAlbum(album, force = force, probeEmbeddedArt = true)
                     }
-                    _statusMessage.value = "Fetched metadata for ${albums.size} releases"
+                    _statusMessage.value = "Updated ${albums.size} albums"
                 } catch (e: Exception) {
                     Log.e(TAG, "enrichAlbums failed", e)
-                    _statusMessage.value = "Metadata lookup failed"
+                    _statusMessage.value = "Couldn't look up artwork"
                 } finally {
                     _busy.value = false
                 }

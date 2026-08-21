@@ -127,6 +127,10 @@ android {
         // Keep the user's library / logins. Do not enable orchestrator
         // clearPackageData — these tests run against familiar on-device data.
         animationsDisabled = true
+        unitTests {
+            isIncludeAndroidResources = true
+            isReturnDefaultValues = true
+        }
     }
     buildFeatures {
         compose = true
@@ -280,6 +284,7 @@ dependencies {
     implementation(libs.aboutlibraries.core)
 
     testImplementation(libs.junit)
+    testImplementation(libs.robolectric)
     androidTestImplementation(platform(libs.androidx.compose.bom))
     androidTestImplementation(libs.androidx.compose.ui.test.junit4)
     androidTestImplementation(libs.androidx.espresso.core)

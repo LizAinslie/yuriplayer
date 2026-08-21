@@ -353,7 +353,7 @@ fun ArtistDetailScreen(
             scope.launch {
                 profileRepo.setCustomImage(artist.displayName, null)
                 themeTick++
-                Toast.makeText(context, "Artist image cleared", Toast.LENGTH_SHORT).show()
+                Toast.makeText(context, "Photo removed", Toast.LENGTH_SHORT).show()
             }
         },
         clearBanner = {
@@ -361,7 +361,7 @@ fun ArtistDetailScreen(
                 profileRepo.setBannerImage(artist.displayName, null)
                 bannerUri = null
                 themeTick++
-                Toast.makeText(context, "Banner cleared", Toast.LENGTH_SHORT).show()
+                Toast.makeText(context, "Header removed", Toast.LENGTH_SHORT).show()
             }
         },
         openLinks = { showDataSources = true }
@@ -371,7 +371,7 @@ fun ArtistDetailScreen(
         if (cropUri != null) {
             ImageCropScreen(
                 sourceUri = cropUri!!,
-                title = if (cropKind == ArtistImageKind.BANNER) "Crop banner" else "Crop artist image",
+                title = if (cropKind == ArtistImageKind.BANNER) "Crop header" else "Crop photo",
                 aspect = if (cropKind == ArtistImageKind.BANNER) 16f / 9f else 1f,
                 onCancel = { cropUri = null },
                 onCropped = { cropped ->
@@ -380,7 +380,7 @@ fun ArtistDetailScreen(
                         when (cropKind) {
                             ArtistImageKind.PROFILE -> {
                                 profileRepo.setCustomImage(artist.displayName, cropped.toString())
-                                Toast.makeText(context, "Artist image updated", Toast.LENGTH_SHORT).show()
+                                Toast.makeText(context, "Photo updated", Toast.LENGTH_SHORT).show()
                             }
                             ArtistImageKind.BANNER -> {
                                 val saved = profileRepo.setBannerImage(
@@ -388,7 +388,7 @@ fun ArtistDetailScreen(
                                     cropped.toString()
                                 )
                                 bannerUri = saved
-                                Toast.makeText(context, "Banner updated", Toast.LENGTH_SHORT).show()
+                                Toast.makeText(context, "Header updated", Toast.LENGTH_SHORT).show()
                             }
                         }
                         themeTick++
@@ -1059,7 +1059,7 @@ private fun ArtistHero(
                             .diskCacheKey(bannerUri)
                             .crossfade(true)
                             .build(),
-                        contentDescription = "$name banner",
+                        contentDescription = "$name header",
                         contentScale = ContentScale.Crop,
                         modifier = Modifier.fillMaxSize()
                     )
@@ -1240,12 +1240,12 @@ private fun ArtistMergeSheet(
     ) {
         Column(modifier = Modifier.padding(horizontal = 20.dp)) {
             Text(
-                "Merge other artists into this page",
+                "Merge artists",
                 style = MaterialTheme.typography.titleLarge,
                 fontWeight = FontWeight.Bold
             )
             Text(
-                "Pick a duplicate name (for example nightcord at 25:00). Yuri remembers it as an alias of ${artist.displayName}. Unmerge anytime from this page.",
+                "Pick a duplicate name for ${artist.displayName}. It becomes an alias of this page — you can undo it later.",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
                 modifier = Modifier.padding(top = 6.dp, bottom = 12.dp)

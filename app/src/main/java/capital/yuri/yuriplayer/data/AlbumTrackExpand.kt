@@ -266,12 +266,9 @@ fun albumTrackOrder(): Comparator<Song> =
         .thenBy { it.trackNumber ?: filenameTrackHint(it) }
         .thenBy(String.CASE_INSENSITIVE_ORDER) { it.displayTitle }
 
-private val FILENAME_TRACK = Regex("""(?:^|[/\\])(\d{1,3})\s*[\s.\-_)]+""")
-
 private fun filenameTrackHint(song: Song): Int {
-    val path = song.path ?: song.contentUri.toString()
-    val name = path.substringAfterLast('/').substringAfterLast('\\')
-    return FILENAME_TRACK.find(name)?.groupValues?.getOrNull(1)?.toIntOrNull() ?: Int.MAX_VALUE
+    val parsed = FilenameMetadataParser.parse(song.path ?: song.contentUri.toString())
+    return parsed.trackNumber ?: Int.MAX_VALUE
 }
 
 private fun collapseNearTitleGroups(

@@ -23,10 +23,9 @@ import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.LibraryMusic
 import androidx.compose.material.icons.filled.PlayArrow
-import androidx.compose.material.icons.filled.SettingsInputComponent
 import androidx.compose.material.icons.filled.SignalCellularAlt
 import androidx.compose.material.icons.filled.Storage
-import androidx.compose.material.icons.filled.Sync
+import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material.icons.outlined.CloudDownload
 import androidx.compose.material.icons.outlined.Gavel
 import androidx.compose.material3.MaterialTheme
@@ -159,7 +158,6 @@ private fun SettingsHubScreen(
         mutableStateOf(settings.isSyncOverMobileDataEnabled())
     }
     val scanMode = settings.getScanMode()
-    val engineDesc = PlaybackEngineCatalog.descriptor(settings.getPlaybackEngineId())
     val streamQuality = settings.getStreamQuality()
     val coverVariant = settings.getCoverColorVariant()
     val bannerVariant = settings.getBannerColorVariant()
@@ -238,8 +236,8 @@ private fun SettingsHubScreen(
         SettingsSectionTitle("Metadata")
         SettingsGroup {
             SettingsSwitchRow(
-                title = "Automatic online metadata",
-                subtitle = "Background year & cover lookup via MusicBrainz",
+                title = "Find missing artwork",
+                subtitle = "Fill in album art and release years in the background",
                 icon = Icons.Default.Sync,
                 checked = autoMetadata,
                 onCheckedChange = { enabled ->
@@ -252,15 +250,8 @@ private fun SettingsHubScreen(
         SettingsSectionTitle("Playback")
         SettingsGroup {
             SettingsNavRow(
-                title = "Playback engine",
-                subtitle = engineDesc.displayName,
-                icon = Icons.Default.SettingsInputComponent,
-                testTag = TestTags.SETTINGS_PLAYBACK_ENGINE,
-                onClick = onOpenPlaybackEngine
-            )
-            SettingsNavRow(
                 title = "Streaming quality",
-                subtitle = streamQuality.displayName + " — Jellyfin & Subsonic buffer",
+                subtitle = streamQuality.displayName + " — Jellyfin and Navidrome",
                 icon = Icons.Default.HighQuality,
                 onClick = onOpenStreamingQuality
             )
@@ -281,13 +272,20 @@ private fun SettingsHubScreen(
                 trailing = "50",
                 onClick = {}
             )
+            SettingsNavRow(
+                title = "Advanced playback",
+                subtitle = "Decoder and other low-level options",
+                icon = Icons.Default.Tune,
+                testTag = TestTags.SETTINGS_PLAYBACK_ENGINE,
+                onClick = onOpenPlaybackEngine
+            )
         }
 
         SettingsSectionTitle("Interface")
         SettingsGroup {
             SettingsNavRow(
                 title = "Appearance",
-                subtitle = "Cover · ${coverVariant.displayName}  ·  Banner · ${bannerVariant.displayName}",
+                subtitle = "Cover · ${coverVariant.displayName}  ·  Header · ${bannerVariant.displayName}",
                 icon = Icons.Default.ColorLens,
                 onClick = onOpenAppearance
             )
@@ -345,12 +343,13 @@ private fun PlaybackEngineSettingsScreen(onBack: () -> Unit) {
             .statusBarsPadding()
             .verticalScroll(rememberScrollState())
     ) {
-        SettingsTopBar(title = "Playback engine", onBack = onBack)
+        SettingsTopBar(title = "Advanced playback", onBack = onBack)
 
-        SettingsSectionTitle("Backend")
+        SettingsSectionTitle("Decoder")
         TextNote(
-            text = "One engine plays everything — local files and remote streams. " +
-                "Change applies the next time playback starts (force-stop the app if a track is mid-play)."
+            text = "YuriPlayer uses LibVLC by default. Only change this if a " +
+                "specific file or stream fails to play. Applies the next time " +
+                "playback starts (force-stop if a track is mid-play)."
         )
         SettingsGroup {
             PlaybackEngineCatalog.available.forEach { desc ->
@@ -377,7 +376,7 @@ private fun PlaybackEngineSettingsScreen(onBack: () -> Unit) {
         SettingsSectionTitle("Tips")
         SettingsGroup {
             TextNote(
-                text = "LibVLC is the best bet for stubborn FLAC / APE / odd containers. " +
+                text = "LibVLC is the default and the best bet for FLAC / APE / odd containers. " +
                     "Media3 is lighter and fine for most MP3/AAC and HTTP streams. " +
                     "An FFmpeg AudioTrack engine can share the bundled ffmpeg binary later."
             )
@@ -400,20 +399,16 @@ private fun StreamingQualitySettingsScreen(onBack: () -> Unit) {
     ) {
         SettingsTopBar(title = "Streaming quality", onBack = onBack)
 
-        SettingsSectionTitle("Jellyfin & Subsonic")
+        SettingsSectionTitle("Remote libraries")
         TextNote(
-            text = "Original streams the Subsonic/OpenSubsonic source file " +
-                "(FLAC, ALAC, …) with format=raw — playback starts as soon as " +
-                "the first bytes arrive, the rest fills in the background. " +
-                "Lower steps request an mp3 transcode so prefetch uses less data. " +
-                "Applies to the next track — the current song keeps playing as-is."
+            text = "Original plays the file as stored on the server. Lower options " +
+                "use less data. Changes apply to the next song."
         )
         val pipeline by AudioPipeline.last.collectAsState()
         pipeline?.let { snap ->
             SettingsSectionTitle("Last stream")
             TextNote(
-                text = "${snap.title}\n${snap.engine} · ${snap.summary}\n" +
-                    "logcat: adb logcat -s YuriAudio:I"
+                text = "${snap.title}\n${snap.engine} · ${snap.summary}"
             )
         }
         SettingsGroup {
@@ -449,9 +444,8 @@ private fun AppearanceSettingsScreen(onBack: () -> Unit) {
         SettingsTopBar(title = "Appearance", onBack = onBack)
 
         TextNote(
-            text = "Dynamic colors come from artwork. Covers (now playing, albums, " +
-                "playlists) and artist banners can use different Palette variants. " +
-                "Cached per artwork — only re-extracted when the art or these settings change."
+            text = "Colors come from your artwork. Album covers and artist headers " +
+                "can use different palettes."
         )
 
         SettingsSectionTitle("Cover")
@@ -469,7 +463,7 @@ private fun AppearanceSettingsScreen(onBack: () -> Unit) {
             }
         }
 
-        SettingsSectionTitle("Banner")
+        SettingsSectionTitle("Header")
         SettingsGroup {
             ArtColorVariant.entries.forEach { variant ->
                 SettingsNavRow(

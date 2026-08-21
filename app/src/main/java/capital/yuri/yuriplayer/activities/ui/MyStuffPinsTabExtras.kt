@@ -154,25 +154,25 @@ fun PinActionSheetWithReorder(
                     }
                     // Image options only when provided (e.g. nested provider on artist page)
                     artistNav.fetchImage?.let { fn ->
-                        MediaSheetItem("Fetch artist image") {
+                        MediaSheetItem("Find photos") {
                             onDismiss()
                             fn(name)
                         }
                     }
                     artistNav.changeImage?.let { fn ->
-                        MediaSheetItem("Change artist image") {
+                        MediaSheetItem("Choose photo") {
                             onDismiss()
                             fn(name)
                         }
                     }
                     artistNav.fetchBanner?.let { fn ->
-                        MediaSheetItem("Fetch banner") {
+                        MediaSheetItem("Find header") {
                             onDismiss()
                             fn(name)
                         }
                     }
                     artistNav.changeBanner?.let { fn ->
-                        MediaSheetItem("Change banner") {
+                        MediaSheetItem("Choose header") {
                             onDismiss()
                             fn(name)
                         }

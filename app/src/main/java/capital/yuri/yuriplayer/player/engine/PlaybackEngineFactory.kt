@@ -16,15 +16,15 @@ enum class PlaybackEngineId(val id: String) {
     companion object {
         fun fromId(raw: String?): PlaybackEngineId {
             val key = raw?.trim()?.lowercase().orEmpty()
-            return entries.firstOrNull { it.id == key } ?: MEDIA3
+            return entries.firstOrNull { it.id == key } ?: VLC
         }
     }
 }
 
 object PlaybackEngineCatalog {
     val available: List<PlaybackEngineDescriptor> = listOf(
-        Media3PlaybackEngine.DESCRIPTOR,
         VlcPlaybackEngine.DESCRIPTOR,
+        Media3PlaybackEngine.DESCRIPTOR,
         PlaybackEngineDescriptor(
             id = PlaybackEngineId.FFMPEG.id,
             displayName = "FFmpeg (planned)",
@@ -35,7 +35,7 @@ object PlaybackEngineCatalog {
 
     fun descriptor(id: PlaybackEngineId): PlaybackEngineDescriptor =
         available.firstOrNull { it.id == id.id }
-            ?: Media3PlaybackEngine.DESCRIPTOR
+            ?: VlcPlaybackEngine.DESCRIPTOR
 }
 
 /**

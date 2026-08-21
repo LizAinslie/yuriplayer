@@ -14,6 +14,7 @@ import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
 import org.jaudiotagger.audio.AudioFileIO
 import org.jaudiotagger.tag.FieldKey
+import org.jaudiotagger.tag.TagOptionSingleton
 import java.io.File
 import java.util.concurrent.atomic.AtomicInteger
 import kotlin.coroutines.resume
@@ -92,7 +93,7 @@ class MusicRepository(
                 val uri = doc.uri
                 val key = uri.toString()
                 if (byKey.containsKey(key)) return@walkDocumentTree
-                val tags = readTagsFromUri(uri)
+                val tags = readTagsFromUri(uri, fileName = name)
                 val coverUri = findFolderCoverUri(parent)
                 byKey[key] = Song(
                     id = key.hashCode().toLong(),
@@ -104,6 +105,7 @@ class MusicRepository(
                     contentUri = uri,
                     albumArtUri = coverUri,
                     trackNumber = tags.trackNumber,
+                    discNumber = tags.discNumber,
                     year = tags.year,
                     genre = tags.genre,
                     path = tags.pathHint ?: key,
@@ -283,6 +285,7 @@ class MusicRepository(
                 }
                 var year = it.getInt(yearCol).takeIf { y -> y in 1000..2100 }
                 var genre: String? = null
+                var disc: Int? = null
                 val albumId = it.getLong(albumIdCol)
 
                 if (path != null) {
@@ -293,11 +296,12 @@ class MusicRepository(
                     if (albumArtist == null) albumArtist = tags.albumArtist
                     if (duration == null && tags.durationMs != null) duration = tags.durationMs
                     if (track == null && tags.trackNumber != null) track = tags.trackNumber
+                    disc = tags.discNumber
                     if (tags.year != null) year = tags.year
                     if (tags.genre != null) genre = tags.genre
-                    if (title == fileNameTitle(path)) {
-                        title = tags.title
-                    }
+                    if (title == fileNameTitle(path)) title = tags.title
+                    if (track == null) track = tags.trackNumber
+                    if (title == null || title == fileNameTitle(path)) title = tags.title ?: title
                 }
 
                 val contentUri = ContentUris.withAppendedId(
@@ -319,6 +323,7 @@ class MusicRepository(
                     contentUri = contentUri,
                     albumArtUri = albumArtUri,
                     trackNumber = track,
+                    discNumber = disc,
                     year = year,
                     genre = genre,
                     path = path,
@@ -358,6 +363,7 @@ class MusicRepository(
                             durationMs = tags.durationMs,
                             contentUri = Uri.fromFile(file),
                             trackNumber = tags.trackNumber,
+                            discNumber = tags.discNumber,
                             year = tags.year,
                             genre = tags.genre,
                             path = path,
@@ -380,12 +386,40 @@ class MusicRepository(
         val album: String? = null,
         val durationMs: Long? = null,
         val trackNumber: Int? = null,
+        val discNumber: Int? = null,
         val year: Int? = null,
         val genre: String? = null,
         val pathHint: String? = null
-    )
+    ) {
+        fun withFilenameFallback(fileName: String?, persistPath: String?): FileTags {
+            val inferred = FilenameMetadataParser.parse(
+                persistPath ?: fileName
+            )
+            if (inferred.isEmpty) return this
+            val rawName = fileName?.substringBeforeLast('.')
+                ?: persistPath?.substringAfterLast('/')?.substringBeforeLast('.')
+            val titleNeedsFill = title.isNullOrBlank() || title == rawName
+            val next = copy(
+                trackNumber = trackNumber ?: inferred.trackNumber,
+                discNumber = discNumber ?: inferred.discNumber,
+                title = if (titleNeedsFill) inferred.title ?: title else title
+            )
+            val writeTrack = trackNumber == null && inferred.trackNumber != null
+            val writeDisc = discNumber == null && inferred.discNumber != null
+            val writeTitle = titleNeedsFill && inferred.title != null && inferred.title != title
+            if (persistPath != null && (writeTrack || writeDisc || writeTitle)) {
+                persistInferredTags(
+                    persistPath,
+                    track = inferred.trackNumber.takeIf { writeTrack },
+                    disc = inferred.discNumber.takeIf { writeDisc },
+                    title = inferred.title.takeIf { writeTitle }
+                )
+            }
+            return next
+        }
+    }
 
-    private fun readTagsFromUri(uri: Uri): FileTags {
+    private fun readTagsFromUri(uri: Uri, fileName: String? = null): FileTags {
         val fromMmr = readTagsWithRetrieverUri(uri)
         val path = uri.path
         val fromJaudio = if (path != null && path.startsWith("/") && File(path).canRead()) {
@@ -398,9 +432,13 @@ class MusicRepository(
             album = fromMmr.album ?: fromJaudio.album,
             durationMs = fromMmr.durationMs ?: fromJaudio.durationMs,
             trackNumber = fromMmr.trackNumber ?: fromJaudio.trackNumber,
+            discNumber = fromMmr.discNumber ?: fromJaudio.discNumber,
             year = fromJaudio.year ?: fromMmr.year,
             genre = fromJaudio.genre ?: fromMmr.genre,
             pathHint = path
+        ).withFilenameFallback(
+            fileName = fileName ?: path?.substringAfterLast('/'),
+            persistPath = path?.takeIf { File(it).isFile }
         )
     }
 
@@ -414,10 +452,11 @@ class MusicRepository(
             album = fromMmr.album ?: fromJaudio.album,
             durationMs = fromMmr.durationMs ?: fromJaudio.durationMs,
             trackNumber = fromMmr.trackNumber ?: fromJaudio.trackNumber,
+            discNumber = fromMmr.discNumber ?: fromJaudio.discNumber,
             year = fromJaudio.year ?: fromMmr.year,
             genre = fromJaudio.genre ?: fromMmr.genre,
             pathHint = path
-        )
+        ).withFilenameFallback(fileNameTitle(path), persistPath = path)
     }
 
     private fun readTagsWithRetrieverUri(uri: Uri): FileTags {
@@ -435,6 +474,9 @@ class MusicRepository(
                     ?.toLongOrNull()?.takeIf { it > 0 },
                 trackNumber = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_CD_TRACK_NUMBER)
                     ?.let { parseTrackNumber(it) },
+                discNumber = runCatching {
+                    retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DISC_NUMBER)
+                }.getOrNull()?.let { parseTrackNumber(it) },
                 year = parseYear(yearRaw) ?: parseYear(dateRaw),
                 genre = cleanTag(retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_GENRE))
             )
@@ -463,6 +505,9 @@ class MusicRepository(
                     ?.toLongOrNull()?.takeIf { it > 0 },
                 trackNumber = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_CD_TRACK_NUMBER)
                     ?.let { parseTrackNumber(it) },
+                discNumber = runCatching {
+                    retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DISC_NUMBER)
+                }.getOrNull()?.let { parseTrackNumber(it) },
                 year = parseYear(yearRaw) ?: parseYear(dateRaw),
                 genre = cleanTag(retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_GENRE))
             )
@@ -498,6 +543,7 @@ class MusicRepository(
                     audio.audioHeader?.trackLength?.toLong()?.times(1000)?.takeIf { it > 0 }
                 }.getOrNull(),
                 trackNumber = field(FieldKey.TRACK)?.let { parseTrackNumber(it) },
+                discNumber = field(FieldKey.DISC_NO)?.let { parseTrackNumber(it) },
                 year = year,
                 genre = field(FieldKey.GENRE),
                 pathHint = path
@@ -505,6 +551,31 @@ class MusicRepository(
         } catch (e: Exception) {
             Log.d(TAG, "jaudio tags failed for $path: ${e.message}")
             FileTags()
+        }
+    }
+
+    private fun persistInferredTags(
+        path: String,
+        track: Int?,
+        disc: Int?,
+        title: String?
+    ) {
+        if (track == null && disc == null && title.isNullOrBlank()) return
+        val file = File(path)
+        if (!file.isFile) return
+        if (!file.canWrite()) runCatching { file.setWritable(true) }
+        if (!file.canWrite()) return
+        try {
+            runCatching { TagOptionSingleton.getInstance().isAndroid = true }
+            val audio = AudioFileIO.read(file)
+            val tag = audio.tagOrCreateAndSetDefault
+            if (track != null) tag.setField(FieldKey.TRACK, track.toString())
+            if (disc != null) tag.setField(FieldKey.DISC_NO, disc.toString())
+            if (!title.isNullOrBlank()) tag.setField(FieldKey.TITLE, title)
+            audio.commit()
+            Log.i(TAG, "wrote inferred tags track=$track disc=$disc title='$title' for ${file.name}")
+        } catch (e: Exception) {
+            Log.d(TAG, "inferred tag write skipped for $path: ${e.message}")
         }
     }
 
