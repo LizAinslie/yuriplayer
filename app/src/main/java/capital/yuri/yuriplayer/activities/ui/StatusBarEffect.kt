@@ -43,14 +43,13 @@ class StatusBarColorStack(initial: Color) {
     }
 }
 
-val LocalStatusBarStack = compositionLocalOf<StatusBarColorStack> {
-    error("StatusBarColorStack not provided")
-}
+/** Null when not under MainActivity's CompositionLocalProvider (e.g. previews). */
+val LocalStatusBarStack = compositionLocalOf<StatusBarColorStack?> { null }
 
 @Composable
 fun ContributeStatusBarColor(color: Color, enabled: Boolean = true) {
     if (!enabled) return
-    val stack = LocalStatusBarStack.current
+    val stack = LocalStatusBarStack.current ?: return
     DisposableEffect(color) {
         stack.push(color)
         onDispose { stack.pop() }
@@ -79,6 +78,7 @@ fun ApplyStatusBarStack(stack: StatusBarColorStack) {
             window.isStatusBarContrastEnforced = false
             window.isNavigationBarContrastEnforced = false
         }
+        @Suppress("DEPRECATION")
         window.statusBarColor = color.toArgb()
         WindowCompat.getInsetsController(window, view).isAppearanceLightStatusBars = lightIcons
     }
@@ -86,8 +86,9 @@ fun ApplyStatusBarStack(stack: StatusBarColorStack) {
 
 @Composable
 fun ThemedStatusBar(color: Color, enabled: Boolean = true) {
-    val stack = runCatching { LocalStatusBarStack.current }.getOrNull()
-    if (stack != null) {
+    // Prefer the shared stack when MainActivity provides it (no runCatching —
+    // Compose forbids @Composable reads inside inline catch scopes on Kotlin 2.3+).
+    if (LocalStatusBarStack.current != null) {
         ContributeStatusBarColor(color, enabled)
         return
     }
@@ -102,6 +103,7 @@ fun ThemedStatusBar(color: Color, enabled: Boolean = true) {
         if (window == null) {
             onDispose { }
         } else {
+            @Suppress("DEPRECATION")
             val previous = window.statusBarColor
             val controller = WindowCompat.getInsetsController(window, view)
             val previousLight = controller.isAppearanceLightStatusBars
@@ -109,9 +111,11 @@ fun ThemedStatusBar(color: Color, enabled: Boolean = true) {
                 window.isStatusBarContrastEnforced = false
                 window.isNavigationBarContrastEnforced = false
             }
+            @Suppress("DEPRECATION")
             window.statusBarColor = color.toArgb()
             controller.isAppearanceLightStatusBars = lightIcons
             onDispose {
+                @Suppress("DEPRECATION")
                 window.statusBarColor = previous
                 controller.isAppearanceLightStatusBars = previousLight
             }
@@ -125,6 +129,7 @@ fun ThemedStatusBar(color: Color, enabled: Boolean = true) {
             window.isStatusBarContrastEnforced = false
             window.isNavigationBarContrastEnforced = false
         }
+        @Suppress("DEPRECATION")
         window.statusBarColor = color.toArgb()
         WindowCompat.getInsetsController(window, view).isAppearanceLightStatusBars = lightIcons
     }

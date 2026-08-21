@@ -10,9 +10,16 @@ import androidx.core.content.ContextCompat
 import capital.yuri.yuriplayer.data.AlbumItem
 import capital.yuri.yuriplayer.data.Song
 import capital.yuri.yuriplayer.player.radio.RadioEngine
+import capital.yuri.yuriplayer.player.radio.RadioSourcePrefs
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.collect
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.launch
 
 class PlayerController(
     private val context: Context,
@@ -24,9 +31,18 @@ class PlayerController(
     private var service: MusicService? = null
     private var bound = false
     private var pendingAction: (() -> Unit)? = null
+    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
+    private var serviceNowPlayingJob: Job? = null
+    private var serviceViewJob: Job? = null
 
     private val _isConnected = MutableStateFlow(false)
     val isConnected: StateFlow<Boolean> = _isConnected.asStateFlow()
+
+    private val _nowPlaying = MutableStateFlow<Song?>(queueManager.currentSong())
+    val nowPlaying: StateFlow<Song?> = _nowPlaying.asStateFlow()
+
+    private val _viewState = MutableStateFlow(PlayerViewState(song = queueManager.currentSong()))
+    val viewState: StateFlow<PlayerViewState> = _viewState.asStateFlow()
 
     val historyEntries: StateFlow<List<HistoryEntry>> get() = historyStore.entries
 
@@ -36,6 +52,28 @@ class PlayerController(
             service = local.getService()
             bound = true
             _isConnected.value = true
+            _nowPlaying.value = service?.getCurrentSong() ?: queueManager.currentSong()
+            _viewState.value = service?.viewState?.value ?: PlayerViewState(
+                song = queueManager.currentSong(),
+                next = queueManager.peekNext(),
+                previous = queueManager.peekPrevious()
+            )
+            serviceNowPlayingJob?.cancel()
+            serviceViewJob?.cancel()
+            val svc = service
+            if (svc != null) {
+                serviceNowPlayingJob = scope.launch {
+                    svc.nowPlaying.collect { song ->
+                        _nowPlaying.value = song ?: queueManager.currentSong()
+                    }
+                }
+                serviceViewJob = scope.launch {
+                    svc.viewState.collect { state ->
+                        _viewState.value = state
+                        _nowPlaying.value = state.song
+                    }
+                }
+            }
             val pending = pendingAction
             pendingAction = null
             try {
@@ -46,9 +84,28 @@ class PlayerController(
         }
 
         override fun onServiceDisconnected(name: ComponentName?) {
+            serviceNowPlayingJob?.cancel()
+            serviceNowPlayingJob = null
+            serviceViewJob?.cancel()
+            serviceViewJob = null
             service = null
             bound = false
             _isConnected.value = false
+        }
+    }
+
+    init {
+        scope.launch {
+            queueManager.snapshot.collect { snap ->
+                if (serviceViewJob == null) {
+                    _nowPlaying.value = snap.currentSong
+                    _viewState.value = PlayerViewState(
+                        song = snap.currentSong,
+                        next = queueManager.peekNext(),
+                        previous = queueManager.peekPrevious()
+                    )
+                }
+            }
         }
     }
 
@@ -66,6 +123,10 @@ class PlayerController(
             context.unbindService(connection)
         } catch (_: IllegalArgumentException) {
         }
+        serviceNowPlayingJob?.cancel()
+        serviceNowPlayingJob = null
+        serviceViewJob?.cancel()
+        serviceViewJob = null
         bound = false
         service = null
         _isConnected.value = false
@@ -125,7 +186,6 @@ class PlayerController(
         launchRadioSession(radioEngine.startPlaylistRadio(songs, playlistName))
     }
 
-    /** Song radio = artist radio seeded from the track's primary artist. */
     fun startSongRadio(song: Song) {
         val name = song.effectiveAlbumArtist ?: song.artist ?: song.displayArtist
         startArtistRadio(name)
@@ -134,6 +194,11 @@ class PlayerController(
     fun stopRadio() {
         radioEngine.stopRadio()
         queueManager.clearRadio()
+    }
+
+    /** Apply prefs for the active radio session and replan cold live. */
+    fun applyRadioPrefs(prefs: RadioSourcePrefs) {
+        runOrQueue { it.applyRadioPrefs(prefs) }
     }
 
     fun updateColdFromSource(songs: List<Song>, sourceId: String) {
@@ -177,8 +242,7 @@ class PlayerController(
     }
 
     fun setShuffle(enabled: Boolean) {
-        queueManager.setShuffle(enabled)
-        service?.setShuffle(enabled)
+        runOrQueue { it.setShuffle(enabled) }
     }
 
     fun toggleShuffle() {
@@ -187,27 +251,23 @@ class PlayerController(
     }
 
     fun cycleRepeatMode() {
-        if (service != null) service?.cycleRepeatMode()
-        else queueManager.cycleRepeatMode()
+        runOrQueue { it.cycleRepeatMode() }
     }
 
     fun setRepeatMode(mode: RepeatMode) {
-        if (service != null) service?.setRepeatMode(mode)
-        else queueManager.setRepeatMode(mode)
+        runOrQueue { it.setRepeatMode(mode) }
     }
 
     fun play() {
-        ContextCompat.startForegroundService(
-            context,
-            Intent(context, MusicService::class.java)
-        )
-        service?.play()
+        runOrQueue { it.play() }
     }
 
-    fun pause() = service?.pause()
+    fun pause() {
+        runOrQueue { it.pause() }
+    }
 
     fun togglePlayPause() {
-        if (service?.isPlaying() == true) service?.pause()
+        if (service?.isPlaying() == true) pause()
         else play()
     }
 
@@ -219,7 +279,9 @@ class PlayerController(
         runOrQueue { it.skipToPrevious(forceTrackChange) }
     }
 
-    fun seekTo(positionMs: Long) = service?.seekTo(positionMs)
+    fun seekTo(positionMs: Long) {
+        runOrQueue { it.seekTo(positionMs) }
+    }
 
     fun seekToFraction(fraction: Float) {
         runOrQueue { it.seekToFraction(fraction) }
@@ -240,15 +302,15 @@ class PlayerController(
     }
 
     fun isPlayingNow(): Boolean = service?.isPlaying() == true
-    fun getCurrentSong(): Song? = service?.getCurrentSong()
+    fun getCurrentSong(): Song? = service?.getCurrentSong() ?: queueManager.currentSong()
     fun getCurrentIndex(): Int = service?.getCurrentIndex() ?: -1
     fun getPositionMs(): Long = service?.getPositionMs() ?: 0L
     fun getDurationMs(): Long = service?.getDurationMs() ?: 0L
     fun getQueue(): List<Song> = service?.getQueue() ?: emptyList()
-    fun getQueueSnapshot(): QueueSnapshot =
-        service?.getQueueSnapshot() ?: queueManager.getSnapshot()
+    fun getQueueSnapshot(): QueueSnapshot = queueManager.getSnapshot()
+    val snapshot: StateFlow<QueueSnapshot> get() = queueManager.snapshot
 
-    fun queueSnapshotFlow(): StateFlow<QueueSnapshot>? = service?.queueSnapshot
+    fun queueSnapshotFlow(): StateFlow<QueueSnapshot> = queueManager.snapshot
 
     private fun ensureServiceStarted() {
         ContextCompat.startForegroundService(

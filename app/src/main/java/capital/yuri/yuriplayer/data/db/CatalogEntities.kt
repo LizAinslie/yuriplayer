@@ -11,6 +11,8 @@ import androidx.room.PrimaryKey
 object CatalogSources {
     const val LOCAL = "LOCAL"
     const val JELLYFIN = "JELLYFIN"
+    const val SUBSONIC = "SUBSONIC"
+    /** Legacy alias — treat as [SUBSONIC] protocol. */
     const val NAVIDROME = "NAVIDROME"
     const val WEBDAV = "WEBDAV"
     const val MUSICBRAINZ = "MUSICBRAINZ" // enrichment-only, not a playable source
@@ -28,6 +30,7 @@ object CatalogSources {
     indices = [
         Index(value = ["songKey"], unique = true),
         Index(value = ["sourceType", "sourceInstanceId"]),
+        Index(value = ["sourceType", "sourceInstanceId", "externalId"]),
         Index(value = ["albumKey"]),
         Index(value = ["artistKey"]),
         Index(value = ["title"]),
@@ -38,7 +41,7 @@ data class CatalogTrackEntity(
     @PrimaryKey(autoGenerate = true) val id: Long = 0,
     /** Stable identity: lowercase path, or content URI, or "source:externalId". */
     val songKey: String,
-    /** LOCAL | JELLYFIN | NAVIDROME | … */
+    /** LOCAL | JELLYFIN | SUBSONIC | … */
     val sourceType: String,
     /** FK-ish to source_instances.id; null for built-in local scanner. */
     val sourceInstanceId: Long? = null,
@@ -115,5 +118,56 @@ data class CatalogArtistEntity(
     val imageUri: String? = null,
     val websiteUrl: String? = null,
     val linksJson: String? = null,
+    val mbid: String? = null,
     val updatedAtMs: Long = System.currentTimeMillis()
+)
+
+/**
+ * Redirects one folded artistKey to another. User merges (Nightcord → 25時)
+ * and MusicBrainz-id collapses both write rows here.
+ */
+@Entity(
+    tableName = "artist_aliases",
+    indices = [Index(value = ["canonicalKey"])]
+)
+data class ArtistAliasEntity(
+    @PrimaryKey val aliasKey: String,
+    val canonicalKey: String,
+    val aliasName: String,
+    val source: String = SOURCE_USER,
+    val createdAtMs: Long = System.currentTimeMillis()
+) {
+    companion object {
+        const val SOURCE_USER = "USER"
+        const val SOURCE_MBID = "MBID"
+    }
+}
+
+enum class CreditSubject {
+    TRACK,
+    ALBUM
+}
+
+/**
+ * Primary vs featured credits for a track or album.
+ * Album cards / explore show [ArtistRole.PRIMARY] only.
+ */
+@Entity(
+    tableName = "catalog_credits",
+    indices = [
+        Index(value = ["subjectType", "subjectKey"]),
+        Index(value = ["artistKey"])
+    ]
+)
+data class CatalogCreditEntity(
+    @PrimaryKey(autoGenerate = true) val id: Long = 0,
+    /** TRACK | ALBUM */
+    val subjectType: String,
+    /** songKey or albumKey */
+    val subjectKey: String,
+    val artistKey: String,
+    val displayName: String,
+    /** PRIMARY | FEATURED */
+    val role: String,
+    val position: Int = 0
 )

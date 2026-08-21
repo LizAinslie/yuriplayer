@@ -1,6 +1,7 @@
 package capital.yuri.yuriplayer.data.source
 
 import android.util.Log
+import capital.yuri.yuriplayer.http.url
 import io.ktor.client.HttpClient
 import io.ktor.client.request.get
 import io.ktor.client.statement.bodyAsText
@@ -8,22 +9,49 @@ import io.ktor.http.isSuccess
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import org.json.JSONArray
-import java.net.URLEncoder
 
-/** Public Bandsintown events API (app_id identifies the client). */
+/**
+ * Bandsintown events API.
+ *
+ * As of 2025 the public "pick any app_id" model is dead — every unapproved
+ * app_id gets AWS IAM 403 "explicit deny". Access is:
+ *  - Artist/manager keys (single-artist only) via Bandsintown for Artists, or
+ *  - Partner keys negotiated at API@bandsintown.com
+ *
+ * Pass a real key via [appId] when you have one; otherwise we soft-fail empty.
+ */
 class BandsintownClient(
     private val http: HttpClient,
-    private val appId: String = "yuriplayer"
+    /** Partner / approved app_id. Null or blank → skip network (no point 403-ing). */
+    private val appId: String? = null
 ) {
     suspend fun upcomingEvents(artistName: String): List<ArtistEvent> = withContext(Dispatchers.IO) {
         val name = artistName.trim()
         if (name.isEmpty()) return@withContext emptyList()
-        val path = URLEncoder.encode(name, "UTF-8")
-        val url =
-            "https://rest.bandsintown.com/artists/$path/events?app_id=$appId&date=upcoming"
+        val id = appId?.trim().orEmpty()
+        if (id.isEmpty()) {
+            Log.i(TAG, "skip events for $name — no partner app_id configured")
+            return@withContext emptyList()
+        }
+        val requestUrl = url("https://rest.bandsintown.com") {
+            path("artists", name, "events", encodeSlash = true)
+            param("app_id", id)
+            param("date", "upcoming")
+        }
         val body = try {
-            val response = http.get(url)
-            if (!response.status.isSuccess()) return@withContext emptyList()
+            val response = http.get(requestUrl)
+            if (response.status.value == 403) {
+                Log.w(
+                    TAG,
+                    "403 for $name — app_id is not partner-approved. " +
+                        "Request access at API@bandsintown.com or use a Bandsintown-for-Artists key."
+                )
+                return@withContext emptyList()
+            }
+            if (!response.status.isSuccess()) {
+                Log.w(TAG, "events ${response.status} for $name")
+                return@withContext emptyList()
+            }
             response.bodyAsText()
         } catch (e: Exception) {
             Log.w(TAG, "events failed for $name", e)
@@ -37,10 +65,10 @@ class BandsintownClient(
                 for (i in 0 until minOf(arr.length(), 12)) {
                     val o = arr.optJSONObject(i) ?: continue
                     val venue = o.optJSONObject("venue")
-                    val id = o.optString("id").ifBlank { "$name-$i" }
+                    val eventId = o.optString("id").ifBlank { "$name-$i" }
                     add(
                         ArtistEvent(
-                            id = id,
+                            id = eventId,
                             title = o.optString("title").ifBlank { name },
                             venue = venue?.optString("name")?.takeIf { it.isNotBlank() },
                             city = venue?.optString("city")?.takeIf { it.isNotBlank() },
@@ -62,5 +90,12 @@ class BandsintownClient(
 
     companion object {
         private const val TAG = "Bandsintown"
+
+        /** Deep-link fallback when API access is unavailable. */
+        fun publicArtistUrl(artistName: String): String {
+            return url("https://www.bandsintown.com") {
+                path("a", artistName.trim(), encodeSlash = true)
+            }
+        }
     }
 }

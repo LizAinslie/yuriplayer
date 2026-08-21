@@ -39,6 +39,13 @@ class PlaybackHistoryStore(context: Context) {
             persist()
         }
 
+    /** When true, recently played is wiped if the user closes the app from recents. */
+    var clearOnClose: Boolean
+        get() = prefs.getBoolean(KEY_CLEAR_ON_CLOSE, false)
+        set(value) {
+            prefs.edit { putBoolean(KEY_CLEAR_ON_CLOSE, value) }
+        }
+
     init {
         _entries.value = load()
     }
@@ -114,8 +121,10 @@ class PlaybackHistoryStore(context: Context) {
         private const val FILE_NAME = "playback_history.json"
         private const val PREFS = "yuri_history_prefs"
         private const val KEY_MAX = "max_entries"
+        private const val KEY_CLEAR_ON_CLOSE = "clear_on_close"
         private const val VERSION = 1
         const val DEFAULT_MAX = 50
+        val SIZE_OPTIONS = listOf(25, 50, 100, 200, 500)
     }
 }
 

@@ -65,15 +65,43 @@ data class ReleasePoolConfig(
     val avoidRecentPerKind: Int = 1
 )
 
-/** Per radio-source preferences (artist / album / playlist station). */
+/** How shuffle fills the radio cold queue. */
+@Serializable
+enum class RadioShuffleUnit {
+    /** Random tracks from the whole pool (default). */
+    SONGS,
+    /** Random order of whole LP/EP/Single blocks; tracks stay in release order. */
+    RELEASES
+}
+
+/**
+ * Per radio-source preferences (artist / album / playlist station).
+ *
+ * Defaults: shuffle ON with [RadioShuffleUnit.SONGS]. Ordered whole-release
+ * mode remains available by turning shuffle off.
+ *
+ * Discovery flags: combine any set of sources for similar artists/songs.
+ */
 @Serializable
 data class RadioSourcePrefs(
     /**
-     * true  → random songs; restock cold to [maxRadioQueue] as tracks finish.
-     * false → whole LP/EP/Single blocks until the last block reaches ≥ maxRadioQueue.
+     * true  → use [shuffleUnit] to fill cold up to [maxRadioQueue].
+     * false → whole LP/EP/Single blocks in year-desc order (legacy ordered mode).
      */
-    val shuffle: Boolean = false,
-    val maxRadioQueue: Int = DEFAULT_MAX_RADIO_QUEUE
+    val shuffle: Boolean = true,
+    val shuffleUnit: RadioShuffleUnit = RadioShuffleUnit.SONGS,
+    val maxRadioQueue: Int = DEFAULT_MAX_RADIO_QUEUE,
+    /** On-device catalog / already-scanned sources. */
+    val useLibraryDiscovery: Boolean = true,
+    /** Jellyfin Instant Mix when a matching item exists on an enabled server. */
+    val useJellyfinInstantMix: Boolean = false,
+    /** Subsonic / OpenSubsonic similar-songs / similar-artists. */
+    val useSubsonicSimilar: Boolean = false,
+    /**
+     * monochrome.tf community hifi-api recommendations
+     * (`/recommendations`, `/artist/similar`, `/mix`) — discovery only.
+     */
+    val useMonochromeDiscovery: Boolean = false
 ) {
     companion object {
         const val DEFAULT_MAX_RADIO_QUEUE = 50

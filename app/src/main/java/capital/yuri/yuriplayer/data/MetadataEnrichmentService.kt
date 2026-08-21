@@ -6,7 +6,7 @@ import android.util.Log
 import capital.yuri.yuriplayer.data.db.AlbumMetadataDao
 import capital.yuri.yuriplayer.data.db.AlbumMetadataEntity
 import capital.yuri.yuriplayer.data.source.MusicBrainzClient
-import capital.yuri.yuriplayer.data.theme.ThemeService
+import capital.yuri.yuriplayer.http.url
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -19,21 +19,13 @@ import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import java.io.File
 
-/**
- * Fills gaps in local tags using MusicBrainz (year) and Cover Art Archive (art).
- *
- * Manual fetch always runs; automatic only when Settings allows it.
- * New covers invalidate [AlbumArtCache] / [ThemeService] and bump [coverGeneration]
- * so UI reloads art **and** Material You colors.
- */
 class MetadataEnrichmentService(
     private val context: Context,
     private val dao: AlbumMetadataDao,
     private val client: MusicBrainzClient,
     private val library: LibraryIndex,
     private val settings: LibrarySettings,
-    private val artCache: AlbumArtCache,
-    private val themeService: ThemeService
+    private val artCache: AlbumArtCache
 ) {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val workLock = Mutex()
@@ -42,7 +34,6 @@ class MetadataEnrichmentService(
     private val _busy = MutableStateFlow(false)
     val busy: StateFlow<Boolean> = _busy.asStateFlow()
 
-    /** Bumped when a cover file is written so Compose can reload art + colors. */
     private val _coverGeneration = MutableStateFlow(0L)
     val coverGeneration: StateFlow<Long> = _coverGeneration.asStateFlow()
 
@@ -51,6 +42,11 @@ class MetadataEnrichmentService(
 
     private val coverDir: File
         get() = File(context.filesDir, "covers").also { it.mkdirs() }
+
+    /** Force UI art/theme reload after a user cover preference change. */
+    fun bumpCoverGeneration() {
+        _coverGeneration.value = System.currentTimeMillis()
+    }
 
     suspend fun applyCachedToLibrary() = withContext(Dispatchers.IO) {
         val all = dao.getAll()
@@ -61,7 +57,7 @@ class MetadataEnrichmentService(
         }
     }
 
-    fun enrichLibraryAsync(maxAlbums: Int = 60) {
+    fun enrichLibraryAsync(maxAlbums: Int = 80) {
         if (!settings.isAutomaticMetadataEnabled()) {
             Log.i(TAG, "skip auto enrich — automatic metadata disabled")
             return
@@ -69,20 +65,29 @@ class MetadataEnrichmentService(
         scope.launch {
             workLock.withLock {
                 _busy.value = true
-                _statusMessage.value = "Looking up metadata…"
+                _statusMessage.value = "Looking up artwork…"
                 try {
                     applyCachedToLibrary()
                     val albums = library.albums(taggedOnly = false)
-                        .filter { needsWork(it) }
+                        .filter { needsWorkCheap(it) }
                         .take(maxAlbums)
                     Log.i(TAG, "auto enrich queue size=${albums.size}")
+                    var done = 0
                     for (album in albums) {
-                        enrichAlbum(album, force = false)
+                        if (!settings.isAutomaticMetadataEnabled()) {
+                            Log.i(TAG, "auto enrich cancelled mid-run")
+                            break
+                        }
+                        enrichAlbum(album, force = false, probeEmbeddedArt = false)
+                        done++
+                        if (done % 5 == 0) {
+                            _statusMessage.value = "Artwork $done / ${albums.size}…"
+                        }
                     }
-                    _statusMessage.value = null
+                    _statusMessage.value = if (done > 0) "Updated $done albums" else null
                 } catch (e: Exception) {
                     Log.e(TAG, "enrichLibrary failed", e)
-                    _statusMessage.value = "Metadata lookup failed"
+                    _statusMessage.value = "Couldn't look up artwork"
                 } finally {
                     _busy.value = false
                 }
@@ -93,13 +98,13 @@ class MetadataEnrichmentService(
     fun enrichAlbumAsync(album: AlbumItem, force: Boolean = true) {
         scope.launch {
             _busy.value = true
-            _statusMessage.value = "Fetching metadata for ${album.displayName}…"
+            _statusMessage.value = "Looking up ${album.displayName}…"
             try {
-                enrichAlbum(album, force = force)
-                _statusMessage.value = "Done: ${album.displayName}"
+                enrichAlbum(album, force = force, probeEmbeddedArt = true)
+                _statusMessage.value = "Updated ${album.displayName}"
             } catch (e: Exception) {
                 Log.w(TAG, "enrichAlbum failed ${album.displayName}", e)
-                _statusMessage.value = "Failed: ${album.displayName}"
+                _statusMessage.value = "Couldn't update ${album.displayName}"
             } finally {
                 _busy.value = false
             }
@@ -111,15 +116,15 @@ class MetadataEnrichmentService(
         scope.launch {
             workLock.withLock {
                 _busy.value = true
-                _statusMessage.value = "Fetching metadata for ${albums.size} releases…"
+                _statusMessage.value = "Looking up ${albums.size} albums…"
                 try {
                     for (album in albums) {
-                        enrichAlbum(album, force = force)
+                        enrichAlbum(album, force = force, probeEmbeddedArt = true)
                     }
-                    _statusMessage.value = "Fetched metadata for ${albums.size} releases"
+                    _statusMessage.value = "Updated ${albums.size} albums"
                 } catch (e: Exception) {
                     Log.e(TAG, "enrichAlbums failed", e)
-                    _statusMessage.value = "Metadata lookup failed"
+                    _statusMessage.value = "Couldn't look up artwork"
                 } finally {
                     _busy.value = false
                 }
@@ -133,16 +138,20 @@ class MetadataEnrichmentService(
     fun coverFileForAlbumKey(key: String): File =
         File(coverDir, sanitizeFileName(key) + ".jpg")
 
-    private fun needsWork(album: AlbumItem): Boolean {
+    private fun needsWorkCheap(album: AlbumItem): Boolean {
         val key = albumKey(album.name, album.artist)
         if (key in inFlight) return false
-        val hasYear = album.songs.any { it.year != null && it.year > 0 }
-        val hasRealArt = album.songs.any { hasEmbeddedOrFolderArt(it.path) } ||
-            coverFileForAlbumKey(key).isFile
-        return !hasYear || !hasRealArt
+        val hasYear = album.songs.any { it.year != null && it.year!! > 0 }
+        val hasArt = coverFileForAlbumKey(key).isFile ||
+            album.songs.any { folderCoverExists(it.path) }
+        return !hasYear || !hasArt
     }
 
-    private suspend fun enrichAlbum(album: AlbumItem, force: Boolean) {
+    private suspend fun enrichAlbum(
+        album: AlbumItem,
+        force: Boolean,
+        probeEmbeddedArt: Boolean
+    ) {
         val key = albumKey(album.name, album.artist)
         if (!inFlight.add(key)) return
         try {
@@ -152,10 +161,15 @@ class MetadataEnrichmentService(
                 return
             }
 
-            val needYear = album.songs.none { it.year != null && it.year > 0 } &&
+            val hasEmbedded = if (probeEmbeddedArt) {
+                album.songs.any { hasEmbeddedOrFolderArt(it.path) }
+            } else {
+                album.songs.any { folderCoverExists(it.path) }
+            }
+
+            val needYear = album.songs.none { it.year != null && it.year!! > 0 } &&
                 existing?.year == null
-            val needArt = !coverFileForAlbumKey(key).isFile &&
-                album.songs.none { hasEmbeddedOrFolderArt(it.path) }
+            val needArt = !coverFileForAlbumKey(key).isFile && !hasEmbedded
 
             if (!force && !needYear && !needArt) {
                 existing?.year?.let { library.applyAlbumYear(key, it) }
@@ -163,13 +177,17 @@ class MetadataEnrichmentService(
             }
 
             Log.i(TAG, "lookup \"${album.displayName}\" / \"${album.displayArtist}\" force=$force")
-            var hit = client.searchRelease(album.artist, album.name)
+            var hit = client.searchRelease(
+                artist = album.artist,
+                album = album.name,
+                includeTags = false
+            )
             if (hit == null) {
                 val trackArtist = album.songs.firstOrNull()?.artist
                 if (!trackArtist.isNullOrBlank() &&
                     !trackArtist.equals(album.artist, ignoreCase = true)
                 ) {
-                    hit = client.searchRelease(trackArtist, album.name)
+                    hit = client.searchRelease(trackArtist, album.name, includeTags = false)
                 }
             }
 
@@ -225,7 +243,9 @@ class MetadataEnrichmentService(
                 year = year,
                 mbid = hit.mbid,
                 coverPath = coverPath,
-                coverUrl = "https://coverartarchive.org/release/${hit.mbid}/front",
+                coverUrl = url("https://coverartarchive.org") {
+                    path("release", hit.mbid, "front")
+                },
                 source = "musicbrainz",
                 lookupFailed = false,
                 updatedAtMs = System.currentTimeMillis()
@@ -236,10 +256,8 @@ class MetadataEnrichmentService(
         }
 
         if (coverChanged) {
-            // Drop stale bitmaps / palettes keyed by the old "no cover" identity.
             runCatching { artCache.invalidateAlbum(key) }
             runCatching { artCache.invalidateAllMemory() }
-            themeService.invalidateAll()
             _coverGeneration.value = System.currentTimeMillis()
         }
     }

@@ -25,6 +25,10 @@
 -keep class androidx.media3.** { *; }
 -dontwarn androidx.media3.**
 
+# LibVLC
+-keep class org.videolan.libvlc.** { *; }
+-dontwarn org.videolan.libvlc.**
+
 # Models + player state (JSON / service)
 -keep class capital.yuri.yuriplayer.data.** { *; }
 -keep class capital.yuri.yuriplayer.player.** { *; }

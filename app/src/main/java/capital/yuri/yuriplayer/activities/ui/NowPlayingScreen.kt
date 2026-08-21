@@ -1,5 +1,11 @@
 package capital.yuri.yuriplayer.activities.ui
 
+import MarqueeText
+import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.detectVerticalDragGestures
 import androidx.compose.foundation.layout.Arrangement
@@ -20,8 +26,10 @@ import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.Radio
 import androidx.compose.material.icons.filled.Repeat
 import androidx.compose.material.icons.filled.RepeatOne
+import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Shuffle
 import androidx.compose.material.icons.filled.SkipNext
 import androidx.compose.material.icons.filled.SkipPrevious
@@ -47,24 +55,85 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.input.pointer.pointerInput
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import capital.yuri.yuriplayer.data.PlayerThemeStore
 import capital.yuri.yuriplayer.data.Song
+import capital.yuri.yuriplayer.data.allCreditsForSong
+import capital.yuri.yuriplayer.data.isCombinedArtistName
 import capital.yuri.yuriplayer.player.ColdSourceType
+import capital.yuri.yuriplayer.player.PlayerController
 import capital.yuri.yuriplayer.player.QueueLane
 import capital.yuri.yuriplayer.player.QueueSnapshot
 import capital.yuri.yuriplayer.player.RepeatMode
+import capital.yuri.yuriplayer.player.radio.RadioAlgorithmId
+import capital.yuri.yuriplayer.player.radio.RadioSession
+import capital.yuri.yuriplayer.player.radio.RadioSessionKind
+import capital.yuri.yuriplayer.player.radio.RadioSourcePrefs
+import capital.yuri.yuriplayer.ui.TestTags
 import org.koin.compose.koinInject
 import java.util.Locale
 import java.util.concurrent.TimeUnit
 import kotlin.math.abs
 
 private const val PREV_RESTART_MS = 3_000L
+
+private data class NowPlayingMeta(
+    val key: String,
+    val title: String,
+    val artist: String,
+    val album: String
+)
+
+/** Radio + small settings cog badge (no single Material glyph for both). */
+@Composable
+private fun RadioSettingsIcon(
+    tint: androidx.compose.ui.graphics.Color,
+    modifier: Modifier = Modifier
+) {
+    Box(modifier = modifier.size(28.dp), contentAlignment = Alignment.Center) {
+        Icon(
+            Icons.Default.Radio,
+            contentDescription = null,
+            tint = tint,
+            modifier = Modifier.size(26.dp)
+        )
+        Icon(
+            Icons.Default.Settings,
+            contentDescription = null,
+            tint = tint,
+            modifier = Modifier
+                .align(Alignment.BottomEnd)
+                .size(14.dp)
+                .background(
+                    color = MaterialTheme.colorScheme.background.copy(alpha = 0.92f),
+                    shape = MaterialTheme.shapes.extraSmall
+                )
+                .padding(1.dp)
+        )
+    }
+}
+
+/** Prefer live session; if only coldSource is RADIO (e.g. after restore), synthesize one. */
+private fun radioSessionForSettings(snapshot: QueueSnapshot): RadioSession? {
+    snapshot.radioSession?.takeIf { it.active || snapshot.coldSource?.type == ColdSourceType.RADIO }
+        ?.let { return it }
+    if (snapshot.coldSource?.type != ColdSourceType.RADIO) return null
+    val src = snapshot.coldSource
+    return RadioSession(
+        kind = RadioSessionKind.CUSTOM,
+        displayName = src.title?.takeIf { it.isNotBlank() } ?: "Radio",
+        algorithmId = RadioAlgorithmId.PLAYBACK,
+        seedId = src.id,
+        seedTitle = src.title,
+        active = true,
+        prefs = RadioSourcePrefs()
+    )
+}
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -99,8 +168,8 @@ fun NowPlayingScreen(
     onGoToArtist: (Song) -> Unit = {},
     onAddToPlaylist: (Song) -> Unit = {}
 ) {
-    val context = LocalContext.current
     val themeStore: PlayerThemeStore = koinInject()
+    val player: PlayerController = koinInject()
     val baseScheme = MaterialTheme.colorScheme
     val density = LocalDensity.current
 
@@ -117,6 +186,8 @@ fun NowPlayingScreen(
 
     var showQueue by remember { mutableStateOf(false) }
     var showSongMenu by remember { mutableStateOf(false) }
+    var artistPick by remember { mutableStateOf<List<String>?>(null) }
+    var showRadioSettings by remember { mutableStateOf(false) }
     var sliderPosition by remember { mutableFloatStateOf(0f) }
     var sliding by remember { mutableStateOf(false) }
     var hFrac by remember { mutableFloatStateOf(0f) }
@@ -128,42 +199,70 @@ fun NowPlayingScreen(
 
     val dismissThreshold = with(density) { 140.dp.toPx() }
 
-    val canSwipePrev = peekPrevSong != null
-    val buttonGoesToPrevTrack = positionMs <= PREV_RESTART_MS && canSwipePrev
+    val canSwipePrev = peekPrevSong != null && positionMs < PREV_RESTART_MS
+    val buttonGoesToPrevTrack = canSwipePrev
+    val isRadio = snapshot.isRadio
+    val radioSettingsSession = remember(snapshot.radioSession, snapshot.coldSource) {
+        radioSessionForSettings(snapshot)
+    }
+
+    val songKey = song?.songKey ?: song?.path ?: song?.contentUri?.toString()
+    val meta = NowPlayingMeta(
+        key = listOf(
+            songKey ?: "none",
+            song?.title.orEmpty(),
+            song?.artist.orEmpty(),
+            song?.album.orEmpty()
+        ).joinToString("\u0000"),
+        title = song?.displayTitle ?: "Not playing",
+        artist = song?.displayArtist ?: "",
+        album = song?.displayAlbum ?: ""
+    )
 
     fun requestSkipNext() {
         skipDirection = -1
-        skipToken++
+        skipToken += 1
+        onNext()
     }
 
     fun requestSkipPrev() {
         if (!buttonGoesToPrevTrack) {
+            skipDirection = 0
+            skipToken += 1
+            hFrac = 0f
             onPrev()
             return
         }
         skipDirection = 1
-        skipToken++
+        skipToken += 1
+        onForcePrev()
     }
 
-    LaunchedEffect(song?.id, song?.path) {
-        themeStore.updateCurrent(context, song, baseScheme)
-    }
-    LaunchedEffect(peekNextSong?.id, peekPrevSong?.id, song?.id) {
-        themeStore.updateNeighbors(context, peekNextSong, peekPrevSong, baseScheme)
-    }
-
-    LaunchedEffect(positionMs, durationMs, sliding) {
-        if (!sliding && durationMs > 0) {
-            sliderPosition = (positionMs.toDouble() / durationMs.toDouble())
-                .toFloat()
-                .coerceIn(0f, 1f)
-        }
+    LaunchedEffect(songKey) {
+        sliding = false
+        sliderPosition = 0f
+        hFrac = 0f
+        dismissFrac = 0f
     }
 
-    val playerColors = theme?.colors ?: fallbackPlayerColors(baseScheme)
+    LaunchedEffect(snapshot.shuffleEnabled) {
+        hFrac = 0f
+        skipDirection = 0
+    }
+
+    // Theme is kept warm by MainActivity on song change. Don't re-extract here —
+    // opening Now Playing used to hitch audio via Palette on Main.
+
+    val displayedProgress = if (sliding || durationMs <= 0L) {
+        sliderPosition
+    } else {
+        (positionMs.toDouble() / durationMs.toDouble()).toFloat().coerceIn(0f, 1f)
+    }
+
+    val playerColors = themeStore.colorsFor(song, fallbackPlayerColors(baseScheme))
     val blendTarget = when {
-        hFrac < -0.02f -> nextTheme?.colors
-        hFrac > 0.02f && canSwipePrev -> prevTheme?.colors
+        hFrac < -0.02f -> nextTheme?.takeIf { peekNextSong != null && it.songKey == peekNextSong.songKey }?.colors
+        hFrac > 0.02f && canSwipePrev -> prevTheme?.takeIf { peekPrevSong != null && it.songKey == peekPrevSong.songKey }?.colors
         else -> null
     }
     val blendT = abs(hFrac).coerceIn(0f, 1f)
@@ -171,7 +270,6 @@ fun NowPlayingScreen(
         lerpPlayerColors(playerColors, blendTarget, blendT)
     } else playerColors
 
-    // Full NP: page background from album art. Mini-player uses app default instead.
     val scheme = playerColorScheme(shownColors, baseScheme, useArtBackground = true)
     ThemedStatusBar(color = scheme.background, enabled = true)
 
@@ -204,7 +302,7 @@ fun NowPlayingScreen(
 
     MaterialTheme(colorScheme = scheme) {
         Surface(
-            modifier = Modifier.fillMaxSize(),
+            modifier = Modifier.fillMaxSize().testTag(TestTags.NOW_PLAYING),
             color = scheme.background.copy(
                 alpha = 1f - maxOf(dismissFrac, topPull / dismissThreshold) * 0.2f
             )
@@ -293,12 +391,21 @@ fun NowPlayingScreen(
                             )
                         }
                 ) {
-                    Box(
+                    Row(
                         modifier = Modifier.fillMaxWidth(),
-                        contentAlignment = Alignment.Center
+                        verticalAlignment = Alignment.CenterVertically
                     ) {
-                        IconButton(onClick = onCollapse) {
+                        IconButton(
+                            onClick = onCollapse,
+                            modifier = Modifier.testTag(TestTags.NP_CLOSE)
+                        ) {
                             Icon(Icons.Default.ExpandMore, "Close", tint = scheme.onBackground)
+                        }
+                        Spacer(modifier = Modifier.weight(1f))
+                        if (isRadio) {
+                            IconButton(onClick = { showRadioSettings = true }) {
+                                RadioSettingsIcon(tint = scheme.primary)
+                            }
                         }
                     }
 
@@ -319,11 +426,12 @@ fun NowPlayingScreen(
                     }
 
                     SwipeableAlbumArt(
-                        current = theme,
-                        next = nextTheme,
-                        prev = if (canSwipePrev) prevTheme else null,
+                        currentSong = song,
+                        nextSong = peekNextSong,
+                        prevSong = if (canSwipePrev) peekPrevSong else null,
                         onSwipeNext = onNext,
                         onSwipePrev = onForcePrev,
+                        onRestartCurrent = onPrev,
                         onPromoteNext = { themeStore.promoteNext() },
                         onPromotePrev = { themeStore.promotePrev() },
                         onDismiss = onCollapse,
@@ -348,27 +456,41 @@ fun NowPlayingScreen(
                         .padding(horizontal = 16.dp)
                         .padding(bottom = 8.dp)
                 ) {
-                    MarqueeText(
-                        text = song?.displayTitle ?: "Not playing",
-                        style = MaterialTheme.typography.headlineSmall,
-                        fontWeight = FontWeight.Bold,
-                        color = scheme.onBackground
-                    )
-                    MarqueeText(
-                        text = song?.displayArtist ?: "",
-                        style = MaterialTheme.typography.titleMedium,
-                        color = scheme.onBackground.copy(alpha = 0.65f)
-                    )
-                    MarqueeText(
-                        text = song?.displayAlbum ?: "",
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = scheme.onBackground.copy(alpha = 0.5f)
-                    )
+                    AnimatedContent(
+                        targetState = meta,
+                        transitionSpec = {
+                            fadeIn(tween(180)) togetherWith fadeOut(tween(120))
+                        },
+                        contentKey = { it.key },
+                        label = "npMeta"
+                    ) { m ->
+                        Column {
+                            MarqueeText(
+                                text = m.title,
+                                style = MaterialTheme.typography.headlineSmall,
+                                fontWeight = FontWeight.Bold,
+                                color = scheme.onBackground,
+                                modifier = Modifier.testTag(TestTags.NP_TITLE)
+                            )
+                            MarqueeText(
+                                text = m.artist,
+                                style = MaterialTheme.typography.titleMedium,
+                                color = scheme.onBackground.copy(alpha = 0.65f),
+                                modifier = Modifier.testTag(TestTags.NP_ARTIST)
+                            )
+                            MarqueeText(
+                                text = m.album,
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = scheme.onBackground.copy(alpha = 0.5f),
+                                modifier = Modifier.testTag(TestTags.NP_ALBUM)
+                            )
+                        }
+                    }
 
                     Spacer(modifier = Modifier.height(16.dp))
 
                     WavySeekBar(
-                        progress = sliderPosition,
+                        progress = displayedProgress,
                         playing = playing,
                         onProgressChange = {
                             sliding = true
@@ -421,7 +543,10 @@ fun NowPlayingScreen(
                                 else scheme.onBackground.copy(alpha = 0.7f)
                             )
                         }
-                        IconButton(onClick = { requestSkipPrev() }) {
+                        IconButton(
+                            onClick = { requestSkipPrev() },
+                            modifier = Modifier.testTag(TestTags.NP_SKIP_PREV)
+                        ) {
                             Icon(
                                 Icons.Default.SkipPrevious,
                                 "Previous",
@@ -434,6 +559,7 @@ fun NowPlayingScreen(
                             modifier = Modifier
                                 .size(72.dp)
                                 .background(scheme.primary, shape = MaterialTheme.shapes.extraLarge)
+                                .testTag(TestTags.NP_PLAY_PAUSE)
                         ) {
                             Icon(
                                 if (playing) Icons.Default.Pause else Icons.Default.PlayArrow,
@@ -442,7 +568,10 @@ fun NowPlayingScreen(
                                 tint = scheme.onPrimary
                             )
                         }
-                        IconButton(onClick = { requestSkipNext() }) {
+                        IconButton(
+                            onClick = { requestSkipNext() },
+                            modifier = Modifier.testTag(TestTags.NP_SKIP_NEXT)
+                        ) {
                             Icon(
                                 Icons.Default.SkipNext,
                                 "Next",
@@ -483,6 +612,7 @@ fun NowPlayingScreen(
                             buildString {
                                 append(repeatLabel(snapshot.repeatMode))
                                 if (snapshot.shuffleEnabled) append(" · Shuffle")
+                                if (isRadio) append(" · Radio")
                             },
                             style = MaterialTheme.typography.labelSmall,
                             color = scheme.onBackground.copy(alpha = 0.55f),
@@ -499,6 +629,21 @@ fun NowPlayingScreen(
                         }
                     }
                 }
+            }
+
+            if (artistPick != null && song != null) {
+                val names = artistPick.orEmpty()
+                val songNav = LocalSongNav.current
+                GoToArtistSheet(
+                    songTitle = song.displayTitle,
+                    artists = names,
+                    onPick = { name ->
+                        artistPick = null
+                        showSongMenu = false
+                        songNav.openArtistByName(name)
+                    },
+                    onDismiss = { artistPick = null }
+                )
             }
 
             if (showSongMenu && song != null) {
@@ -521,8 +666,16 @@ fun NowPlayingScreen(
                     MediaSheetItem(
                         label = "Go to artist",
                         onClick = {
+                            val names = allCreditsForSong(song)
+                                .map { it.name }
+                                .filter { !isCombinedArtistName(it) }
+                                .distinctBy { it.lowercase() }
                             showSongMenu = false
-                            onGoToArtist(song)
+                            if (names.size > 1) {
+                                artistPick = names
+                            } else {
+                                onGoToArtist(song)
+                            }
                         }
                     )
                     MediaSheetItem(
@@ -539,7 +692,25 @@ fun NowPlayingScreen(
                             onAddToQueue(song)
                         }
                     )
+                    MediaSheetItem(
+                        label = "Sources",
+                        onClick = {
+                            showSongMenu = false
+                        }
+                    )
                     MediaSheetBottomPad()
+                }
+            }
+
+            // Always open when isRadio — never silently clear the flag mid-composition
+            if (showRadioSettings && isRadio) {
+                val session = radioSettingsSession
+                if (session != null) {
+                    RadioSettingsSheet(
+                        session = session,
+                        onApply = { prefs -> player.applyRadioPrefs(prefs) },
+                        onDismiss = { showRadioSettings = false }
+                    )
                 }
             }
         }

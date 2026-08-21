@@ -1,5 +1,6 @@
 package capital.yuri.yuriplayer.activities.ui
 
+import MarqueeText
 import android.widget.Toast
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.core.Spring
@@ -45,6 +46,7 @@ import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -65,6 +67,7 @@ import capital.yuri.yuriplayer.player.HistoryEntry
 import capital.yuri.yuriplayer.player.PlaybackHistoryStore
 import capital.yuri.yuriplayer.player.QueueLane
 import capital.yuri.yuriplayer.player.QueueSnapshot
+import capital.yuri.yuriplayer.player.radio.RadioShuffleUnit
 import org.koin.compose.koinInject
 import java.text.DateFormat
 import java.util.Date
@@ -257,12 +260,15 @@ private fun QueueTabContent(
     val upcomingCold = remember(snapshot.coldQueue, currentKey) {
         keyedQueue("cold", snapshot.coldQueue, ::isCurrent)
     }
+    val latestHot = rememberUpdatedState(upcomingHot)
+    val latestCold = rememberUpdatedState(upcomingCold)
     val radioNext = remember(snapshot.radioUpcoming, currentKey) {
         keyedQueue("radio", snapshot.radioUpcoming) { false }
     }
     val showHotSection = upcomingHot.isNotEmpty()
     val isRadio = snapshot.isRadio
     val radioShuffled = isRadio && snapshot.shuffleEnabled
+    val shuffleUnit = snapshot.radioSession?.prefs?.shuffleUnit ?: RadioShuffleUnit.SONGS
 
     autoScroll.onScrolled = { delta ->
         when {
@@ -316,6 +322,7 @@ private fun QueueTabContent(
                 ) { entry ->
                     SwipeableQueueRow(
                         song = entry.song,
+                        rowId = entry.key,
                         index = entry.index,
                         listSize = snapshot.hotQueue.size,
                         isCurrent = false,
@@ -327,7 +334,11 @@ private fun QueueTabContent(
                         listTopInRoot = listTopInRoot,
                         onClick = { onPlayItem(QueueLane.HOT, entry.index) },
                         onCommitMove = { f, t -> onMoveHot(f, t) },
-                        onSwipeRemove = { onRemoveHot(entry.index) },
+                        onSwipeRemove = {
+                            val live = latestHot.value.firstOrNull { it.key == entry.key }?.index
+                                ?: entry.index
+                            onRemoveHot(live)
+                        },
                         onSwipePromote = null,
                         modifier = Modifier.animateItem(
                             fadeInSpec = fadeSpec,
@@ -351,10 +362,12 @@ private fun QueueTabContent(
                 )
                 Text(
                     when {
+                        isRadio && radioShuffled && shuffleUnit == RadioShuffleUnit.RELEASES ->
+                            "Shuffle plays whole releases at random (tracks stay in order). Drag to reorder."
                         isRadio && radioShuffled ->
-                            "Shuffle picks random tracks from this radio pool. Drag to reorder · hold near edges to scroll."
+                            "Shuffle picks random tracks from this radio pool. Drag to reorder."
                         isRadio ->
-                            "Plays whole releases in order. Drag to reorder · hold near edges to scroll."
+                            "Plays whole releases in order. Drag to reorder."
                         showHotSection ->
                             "Drag to reorder · swipe left to remove · swipe right or drag up to promote · edges scroll"
                         else ->
@@ -369,9 +382,14 @@ private fun QueueTabContent(
                 item(key = "cold-empty") {
                     Text(
                         when {
-                            radioShuffled -> "Radio will pull more random tracks from the pool as you keep listening."
-                            isRadio -> "Radio will load the next release when this one ends."
-                            else -> "Play an album or list to fill what comes next."
+                            radioShuffled && shuffleUnit == RadioShuffleUnit.RELEASES ->
+                                "Radio will load another release when this run is low."
+                            radioShuffled ->
+                                "Radio will pull more random tracks from the pool as you keep listening."
+                            isRadio ->
+                                "Radio will load the next release when this one ends."
+                            else ->
+                                "Play an album or list to fill what comes next."
                         },
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f),
@@ -385,6 +403,7 @@ private fun QueueTabContent(
             ) { entry ->
                 SwipeableQueueRow(
                     song = entry.song,
+                    rowId = entry.key,
                     index = entry.index,
                     listSize = snapshot.coldQueue.size,
                     isCurrent = false,
@@ -396,8 +415,16 @@ private fun QueueTabContent(
                     listTopInRoot = listTopInRoot,
                     onClick = { onPlayItem(QueueLane.COLD, entry.index) },
                     onCommitMove = { f, t -> onMoveCold(f, t) },
-                    onSwipeRemove = { onRemoveCold(entry.index) },
-                    onSwipePromote = { onMoveColdToHot(entry.index) },
+                    onSwipeRemove = {
+                        val live = latestCold.value.firstOrNull { it.key == entry.key }?.index
+                            ?: entry.index
+                        onRemoveCold(live)
+                    },
+                    onSwipePromote = {
+                        val live = latestCold.value.firstOrNull { it.key == entry.key }?.index
+                            ?: entry.index
+                        onMoveColdToHot(live)
+                    },
                     onDragPromote = { onMoveColdToHot(it) },
                     modifier = Modifier.animateItem(
                         fadeInSpec = fadeSpec,
@@ -494,6 +521,7 @@ private fun NowPlayingQueueCard(song: Song, radioLabel: String? = null) {
 @Composable
 private fun SwipeableQueueRow(
     song: Song,
+    rowId: String,
     index: Int,
     listSize: Int,
     isCurrent: Boolean,
@@ -512,9 +540,14 @@ private fun SwipeableQueueRow(
 ) {
     val density = LocalDensity.current
     val swipeThreshold = with(density) { 96.dp.toPx() }
-    var swipeX by remember { mutableFloatStateOf(0f) }
+    var swipeX by remember(rowId) { mutableFloatStateOf(0f) }
     val isDragged = drag.active && drag.from == index
     var rowCoords by remember { mutableStateOf<LayoutCoordinates?>(null) }
+    val latestRemove = rememberUpdatedState(onSwipeRemove)
+    val latestPromote = rememberUpdatedState(onSwipePromote)
+    val latestMove = rememberUpdatedState(onCommitMove)
+    val latestClick = rememberUpdatedState(onClick)
+    val latestDragPromote = rememberUpdatedState(onDragPromote)
 
     val targetShift = when {
         !drag.active || isDragged -> 0f
@@ -596,8 +629,8 @@ private fun SwipeableQueueRow(
                         )
                     else Modifier.background(MaterialTheme.colorScheme.surface)
                 )
-                .clickable(enabled = !drag.active && swipeX == 0f, onClick = onClick)
-                .pointerInput(index, listSize, listTopInRoot) {
+                .clickable(enabled = !drag.active && swipeX == 0f, onClick = { latestClick.value() })
+                .pointerInput(rowId, listSize, listTopInRoot) {
                     detectDragGesturesAfterLongPress(
                         onDragStart = { start ->
                             swipeX = 0f
@@ -609,8 +642,8 @@ private fun SwipeableQueueRow(
                         onDragEnd = {
                             autoScroll.onDragEnd()
                             drag.end()?.let { (f, t, promote) ->
-                                if (promote && allowPromoteToHot) onDragPromote?.invoke(f)
-                                else if (f != t) onCommitMove(f, t)
+                                if (promote && allowPromoteToHot) latestDragPromote.value?.invoke(f)
+                                else if (f != t) latestMove.value(f, t)
                             }
                         },
                         onDragCancel = {
@@ -624,13 +657,14 @@ private fun SwipeableQueueRow(
                         }
                     )
                 }
-                .pointerInput(index, drag.active) {
+                .pointerInput(rowId, drag.active) {
                     if (drag.active) return@pointerInput
                     detectHorizontalDragGestures(
                         onDragEnd = {
                             when {
-                                swipeX < -swipeThreshold -> onSwipeRemove()
-                                swipeX > swipeThreshold && onSwipePromote != null -> onSwipePromote()
+                                swipeX < -swipeThreshold -> latestRemove.value()
+                                swipeX > swipeThreshold && latestPromote.value != null ->
+                                    latestPromote.value?.invoke()
                             }
                             swipeX = 0f
                         },

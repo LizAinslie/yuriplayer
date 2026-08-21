@@ -1,6 +1,7 @@
 package capital.yuri.yuriplayer.data.source
 
 import android.util.Log
+import capital.yuri.yuriplayer.http.url
 import io.ktor.client.HttpClient
 import io.ktor.client.request.get
 import io.ktor.client.request.prepareGet
@@ -15,10 +16,15 @@ import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import org.json.JSONObject
 import java.io.File
-import java.net.URLEncoder
+import java.net.URLDecoder
 import kotlin.time.Duration.Companion.milliseconds
 
-/** MusicBrainz + Wikidata helpers via shared Ktor [HttpClient]. */
+/**
+ * MusicBrainz + Cover Art Archive + light Wikidata/Wikipedia helpers via shared Ktor [HttpClient].
+ *
+ * Kept hand-rolled (not eAlvaBrainz): that library last shipped 2022 on Retrofit/Moshi and would
+ * duplicate HTTP stacks. We keep MB's ~1.1s throttle here so auto-enrich stays polite.
+ */
 class MusicBrainzClient(
     private val http: HttpClient
 ) {
@@ -43,7 +49,15 @@ class MusicBrainzClient(
     private val rateLock = Mutex()
     private var lastRequestAt = 0L
 
-    suspend fun searchRelease(artist: String?, album: String?): ReleaseHit? =
+    /**
+     * @param includeTags when true, issues a second MB request for release tags (genres).
+     *   Auto year/cover fill should pass false — halves rate-limited traffic.
+     */
+    suspend fun searchRelease(
+        artist: String?,
+        album: String?,
+        includeTags: Boolean = true
+    ): ReleaseHit? =
         withContext(Dispatchers.IO) {
             if (album.isNullOrBlank()) return@withContext null
             val query = buildString {
@@ -56,17 +70,40 @@ class MusicBrainzClient(
                     append("\"")
                 }
             }
-            val url = "https://musicbrainz.org/ws/2/release?query=" +
-                URLEncoder.encode(query, "UTF-8") +
-                "&fmt=json&limit=5"
-            val body = getText(url) ?: return@withContext null
+            val requestUrl = url("https://musicbrainz.org") {
+                path("ws", "2", "release")
+                param("query", query)
+                param("fmt", "json")
+                param("limit", 5)
+            }
+            val body = getText(requestUrl) ?: return@withContext null
             val basic = parseReleaseSearch(body) ?: return@withContext null
-            // Tags on the release for genres
+            if (!includeTags) return@withContext basic
             val detail = getText(
-                "https://musicbrainz.org/ws/2/release/${basic.mbid}?inc=tags&fmt=json"
+                url("https://musicbrainz.org") {
+                    path("ws", "2", "release", basic.mbid)
+                    param("inc", "tags")
+                    param("fmt", "json")
+                }
             )
             val genres = detail?.let { parseTags(it) }.orEmpty()
             basic.copy(genres = genres)
+        }
+
+    suspend fun lookupArtist(mbid: String): ArtistHit? =
+        withContext(Dispatchers.IO) {
+            if (mbid.isBlank()) return@withContext null
+            val detailUrl = url("https://musicbrainz.org") {
+                path("ws", "2", "artist", mbid)
+                param("inc", "url-rels+tags")
+                param("fmt", "json")
+            }
+            val detail = getText(detailUrl) ?: return@withContext ArtistHit(mbid, mbid)
+            val hit = parseArtistDetail(detail, mbid)
+            val image = hit.imageUrl
+                ?: resolveWikidataImage(hit)
+                ?: resolveWikipediaImage(hit)
+            hit.copy(imageUrl = image)
         }
 
     suspend fun searchArtist(name: String): ArtistHit? =
@@ -74,14 +111,7 @@ class MusicBrainzClient(
             if (name.isBlank()) return@withContext null
             val trimmed = name.trim()
             val mbid = findBestArtistMbid(trimmed) ?: return@withContext null
-            val detailUrl =
-                "https://musicbrainz.org/ws/2/artist/$mbid?inc=url-rels+tags&fmt=json"
-            val detail = getText(detailUrl) ?: return@withContext ArtistHit(mbid, trimmed)
-            val hit = parseArtistDetail(detail, mbid)
-            val image = hit.imageUrl
-                ?: resolveWikidataImage(hit)
-                ?: resolveWikipediaImage(hit)
-            hit.copy(imageUrl = image)
+            lookupArtist(mbid) ?: ArtistHit(mbid, trimmed)
         }
 
     suspend fun expandImageCandidates(hit: ArtistHit): List<Pair<String, String>> =
@@ -106,8 +136,13 @@ class MusicBrainzClient(
         }
 
     private suspend fun allWikidataP18(qid: String): List<String> {
-        val api =
-            "https://www.wikidata.org/w/api.php?action=wbgetentities&ids=$qid&props=claims&format=json"
+        val api = url("https://www.wikidata.org") {
+            path("w", "api.php")
+            param("action", "wbgetentities")
+            param("ids", qid)
+            param("props", "claims")
+            param("format", "json")
+        }
         val body = getText(api) ?: return emptyList()
         return try {
             val p18 = JSONObject(body)
@@ -125,9 +160,10 @@ class MusicBrainzClient(
                         ?.takeIf { it.isNotBlank() }
                         ?: continue
                     add(
-                        "https://commons.wikimedia.org/wiki/Special:FilePath/" +
-                            URLEncoder.encode(fileName.replace(' ', '_'), "UTF-8") +
-                            "?width=1000"
+                        url("https://commons.wikimedia.org") {
+                            path("wiki", "Special:FilePath", fileName.replace(' ', '_'), encodeSlash = true)
+                            param("width", 1000)
+                        }
                     )
                 }
             }
@@ -143,10 +179,13 @@ class MusicBrainzClient(
             escapeLucene(name)
         )
         for (q in queries) {
-            val url = "https://musicbrainz.org/ws/2/artist?query=" +
-                URLEncoder.encode(q, "UTF-8") +
-                "&fmt=json&limit=10"
-            val body = getText(url) ?: continue
+            val requestUrl = url("https://musicbrainz.org") {
+                path("ws", "2", "artist")
+                param("query", q)
+                param("fmt", "json")
+                param("limit", 10)
+            }
+            val body = getText(requestUrl) ?: continue
             val mbid = pickBestArtistMbid(body, name)
             if (mbid != null) return mbid
         }
@@ -206,10 +245,13 @@ class MusicBrainzClient(
         val wikiUrl = hit.links.firstOrNull {
             it.url.contains("wikipedia.org", ignoreCase = true)
         }?.url ?: return null
-        val path = wikiUrl.substringAfter("/wiki/").takeIf { it.isNotBlank() } ?: return null
+        val encodedPath = wikiUrl.substringAfter("/wiki/").takeIf { it.isNotBlank() } ?: return null
+        val page = URLDecoder.decode(encodedPath, "UTF-8")
         val lang = Regex("https?://([a-z]{2,3})\\.wikipedia").find(wikiUrl)?.groupValues?.getOrNull(1)
             ?: "en"
-        val api = "https://$lang.wikipedia.org/api/rest_v1/page/summary/$path"
+        val api = url("https://$lang.wikipedia.org") {
+            path("api", "rest_v1", "page", "summary", page.replace(' ', '_'), encodeSlash = true)
+        }
         val body = getText(api) ?: return null
         return try {
             val root = JSONObject(body)
@@ -224,8 +266,8 @@ class MusicBrainzClient(
     suspend fun downloadFrontCover(mbid: String, destFile: File): Boolean =
         withContext(Dispatchers.IO) {
             val urls = listOf(
-                "https://coverartarchive.org/release/$mbid/front-500",
-                "https://coverartarchive.org/release/$mbid/front"
+                url("https://coverartarchive.org") { path("release", mbid, "front-500") },
+                url("https://coverartarchive.org") { path("release", mbid, "front") }
             )
             for (u in urls) {
                 if (downloadToFile(u, destFile)) return@withContext true
@@ -384,6 +426,8 @@ class MusicBrainzClient(
     }
 
     private suspend fun downloadToFile(url: String, dest: File): Boolean = rateLock.withLock {
+        // CAA is separate from MB and does not need the same strict throttle,
+        // but sharing the lock keeps total outbound polite under auto-enrich.
         throttle()
         try {
             http.prepareGet(url).execute { response ->
@@ -418,6 +462,7 @@ class MusicBrainzClient(
 
     companion object {
         private const val TAG = "MusicBrainz"
+        /** Anonymous MB guideline ≈ 1 req/s. */
         private const val MIN_INTERVAL_MS = 1_100L
     }
 }

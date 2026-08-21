@@ -21,6 +21,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.FilterQuality
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
@@ -37,7 +38,11 @@ import org.koin.compose.koinInject
  * Display [size] drives decode tier:
  * - row-sized (<= 80.dp) → [AlbumArtCache.THUMB_DECODE_SIZE] (128px), kept in the
  *   large thumb LRU so queue / playlist / library scrolling stays smooth
- * - larger → hero tier (512px)
+ * - mid (<= 160.dp) → 256px
+ * - larger / unspecified → hero tier (512px)
+ *
+ * Now Playing uses [PlayerThemeStore] + [AlbumArtCache.HQ_DECODE_SIZE], not this
+ * composable.
  */
 @Composable
 fun AlbumArt(
@@ -96,6 +101,11 @@ fun AlbumArt(
                 bitmap = bmp.asImageBitmap(),
                 contentDescription = song?.displayAlbum,
                 contentScale = ContentScale.Crop,
+                filterQuality = if (decodeSize >= AlbumArtCache.HERO_DECODE_SIZE) {
+                    FilterQuality.High
+                } else {
+                    FilterQuality.Low
+                },
                 modifier = Modifier.fillMaxSize()
             )
         } else {

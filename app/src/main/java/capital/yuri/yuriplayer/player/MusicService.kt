@@ -4,30 +4,26 @@ import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
+import android.app.Service
+import android.content.Context
 import android.content.Intent
-import android.net.Uri
+import android.media.AudioManager
+import android.net.wifi.WifiManager
 import android.os.Binder
 import android.os.Build
 import android.os.IBinder
+import android.os.PowerManager
 import android.os.SystemClock
 import android.util.Log
-import androidx.annotation.OptIn
 import androidx.core.app.NotificationCompat
-import androidx.media3.common.AudioAttributes
-import androidx.media3.common.C
-import androidx.media3.common.MediaItem
-import androidx.media3.common.PlaybackException
-import androidx.media3.common.Player
-import androidx.media3.common.util.UnstableApi
-import androidx.media3.exoplayer.DefaultLoadControl
-import androidx.media3.exoplayer.DefaultRenderersFactory
-import androidx.media3.exoplayer.ExoPlayer
-import androidx.media3.exoplayer.audio.AudioSink
-import androidx.media3.session.MediaSession
-import androidx.media3.session.MediaSessionService
-import androidx.media3.session.MediaStyleNotificationHelper
 import capital.yuri.yuriplayer.activities.MainActivity
+import capital.yuri.yuriplayer.data.LibrarySettings
 import capital.yuri.yuriplayer.data.Song
+import capital.yuri.yuriplayer.player.engine.StreamPrefetcher
+import capital.yuri.yuriplayer.player.engine.isNetworkUri
+import capital.yuri.yuriplayer.player.engine.isVirtualLibraryPath
+import capital.yuri.yuriplayer.player.engine.toPlaybackMedia
+import capital.yuri.yuriplayer.player.radio.RadioSourcePrefs
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -37,48 +33,76 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.drop
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.yield
 import org.koin.android.ext.android.inject
-import java.io.File
 import kotlin.math.abs
 import kotlin.math.roundToLong
 
-class MusicService : MediaSessionService() {
+/**
+ * Foreground playback service.
+ *
+ * Audio is owned by the user-selected [PlaybackEngine] (Media3 or LibVLC).
+ * MediaSession is [EngineSessionBridge] — independent of any specific backend.
+ * This class owns queue policy, restore, notification, and stall recovery.
+ */
+class MusicService : Service() {
 
     private val binder = LocalBinder()
     private val queueManager: QueueManager by inject()
     private val stateStore: PlaybackStateStore by inject()
     private val historyStore: PlaybackHistoryStore by inject()
+    private val librarySettings: LibrarySettings by inject()
 
-    private var player: ExoPlayer? = null
-    private var mediaSession: MediaSession? = null
+    private var engineHooks: MusicServiceEngineHooks? = null
 
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private var persistJob: Job? = null
+    private var persistDebounceJob: Job? = null
     private var stallWatchJob: Job? = null
     private var restoredOnce = false
     private var advancing = false
     private var recoveringAudio = false
     private var lastHistoryKey: String? = null
-    private var loopGeneration = 0L
+    private var windowGeneration: Int = 0
+    private var endedForWindow: Int = -1
+    /** Engine posts onAutoAdvanced after playPreparedNext; the queue already moved. */
+    private var ignoreAutoAdvancedUntilElapsed: Long = 0L
+    private var lastAdvanceElapsed: Long = 0L
+    private var ignoreWatchdogUntilElapsed: Long = 0L
+    /** System MediaSession often fires onPlay when the session becomes active. */
+    private var ignoreSessionPlayUntilElapsed: Long = Long.MAX_VALUE
 
     private var stallSamplePos = -1L
     private var stallSampleAtElapsed = 0L
 
-    /** Report this position until Exo catches up (prevents UI snap-back after scrub). */
     private var stickySeekTargetMs: Long = -1L
     private var stickySeekUntilElapsed: Long = 0L
-
-    /** Ignore AUTO / STATE_ENDED for a short window after a user scrub. */
     private var userSeekGuardUntilElapsed: Long = 0L
+
+    private var pendingRemoteRestore: PendingRemoteRestore? = null
+
+    /** User/session wants audio. Engine hiccups must not clear this. */
+    private var userWantsPlay = false
+    private var wakeLock: PowerManager.WakeLock? = null
+    private var wifiLock: WifiManager.WifiLock? = null
+
+    private data class PendingRemoteRestore(
+        val positionMs: Long,
+        val wasPlayWhenReady: Boolean
+    )
 
     private val _nowPlaying = MutableStateFlow<Song?>(null)
     val nowPlaying: StateFlow<Song?> = _nowPlaying.asStateFlow()
 
     private val _isPlaying = MutableStateFlow(false)
     val isPlaying: StateFlow<Boolean> = _isPlaying.asStateFlow()
+
+    private val _viewState = MutableStateFlow(PlayerViewState())
+    val viewState: StateFlow<PlayerViewState> = _viewState.asStateFlow()
 
     val queueSnapshot: StateFlow<QueueSnapshot> get() = queueManager.snapshot
     val historyEntries: StateFlow<List<HistoryEntry>> get() = historyStore.entries
@@ -87,46 +111,53 @@ class MusicService : MediaSessionService() {
         fun getService(): MusicService = this@MusicService
     }
 
-    @OptIn(UnstableApi::class)
     override fun onCreate() {
         super.onCreate()
 
         createNotificationChannel()
         startForeground(NOTIFICATION_ID, buildMediaNotification(null, false))
 
-        val audioAttributes = AudioAttributes.Builder()
-            .setUsage(C.USAGE_MEDIA)
-            .setContentType(C.AUDIO_CONTENT_TYPE_MUSIC)
-            .build()
-
-        val loadControl = DefaultLoadControl.Builder()
-            .setBufferDurationsMs(20_000, 60_000, 1_000, 2_000)
-            .setPrioritizeTimeOverSizeThresholds(true)
-            .build()
-
-        val renderersFactory = DefaultRenderersFactory(this)
-            .setEnableDecoderFallback(true)
-            .setExtensionRendererMode(DefaultRenderersFactory.EXTENSION_RENDERER_MODE_OFF)
-
-        player = ExoPlayer.Builder(this, renderersFactory)
-            .setAudioAttributes(audioAttributes, true)
-            .setHandleAudioBecomingNoisy(true)
-            .setWakeMode(C.WAKE_MODE_LOCAL)
-            .setLoadControl(loadControl)
-            .setPauseAtEndOfMediaItems(false)
-            .build()
-            .also {
-                it.repeatMode = Player.REPEAT_MODE_OFF
-                it.addListener(playerListener)
+        engineHooks = MusicServiceEngineHooks(
+            context = this,
+            settings = librarySettings,
+            sessionActivity = openPlayerPendingIntent(),
+            onPlay = {
+                if (SystemClock.elapsedRealtime() < ignoreSessionPlayUntilElapsed) {
+                    Log.i(TAG, "session onPlay ignored — startup")
+                    return@MusicServiceEngineHooks
+                }
+                play()
+            },
+            onPause = { pause() },
+            onNext = { skipToNext() },
+            onPrev = { skipToPrevious(forceTrackChange = false) },
+            onSeek = { pos -> seekTo(pos) },
+            onEnded = { onEngineEnded() },
+            onAutoAdvanced = { onEngineAutoAdvanced() },
+            onPlayingChanged = { playing ->
+                _isPlaying.value = playing
+                updateForegroundNotification()
+                if (playing) acquireSleepLocks()
+                else if (!userWantsPlay) releaseSleepLocks()
+            },
+            onError = { message, recoverable ->
+                Log.e(TAG, "engine error: $message recoverable=$recoverable")
+                if (recoverable && userWantsPlay && !recoveringAudio && !advancing) {
+                    recoverFromAudioGlitch()
+                }
             }
+        )
 
-        mediaSession = MediaSession.Builder(this, player!!)
-            .setSessionActivity(openPlayerPendingIntent())
-            .build()
-
+        Log.i(TAG, "engine=${engineHooks?.engineId}")
         restorePlaybackState()
         startPeriodicPersist()
         startStallWatchdog()
+        serviceScope.launch {
+            librarySettings.streamQuality.drop(1).collect { q ->
+                Log.i(TAG, "stream quality → ${q.id} — rebuffer next")
+                syncPreparedNext()
+            }
+        }
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -141,9 +172,10 @@ class MusicService : MediaSessionService() {
                 buildMediaNotification(_nowPlaying.value, _isPlaying.value)
             )
         }
-        super.onStartCommand(intent, flags, startId)
         return START_STICKY
     }
+
+    override fun onBind(intent: Intent?): IBinder = binder
 
     private fun isRepeatOne(): Boolean =
         queueManager.getSnapshot().repeatMode == RepeatMode.ONE
@@ -151,30 +183,10 @@ class MusicService : MediaSessionService() {
     private fun inUserSeekGuard(): Boolean =
         SystemClock.elapsedRealtime() < userSeekGuardUntilElapsed
 
-    private fun songUri(song: Song): Uri {
-        val path = song.path
-        if (!path.isNullOrBlank()) {
-            val file = File(path)
-            if (file.exists() && file.canRead()) return Uri.fromFile(file)
-        }
-        return song.contentUri
-    }
-
-    private fun mediaItemUriAt(index: Int): Uri? {
-        val p = player ?: return null
-        if (index < 0 || index >= p.mediaItemCount) return null
-        return p.getMediaItemAt(index).localConfiguration?.uri
-    }
-
-    private fun urisEqual(a: Uri?, b: Uri?): Boolean {
-        if (a == null || b == null) return false
-        if (a == b) return true
-        return a.lastPathSegment != null && a.lastPathSegment == b.lastPathSegment
-    }
-
-    private fun nextLoopItem(song: Song): MediaItem {
-        loopGeneration++
-        return toMediaItem(song, mediaIdSuffix = "loop-$loopGeneration")
+    private fun isRemoteSong(song: Song?): Boolean {
+        if (song == null) return false
+        if (isVirtualLibraryPath(song.path)) return true
+        return isNetworkUri(MusicServicePlaybackHooks.songUri(song))
     }
 
     private fun clearStickySeek() {
@@ -182,80 +194,20 @@ class MusicService : MediaSessionService() {
         stickySeekUntilElapsed = 0L
     }
 
+    private fun flushPendingRemoteRestore(autoPlay: Boolean): Boolean {
+        val pending = pendingRemoteRestore ?: return false
+        pendingRemoteRestore = null
+        Log.i(TAG, "flushPendingRemoteRestore pos=${pending.positionMs} autoPlay=$autoPlay")
+        rebufferWindow(pending.positionMs, autoPlay = autoPlay, forceReload = true)
+        return true
+    }
+
     private fun hardRestartCurrent(autoPlay: Boolean = true, startPositionMs: Long = 0L) {
-        val p = player ?: return
         val current = queueManager.currentSong() ?: return
-        val wasPlaying = autoPlay || p.playWhenReady
-        val pos = startPositionMs.coerceAtLeast(0L)
         clearStickySeek()
-        Log.i(TAG, "hardRestartCurrent '${current.displayTitle}' pos=$pos gen=$loopGeneration")
-        try {
-            p.playWhenReady = false
-            p.stop()
-            p.clearMediaItems()
-            p.setMediaItem(nextLoopItem(current), /* resetPosition = */ true)
-            p.prepare()
-            if (pos > 0L) p.seekTo(pos)
-            p.repeatMode = Player.REPEAT_MODE_OFF
-            if (wasPlaying) {
-                p.playWhenReady = true
-                p.play()
-            }
-        } catch (e: Exception) {
-            Log.e(TAG, "hardRestartCurrent failed", e)
-            rebufferWindow(pos, autoPlay = wasPlaying, forceReload = true)
-            return
-        }
-        _nowPlaying.value = current
-        updateForegroundNotification()
-        persistState()
-    }
-
-    private fun softNormalizeWindow(): Boolean {
-        val p = player ?: return false
-        val current = queueManager.currentSong() ?: return false
-        if (isRepeatOne()) return true
-
-        val playingUri = mediaItemUriAt(p.currentMediaItemIndex)
-        val wantUri = songUri(current)
-        if (!urisEqual(playingUri, wantUri)) {
-            Log.w(
-                TAG,
-                "softNormalize refused desync: playing=$playingUri " +
-                    "want='${current.displayTitle}'"
-            )
-            return false
-        }
-
-        try {
-            while (p.currentMediaItemIndex > 0) p.removeMediaItem(0)
-            while (p.mediaItemCount > 1) p.removeMediaItem(p.mediaItemCount - 1)
-            queueManager.peekNext()?.let { p.addMediaItem(toMediaItem(it)) }
-            return true
-        } catch (e: Exception) {
-            Log.e(TAG, "softNormalizeWindow failed", e)
-            return false
-        }
-    }
-
-    private fun ensurePlayerMatchesQueue(autoPlay: Boolean = true) {
-        val p = player ?: return
-        val current = queueManager.currentSong() ?: return
-        val playingUri = mediaItemUriAt(p.currentMediaItemIndex)
-        if (urisEqual(playingUri, songUri(current))) {
-            if (!softNormalizeWindow()) {
-                rebufferWindow(0L, autoPlay = autoPlay, forceReload = true)
-            } else {
-                _nowPlaying.value = current
-                updateForegroundNotification()
-            }
-            return
-        }
-        Log.w(
-            TAG,
-            "ensurePlayerMatchesQueue desync → rebuffer '${current.displayTitle}'"
-        )
-        rebufferWindow(0L, autoPlay = autoPlay, forceReload = true)
+        pendingRemoteRestore = null
+        Log.i(TAG, "hardRestartCurrent '${current.displayTitle}' pos=$startPositionMs")
+        rebufferWindow(startPositionMs.coerceAtLeast(0L), autoPlay = autoPlay, forceReload = true)
     }
 
     private fun rebufferWindow(
@@ -263,68 +215,64 @@ class MusicService : MediaSessionService() {
         autoPlay: Boolean = false,
         forceReload: Boolean = false
     ) {
-        val p = player ?: return
+        val hooks = engineHooks ?: return
         val current = queueManager.currentSong()
         if (current == null) {
-            p.stop()
-            p.clearMediaItems()
+            hooks.deactivate()
             _nowPlaying.value = null
+            pendingRemoteRestore = null
             updateForegroundNotification()
             return
         }
 
         clearStickySeek()
+        pendingRemoteRestore = null
 
         val repeatOne = isRepeatOne()
         val nextSong = if (repeatOne) null else queueManager.peekNext()
-        val wantCount = if (repeatOne) 1 else 1 + (if (nextSong != null) 1 else 0)
-        val haveUris = (0 until p.mediaItemCount).mapNotNull { mediaItemUriAt(it) }
-        val currentUri = songUri(current)
 
-        val alreadySynced = !forceReload &&
-            p.currentMediaItemIndex == 0 &&
-            haveUris.size == wantCount &&
-            haveUris.isNotEmpty() &&
-            urisEqual(haveUris[0], currentUri) &&
-            (if (nextSong != null) {
-                haveUris.size >= 2 && urisEqual(haveUris[1], songUri(nextSong))
-            } else true)
-
-        if (alreadySynced) {
-            if (startPositionMs > 0L && abs(p.currentPosition - startPositionMs) > 400L) {
-                p.seekTo(0, startPositionMs)
+        if (!forceReload &&
+            hooks.active &&
+            _nowPlaying.value?.id == current.id
+        ) {
+            val pos = hooks.getPositionMs()
+            if (startPositionMs > 0L && abs(pos - startPositionMs) > 400L) {
+                hooks.seekTo(startPositionMs)
             }
-            if (autoPlay && !p.isPlaying) p.play()
-            p.repeatMode = Player.REPEAT_MODE_OFF
+            if (autoPlay && !hooks.isPlaying()) hooks.play()
             _nowPlaying.value = current
             maybeRecordHistory(current)
+            hooks.updateMetadata(current)
             updateForegroundNotification()
             return
         }
 
-        val items = if (repeatOne) {
-            listOf(nextLoopItem(current))
-        } else {
-            buildList {
-                add(toMediaItem(current))
-                if (nextSong != null) add(toMediaItem(nextSong))
-            }
-        }
-
         Log.i(
             TAG,
-            "rebufferWindow current='${current.displayTitle}' " +
-                "next='${if (repeatOne) "(repeat-one single)" else nextSong?.displayTitle}' " +
-                "startMs=$startPositionMs autoPlay=$autoPlay force=$forceReload"
+            "rebufferWindow engine=${hooks.engineId} current='${current.displayTitle}' " +
+                "peekNext='${if (repeatOne) "(repeat-one)" else nextSong?.displayTitle}' " +
+                "startMs=$startPositionMs autoPlay=$autoPlay force=$forceReload " +
+                "remote=${isRemoteSong(current)}"
         )
 
         try {
-            val wasPlaying = autoPlay || p.playWhenReady
-            p.setMediaItems(items, 0, startPositionMs.coerceAtLeast(0L))
-            p.prepare()
-            p.repeatMode = Player.REPEAT_MODE_OFF
-            p.playWhenReady = wasPlaying
-            if (wasPlaying) p.play()
+            windowGeneration += 1
+            endedForWindow = -1
+            ignoreAutoAdvancedUntilElapsed = 0L
+            lastAdvanceElapsed = SystemClock.elapsedRealtime()
+            ignoreWatchdogUntilElapsed = lastAdvanceElapsed +
+                if (isRemoteSong(current)) NETWORK_WATCHDOG_GRACE_MS else WATCHDOG_GRACE_MS
+            stallSamplePos = -1L
+            if (autoPlay) {
+                userWantsPlay = true
+                acquireSleepLocks()
+            }
+            hooks.playWindow(
+                song = current,
+                next = nextSong,
+                startPositionMs = startPositionMs.coerceAtLeast(0L),
+                autoPlay = autoPlay
+            )
         } catch (e: Exception) {
             Log.e(TAG, "rebufferWindow failed", e)
         }
@@ -333,29 +281,7 @@ class MusicService : MediaSessionService() {
         maybeRecordHistory(current)
         updateForegroundNotification()
         persistState()
-    }
-
-    private fun updateNextMediaItemOnly() {
-        val p = player ?: return
-        val current = queueManager.currentSong() ?: return
-        val playingUri = mediaItemUriAt(p.currentMediaItemIndex)
-        if (!urisEqual(playingUri, songUri(current))) {
-            rebufferWindow(
-                startPositionMs = p.currentPosition.coerceAtLeast(0L),
-                autoPlay = p.playWhenReady,
-                forceReload = true
-            )
-            return
-        }
-        while (p.mediaItemCount > p.currentMediaItemIndex + 1) {
-            p.removeMediaItem(p.mediaItemCount - 1)
-        }
-        if (!isRepeatOne()) {
-            queueManager.peekNext()?.let { p.addMediaItem(toMediaItem(it)) }
-        }
-        p.repeatMode = Player.REPEAT_MODE_OFF
-        _nowPlaying.value = current
-        updateForegroundNotification()
+        syncPreparedNext()
     }
 
     private fun maybeRecordHistory(song: Song) {
@@ -367,79 +293,192 @@ class MusicService : MediaSessionService() {
 
     private fun applyAdvance(result: QueueManager.AdvanceResult, autoPlay: Boolean = true) {
         clearStickySeek()
-        val p = player
+        pendingRemoteRestore = null
         when {
             result.finished -> {
-                p?.pause()
+                userWantsPlay = false
+                releaseSleepLocks()
+                engineHooks?.pause()
                 _nowPlaying.value = queueManager.currentSong()
                 updateForegroundNotification()
                 persistState()
             }
-            result.seekToStart -> hardRestartCurrent(autoPlay = autoPlay)
+            result.seekToStart -> {
+                val hooks = engineHooks
+                if (hooks != null && hooks.active) {
+                    hooks.seekTo(0L)
+                    if (autoPlay) {
+                        userWantsPlay = true
+                        if (!hooks.isPlaying()) hooks.play()
+                    }
+                    updateForegroundNotification()
+                    persistState()
+                } else {
+                    hardRestartCurrent(autoPlay = autoPlay)
+                }
+            }
             result.reload -> hardRestartCurrent(autoPlay = autoPlay)
             result.song != null -> {
                 val target = result.song
                 _nowPlaying.value = target
                 maybeRecordHistory(target)
                 updateForegroundNotification()
-
-                val nextItemUri = mediaItemUriAt(1)
-                val canSeamless =
-                    p != null &&
-                        !isRepeatOne() &&
-                        p.hasNextMediaItem() &&
-                        nextItemUri != null &&
-                        urisEqual(nextItemUri, songUri(target))
-
-                if (canSeamless) {
-                    Log.i(TAG, "seamless advance → '${target.displayTitle}'")
-                    p.seekToNextMediaItem()
-                    if (autoPlay) p.play()
-                    if (!softNormalizeWindow()) {
-                        rebufferWindow(0L, autoPlay = autoPlay, forceReload = true)
-                    } else {
-                        persistState()
-                    }
-                } else {
-                    Log.i(TAG, "fallback rebuffer advance → '${target.displayTitle}'")
-                    rebufferWindow(0L, autoPlay = autoPlay, forceReload = true)
-                }
+                rebufferWindow(0L, autoPlay = autoPlay, forceReload = true)
             }
         }
     }
 
-    private fun syncQueueAfterExoAutoAdvance() {
-        if (advancing) return
-        if (inUserSeekGuard()) {
-            Log.i(TAG, "AUTO transition ignored — inside user seek guard")
-            // Window may already be on next item incorrectly; force match queue.
-            ensurePlayerMatchesQueue(autoPlay = player?.playWhenReady == true)
-            return
+    /** Queue already matches the engine (pre-buffered next is now current). */
+    private fun applyAdvanceKeepEngine(result: QueueManager.AdvanceResult) {
+        clearStickySeek()
+        pendingRemoteRestore = null
+        when {
+            result.finished -> {
+                userWantsPlay = false
+                releaseSleepLocks()
+                engineHooks?.pause()
+                _nowPlaying.value = queueManager.currentSong()
+            }
+            result.seekToStart -> engineHooks?.seekTo(0L)
+            result.reload -> hardRestartCurrent(autoPlay = true)
+            result.song != null -> {
+                _nowPlaying.value = result.song
+                maybeRecordHistory(result.song)
+                syncPreparedNext()
+            }
         }
+        updateForegroundNotification()
+        persistState()
+    }
+
+    private fun syncPreparedNext() {
+        val hooks = engineHooks ?: return
+        if (!hooks.active) return
         if (isRepeatOne()) {
-            hardRestartCurrent(autoPlay = true)
+            hooks.setNext(null)
+            StreamPrefetcher.get(this).retain(currentPrefetchIds())
             return
         }
+        val upcoming = queueManager.upcoming(WARM_AHEAD)
+        val next = upcoming.firstOrNull()
+        Log.i(TAG, "syncPreparedNext '${next?.displayTitle}' warm=${upcoming.size}")
+        hooks.setNext(next)
+        warmUpcoming(upcoming)
+    }
+
+    private fun currentPrefetchIds(): Set<String> {
+        val quality = librarySettings.getStreamQuality()
+        return setOfNotNull(queueManager.currentSong()?.toPlaybackMedia(quality = quality)?.mediaId)
+    }
+
+    private fun warmUpcoming(upcoming: List<Song>) {
+        val quality = librarySettings.getStreamQuality()
+        val prefetch = StreamPrefetcher.get(this)
+        val current = queueManager.currentSong()?.toPlaybackMedia(quality = quality)
+        val nextMedia = upcoming.map { it.toPlaybackMedia(quality = quality) }
+        val keep = buildSet {
+            current?.mediaId?.let { add(it) }
+            nextMedia.forEach { add(it.mediaId) }
+        }
+        prefetch.retain(keep)
+        current?.let { prefetch.start(it) }
+        nextMedia.forEach { prefetch.start(it) }
+    }
+
+    /**
+     * Claim the current engine window so a second EndReached / AUTO /
+     * watchdog tick cannot advance the queue twice. Increments
+     * [windowGeneration] so the *new* track is not treated as already ended.
+     */
+    private fun claimEndOfWindow(fromUser: Boolean): Boolean {
+        val now = SystemClock.elapsedRealtime()
+        if (!fromUser && now - lastAdvanceElapsed < ADVANCE_DEBOUNCE_MS) return false
+        if (!fromUser && endedForWindow == windowGeneration) return false
+        lastAdvanceElapsed = now
+        endedForWindow = windowGeneration
+        windowGeneration += 1
+        stallSamplePos = -1L
+        ignoreWatchdogUntilElapsed = now + WATCHDOG_GRACE_MS
+        return true
+    }
+
+    private fun onEngineAutoAdvanced() {
+        val now = SystemClock.elapsedRealtime()
+        if (now < ignoreAutoAdvancedUntilElapsed) {
+            ignoreAutoAdvancedUntilElapsed = 0L
+            Log.i(TAG, "autoAdvanced ignored — queue already moved")
+            return
+        }
+        if (advancing) return
+        if (!claimEndOfWindow(fromUser = false)) return
         advancing = true
         try {
             val result = queueManager.advance(userInitiated = false)
-            when {
-                result.reload -> hardRestartCurrent(autoPlay = true)
-                result.finished -> {
-                    player?.pause()
-                    _nowPlaying.value = null
-                    updateForegroundNotification()
-                    persistState()
-                }
-                result.song != null -> {
-                    Log.i(TAG, "auto-transition → queue now '${result.song.displayTitle}'")
-                    _nowPlaying.value = result.song
-                    maybeRecordHistory(result.song)
-                    updateForegroundNotification()
-                    ensurePlayerMatchesQueue(autoPlay = true)
-                    persistState()
-                }
+            Log.i(TAG, "autoAdvanced → '${result.song?.displayTitle}'")
+            applyAdvanceKeepEngine(result)
+        } finally {
+            advancing = false
+        }
+    }
+
+    /**
+     * Swap onto the already-prepared next item and advance queue state
+     * without reloading. Used by skip, EndReached, and the stall watchdog.
+     */
+    private fun advanceUsingPreparedNext(userInitiated: Boolean): Boolean {
+        val hooks = engineHooks ?: return false
+        if (!hooks.hasPreparedNext()) return false
+        val expected = queueManager.peekNext() ?: return false
+        val preparedId = hooks.preparedNextId()
+        val expectedId = expected.toPlaybackMedia(quality = librarySettings.getStreamQuality()).mediaId
+        if (preparedId == null || preparedId != expectedId) {
+            Log.i(
+                TAG,
+                "skip prepared mismatch want='${expected.displayTitle}' have=$preparedId"
+            )
+            syncPreparedNext()
+            return false
+        }
+        // VLC swap does not post onAutoAdvanced; Media3 AUTO transition does.
+        // Only ignore that callback for a short window so a later EndReached
+        // is not swallowed (that left audio on the next track with old art).
+        ignoreAutoAdvancedUntilElapsed =
+            SystemClock.elapsedRealtime() + AUTO_ADVANCE_IGNORE_MS
+        if (!hooks.playPreparedNext()) {
+            ignoreAutoAdvancedUntilElapsed = 0L
+            return false
+        }
+        claimEndOfWindow(fromUser = userInitiated)
+        applyAdvanceKeepEngine(queueManager.advance(userInitiated = userInitiated))
+        return true
+    }
+
+    private fun onEngineEnded() {
+        if (advancing) return
+        if (endedForWindow == windowGeneration) return
+
+        if (inUserSeekGuard()) {
+            val target = stickySeekTargetMs.takeIf { it >= 0L }
+                ?: engineHooks?.getPositionMs() ?: 0L
+            Log.i(TAG, "ENDED suppressed after user seek → reseek $target")
+            rebufferWindow(target, autoPlay = true, forceReload = true)
+            return
+        }
+
+        if (isRepeatOne()) {
+            if (!claimEndOfWindow(fromUser = false)) return
+            hardRestartCurrent(autoPlay = true)
+            return
+        }
+
+        advancing = true
+        try {
+            if (advanceUsingPreparedNext(userInitiated = false)) {
+                Log.i(TAG, "onEnded → playPreparedNext")
+                return
             }
+            if (!claimEndOfWindow(fromUser = false)) return
+            applyAdvance(queueManager.advance(userInitiated = false))
         } finally {
             advancing = false
         }
@@ -451,116 +490,147 @@ class MusicService : MediaSessionService() {
         autoPlay: Boolean = true,
         source: ColdSource? = null
     ) {
+        pendingRemoteRestore = null
         queueManager.playSource(songs, startIndex, source)
         rebufferWindow(0L, autoPlay = autoPlay, forceReload = true)
     }
 
     fun updateColdFromSource(songs: List<Song>, sourceId: String) {
         if (queueManager.updateColdFromSource(songs, sourceId)) {
-            updateNextMediaItemOnly()
             persistState()
         }
     }
 
+    fun applyRadioPrefs(prefs: RadioSourcePrefs) {
+        queueManager.applyRadioPrefs(prefs)
+        persistState()
+    }
+
     fun addToHotQueue(song: Song) {
         queueManager.addToQueue(song)
-        updateNextMediaItemOnly()
+        syncPreparedNext()
         persistState()
     }
 
     fun addToHotQueue(songs: List<Song>) {
         queueManager.addToQueue(songs)
-        updateNextMediaItemOnly()
+        syncPreparedNext()
         persistState()
     }
 
     fun clearHotQueue() {
         queueManager.clearHotQueue()
-        updateNextMediaItemOnly()
+        syncPreparedNext()
         persistState()
     }
 
     fun removeFromHot(index: Int) {
         val needReload = queueManager.removeFromQueue(index)
-        if (needReload) rebufferWindow(0L, autoPlay = player?.playWhenReady == true, forceReload = true)
-        else updateNextMediaItemOnly()
+        if (needReload) {
+            rebufferWindow(0L, autoPlay = engineHooks?.getPlayWhenReady() == true, forceReload = true)
+        } else {
+            syncPreparedNext()
+        }
         persistState()
     }
 
     fun removeFromCold(index: Int) {
         val needReload = queueManager.removeFromContext(index)
-        if (needReload) rebufferWindow(0L, autoPlay = player?.playWhenReady == true, forceReload = true)
-        else updateNextMediaItemOnly()
+        if (needReload) {
+            rebufferWindow(0L, autoPlay = engineHooks?.getPlayWhenReady() == true, forceReload = true)
+        } else {
+            syncPreparedNext()
+        }
         persistState()
     }
 
     fun moveHot(from: Int, to: Int) {
         queueManager.moveInQueue(from, to)
-        updateNextMediaItemOnly()
+        syncPreparedNext()
         persistState()
     }
 
     fun moveCold(from: Int, to: Int) {
         queueManager.moveInContext(from, to)
-        updateNextMediaItemOnly()
+        syncPreparedNext()
         persistState()
     }
 
     fun moveColdToHot(index: Int) {
         val needReload = queueManager.moveColdToHot(index)
-        if (needReload) rebufferWindow(0L, autoPlay = player?.playWhenReady == true, forceReload = true)
-        else updateNextMediaItemOnly()
+        if (needReload) {
+            rebufferWindow(0L, autoPlay = engineHooks?.getPlayWhenReady() == true, forceReload = true)
+        } else {
+            syncPreparedNext()
+        }
         persistState()
     }
 
     fun playQueueItem(lane: QueueLane, index: Int) {
+        pendingRemoteRestore = null
         queueManager.playItem(lane, index)
         rebufferWindow(0L, autoPlay = true, forceReload = true)
     }
 
     fun setShuffle(enabled: Boolean) {
         queueManager.setShuffle(enabled)
-        updateNextMediaItemOnly()
+        syncPreparedNext()
         persistState()
     }
 
     fun cycleRepeatMode() {
         queueManager.cycleRepeatMode()
-        updateNextMediaItemOnly()
+        syncPreparedNext()
         persistState()
     }
 
     fun setRepeatMode(mode: RepeatMode) {
         queueManager.setRepeatMode(mode)
-        updateNextMediaItemOnly()
+        syncPreparedNext()
         persistState()
     }
 
     fun play() {
-        player?.play()
+        userWantsPlay = true
+        acquireSleepLocks()
+        if (flushPendingRemoteRestore(autoPlay = true)) {
+            updateForegroundNotification()
+            persistState()
+            return
+        }
+        val hooks = engineHooks
+        if (hooks == null || !hooks.active) {
+            rebufferWindow(0L, autoPlay = true, forceReload = true)
+        } else {
+            hooks.play()
+        }
         updateForegroundNotification()
         persistState()
     }
 
     fun pause() {
-        player?.pause()
+        userWantsPlay = false
+        releaseSleepLocks()
+        engineHooks?.pause()
         updateForegroundNotification()
         persistState()
     }
 
     fun togglePlayPause() {
-        player?.let { if (it.isPlaying) it.pause() else it.play() }
-        updateForegroundNotification()
-        persistState()
+        val hooks = engineHooks
+        val shouldPause = userWantsPlay ||
+            hooks?.isPlaying() == true ||
+            hooks?.getPlayWhenReady() == true
+        if (shouldPause) pause() else play()
     }
 
     fun skipToNext() {
         if (advancing) return
-        // Manual skip always clears seek guard
         userSeekGuardUntilElapsed = 0L
         clearStickySeek()
         advancing = true
         try {
+            if (advanceUsingPreparedNext(userInitiated = true)) return
             applyAdvance(queueManager.advance(userInitiated = true))
         } finally {
             advancing = false
@@ -570,24 +640,30 @@ class MusicService : MediaSessionService() {
     fun skipToPrevious(forceTrackChange: Boolean = false) {
         userSeekGuardUntilElapsed = 0L
         clearStickySeek()
-        applyAdvance(
-            queueManager.skipPrevious(
-                currentPositionMs = player?.currentPosition ?: 0L,
-                forceTrackChange = forceTrackChange
+        advancing = true
+        try {
+            applyAdvance(
+                queueManager.skipPrevious(
+                    currentPositionMs = engineHooks?.getPositionMs() ?: 0L,
+                    forceTrackChange = forceTrackChange
+                )
             )
-        )
+        } finally {
+            advancing = false
+        }
     }
 
-    /**
-     * Scrubber seek on the *current* item only.
-     * Uses live decoder duration; parks 1ms before EOF only when drop is at/past end.
-     * Sticky position + seek guard prevent snap-back UI and accidental next-track.
-     */
     fun seekTo(positionMs: Long) {
-        val p = player ?: return
-        if (p.mediaItemCount <= 0) return
+        if (pendingRemoteRestore != null) {
+            val pending = pendingRemoteRestore!!
+            pendingRemoteRestore = pending.copy(positionMs = positionMs.coerceAtLeast(0L))
+            persistState()
+            return
+        }
+        val hooks = engineHooks ?: return
+        if (!hooks.active) return
 
-        val playerDuration = p.duration.takeIf { it > 0 && it != C.TIME_UNSET } ?: 0L
+        val playerDuration = hooks.getDurationMs().takeIf { it > 0 } ?: 0L
         val metaDuration = queueManager.currentSong()?.durationMs?.takeIf { it > 0 } ?: 0L
         val duration = when {
             playerDuration > 0L -> playerDuration
@@ -602,23 +678,6 @@ class MusicService : MediaSessionService() {
             else -> positionMs
         }
 
-        // Always seek on the item that matches the current song URI when possible
-        val current = queueManager.currentSong()
-        val idx = when {
-            current != null && urisEqual(mediaItemUriAt(0), songUri(current)) -> 0
-            current != null -> {
-                var found = p.currentMediaItemIndex.coerceAtLeast(0)
-                for (i in 0 until p.mediaItemCount) {
-                    if (urisEqual(mediaItemUriAt(i), songUri(current))) {
-                        found = i
-                        break
-                    }
-                }
-                found
-            }
-            else -> p.currentMediaItemIndex.coerceAtLeast(0)
-        }
-
         val now = SystemClock.elapsedRealtime()
         stickySeekTargetMs = target
         stickySeekUntilElapsed = now + STICKY_SEEK_MS
@@ -627,12 +686,9 @@ class MusicService : MediaSessionService() {
         stallSampleAtElapsed = now
 
         try {
-            p.seekTo(idx, target)
-            // Keep playing if we were playing — seek should not pause
-            if (p.playWhenReady && !p.isPlaying && p.playbackState == Player.STATE_READY) {
-                p.play()
-            }
-            Log.i(TAG, "seekTo target=$target (raw=$positionMs) duration=$duration idx=$idx")
+            hooks.seekTo(target)
+            if (hooks.getPlayWhenReady() && !hooks.isPlaying()) hooks.play()
+            Log.i(TAG, "seekTo target=$target (raw=$positionMs) duration=$duration")
         } catch (e: Exception) {
             Log.w(TAG, "seekTo failed", e)
             clearStickySeek()
@@ -640,11 +696,9 @@ class MusicService : MediaSessionService() {
         persistState()
     }
 
-    /** Map a 0–1 scrub fraction using **live** player duration (not a stale UI poll). */
     fun seekToFraction(fraction: Float) {
-        val p = player ?: return
-        val playerDuration = p.duration.takeIf { it > 0 && it != C.TIME_UNSET } ?: 0L
         val metaDuration = queueManager.currentSong()?.durationMs?.takeIf { it > 0 } ?: 0L
+        val playerDuration = engineHooks?.getDurationMs()?.takeIf { it > 0 } ?: 0L
         val duration = when {
             playerDuration > 0L -> playerDuration
             metaDuration > 0L -> metaDuration
@@ -659,36 +713,51 @@ class MusicService : MediaSessionService() {
     fun peekPrevious(): Song? = queueManager.peekPrevious()
 
     fun clearHistory() = historyStore.clear()
-    fun getHistory(): List<HistoryEntry> = historyStore.entries.value
     fun getHistoryMax(): Int = historyStore.maxEntries
     fun setHistoryMax(n: Int) {
         historyStore.maxEntries = n
-    }
-
-    private fun toMediaItem(song: Song, mediaIdSuffix: String? = null): MediaItem {
-        val id = if (mediaIdSuffix != null) "${song.id}-$mediaIdSuffix" else song.id.toString()
-        return MediaItem.Builder()
-            .setUri(songUri(song))
-            .setMediaId(id)
-            .setMediaMetadata(
-                androidx.media3.common.MediaMetadata.Builder()
-                    .setTitle(song.displayTitle)
-                    .setArtist(song.displayArtist)
-                    .setAlbumTitle(song.displayAlbum)
-                    .setAlbumArtist(song.displayAlbumArtist)
-                    .setArtworkUri(song.albumArtUri)
-                    .build()
-            )
-            .build()
     }
 
     private fun restorePlaybackState() {
         if (restoredOnce) return
         restoredOnce = true
         serviceScope.launch {
-            val saved = withContext(Dispatchers.IO) { stateStore.load() } ?: return@launch
-            queueManager.restore(saved.snapshot)
-            rebufferWindow(saved.positionMs, autoPlay = false, forceReload = true)
+            try {
+                val saved = withContext(Dispatchers.IO) { stateStore.load() } ?: return@launch
+                queueManager.restore(saved.snapshot)
+                val current = queueManager.currentSong()
+                _nowPlaying.value = current
+                updateForegroundNotification()
+                yield()
+                userWantsPlay = false
+                if (isRemoteSong(current)) {
+                    pendingRemoteRestore = PendingRemoteRestore(
+                        positionMs = saved.positionMs,
+                        wasPlayWhenReady = false
+                    )
+                    Log.i(
+                        TAG,
+                        "restore deferred remote '${current?.displayTitle}' pos=${saved.positionMs}"
+                    )
+                } else {
+                    delay(RESTORE_PREPARE_DELAY_MS)
+                    rebufferWindow(
+                        saved.positionMs,
+                        autoPlay = false,
+                        forceReload = true
+                    )
+                    engineHooks?.pause()
+                }
+            } finally {
+                userWantsPlay = false
+                persistState(immediate = true)
+                engineHooks?.pause()
+                engineHooks?.updateMetadata(queueManager.currentSong())
+                ignoreSessionPlayUntilElapsed =
+                    SystemClock.elapsedRealtime() + STARTUP_IGNORE_SESSION_PLAY_MS
+                engineHooks?.setSessionActive(true)
+                Log.i(TAG, "restore complete — paused until user plays")
+            }
         }
     }
 
@@ -707,30 +776,45 @@ class MusicService : MediaSessionService() {
         stallWatchJob = serviceScope.launch {
             while (isActive) {
                 delay(STALL_POLL_MS)
-                val p = player ?: continue
-                if (recoveringAudio || advancing || inUserSeekGuard()) {
+                publishViewState()
+                if (pendingRemoteRestore != null) {
                     stallSamplePos = -1L
                     continue
                 }
-                if (!p.playWhenReady) {
+                val hooks = engineHooks ?: continue
+                if (!hooks.active || recoveringAudio || advancing || inUserSeekGuard()) {
                     stallSamplePos = -1L
                     continue
                 }
-                if (p.playbackState != Player.STATE_READY) {
-                    stallSamplePos = p.currentPosition
-                    stallSampleAtElapsed = SystemClock.elapsedRealtime()
+                if (SystemClock.elapsedRealtime() < ignoreWatchdogUntilElapsed) {
+                    stallSamplePos = -1L
                     continue
                 }
+                if (userWantsPlay) acquireSleepLocks()
 
-                val pos = p.currentPosition.coerceAtLeast(0L)
-                val duration = p.duration.takeIf { it > 0 } ?: 0L
-                if (duration > 0L && pos >= duration - NEAR_END_MS) {
-                    stallSamplePos = pos
-                    stallSampleAtElapsed = SystemClock.elapsedRealtime()
-                    continue
-                }
-
+                val pos = hooks.getPositionMs().coerceAtLeast(0L)
+                val engineDur = hooks.getDurationMs().takeIf { it > 0 } ?: 0L
+                val metaDur = _nowPlaying.value?.durationMs?.takeIf { it > 0 } ?: 0L
+                val duration = if (engineDur > 0L) engineDur else metaDur
+                val live = hooks.isLive()
+                val remaining = if (live || duration <= 0L) Long.MAX_VALUE else (duration - pos).coerceAtLeast(0L)
                 val now = SystemClock.elapsedRealtime()
+                val remote = isRemoteSong(_nowPlaying.value)
+                val wantPlay = hooks.getPlayWhenReady()
+                val playing = hooks.isPlaying()
+                val buffering = hooks.isBuffering()
+                val nearEnd = !live && duration > 0L && remaining <= NEAR_END_MS
+
+                // Finite tracks only — live radio has no successor to warm.
+                if (!live && wantPlay && remaining in 1L..WARMUP_NEXT_MS && !isRepeatOne()) {
+                    hooks.warmupNext()
+                }
+
+                if (live) {
+                    stallSamplePos = -1L
+                    continue
+                }
+
                 if (pos != stallSamplePos) {
                     stallSamplePos = pos
                     stallSampleAtElapsed = now
@@ -738,13 +822,64 @@ class MusicService : MediaSessionService() {
                 }
 
                 val frozenFor = now - stallSampleAtElapsed
-                val looksStuck = frozenFor >= STALL_MS &&
-                    (p.isPlaying || p.playWhenReady)
-                if (looksStuck && stallSamplePos >= 0L) {
+                if (stallSamplePos < 0L) continue
+
+                // End-of-track freeze: HTTP streams often sit BUFFERING at EOF
+                // and never fire onEnded. Never treat an explicit user pause as
+                // EOF — buffering stays true after pause on Jellyfin/VLC.
+                if (nearEnd && userWantsPlay && frozenFor >= NEAR_END_ADVANCE_MS &&
+                    (wantPlay || buffering)
+                ) {
+                    Log.i(
+                        TAG,
+                        "near-end freeze ${frozenFor}ms pos=$pos/$duration " +
+                            "playing=$playing buffering=$buffering wantPlay=$wantPlay → onEnded"
+                    )
+                    onEngineEnded()
+                    stallSamplePos = -1L
+                    continue
+                }
+
+                // Intended to play but producing no audio, stuck off zero.
+                // Covers VLC Stopped-without-EndReached mid-file-end.
+                if (wantPlay && !playing && !buffering && pos > 1_000L &&
+                    frozenFor >= ENDED_SILENCE_MS && remaining <= 5_000L
+                ) {
+                    Log.i(TAG, "silent near end ${frozenFor}ms pos=$pos/$duration → onEnded")
+                    onEngineEnded()
+                    stallSamplePos = -1L
+                    continue
+                }
+
+                if (!wantPlay) {
+                    // Media3 audio-focus pause clears playWhenReady; we still
+                    // resume unless this was an explicit user pause or a call.
+                    val inCall = isInCall()
+                    if (userWantsPlay && !playing && !buffering && !inCall &&
+                        frozenFor >= UNEXPECTED_PAUSE_MS && !nearEnd
+                    ) {
+                        Log.i(TAG, "unexpected pause ${frozenFor}ms pos=$pos — resume")
+                        acquireSleepLocks()
+                        hooks.play()
+                    }
+                    continue
+                }
+                // Mid-track buffering is expected on Jellyfin/HTTP.
+                if (buffering) continue
+
+                val threshold = if (remote) NETWORK_STALL_MS else STALL_MS
+
+                if (userWantsPlay && !playing && !isInCall() && frozenFor >= UNEXPECTED_PAUSE_MS) {
+                    Log.i(TAG, "unexpected pause ${frozenFor}ms pos=$pos — resume")
+                    acquireSleepLocks()
+                    hooks.play()
+                    continue
+                }
+
+                if (frozenFor >= threshold) {
                     Log.w(
                         TAG,
-                        "stall watchdog: pos frozen at $pos for ${frozenFor}ms " +
-                            "isPlaying=${p.isPlaying} — recovering"
+                        "stall watchdog: pos frozen at $pos for ${frozenFor}ms remote=$remote — recovering"
                     )
                     recoverFromAudioGlitch(atPositionMs = pos)
                 }
@@ -752,12 +887,72 @@ class MusicService : MediaSessionService() {
         }
     }
 
-    private fun persistState() {
-        stateStore.save(
-            snapshot = queueManager.getSnapshot(),
-            positionMs = getPositionMs(),
-            playWhenReady = player?.playWhenReady == true
-        )
+    private fun persistState(immediate: Boolean = false) {
+        val pending = pendingRemoteRestore
+        val snap = queueManager.getSnapshot()
+        val pos = if (pending != null) pending.positionMs else getPositionMs()
+        val ready = if (pending != null) false else userWantsPlay || engineHooks?.getPlayWhenReady() == true
+        persistDebounceJob?.cancel()
+        val write = {
+            stateStore.save(snap, pos, ready)
+        }
+        if (immediate) {
+            serviceScope.launch(Dispatchers.IO) { write() }
+            return
+        }
+        persistDebounceJob = serviceScope.launch(Dispatchers.IO) {
+            delay(750)
+            write()
+        }
+    }
+
+    private fun isInCall(): Boolean {
+        return try {
+            val mode = (getSystemService(Context.AUDIO_SERVICE) as AudioManager).mode
+            mode == AudioManager.MODE_IN_CALL || mode == AudioManager.MODE_IN_COMMUNICATION
+        } catch (_: Exception) {
+            false
+        }
+    }
+
+    private fun acquireSleepLocks() {
+        try {
+            val lock = wakeLock ?: (getSystemService(Context.POWER_SERVICE) as PowerManager)
+                .newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "yuriplayer:playback")
+                .also {
+                    it.setReferenceCounted(false)
+                    wakeLock = it
+                }
+            if (!lock.isHeld) lock.acquire()
+        } catch (e: Exception) {
+            Log.w(TAG, "wakeLock", e)
+        }
+        if (!isRemoteSong(_nowPlaying.value)) return
+        try {
+            @Suppress("DEPRECATION")
+            val lock = wifiLock ?: (applicationContext.getSystemService(Context.WIFI_SERVICE) as WifiManager)
+                .createWifiLock(WifiManager.WIFI_MODE_FULL_HIGH_PERF, "yuriplayer:wifi")
+                .also {
+                    it.setReferenceCounted(false)
+                    wifiLock = it
+                }
+            if (!lock.isHeld) lock.acquire()
+        } catch (e: Exception) {
+            Log.w(TAG, "wifiLock", e)
+        }
+    }
+
+    private fun releaseSleepLocks() {
+        try {
+            if (wakeLock?.isHeld == true) wakeLock?.release()
+        } catch (e: Exception) {
+            Log.w(TAG, "wakeLock release", e)
+        }
+        try {
+            if (wifiLock?.isHeld == true) wifiLock?.release()
+        } catch (e: Exception) {
+            Log.w(TAG, "wifiLock release", e)
+        }
     }
 
     private fun recoverFromAudioGlitch(atPositionMs: Long? = null) {
@@ -765,9 +960,11 @@ class MusicService : MediaSessionService() {
         recoveringAudio = true
         serviceScope.launch {
             try {
-                val p = player
-                val pos = (atPositionMs ?: p?.currentPosition ?: 0L).coerceAtLeast(0L)
-                val wasPlaying = p?.playWhenReady == true || p?.isPlaying == true
+                val hooks = engineHooks
+                val pos = (atPositionMs ?: hooks?.getPositionMs() ?: 0L).coerceAtLeast(0L)
+                val wasPlaying = userWantsPlay ||
+                    hooks?.getPlayWhenReady() == true ||
+                    hooks?.isPlaying() == true
                 Log.w(TAG, "audio glitch → rebuffer at $pos autoPlay=$wasPlaying")
                 rebufferWindow(pos, autoPlay = wasPlaying, forceReload = true)
             } finally {
@@ -779,95 +976,25 @@ class MusicService : MediaSessionService() {
         }
     }
 
-    private val playerListener = object : Player.Listener {
-        override fun onIsPlayingChanged(isPlaying: Boolean) {
-            _isPlaying.value = isPlaying
-            updateForegroundNotification()
-            persistState()
-        }
-
-        override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) {
-            if (reason == Player.MEDIA_ITEM_TRANSITION_REASON_REPEAT) {
-                hardRestartCurrent(autoPlay = true)
-                return
-            }
-            if (reason == Player.MEDIA_ITEM_TRANSITION_REASON_AUTO) {
-                syncQueueAfterExoAutoAdvance()
-                return
-            }
-            if (advancing) return
-            // SEEK / PLAYLIST_CHANGED transitions — keep nowPlaying aligned
-            val song = queueManager.currentSong() ?: _nowPlaying.value
-            if (song != null) {
-                _nowPlaying.value = song
-                maybeRecordHistory(song)
-                updateForegroundNotification()
-            }
-        }
-
-        override fun onPlaybackStateChanged(playbackState: Int) {
-            if (playbackState != Player.STATE_ENDED || advancing) return
-
-            // Near-end scrub can trip STATE_ENDED while the user is still on this track.
-            if (inUserSeekGuard()) {
-                val p = player ?: return
-                val target = stickySeekTargetMs.takeIf { it >= 0L } ?: p.currentPosition
-                Log.i(TAG, "STATE_ENDED suppressed after user seek → reseek $target")
-                try {
-                    val idx = p.currentMediaItemIndex.coerceAtLeast(0)
-                    p.seekTo(idx, target.coerceAtLeast(0L))
-                    if (p.playWhenReady) p.play()
-                } catch (e: Exception) {
-                    Log.w(TAG, "reseek after suppressed ENDED failed", e)
-                    rebufferWindow(
-                        startPositionMs = target.coerceAtLeast(0L),
-                        autoPlay = p.playWhenReady,
-                        forceReload = true
-                    )
-                }
-                return
-            }
-
-            val p = player
-            if (p != null && p.hasNextMediaItem()) {
-                Log.i(TAG, "STATE_ENDED with next item — defer to AUTO transition")
-                return
-            }
-
-            if (isRepeatOne()) {
-                Log.i(TAG, "STATE_ENDED under repeat-one → hardRestart")
-                hardRestartCurrent(autoPlay = true)
-                return
-            }
-
-            advancing = true
-            try {
-                applyAdvance(queueManager.advance(userInitiated = false))
-            } finally {
-                advancing = false
-            }
-        }
-
-        override fun onPlayerError(error: PlaybackException) {
-            Log.e(TAG, "player error code=${error.errorCode} ${error.message}", error)
-            val cause = error.cause
-            // 1004 FAILED_RUNTIME_CHECK often wraps IllegalArgumentException from
-            // DefaultAudioSink.handleBuffer (bad PTS / discontinuity). Treat like
-            // the other audio-track recoveries so playback does not stay paused.
-            val shouldRecover =
-                cause is AudioSink.UnexpectedDiscontinuityException ||
-                    cause is IllegalArgumentException ||
-                    error.errorCode == PlaybackException.ERROR_CODE_FAILED_RUNTIME_CHECK ||
-                    error.errorCode == PlaybackException.ERROR_CODE_AUDIO_TRACK_INIT_FAILED ||
-                    error.errorCode == PlaybackException.ERROR_CODE_AUDIO_TRACK_WRITE_FAILED
-            if (shouldRecover) {
-                recoverFromAudioGlitch()
-            }
-        }
+    private fun publishViewState() {
+        val song = queueManager.currentSong()
+        _nowPlaying.value = song
+        val engineDur = engineHooks?.getDurationMs()?.takeIf { it > 0L } ?: 0L
+        val metaDur = song?.durationMs?.takeIf { it > 0L } ?: 0L
+        _viewState.value = PlayerViewState(
+            song = song,
+            next = queueManager.peekNext(),
+            previous = queueManager.peekPrevious(),
+            playing = _isPlaying.value,
+            positionMs = getPositionMs(),
+            durationMs = if (engineDur > 0L) engineDur else metaDur
+        )
     }
 
     private fun updateForegroundNotification() {
+        publishViewState()
         startForeground(NOTIFICATION_ID, buildMediaNotification(_nowPlaying.value, _isPlaying.value))
+        engineHooks?.updateMetadata(_nowPlaying.value)
     }
 
     private fun createNotificationChannel() {
@@ -902,7 +1029,6 @@ class MusicService : MediaSessionService() {
         )
     }
 
-    @OptIn(UnstableApi::class)
     private fun buildMediaNotification(song: Song?, playing: Boolean): Notification {
         val title = song?.displayTitle ?: "Yuri Player"
         val text = song?.displayArtist ?: if (playing) "Playing" else "Paused"
@@ -920,31 +1046,43 @@ class MusicService : MediaSessionService() {
             .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
             .setCategory(NotificationCompat.CATEGORY_TRANSPORT)
             .setPriority(NotificationCompat.PRIORITY_LOW)
-            .addAction(android.R.drawable.ic_media_previous, "Previous", serviceActionPending(ACTION_PREV, REQUEST_PREV))
-            .addAction(playPauseIcon, if (playing) "Pause" else "Play", serviceActionPending(ACTION_TOGGLE, REQUEST_TOGGLE))
-            .addAction(android.R.drawable.ic_media_next, "Next", serviceActionPending(ACTION_NEXT, REQUEST_NEXT))
+            .addAction(
+                android.R.drawable.ic_media_previous, "Previous",
+                serviceActionPending(ACTION_PREV, REQUEST_PREV)
+            )
+            .addAction(
+                playPauseIcon, if (playing) "Pause" else "Play",
+                serviceActionPending(ACTION_TOGGLE, REQUEST_TOGGLE)
+            )
+            .addAction(
+                android.R.drawable.ic_media_next, "Next",
+                serviceActionPending(ACTION_NEXT, REQUEST_NEXT)
+            )
 
-        mediaSession?.let {
-            builder.setStyle(MediaStyleNotificationHelper.MediaStyle(it).setShowActionsInCompactView(0, 1, 2))
+        engineHooks?.let { hooks ->
+            try {
+                @Suppress("DEPRECATION")
+                builder.setStyle(
+                    androidx.media.app.NotificationCompat.MediaStyle()
+                        .setMediaSession(
+                            android.support.v4.media.session.MediaSessionCompat.Token
+                                .fromToken(hooks.sessionToken())
+                        )
+                        .setShowActionsInCompactView(0, 1, 2)
+                )
+            } catch (e: Throwable) {
+                Log.d(TAG, "MediaStyle skipped: ${e.message}")
+            }
         }
         return builder.build()
     }
 
-    override fun onGetSession(controllerInfo: MediaSession.ControllerInfo): MediaSession? = mediaSession
+    fun isPlaying(): Boolean = engineHooks?.isPlaying() == true
+    fun getCurrentSong(): Song? = queueManager.currentSong()
 
-    override fun onBind(intent: Intent?): IBinder? {
-        return if (intent?.action == null) binder else super.onBind(intent) ?: binder
-    }
-
-    fun isPlaying(): Boolean = player?.isPlaying == true
-    fun getCurrentSong(): Song? = _nowPlaying.value ?: queueManager.currentSong()
-
-    /**
-     * While a user scrub is settling, report the drop target so the UI does not
-     * snap back to the pre-seek position for ~1s.
-     */
     fun getPositionMs(): Long {
-        val real = player?.currentPosition?.coerceAtLeast(0L) ?: 0L
+        pendingRemoteRestore?.let { return it.positionMs }
+        val real = engineHooks?.getPositionMs()?.coerceAtLeast(0L) ?: 0L
         val now = SystemClock.elapsedRealtime()
         if (stickySeekTargetMs >= 0L && now < stickySeekUntilElapsed) {
             if (abs(real - stickySeekTargetMs) <= SEEK_CONFIRM_MS) {
@@ -958,14 +1096,18 @@ class MusicService : MediaSessionService() {
     }
 
     fun getDurationMs(): Long {
-        val p = player ?: return 0L
-        val d = p.duration
-        if (d > 0L && d != C.TIME_UNSET) return d
+        if (pendingRemoteRestore != null) {
+            return queueManager.currentSong()?.durationMs?.takeIf { it > 0 } ?: 0L
+        }
+        val d = engineHooks?.getDurationMs() ?: 0L
+        if (d > 0L) return d
         return queueManager.currentSong()?.durationMs?.takeIf { it > 0 } ?: 0L
     }
 
     fun getQueueSnapshot(): QueueSnapshot = queueManager.getSnapshot()
-    fun setPlaylist(songs: List<Song>, startIndex: Int = 0) = playSource(songs, startIndex, autoPlay = false)
+    fun setPlaylist(songs: List<Song>, startIndex: Int = 0) =
+        playSource(songs, startIndex, autoPlay = false)
+
     fun getQueue(): List<Song> = queueManager.getSnapshot().flatQueue
     fun getCurrentIndex(): Int {
         val snap = queueManager.getSnapshot()
@@ -977,34 +1119,39 @@ class MusicService : MediaSessionService() {
 
     override fun onTaskRemoved(rootIntent: Intent?) {
         Log.i(TAG, "onTaskRemoved — stopping playback")
-        persistState()
-        try {
-            player?.playWhenReady = false
-            player?.pause()
-            player?.stop()
-        } catch (e: Exception) {
-            Log.w(TAG, "stop on task removed", e)
-        }
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) stopForeground(STOP_FOREGROUND_REMOVE)
-        else {
-            @Suppress("DEPRECATION")
-            stopForeground(true)
-        }
-        stopSelf()
+        stopForAppClosed()
         super.onTaskRemoved(rootIntent)
     }
 
+    /** Recents swipe / close-the-app. Home and lock-screen keep playing. */
+    private fun stopForAppClosed() {
+        userWantsPlay = false
+        val pos = getPositionMs()
+        val snap = queueManager.getSnapshot()
+        runCatching { engineHooks?.pause() }
+        runCatching { engineHooks?.deactivate() }
+        releaseSleepLocks()
+        try {
+            stateStore.save(snap, pos, playWhenReady = false)
+        } catch (e: Exception) {
+            Log.w(TAG, "persist on close", e)
+        }
+        if (historyStore.clearOnClose) {
+            historyStore.clear()
+        }
+        stopForeground(STOP_FOREGROUND_REMOVE)
+        stopSelf()
+    }
+
     override fun onDestroy() {
-        persistState()
+        persistState(immediate = true)
+        persistDebounceJob?.cancel()
         persistJob?.cancel()
         stallWatchJob?.cancel()
         serviceScope.cancel()
-        mediaSession?.run {
-            player?.release()
-            release()
-            mediaSession = null
-        }
-        player = null
+        releaseSleepLocks()
+        engineHooks?.release()
+        engineHooks = null
         super.onDestroy()
     }
 
@@ -1023,10 +1170,22 @@ class MusicService : MediaSessionService() {
         private const val REQUEST_NEXT = 103
         private const val REQUEST_DELETE = 104
         private const val STALL_POLL_MS = 500L
-        private const val STALL_MS = 2_000L
-        private const val NEAR_END_MS = 500L
+        private const val STALL_MS = 4_000L
+        private const val NETWORK_STALL_MS = 12_000L
+        private const val NEAR_END_MS = 2_500L
+        private const val NEAR_END_ADVANCE_MS = 700L
+        private const val WARMUP_NEXT_MS = 8_000L
+        private const val ENDED_SILENCE_MS = 1_500L
+        private const val UNEXPECTED_PAUSE_MS = 1_200L
+        private const val ADVANCE_DEBOUNCE_MS = 600L
+        private const val AUTO_ADVANCE_IGNORE_MS = 800L
+        private const val WATCHDOG_GRACE_MS = 2_000L
+        private const val NETWORK_WATCHDOG_GRACE_MS = 8_000L
         private const val STICKY_SEEK_MS = 1_200L
         private const val USER_SEEK_GUARD_MS = 1_000L
         private const val SEEK_CONFIRM_MS = 600L
+        private const val WARM_AHEAD = 2
+        private const val RESTORE_PREPARE_DELAY_MS = 40L
+        private const val STARTUP_IGNORE_SESSION_PLAY_MS = 2_500L
     }
 }

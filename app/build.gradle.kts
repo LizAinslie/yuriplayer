@@ -1,12 +1,62 @@
 import java.util.Properties
 import java.io.FileInputStream
+import org.gradle.api.provider.ValueSource
+import org.gradle.api.provider.ValueSourceParameters
+import org.gradle.process.ExecOperations
+import java.io.ByteArrayOutputStream
+import javax.inject.Inject
 
 plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.compose)
     alias(libs.plugins.kotlin.serialization)
     alias(libs.plugins.ksp)
+    alias(libs.plugins.aboutlibraries)
+    alias(libs.plugins.aboutlibraries.android)
 }
+
+/**
+ * Configuration-cache compatible git invocation.
+ * Bare ProcessBuilder at configuration time is forbidden under Gradle CC.
+ */
+abstract class GitCommandValueSource : ValueSource<String, GitCommandValueSource.Params> {
+    interface Params : ValueSourceParameters {
+        val args: org.gradle.api.provider.ListProperty<String>
+        val workingDir: org.gradle.api.file.DirectoryProperty
+    }
+
+    @get:Inject
+    abstract val execOperations: ExecOperations
+
+    override fun obtain(): String {
+        val out = ByteArrayOutputStream()
+        val result = execOperations.exec {
+            commandLine(listOf("git") + parameters.args.get())
+            workingDir(parameters.workingDir.get().asFile)
+            standardOutput = out
+            errorOutput = ByteArrayOutputStream()
+            isIgnoreExitValue = true
+        }
+        val text = out.toString(Charsets.UTF_8).trim()
+        return if (result.exitValue == 0 && text.isNotBlank()) text else "unknown"
+    }
+}
+
+fun Project.gitOutput(vararg args: String): Provider<String> =
+    providers.of(GitCommandValueSource::class.java) {
+        parameters.args.set(args.toList())
+        parameters.workingDir.set(rootProject.layout.projectDirectory)
+    }
+
+val gitCommit = gitOutput("rev-parse", "HEAD")
+val gitCommitShort = gitOutput("rev-parse", "--short", "HEAD")
+val gitBranch = gitOutput("rev-parse", "--abbrev-ref", "HEAD")
+val gitDescribe = gitOutput("describe", "--tags", "--always", "--dirty")
+val gitTagExact = gitOutput("describe", "--tags", "--exact-match")
+val gitStatus = gitOutput("status", "--porcelain")
+
+val gitTag: Provider<String> = gitTagExact.map { if (it == "unknown") "" else it }
+val gitDirty: Provider<Boolean> = gitStatus.map { it != "unknown" && it.isNotBlank() }
 
 android {
     namespace = "capital.yuri.yuriplayer"
@@ -22,6 +72,15 @@ android {
         versionName = "0.1.0-local"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+
+        // .get() is fine: ValueSource is a tracked CC input
+        buildConfigField("String", "GIT_COMMIT", "\"${gitCommit.get()}\"")
+        buildConfigField("String", "GIT_COMMIT_SHORT", "\"${gitCommitShort.get()}\"")
+        buildConfigField("String", "GIT_BRANCH", "\"${gitBranch.get()}\"")
+        buildConfigField("String", "GIT_DESCRIBE", "\"${gitDescribe.get()}\"")
+        buildConfigField("String", "GIT_TAG", "\"${gitTag.get()}\"")
+        buildConfigField("boolean", "GIT_DIRTY", "${gitDirty.get()}")
+        buildConfigField("String", "REPO_URL", "\"https://github.com/LizAinslie/yuriplayer\"")
     }
 
     val keystorePropsFile = rootProject.file("keystore.properties")
@@ -63,8 +122,30 @@ android {
         sourceCompatibility = JavaVersion.VERSION_11
         targetCompatibility = JavaVersion.VERSION_11
     }
+
+    testOptions {
+        // Keep the user's library / logins. Do not enable orchestrator
+        // clearPackageData — these tests run against familiar on-device data.
+        animationsDisabled = true
+        unitTests {
+            isIncludeAndroidResources = true
+            isReturnDefaultValues = true
+        }
+    }
     buildFeatures {
         compose = true
+        buildConfig = true
+    }
+
+    packaging {
+        jniLibs {
+            // LibVLC ships its own .so set; avoid merge conflicts with other natives
+            pickFirsts += listOf(
+                "lib/**/libc++_shared.so",
+                "lib/**/libvlc.so",
+                "lib/**/libvlcjni.so"
+            )
+        }
     }
 
     sourceSets {
@@ -79,15 +160,13 @@ android {
     }
 }
 
-// ---------------------------------------------------------------------------
-// NDK FFmpeg (optional, cached).
-//   ./gradlew :app:buildFfmpeg
-// Resolves NDK from (first hit wins):
-//   1) ANDROID_NDK_HOME / ANDROID_NDK env (if Gradle actually sees it)
-//   2) ANDROID_HOME/ndk/<newest>
-//   3) local.properties sdk.dir/ndk/<newest>  ← usual Android Studio path
-// Then *forwards* ANDROID_NDK_HOME into the Exec process (daemon-safe).
-// ---------------------------------------------------------------------------
+aboutLibraries {
+    library {
+        duplicationMode.set(com.mikepenz.aboutlibraries.plugin.DuplicateMode.MERGE)
+        duplicationRule.set(com.mikepenz.aboutlibraries.plugin.DuplicateRule.SIMPLE)
+    }
+}
+
 val ffmpegAbis = listOf("arm64-v8a", "armeabi-v7a", "x86_64")
 val ffmpegRoot = rootProject.file("native/ffmpeg")
 val ffmpegAssetsDir = file("src/main/assets/ffmpeg")
@@ -137,8 +216,6 @@ tasks.register<Exec>("buildFfmpeg") {
     workingDir = ffmpegRoot
     commandLine("bash", "build.sh")
 
-    // Always set process env explicitly — Gradle daemon does not reliably
-    // inherit IDEA run-config environment variables.
     val ndk = resolveNdkHome()
     environment("FFMPEG_ASSETS_DIR", ffmpegAssetsDir.absolutePath)
     environment("FFMPEG_ABIS", ffmpegAbis.joinToString(","))
@@ -164,7 +241,10 @@ dependencies {
     implementation(libs.androidx.compose.ui.graphics)
     implementation(libs.androidx.compose.ui.tooling.preview)
     implementation(libs.androidx.core.ktx)
+    implementation(libs.androidx.documentfile)
     implementation(libs.androidx.lifecycle.runtime.ktx)
+    // ProcessLifecycleOwner for secret playlist cover reset on background / lock
+    implementation(libs.androidx.lifecycle.process)
     implementation(libs.material)
     implementation(libs.androidx.palette)
 
@@ -172,6 +252,11 @@ dependencies {
     implementation(libs.androidx.media3.session)
     implementation(libs.androidx.media3.ui)
     implementation(libs.androidx.media3.common)
+    // MediaStyle + MediaSessionCompat.Token for engine-agnostic notifications
+    implementation(libs.androidx.media)
+
+    // LibVLC — local FLAC/APE and other formats Media3 often rejects
+    implementation(libs.libvlc.all)
 
     implementation(libs.koin.android)
     implementation(libs.koin.androidx.compose)
@@ -185,16 +270,21 @@ dependencies {
 
     implementation(libs.jaudiotagger)
 
-    implementation(libs.ktor.client.android)
+    implementation(libs.ktor.client.cio)
     implementation(libs.ktor.client.content.negotiation)
     implementation(libs.ktor.client.logging)
     implementation(libs.ktor.serialization.kotlinx.json)
 
+    implementation(libs.jellyfin.core)
+
     implementation(libs.coil.compose)
-    implementation(libs.coil.network.okhttp)
+    implementation(libs.coil.network.ktor3)
     implementation(libs.coil.gif)
 
+    implementation(libs.aboutlibraries.core)
+
     testImplementation(libs.junit)
+    testImplementation(libs.robolectric)
     androidTestImplementation(platform(libs.androidx.compose.bom))
     androidTestImplementation(libs.androidx.compose.ui.test.junit4)
     androidTestImplementation(libs.androidx.espresso.core)

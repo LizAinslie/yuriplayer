@@ -60,10 +60,12 @@ data class QueueSnapshot(
     val repeatMode: RepeatMode = RepeatMode.OFF,
     val playedStack: List<Song> = emptyList(),
     val radioSession: RadioSession? = null,
-    val radioUpcoming: List<Song> = emptyList()
+    val radioUpcoming: List<Song> = emptyList(),
+    /** Playing item when it is not at [indexInLane] (search / one-off). */
+    val floatingCurrent: Song? = null
 ) {
     val currentSong: Song?
-        get() = when (lane) {
+        get() = floatingCurrent ?: when (lane) {
             QueueLane.HOT -> hotQueue.getOrNull(indexInLane)
             QueueLane.COLD -> coldQueue.getOrNull(indexInLane)
         }
@@ -71,8 +73,13 @@ data class QueueSnapshot(
     val flatQueue: List<Song>
         get() = hotQueue + coldQueue
 
+    /**
+     * True when a radio session is active **or** the cold source is typed RADIO.
+     * Label text alone is not enough — some stations set coldSource without
+     * keeping [radioSession].active, which hid the tune button.
+     */
     val isRadio: Boolean
-        get() = radioSession?.active == true
+        get() = radioSession?.active == true || coldSource?.type == ColdSourceType.RADIO
 
     fun isPlayingFromAlbum(albumKey: String): Boolean =
         coldSource?.matches(ColdSourceType.ALBUM, albumKey) == true ||

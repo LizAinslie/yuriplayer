@@ -1,0 +1,13 @@
+appId: capital.yuri.yuriplayer
+---
+- launchApp:
+    appId: capital.yuri.yuriplayer
+    clearState: false
+- tapOn:
+    id: settings
+- tapOn:
+    id: settings_playback_engine
+- tapOn:
+    id: engine_media3
+- back
+- back

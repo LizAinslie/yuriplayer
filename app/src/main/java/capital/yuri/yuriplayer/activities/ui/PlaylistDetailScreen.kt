@@ -1,10 +1,9 @@
 package capital.yuri.yuriplayer.activities.ui
 
-import android.net.Uri
+import MarqueeText
 import android.widget.Toast
-import androidx.activity.compose.rememberLauncherForActivityResult
-import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.layout.Box
@@ -21,7 +20,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -53,6 +52,7 @@ import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -78,9 +78,11 @@ import capital.yuri.yuriplayer.data.MyStuffPinStore
 import capital.yuri.yuriplayer.data.Playlist
 import capital.yuri.yuriplayer.data.PlaylistCover
 import capital.yuri.yuriplayer.data.PlaylistRepository
+import capital.yuri.yuriplayer.data.LibrarySettings
 import capital.yuri.yuriplayer.data.Song
 import capital.yuri.yuriplayer.data.StuffPin
 import capital.yuri.yuriplayer.data.StuffPinKind
+import capital.yuri.yuriplayer.data.theme.ArtColorSurface
 import capital.yuri.yuriplayer.data.theme.ThemeService
 import capital.yuri.yuriplayer.player.PlayerController
 import capital.yuri.yuriplayer.ui.formatTrackCount
@@ -95,8 +97,27 @@ private val GradientFadeLength = 200.dp
 private val ReorderHeaderBody = 110.dp
 private val EditHeaderBody = 380.dp
 
+private data class PlaylistRow(
+    val index: Int,
+    val song: Song,
+    val songKey: String,
+    val occurrence: Int,
+    val rowId: String
+)
+
+private fun playlistRows(songs: List<Song>): List<PlaylistRow> {
+    val seen = mutableMapOf<String, Int>()
+    return songs.mapIndexed { index, song ->
+        val k = song.songKey
+        val n = seen.getOrDefault(k, 0)
+        seen[k] = n + 1
+        PlaylistRow(index, song, k, n, "$k#$n")
+    }
+}
+
 private enum class PlaylistMode { Browse, EditDetails, Reorder }
 
+@OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
 @Composable
 fun PlaylistDetailScreen(
     playlistId: String,
@@ -114,7 +135,9 @@ fun PlaylistDetailScreen(
     val pinStore: MyStuffPinStore = koinInject()
     val player: PlayerController = koinInject()
     val themeService: ThemeService = koinInject()
+    val settings: LibrarySettings = koinInject()
     val playlist by repo.observePlaylist(playlistId).collectAsState(initial = null)
+    val colorRev by settings.colorPrefsRevision.collectAsState()
     val scope = rememberCoroutineScope()
     val context = LocalContext.current
     val base = MaterialTheme.colorScheme
@@ -125,21 +148,19 @@ fun PlaylistDetailScreen(
     var editName by remember { mutableStateOf("") }
     var editDescription by remember { mutableStateOf("") }
     var themeColors by remember { mutableStateOf(fallbackPlayerColors(base)) }
-    var cropUri by remember { mutableStateOf<Uri?>(null) }
 
     val listState = rememberLazyListState()
     val autoScroll = rememberListDragAutoScroll(listState)
 
-    val pickCover = rememberLauncherForActivityResult(
-        ActivityResultContracts.GetContent()
-    ) { uri ->
-        if (uri != null) cropUri = uri
+    // Multi-cover (public + secret) is handled by PlaylistCoverGlobalHost / PlaylistCoverUi.
+    fun openCoverPicker() {
+        PlaylistCoverUi.open(playlistId)
     }
 
-    LaunchedEffect(playlist?.id, playlist?.customImageUri, playlist?.songs?.size) {
+    LaunchedEffect(playlist?.id, playlist?.customImageUri, playlist?.activeCoverId, playlist?.songs?.size, colorRev) {
         val pl = playlist ?: return@LaunchedEffect
         val cover = PlaylistRepository.coverFor(pl)
-        val uri: Uri? = when (cover.mode) {
+        val uri = when (cover.mode) {
             PlaylistCover.CoverMode.CUSTOM -> cover.customUri
             PlaylistCover.CoverMode.SINGLE,
             PlaylistCover.CoverMode.COLLAGE ->
@@ -151,10 +172,18 @@ fun PlaylistDetailScreen(
                 context = context,
                 key = "playlist:${pl.id}:${uri}",
                 uri = uri,
-                base = base
+                base = base,
+                surface = ArtColorSurface.COVER,
+                loadBitmap = false
             ).colors
         } else {
-            themeService.themeFromSong(context, pl.songs.firstOrNull(), base).colors
+            themeService.themeFromSong(
+                context = context,
+                song = pl.songs.firstOrNull(),
+                base = base,
+                surface = ArtColorSurface.COVER,
+                loadBitmap = false
+            ).colors
         }
     }
 
@@ -185,23 +214,6 @@ fun PlaylistDetailScreen(
             }
         }
         mode = PlaylistMode.Browse
-    }
-
-    if (cropUri != null) {
-        ImageCropScreen(
-            sourceUri = cropUri!!,
-            title = "Crop cover",
-            aspect = 1f,
-            onCancel = { cropUri = null },
-            onCropped = { cropped ->
-                cropUri = null
-                scope.launch {
-                    repo.setCustomImage(playlistId, cropped.toString())
-                    Toast.makeText(context, "Cover updated", Toast.LENGTH_SHORT).show()
-                }
-            }
-        )
-        return
     }
 
     val pl = playlist
@@ -277,7 +289,7 @@ fun PlaylistDetailScreen(
     val rootPlaylistNav = LocalPlaylistNav.current
     val nestedPlaylistNav = rootPlaylistNav.copy(
         startRadio = { startRadio() },
-        changeCover = { pickCover.launch("image/*") },
+        changeCover = { openCoverPicker() },
         edit = {
             editName = pl.name
             editDescription = pl.description.orEmpty()
@@ -379,7 +391,8 @@ fun PlaylistDetailScreen(
                                         mode = PlaylistMode.EditDetails
                                     },
                                     onReorder = { mode = PlaylistMode.Reorder },
-                                    onMore = { showMenu = true }
+                                    onMore = { showMenu = true },
+                                    onCoverLongPress = { openCoverPicker() }
                                 )
                                 PlaylistMode.EditDetails -> PlaylistEditHero(
                                     playlist = pl,
@@ -389,7 +402,7 @@ fun PlaylistDetailScreen(
                                     onEditDescriptionChange = { editDescription = it },
                                     onArt = onArt,
                                     themeColors = themeColors,
-                                    onPickCover = { pickCover.launch("image/*") },
+                                    onPickCover = { openCoverPicker() },
                                     onDone = { saveDetailsAndExit() },
                                     onBackToBrowse = { mode = PlaylistMode.Browse }
                                 )
@@ -441,6 +454,8 @@ fun PlaylistDetailScreen(
                 var dragFrom by remember { mutableIntStateOf(-1) }
                 var dragHover by remember { mutableIntStateOf(-1) }
                 var dragOffset by remember { mutableFloatStateOf(0f) }
+                val rows = remember(pl.songs) { playlistRows(pl.songs) }
+                val latestRows = rememberUpdatedState(rows)
 
                 autoScroll.onScrolled = { delta ->
                     if (dragFrom >= 0) {
@@ -458,7 +473,9 @@ fun PlaylistDetailScreen(
                         bottom = 96.dp
                     )
                 ) {
-                    itemsIndexed(pl.songs, key = { i, s -> "$i-${s.songKey}" }) { index, song ->
+                    items(rows, key = { it.rowId }) { row ->
+                        val index = row.index
+                        val song = row.song
                         if (mode == PlaylistMode.Reorder) {
                             val isDragged = dragFrom == index
                             val shift = when {
@@ -469,7 +486,7 @@ fun PlaylistDetailScreen(
                                 isDragged -> dragOffset
                                 else -> 0f
                             }
-                            var swipeX by remember { mutableFloatStateOf(0f) }
+                            var swipeX by remember(row.rowId) { mutableFloatStateOf(0f) }
                             val threshold = with(density) { 96.dp.toPx() }
 
                             Box(
@@ -486,14 +503,13 @@ fun PlaylistDetailScreen(
                                         }
                                         .fillMaxWidth()
                                         .background(Color.Transparent)
-                                        .pointerInput(index, pl.songs.size) {
+                                        .pointerInput(row.rowId, pl.songs.size) {
                                             detectDragGesturesAfterLongPress(
                                                 onDragStart = {
                                                     swipeX = 0f
                                                     dragFrom = index
                                                     dragHover = index
                                                     dragOffset = 0f
-                                                    // layout index == song index (no headers)
                                                     autoScroll.onDragStart(
                                                         fingerYFromListItem(listState, index, 0f)
                                                     )
@@ -528,12 +544,16 @@ fun PlaylistDetailScreen(
                                                 }
                                             )
                                         }
-                                        .pointerInput(index) {
+                                        .pointerInput(row.rowId) {
                                             detectHorizontalDragGestures(
                                                 onDragEnd = {
                                                     if (swipeX < -threshold) {
+                                                        val live = latestRows.value
+                                                            .firstOrNull { it.rowId == row.rowId }
+                                                        val key = live?.songKey ?: row.songKey
+                                                        val occ = live?.occurrence ?: row.occurrence
                                                         scope.launch {
-                                                            repo.removeAt(pl.id, index)
+                                                            repo.removeOccurrence(pl.id, key, occ)
                                                             Toast.makeText(
                                                                 context,
                                                                 "Removed",
@@ -576,7 +596,7 @@ fun PlaylistDetailScreen(
                                     }
                                     IconButton(onClick = {
                                         scope.launch {
-                                            repo.removeAt(pl.id, index)
+                                            repo.removeOccurrence(pl.id, row.songKey, row.occurrence)
                                             Toast.makeText(context, "Removed", Toast.LENGTH_SHORT).show()
                                         }
                                     }) {
@@ -615,6 +635,7 @@ fun PlaylistDetailScreen(
     }
 }
 
+@OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
 @Composable
 private fun PlaylistExpandedHero(
     playlist: Playlist,
@@ -625,7 +646,8 @@ private fun PlaylistExpandedHero(
     onStartRadio: () -> Unit,
     onEdit: () -> Unit,
     onReorder: () -> Unit,
-    onMore: () -> Unit
+    onMore: () -> Unit,
+    onCoverLongPress: () -> Unit = {}
 ) {
     Column(
         modifier = Modifier
@@ -634,7 +656,14 @@ private fun PlaylistExpandedHero(
             .padding(top = 36.dp, bottom = 16.dp),
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
-        PlaylistCoverArt(playlist, size = 160.dp)
+        Box(
+            modifier = Modifier.combinedClickable(
+                onClick = {},
+                onLongClick = onCoverLongPress
+            )
+        ) {
+            PlaylistCoverArt(playlist, size = 160.dp)
+        }
         Spacer(modifier = Modifier.height(16.dp))
         Column(
             modifier = Modifier.fillMaxWidth(),

@@ -31,16 +31,12 @@ import androidx.compose.foundation.layout.WindowInsetsSides
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.only
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.systemBars
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Favorite
-import androidx.compose.material.icons.filled.Home
-import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -57,11 +53,13 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.zIndex
 import androidx.core.content.ContextCompat
@@ -73,7 +71,8 @@ import capital.yuri.yuriplayer.activities.ui.ArtistDetailScreen
 import capital.yuri.yuriplayer.activities.ui.ArtistNavActions
 import capital.yuri.yuriplayer.activities.ui.EditAlbumMetadataScreen
 import capital.yuri.yuriplayer.activities.ui.EditSongMetadataScreen
-import capital.yuri.yuriplayer.activities.ui.LibraryScreen
+import capital.yuri.yuriplayer.activities.ui.ExploreScanMenu
+import capital.yuri.yuriplayer.activities.ui.ExploreScreen
 import capital.yuri.yuriplayer.activities.ui.LocalAlbumNav
 import capital.yuri.yuriplayer.activities.ui.LocalArtistNav
 import capital.yuri.yuriplayer.activities.ui.LocalPlaylistNav
@@ -82,16 +81,19 @@ import capital.yuri.yuriplayer.activities.ui.LocalStatusBarStack
 import capital.yuri.yuriplayer.activities.ui.MiniPlayerBar
 import capital.yuri.yuriplayer.activities.ui.MyStuffScreen
 import capital.yuri.yuriplayer.activities.ui.NowPlayingScreen
-import capital.yuri.yuriplayer.activities.ui.PlaceholderScreen
+import capital.yuri.yuriplayer.activities.ui.PlaylistCoverGlobalHost
+import capital.yuri.yuriplayer.activities.ui.PlaylistCoverUi
 import capital.yuri.yuriplayer.activities.ui.PlaylistDetailScreen
 import capital.yuri.yuriplayer.activities.ui.PlaylistNavActions
 import capital.yuri.yuriplayer.activities.ui.SettingsScreen
 import capital.yuri.yuriplayer.activities.ui.SongNavActions
 import capital.yuri.yuriplayer.activities.ui.StatusBarColorStack
 import capital.yuri.yuriplayer.activities.ui.theme.YuriPlayerTheme
+import capital.yuri.yuriplayer.ui.TestTags
 import capital.yuri.yuriplayer.data.ActivityTitleFormat
 import capital.yuri.yuriplayer.data.AlbumItem
 import capital.yuri.yuriplayer.data.ArtistItem
+import capital.yuri.yuriplayer.data.CatalogRepository
 import capital.yuri.yuriplayer.data.LibraryIndex
 import capital.yuri.yuriplayer.data.LibrarySettings
 import capital.yuri.yuriplayer.data.MetadataEnrichmentService
@@ -103,14 +105,21 @@ import capital.yuri.yuriplayer.data.Song
 import capital.yuri.yuriplayer.data.StuffPin
 import capital.yuri.yuriplayer.data.StuffPinKind
 import capital.yuri.yuriplayer.data.albumKey
+import capital.yuri.yuriplayer.data.allCreditsForSong
 import capital.yuri.yuriplayer.data.artistKey
+import capital.yuri.yuriplayer.data.ArtistRole
+import capital.yuri.yuriplayer.data.primaryArtistName
 import capital.yuri.yuriplayer.player.ColdSource
 import capital.yuri.yuriplayer.player.ColdSourceType
 import capital.yuri.yuriplayer.player.PlayerController
-import capital.yuri.yuriplayer.player.QueueSnapshot
 import capital.yuri.yuriplayer.player.RepeatMode
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import org.koin.android.ext.android.inject
 import org.koin.compose.koinInject
 
@@ -133,8 +142,9 @@ class MainActivity : ComponentActivity() {
                 Manifest.permission.READ_MEDIA_AUDIO
             )
         }
-        if (readOk) libraryIndex.refresh()
-        maybePromptAllFilesAccess()
+        // Do NOT start a library scan here — that raced playback restore on every
+        // cold start. LibraryIndex.bootstrap handles empty / stale later.
+        if (readOk) maybePromptAllFilesAccess()
     }
 
     private fun hasReadPermission(): Boolean {
@@ -146,10 +156,11 @@ class MainActivity : ComponentActivity() {
         return ContextCompat.checkSelfPermission(this, read) == PackageManager.PERMISSION_GRANTED
     }
 
-    private fun requiredStoragePermissions(): Array<String> {
+    private fun requiredPermissions(): Array<String> {
         val perms = mutableListOf<String>()
         if (Build.VERSION.SDK_INT >= 33) {
             perms += Manifest.permission.READ_MEDIA_AUDIO
+            perms += Manifest.permission.POST_NOTIFICATIONS
         } else {
             perms += Manifest.permission.READ_EXTERNAL_STORAGE
             perms += Manifest.permission.WRITE_EXTERNAL_STORAGE
@@ -157,12 +168,13 @@ class MainActivity : ComponentActivity() {
         return perms.toTypedArray()
     }
 
-    private fun ensureStoragePermissions() {
-        val needed = requiredStoragePermissions().filter {
+    private fun ensurePermissions() {
+        val needed = requiredPermissions().filter {
             ContextCompat.checkSelfPermission(this, it) != PackageManager.PERMISSION_GRANTED
         }
         if (needed.isEmpty()) {
-            libraryIndex.refresh()
+            // Permissions already granted — do NOT refresh(). Bootstrap decides
+            // whether a local scan is needed, and only after playback restore.
             maybePromptAllFilesAccess()
         } else {
             permissionLauncher.launch(needed.toTypedArray())
@@ -204,7 +216,11 @@ class MainActivity : ComponentActivity() {
                 intent?.getBooleanExtra("car_mode", false) == true
         openPlayerState.value = intent?.getBooleanExtra(EXTRA_OPEN_PLAYER, false) == true
 
-        ensureStoragePermissions()
+        // Bind as early as possible so the first play tap has a live service.
+        // Application already started MusicService for restore; this attaches the binder.
+        playerController.bind()
+
+        ensurePermissions()
 
         title = "YuriPlayer"
         enableEdgeToEdge()
@@ -257,6 +273,7 @@ class MainActivity : ComponentActivity() {
 
     override fun onStart() {
         super.onStart()
+        // Re-bind if we lost the connection while backgrounded
         playerController.bind()
     }
 
@@ -282,13 +299,12 @@ class MainActivity : ComponentActivity() {
 }
 
 private enum class TopTab(val label: String, val icon: ImageVector) {
-    Home("Home", Icons.Default.Home),
-    Explore("Explore", Icons.Default.Search),
-    MyStuff("My Stuff", Icons.Default.Favorite)
+    MyStuff("My Stuff", Icons.Default.Favorite),
+    Explore("Explore", Icons.Default.Search)
 }
 
 private sealed class DetailRoute {
-    data class Album(val album: AlbumItem) : DetailRoute()
+    data class Album(val album: AlbumItem, val highlightSongKey: String? = null) : DetailRoute()
     data class Artist(val artist: ArtistItem) : DetailRoute()
     data class Playlist(val playlistId: String) : DetailRoute()
     data class EditSong(val song: Song) : DetailRoute()
@@ -311,6 +327,8 @@ fun YuriApp(
     val enrichment: MetadataEnrichmentService = koinInject()
     val playlistRepo: PlaylistRepository = koinInject()
     val pinStore: MyStuffPinStore = koinInject()
+    val catalog: CatalogRepository = koinInject()
+    val scope = rememberCoroutineScope()
     val baseScheme = MaterialTheme.colorScheme
 
     val statusBarStack = remember(baseScheme.background) {
@@ -326,6 +344,7 @@ fun YuriApp(
 
     val songCount by library.songs.collectAsState()
     val loading by library.isLoading.collectAsState()
+    val colorRev by settings.colorPrefsRevision.collectAsState()
 
     LaunchedEffect(songCount.size, loading, showNetworkPrompt) {
         if (!showNetworkPrompt &&
@@ -343,13 +362,12 @@ fun YuriApp(
                 settings.setNetworkMetadataConsent(false)
                 showNetworkPrompt = false
             },
-            title = { Text("Online album metadata?") },
+            title = { Text("Find missing artwork?") },
             text = {
                 Text(
-                    "YuriPlayer can look up missing release years and album art " +
-                        "from MusicBrainz and the Cover Art Archive (e.g. VOIDSTAR). " +
-                        "This uses the internet. Nothing is uploaded — only public " +
-                        "catalog searches. You can change this later in Settings."
+                    "YuriPlayer can fill in missing album art and release years. " +
+                        "This uses the internet. Nothing is uploaded. " +
+                        "You can turn this off later in Settings."
                 )
             },
             confirmButton = {
@@ -372,7 +390,7 @@ fun YuriApp(
         )
     }
 
-    var topTab by remember { mutableStateOf(TopTab.Explore) }
+    var topTab by remember { mutableStateOf(TopTab.MyStuff) }
     var playerExpanded by remember { mutableStateOf(false) }
     var detailStack by remember { mutableStateOf<List<DetailRoute>>(emptyList()) }
     var npPlaylistSong by remember { mutableStateOf<Song?>(null) }
@@ -397,36 +415,48 @@ fun YuriApp(
         }
     }
 
-    var currentSong by remember { mutableStateOf<Song?>(null) }
     var playing by remember { mutableStateOf(false) }
     var positionMs by remember { mutableLongStateOf(0L) }
     var durationMs by remember { mutableLongStateOf(0L) }
-    var snapshot by remember { mutableStateOf(QueueSnapshot()) }
-    var peekNext by remember { mutableStateOf<Song?>(null) }
-    var peekPrev by remember { mutableStateOf<Song?>(null) }
+    val snapshot by player.snapshot.collectAsState()
+    val viewState by player.viewState.collectAsState()
+    val currentSong = viewState.song ?: snapshot.currentSong
+    val peekNext = viewState.next
+    val peekPrev = viewState.previous
 
     val connected by player.isConnected.collectAsState()
 
+    LaunchedEffect(viewState.song?.songKey, viewState.playing) {
+        playing = viewState.playing
+    }
     LaunchedEffect(connected) {
         if (!connected) return@LaunchedEffect
         while (isActive) {
-            currentSong = player.getCurrentSong()
             playing = player.isPlayingNow()
             positionMs = player.getPositionMs()
             durationMs = player.getDurationMs()
-            snapshot = player.getQueueSnapshot()
-            peekNext = player.peekNext()
-            peekPrev = player.peekPrevious()
-            delay(250)
+            delay(200)
         }
     }
 
-    LaunchedEffect(currentSong?.id, currentSong?.path) {
-        themeStore.updateCurrent(context, currentSong, baseScheme)
+    LaunchedEffect(
+        currentSong?.songKey,
+        currentSong?.albumArtUri,
+        colorRev
+    ) {
+        val incoming = currentSong
+        activity?.title = ActivityTitleFormat.format(incoming)
+        if (incoming == null) {
+            themeStore.updateCurrent(context, null, baseScheme)
+            return@LaunchedEffect
+        }
+        themeStore.showSong(context, incoming, baseScheme)
         themeStore.updateNeighbors(context, peekNext, peekPrev, baseScheme)
-        activity?.title = ActivityTitleFormat.format(currentSong)
     }
-    LaunchedEffect(peekNext?.id, peekPrev?.id) {
+    LaunchedEffect(peekNext?.id, peekPrev?.id, peekNext?.path, peekPrev?.path) {
+        // Wait for the cover slide to promote peek-next; replacing it
+        // immediately would snap art and skip the animation.
+        delay(350)
         themeStore.updateNeighbors(context, peekNext, peekPrev, baseScheme)
     }
 
@@ -447,9 +477,10 @@ fun YuriApp(
         )
     }
 
-    fun resolveArtist(name: String): ArtistItem {
+    /** Local-only fallback when catalog has no row yet. */
+    fun resolveArtistLocal(name: String): ArtistItem {
         val key = artistKey(name)
-        val found = library.artists().firstOrNull {
+        val found = library.artists(taggedOnly = false).firstOrNull {
             artistKey(it.name) == key
         }
         if (found != null) return found
@@ -466,38 +497,64 @@ fun YuriApp(
         )
     }
 
+    fun openAlbumResolved(seed: AlbumItem, highlightSongKey: String? = null) {
+        playerExpanded = false
+        pushDetail(DetailRoute.Album(seed, highlightSongKey))
+    }
+
+    fun openArtistResolved(seed: ArtistItem) {
+        val stripped = primaryArtistName(seed.name) ?: seed.displayName
+        val item = if (stripped.equals(seed.name, ignoreCase = true)) seed
+        else seed.copy(name = stripped)
+        playerExpanded = false
+        pushDetail(DetailRoute.Artist(item))
+    }
+
     fun openAlbumForSong(song: Song) {
         val key = albumKey(song.album, song.effectiveAlbumArtist)
-        val found = library.albums().firstOrNull {
+        val fromLocal = library.albums(taggedOnly = false).firstOrNull {
             albumKey(it.name, it.artist) == key
-        } ?: library.albums().firstOrNull {
+        } ?: library.albums(taggedOnly = false).firstOrNull {
             it.name.equals(song.album, ignoreCase = true)
         }
-        if (found != null) {
-            playerExpanded = false
-            pushDetail(DetailRoute.Album(found))
-        } else {
-            Toast.makeText(context, "Album not found in library", Toast.LENGTH_SHORT).show()
+        val seed = when {
+            fromLocal != null && fromLocal.songs.isNotEmpty() -> fromLocal
+            song.hasAlbum -> AlbumItem(
+                name = song.album,
+                artist = song.effectiveAlbumArtist,
+                trackCount = 1,
+                songs = listOf(song)
+            )
+            else -> null
+        }
+        if (seed != null) openAlbumResolved(seed, song.songKey)
+        else Toast.makeText(context, "Album not found in library", Toast.LENGTH_SHORT).show()
+    }
+
+    fun openArtistByName(name: String) {
+        val resolved = primaryArtistName(name) ?: name
+        if (resolved.isBlank()) {
+            Toast.makeText(context, "No artist tag", Toast.LENGTH_SHORT).show()
+            return
+        }
+        val key = artistKey(resolved) ?: resolved.lowercase()
+        scope.launch {
+            val fromCatalog = withContext(Dispatchers.IO) { catalog.artistItemForKey(key, resolved) }
+            openArtistResolved(fromCatalog ?: resolveArtistLocal(resolved))
         }
     }
 
     fun openArtistForSong(song: Song) {
-        val name = song.effectiveAlbumArtist ?: song.artist
+        val credits = allCreditsForSong(song)
+        val name = credits.firstOrNull { it.role == ArtistRole.PRIMARY }?.name
+            ?: credits.firstOrNull()?.name
+            ?: song.effectiveAlbumArtist
+            ?: song.artist
         if (name.isNullOrBlank()) {
             Toast.makeText(context, "No artist tag", Toast.LENGTH_SHORT).show()
             return
         }
-        playerExpanded = false
-        pushDetail(DetailRoute.Artist(resolveArtist(name)))
-    }
-
-    fun openArtistByName(name: String) {
-        if (name.isBlank()) {
-            Toast.makeText(context, "No artist tag", Toast.LENGTH_SHORT).show()
-            return
-        }
-        playerExpanded = false
-        pushDetail(DetailRoute.Artist(resolveArtist(name)))
+        openArtistByName(name)
     }
 
     CompositionLocalProvider(
@@ -507,14 +564,10 @@ fun YuriApp(
             openArtistByName = { openArtistByName(it) }
         ),
         LocalAlbumNav provides AlbumNavActions(
-            openAlbum = {
-                playerExpanded = false
-                pushDetail(DetailRoute.Album(it))
-            },
+            openAlbum = { openAlbumResolved(it) },
             openArtist = { album ->
                 val name = album.artist ?: return@AlbumNavActions
-                playerExpanded = false
-                pushDetail(DetailRoute.Artist(resolveArtist(name)))
+                openArtistByName(name)
             },
             startRadio = {
                 player.startAlbumRadio(it)
@@ -541,10 +594,7 @@ fun YuriApp(
             }
         ),
         LocalArtistNav provides ArtistNavActions(
-            openArtist = {
-                playerExpanded = false
-                pushDetail(DetailRoute.Artist(it))
-            },
+            openArtist = { openArtistResolved(it) },
             openArtistByName = { openArtistByName(it) },
             startRadio = { name ->
                 player.startArtistRadio(name)
@@ -562,8 +612,6 @@ fun YuriApp(
                 )
                 Toast.makeText(context, "Added to My Stuff", Toast.LENGTH_SHORT).show()
             }
-            // Image/banner actions stay null at root; ArtistDetailScreen can override
-            // LocalArtistNav with a nested provider that fills them in.
         ),
         LocalPlaylistNav provides PlaylistNavActions(
             openPlaylist = { id ->
@@ -588,8 +636,9 @@ fun YuriApp(
                     )
                 )
                 Toast.makeText(context, "Added to My Stuff", Toast.LENGTH_SHORT).show()
-            }
-            // changeCover / edit / delete stay null at root; PlaylistDetail can override.
+            },
+            // Root default: open multi-cover picker (public + secret slots).
+            changeCover = { playlistId -> PlaylistCoverUi.open(playlistId) }
         )
     ) {
         ApplyStatusBarStack(statusBarStack)
@@ -616,7 +665,14 @@ fun YuriApp(
                                 ) {
                                     TopTab.entries.forEach { tab ->
                                         val selected = topTab == tab
-                                        IconButton(onClick = { topTab = tab }) {
+                                        val tag = when (tab) {
+                                            TopTab.MyStuff -> TestTags.TAB_MY_STUFF
+                                            TopTab.Explore -> TestTags.TAB_EXPLORE
+                                        }
+                                        IconButton(
+                                            onClick = { topTab = tab },
+                                            modifier = Modifier.testTag(tag)
+                                        ) {
                                             Icon(
                                                 imageVector = tab.icon,
                                                 contentDescription = tab.label,
@@ -629,24 +685,14 @@ fun YuriApp(
                             },
                             actions = {
                                 if (topTab == TopTab.Explore) {
-                                    val libLoading by library.isLoading.collectAsState()
-                                    IconButton(onClick = {
-                                        library.refresh()
-                                        if (settings.isNetworkMetadataEnabled()) {
-                                            enrichment.enrichLibraryAsync()
-                                        }
-                                    }) {
-                                        if (libLoading) {
-                                            CircularProgressIndicator(
-                                                modifier = Modifier.size(20.dp),
-                                                strokeWidth = 2.dp
-                                            )
-                                        } else {
-                                            Icon(Icons.Default.Refresh, contentDescription = "Refresh library")
-                                        }
-                                    }
+                                    // TravelExplore dropdown: scan / pause / stop per source.
+                                    // Never auto-starts on tab enter — only explicit menu actions.
+                                    ExploreScanMenu()
                                 }
-                                IconButton(onClick = { pushDetail(DetailRoute.Settings) }) {
+                                IconButton(
+                                    onClick = { pushDetail(DetailRoute.Settings) },
+                                    modifier = Modifier.testTag(TestTags.SETTINGS)
+                                ) {
                                     Icon(Icons.Default.Settings, contentDescription = "Settings")
                                 }
                             }
@@ -673,66 +719,137 @@ fun YuriApp(
                     when (val d = detail) {
                         is DetailRoute.Album -> {
                             val key = albumKey(d.album.name, d.album.artist)
-                            val liveAlbum = library.albums().firstOrNull {
-                                albumKey(it.name, it.artist) == key
-                            } ?: d.album
-                            LaunchedEffect(liveAlbum.songs.size, key) {
-                                player.updateColdFromSource(liveAlbum.songs, key)
-                                if (settings.isNetworkMetadataEnabled()) {
-                                    enrichment.enrichAlbumAsync(liveAlbum)
-                                }
-                            }
+                            var resolvedAlbum by remember(key) { mutableStateOf(d.album) }
                             AlbumDetailScreen(
-                                album = liveAlbum,
+                                album = d.album,
                                 nowPlaying = currentSong,
                                 isSourceActive = snapshot.isPlayingFromAlbum(key),
                                 isPlaying = playing,
                                 shuffleEnabled = snapshot.shuffleEnabled,
+                                highlightSongKey = d.highlightSongKey,
                                 onBack = { popDetail() },
-                                onPlayAlbum = { songs, index -> playAlbumFrom(liveAlbum, songs, index) },
+                                onPlayAlbum = { songs, index ->
+                                    val item = resolvedAlbum.copy(
+                                        songs = songs,
+                                        trackCount = songs.size
+                                    )
+                                    playAlbumFrom(item, songs, index)
+                                },
                                 onTogglePlayPause = { player.togglePlayPause() },
                                 onToggleShuffle = { player.toggleShuffle() },
                                 onFavorite = {},
                                 onOpenArtist = {
-                                    val name = liveAlbum.artist ?: return@AlbumDetailScreen
-                                    pushDetail(DetailRoute.Artist(resolveArtist(name)))
+                                    val name = primaryArtistName(resolvedAlbum.artist)
+                                        ?: resolvedAlbum.artist
+                                        ?: return@AlbumDetailScreen
+                                    openArtistByName(name)
                                 },
-                                onEditAlbum = { pushDetail(DetailRoute.EditAlbum(liveAlbum)) },
+                                onEditAlbum = { pushDetail(DetailRoute.EditAlbum(resolvedAlbum)) },
                                 onEditSong = { pushDetail(DetailRoute.EditSong(it)) },
                                 onAddSongToQueue = { player.addToHotQueue(it) },
-                                onAddAlbumToQueue = { player.addToHotQueue(it) },
-                                onStartRadio = { player.startAlbumRadio(liveAlbum) }
+                                onAddAlbumToQueue = { songs -> player.addToHotQueue(songs) },
+                                onStartRadio = { player.startAlbumRadio(resolvedAlbum) },
+                                onExpanded = { expanded ->
+                                    if (expanded.songs.size >= resolvedAlbum.songs.size) {
+                                        resolvedAlbum = expanded
+                                        player.updateColdFromSource(expanded.songs, key)
+                                        if (settings.isNetworkMetadataEnabled()) {
+                                            enrichment.enrichAlbumAsync(expanded)
+                                        }
+                                    }
+                                }
                             )
                         }
                         is DetailRoute.Artist -> {
-                            val albums = library.albums().filter {
-                                it.artist.equals(d.artist.name, ignoreCase = true)
-                            }
-                            LaunchedEffect(d.artist.name, albums.size) {
-                                if (settings.isNetworkMetadataEnabled()) {
-                                    albums.forEach { enrichment.enrichAlbumAsync(it) }
+                            val artistName = primaryArtistName(d.artist.name) ?: d.artist.displayName
+                            val aKey = artistKey(artistName) ?: artistName.lowercase()
+                            var liveArtist by remember(aKey) { mutableStateOf(d.artist) }
+                            var albums by remember(aKey) { mutableStateOf<List<AlbumItem>>(emptyList()) }
+                            var appearsOn by remember(aKey) { mutableStateOf<List<AlbumItem>>(emptyList()) }
+                            var albumsLoading by remember(aKey) { mutableStateOf(true) }
+                            var appearsOnLoading by remember(aKey) { mutableStateOf(true) }
+                            LaunchedEffect(aKey) {
+                                albumsLoading = true
+                                appearsOnLoading = true
+                                val localAlbums = library.albums(taggedOnly = false).filter {
+                                    artistKey(it.artist) == aKey
+                                }
+                                if (localAlbums.isNotEmpty()) {
+                                    albums = localAlbums
+                                    albumsLoading = false
+                                }
+                                coroutineScope {
+                                    val fromCatalogDef = async(Dispatchers.IO) {
+                                        catalog.artistItemForKey(aKey, artistName)
+                                    }
+                                    val catalogAlbumsDef = async(Dispatchers.IO) {
+                                        catalog.albumItemsForArtist(aKey, artistName)
+                                    }
+                                    val guestDef = async(Dispatchers.IO) {
+                                        catalog.appearsOnAlbumItems(aKey, artistName)
+                                    }
+                                    val catalogAlbums = catalogAlbumsDef.await()
+                                    val guestAlbums = guestDef.await()
+                                    val fromCatalog = fromCatalogDef.await()
+                                    liveArtist = (fromCatalog ?: d.artist).let { base ->
+                                        val name = primaryArtistName(base.name)
+                                            ?: primaryArtistName(artistName)
+                                            ?: base.name
+                                        val albumN = catalogAlbums.size.coerceAtLeast(localAlbums.size)
+                                        val trackN = catalogAlbums.sumOf { it.trackCount }
+                                            .coerceAtLeast(localAlbums.sumOf { it.trackCount })
+                                            .coerceAtLeast(base.trackCount)
+                                        base.copy(
+                                            name = name,
+                                            albumCount = albumN.coerceAtLeast(base.albumCount),
+                                            trackCount = trackN
+                                        )
+                                    }
+                                    albums = when {
+                                        catalogAlbums.isNotEmpty() -> catalogAlbums
+                                        localAlbums.isNotEmpty() -> localAlbums
+                                        else -> emptyList()
+                                    }
+                                    appearsOn = guestAlbums
+                                    albumsLoading = false
+                                    appearsOnLoading = false
+                                    if (settings.isNetworkMetadataEnabled()) {
+                                        albums.forEach { enrichment.enrichAlbumAsync(it) }
+                                        appearsOn.forEach { enrichment.enrichAlbumAsync(it) }
+                                    }
                                 }
                             }
                             ArtistDetailScreen(
-                                artist = d.artist,
+                                artist = liveArtist,
                                 albums = albums,
+                                appearsOn = appearsOn,
+                                albumsLoading = albumsLoading,
+                                appearsOnLoading = appearsOnLoading,
+                                expectedAlbumCount = liveArtist.albumCount,
+                                expectedAppearsOnCount = 6,
                                 onBack = { popDetail() },
-                                onOpenAlbum = { pushDetail(DetailRoute.Album(it)) },
+                                onOpenAlbum = { openAlbumResolved(it) },
                                 onPlaySongs = { songs, i ->
                                     player.setRepeatMode(RepeatMode.COLD)
                                     player.playSource(
                                         songs, i,
                                         ColdSource(
                                             ColdSourceType.ARTIST,
-                                            d.artist.name ?: "",
-                                            d.artist.displayName
+                                            liveArtist.name ?: "",
+                                            liveArtist.displayName
                                         )
                                     )
                                 },
                                 onStartRadio = {
-                                    player.startArtistRadio(d.artist.name ?: d.artist.displayName)
+                                    player.startArtistRadio(
+                                        liveArtist.name ?: liveArtist.displayName
+                                    )
                                 },
-                                onAddToQueue = { player.addToHotQueue(it) }
+                                onAddToQueue = { player.addToHotQueue(it) },
+                                onArtistMerged = { merged ->
+                                    popDetail()
+                                    openArtistResolved(merged)
+                                }
                             )
                         }
                         is DetailRoute.Playlist -> {
@@ -789,27 +906,26 @@ fun YuriApp(
                         }
                         is DetailRoute.Settings -> SettingsScreen(onBack = { popDetail() })
                         null -> when (topTab) {
-                            TopTab.Home -> PlaceholderScreen("Home", "Pin playlists and shortcuts here later.")
-                            TopTab.Explore -> LibraryScreen(
-                                library = library,
-                                nowPlaying = currentSong,
-                                isPlaybackActive = playing,
-                                onPlay = { songs, index -> player.playSource(songs, index) },
-                                onAddToQueue = { player.addToHotQueue(it) },
-                                onAddAlbumToQueue = { player.addToHotQueue(it) },
-                                onOpenAlbum = { pushDetail(DetailRoute.Album(it)) },
-                                onOpenArtist = { pushDetail(DetailRoute.Artist(it)) },
-                                onEditSong = { pushDetail(DetailRoute.EditSong(it)) },
-                                onEditAlbum = { pushDetail(DetailRoute.EditAlbum(it)) }
-                            )
                             TopTab.MyStuff -> MyStuffScreen(
                                 library = library,
                                 nowPlaying = currentSong,
                                 isPlaybackActive = playing,
                                 onPlay = { songs, index -> player.playSource(songs, index) },
                                 onAddToQueue = { player.addToHotQueue(it) },
-                                onOpenAlbum = { pushDetail(DetailRoute.Album(it)) },
-                                onOpenArtist = { pushDetail(DetailRoute.Artist(it)) },
+                                onOpenAlbum = { openAlbumResolved(it) },
+                                onOpenArtist = { openArtistResolved(it) },
+                                onOpenPlaylist = { pl: Playlist ->
+                                    pushDetail(DetailRoute.Playlist(pl.id))
+                                },
+                                onOpenSongAlbum = { openAlbumForSong(it) }
+                            )
+                            TopTab.Explore -> ExploreScreen(
+                                nowPlaying = currentSong,
+                                isPlaybackActive = playing,
+                                onPlay = { songs, index -> player.playSource(songs, index) },
+                                onAddToQueue = { player.addToHotQueue(it) },
+                                onOpenAlbum = { album -> openAlbumResolved(album) },
+                                onOpenArtist = { artist -> openArtistResolved(artist) },
                                 onOpenPlaylist = { pl: Playlist ->
                                     pushDetail(DetailRoute.Playlist(pl.id))
                                 }
@@ -872,6 +988,9 @@ fun YuriApp(
                     onDismiss = { npPlaylistSong = null }
                 )
             }
+
+            // Multi-cover picker (public + secret) — works from detail and from sheets.
+            PlaylistCoverGlobalHost()
         }
     }
 }

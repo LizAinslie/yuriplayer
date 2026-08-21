@@ -1,0 +1,492 @@
+package capital.yuri.yuriplayer.activities.ui
+
+import android.widget.Toast
+import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Clear
+import androidx.compose.material.icons.filled.Cloud
+import androidx.compose.material.icons.filled.Search
+import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.Text
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import capital.yuri.yuriplayer.data.AlbumItem
+import capital.yuri.yuriplayer.data.ArtistItem
+import capital.yuri.yuriplayer.data.CatalogRepository
+import capital.yuri.yuriplayer.data.ExploreSearchService
+import capital.yuri.yuriplayer.data.Playlist
+import capital.yuri.yuriplayer.data.PlaylistRepository
+import capital.yuri.yuriplayer.data.Song
+import capital.yuri.yuriplayer.data.source.RemotePlaylist
+import capital.yuri.yuriplayer.data.source.RemotePlaylistService
+import capital.yuri.yuriplayer.data.source.SourceOffering
+import capital.yuri.yuriplayer.ui.LoadingEstimates
+import capital.yuri.yuriplayer.ui.SongListSkeleton
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import org.koin.compose.koinInject
+
+@Composable
+fun ExploreScreen(
+    nowPlaying: Song? = null,
+    isPlaybackActive: Boolean = false,
+    onPlay: (List<Song>, Int) -> Unit,
+    onAddToQueue: (Song) -> Unit,
+    onOpenAlbum: (AlbumItem) -> Unit = {},
+    onOpenArtist: (ArtistItem) -> Unit = {},
+    onOpenPlaylist: (Playlist) -> Unit = {}
+) {
+    val explore: ExploreSearchService = koinInject()
+    val catalog: CatalogRepository = koinInject()
+    val playlistsRepo: PlaylistRepository = koinInject()
+    val remotePls: RemotePlaylistService = koinInject()
+    val localPlaylists by playlistsRepo.observePlaylists().collectAsState(initial = emptyList())
+    val context = LocalContext.current
+    val focusManager = LocalFocusManager.current
+    val keyboard = LocalSoftwareKeyboardController.current
+    val scope = rememberCoroutineScope()
+
+    var query by remember { mutableStateOf("") }
+
+    val scanning by explore.isScanning.collectAsState()
+    val scanProgress by explore.scanProgress.collectAsState()
+    val indexed by explore.indexedCount.collectAsState()
+    val err by explore.lastError.collectAsState()
+    val remoteSources by explore.sourceCount.collectAsState()
+
+    var hits by remember { mutableStateOf<List<ExploreSearchService.Hit>>(emptyList()) }
+    var albumHits by remember { mutableStateOf<List<AlbumItem>>(emptyList()) }
+    var artistHits by remember { mutableStateOf<List<ArtistItem>>(emptyList()) }
+    var playlistHits by remember { mutableStateOf<List<Playlist>>(emptyList()) }
+    var remotePlaylistHits by remember { mutableStateOf<List<RemotePlaylist>>(emptyList()) }
+    var searchBusy by remember { mutableStateOf(false) }
+
+    LaunchedEffect(Unit) {
+        explore.hydrateFromCatalog()
+        withContext(Dispatchers.IO) { remotePls.syncOwnedToMyStuff() }
+    }
+
+    LaunchedEffect(query) {
+        val q = query.trim()
+        if (q.isEmpty()) {
+            hits = emptyList()
+            albumHits = emptyList()
+            artistHits = emptyList()
+            playlistHits = emptyList()
+            remotePlaylistHits = emptyList()
+            searchBusy = false
+            return@LaunchedEffect
+        }
+        searchBusy = true
+        delay(SEARCH_DEBOUNCE_MS)
+        if (query.trim() != q) return@LaunchedEffect
+
+        val songHits = withContext(Dispatchers.Default) {
+            explore.searchLive(q).take(SONG_HIT_LIMIT)
+        }
+        if (query.trim() != q) return@LaunchedEffect
+
+        val albums = withContext(Dispatchers.IO) {
+            catalog.searchAlbumsAsItems(q, ALBUM_HIT_LIMIT)
+        }
+        if (query.trim() != q) return@LaunchedEffect
+
+        val artists = withContext(Dispatchers.IO) {
+            catalog.searchArtistsAsItems(q, ARTIST_HIT_LIMIT)
+        }
+        if (query.trim() != q) return@LaunchedEffect
+
+        val localIds = localPlaylists.map { it.id }.toHashSet()
+        val remotePl = withContext(Dispatchers.IO) { remotePls.search(q) }
+            .filter { it.ownedByUser || it.stableId !in localIds }
+            .take(12)
+        val remoteIds = remotePl.map { it.stableId }.toHashSet()
+        val localPl = localPlaylists
+            .filter { it.name.contains(q, true) && it.id !in remoteIds }
+            .take(12)
+        if (query.trim() != q) return@LaunchedEffect
+
+        hits = songHits
+        albumHits = albums
+        artistHits = artists
+        playlistHits = localPl
+        remotePlaylistHits = remotePl
+        searchBusy = false
+    }
+
+    Column(modifier = Modifier.fillMaxSize()) {
+        OutlinedTextField(
+            value = query,
+            onValueChange = { query = it },
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 12.dp, vertical = 8.dp),
+            singleLine = true,
+            leadingIcon = { Icon(Icons.Default.Search, contentDescription = null) },
+            trailingIcon = {
+                if (query.isNotEmpty()) {
+                    IconButton(onClick = { query = "" }) {
+                        Icon(Icons.Default.Clear, contentDescription = "Clear search")
+                    }
+                }
+            },
+            placeholder = { Text("Search all libraries…") },
+            keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
+            keyboardActions = KeyboardActions(
+                onSearch = {
+                    focusManager.clearFocus()
+                    keyboard?.hide()
+                }
+            )
+        )
+
+        val status = when {
+            err != null && !scanning -> err!!
+            scanning && scanProgress != null -> scanProgress!!
+            scanning -> "Scanning remote libraries… ($indexed indexed)"
+            searchBusy -> "Searching…"
+            query.trim().isEmpty() -> {
+                when {
+                    indexed > 0 -> "Type to search · $indexed remote tracks indexed"
+                    remoteSources > 0 -> "Type to search local + $remoteSources remote source(s)"
+                    else -> "Type to search your library"
+                }
+            }
+            else -> {
+                val parts = buildList {
+                    if (artistHits.isNotEmpty()) add("${artistHits.size} artists")
+                    if (albumHits.isNotEmpty()) add("${albumHits.size} albums")
+                    add("${hits.size} songs")
+                }
+                parts.joinToString(" · ") +
+                    if (indexed > 0) " · $indexed remote indexed" else ""
+            }
+        }
+        Row(
+            modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            if (scanning || searchBusy) {
+                CircularProgressIndicator(
+                    modifier = Modifier.size(14.dp),
+                    strokeWidth = 2.dp
+                )
+                Spacer(modifier = Modifier.width(8.dp))
+            }
+            Text(
+                status,
+                style = MaterialTheme.typography.labelMedium,
+                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
+            )
+        }
+
+        when {
+            query.trim().isNotEmpty() && searchBusy && hits.isEmpty() &&
+                albumHits.isEmpty() && artistHits.isEmpty() -> {
+                SongListSkeleton(LoadingEstimates.songs(null))
+            }
+            query.trim().isEmpty() -> {
+                Box(
+                    modifier = Modifier.fillMaxSize().padding(32.dp),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                        Icon(
+                            Icons.Default.Search,
+                            contentDescription = null,
+                            modifier = Modifier.size(48.dp),
+                            tint = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.25f)
+                        )
+                        Spacer(modifier = Modifier.height(12.dp))
+                        Text(
+                            "Search across every library",
+                            style = MaterialTheme.typography.titleMedium,
+                            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.55f)
+                        )
+                        Text(
+                            "Artists, albums, songs, and playlists · local + Jellyfin + Subsonic",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.4f),
+                            modifier = Modifier.padding(top = 6.dp)
+                        )
+                    }
+                }
+            }
+            !searchBusy && hits.isEmpty() && albumHits.isEmpty() && artistHits.isEmpty() &&
+                playlistHits.isEmpty() && remotePlaylistHits.isEmpty() -> {
+                Text(
+                    "No matches for \"${query.trim()}\".",
+                    modifier = Modifier.padding(16.dp),
+                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.55f)
+                )
+            }
+            else -> {
+                val songs = hits.map { it.preferred.song }
+                LazyColumn(modifier = Modifier.fillMaxSize()) {
+                    if (artistHits.isNotEmpty()) {
+                        item { SectionHeader("Artists") }
+                        items(artistHits, key = { "ar-${it.name}" }) { artist ->
+                            ExploreArtistRow(
+                                artist = artist,
+                                onClick = { onOpenArtist(artist) }
+                            )
+                        }
+                    }
+                    if (albumHits.isNotEmpty()) {
+                        item { SectionHeader("Albums") }
+                        items(albumHits, key = { "al-${it.name}-${it.artist}" }) { album ->
+                            ExploreAlbumRow(
+                                album = album,
+                                onClick = { onOpenAlbum(album) }
+                            )
+                        }
+                    }
+                    if (playlistHits.isNotEmpty() || remotePlaylistHits.isNotEmpty()) {
+                        item { SectionHeader("Playlists") }
+                        items(playlistHits, key = { "pl-${it.id}" }) { pl ->
+                            PlaylistRow(pl, onClick = { onOpenPlaylist(pl) })
+                        }
+                        items(remotePlaylistHits, key = { it.stableId }) { remote ->
+                            val inStuff = localPlaylists.any { it.id == remote.stableId }
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clickable {
+                                        scope.launch {
+                                            val existing = localPlaylists.firstOrNull { it.id == remote.stableId }
+                                            if (existing != null) {
+                                                onOpenPlaylist(existing)
+                                                return@launch
+                                            }
+                                            val created = withContext(Dispatchers.IO) {
+                                                remotePls.importToLocal(remote)
+                                            }
+                                            if (created != null) onOpenPlaylist(created)
+                                            else Toast.makeText(context, "Couldn't import playlist", Toast.LENGTH_SHORT).show()
+                                        }
+                                    }
+                                    .padding(horizontal = 16.dp, vertical = 10.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Icon(Icons.Default.Cloud, null, Modifier.size(40.dp).padding(8.dp))
+                                Spacer(modifier = Modifier.width(12.dp))
+                                Column {
+                                    Text(remote.name, fontWeight = FontWeight.SemiBold)
+                                    Text(
+                                        when {
+                                            inStuff -> "${remote.sourceName} · in My Stuff"
+                                            remote.ownedByUser -> "${remote.sourceName} · yours"
+                                            else -> "${remote.sourceName} · tap to add to My Stuff"
+                                        },
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.55f)
+                                    )
+                                }
+                            }
+                        }
+                    }
+                    if (hits.isNotEmpty()) {
+                        item { SectionHeader("Songs") }
+                        itemsIndexed(hits, key = { _, h -> h.identityKey }) { index, hit ->
+                            SwipeAddSongRow(
+                                song = hit.preferred.song,
+                                onClick = { onPlay(songs, index) },
+                                onSwipeAdd = {
+                                    onAddToQueue(hit.preferred.song)
+                                    Toast.makeText(context, "Added to queue", Toast.LENGTH_SHORT).show()
+                                },
+                                showTrackNumber = false,
+                                isPlaying = hit.preferred.song.isSameAs(nowPlaying),
+                                isPlaybackActive = isPlaybackActive,
+                                showHeart = true,
+                                isExplicit = hit.isExplicit,
+                                multiSource = hit.isMultiSource,
+                                sourceOfferings = hit.offerings,
+                                onPreferSource = { off: SourceOffering ->
+                                    scope.launch {
+                                        explore.setPreferredSource(hit.identityKey, off)
+                                        Toast.makeText(
+                                            context,
+                                            "Preferred: ${off.sourceName}",
+                                            Toast.LENGTH_SHORT
+                                        ).show()
+                                    }
+                                }
+                            )
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+private const val SEARCH_DEBOUNCE_MS = 280L
+private const val SONG_HIT_LIMIT = 80
+private const val ALBUM_HIT_LIMIT = 12
+private const val ARTIST_HIT_LIMIT = 12
+
+@Composable
+private fun SectionHeader(title: String) {
+    Text(
+        title,
+        style = MaterialTheme.typography.titleSmall,
+        fontWeight = FontWeight.SemiBold,
+        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f),
+        modifier = Modifier.padding(horizontal = 16.dp, vertical = 10.dp)
+    )
+}
+
+@Composable
+private fun ExploreArtistRow(
+    artist: ArtistItem,
+    onClick: () -> Unit
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onClick)
+            .padding(horizontal = 16.dp, vertical = 10.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        ArtistArt(
+            artistName = artist.displayName,
+            seedSong = artist.songs.firstOrNull(),
+            size = 48.dp,
+            circular = true
+        )
+        Spacer(modifier = Modifier.width(12.dp))
+        Column(modifier = Modifier.weight(1f)) {
+            Text(
+                artist.displayName,
+                style = MaterialTheme.typography.bodyLarge,
+                fontWeight = FontWeight.Medium,
+                maxLines = 1
+            )
+            Text(
+                "${artist.trackCount} tracks · ${artist.albumCount} albums",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.55f),
+                maxLines = 1
+            )
+        }
+    }
+}
+
+@Composable
+private fun ExploreAlbumRow(
+    album: AlbumItem,
+    onClick: () -> Unit
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onClick)
+            .padding(horizontal = 16.dp, vertical = 10.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        AlbumArt(
+            song = album.songs.firstOrNull(),
+            size = 48.dp,
+            corner = 8.dp
+        )
+        Spacer(modifier = Modifier.width(12.dp))
+        Column(modifier = Modifier.weight(1f)) {
+            Text(
+                album.displayName,
+                style = MaterialTheme.typography.bodyLarge,
+                fontWeight = FontWeight.Medium,
+                maxLines = 1
+            )
+            Text(
+                buildString {
+                    append(album.displayArtist)
+                    if (album.trackCount > 0) append(" · ${album.trackCount} tracks")
+                },
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.55f),
+                maxLines = 1
+            )
+        }
+    }
+}
+
+@Composable
+fun SongBadgeRow(
+    isExplicit: Boolean,
+    multiSource: Boolean,
+    modifier: Modifier = Modifier
+) {
+    if (!isExplicit && !multiSource) return
+    Row(
+        modifier = modifier,
+        horizontalArrangement = Arrangement.spacedBy(4.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        if (isExplicit) {
+            Box(
+                modifier = Modifier
+                    .clip(RoundedCornerShape(2.dp))
+                    .background(MaterialTheme.colorScheme.onSurface.copy(alpha = 0.55f))
+                    .padding(horizontal = 3.dp, vertical = 1.dp),
+                contentAlignment = Alignment.Center
+            ) {
+                Text(
+                    "E",
+                    fontSize = 9.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = MaterialTheme.colorScheme.surface,
+                    lineHeight = 10.sp
+                )
+            }
+        }
+        if (multiSource) {
+            Icon(
+                Icons.Default.Cloud,
+                contentDescription = "Multiple sources",
+                modifier = Modifier.size(12.dp),
+                tint = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.55f)
+            )
+        }
+    }
+}

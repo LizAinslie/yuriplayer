@@ -86,15 +86,14 @@ fun FetchArtistImageSheet(
         Column(modifier = Modifier.padding(horizontal = 16.dp).padding(bottom = 32.dp)) {
             Text(
                 when (kind) {
-                    ArtistImageKind.PROFILE -> "Fetch artist image"
-                    ArtistImageKind.BANNER -> "Fetch banner image"
+                    ArtistImageKind.PROFILE -> "Choose a photo"
+                    ArtistImageKind.BANNER -> "Choose a header"
                 },
                 style = MaterialTheme.typography.titleLarge,
                 modifier = Modifier.padding(bottom = 8.dp)
             )
             Text(
-                "All sources combined (profile + banner). Original aspect shown — crop next. " +
-                    "MusicBrainz · Wikipedia · Wikidata · Deezer · AudioDB · Discogs",
+                "Tap one to crop it.",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
                 modifier = Modifier.padding(bottom = 12.dp)
@@ -109,13 +108,13 @@ fun FetchArtistImageSheet(
                 error != null -> Text(error!!, color = MaterialTheme.colorScheme.error)
 
                 candidates.isEmpty() -> Text(
-                    "No images found for $artistName",
+                    "Couldn't find photos of $artistName",
                     color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.55f),
                     modifier = Modifier.padding(24.dp)
                 )
 
                 visible.isEmpty() -> Text(
-                    "Images failed to load",
+                    "Those photos couldn't be loaded",
                     color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.55f),
                     modifier = Modifier.padding(24.dp)
                 )
@@ -143,7 +142,7 @@ fun FetchArtistImageSheet(
                         ) {
                             AsyncImage(
                                 model = c.url,
-                                contentDescription = c.label,
+                                contentDescription = friendlySourceLabel(c.label),
                                 contentScale = ContentScale.Fit,
                                 modifier = Modifier
                                     .fillMaxWidth()
@@ -153,7 +152,7 @@ fun FetchArtistImageSheet(
                                 }
                             )
                             Text(
-                                c.label,
+                                friendlySourceLabel(c.label),
                                 style = MaterialTheme.typography.labelSmall,
                                 color = MaterialTheme.colorScheme.onSurface,
                                 modifier = Modifier
@@ -169,6 +168,15 @@ fun FetchArtistImageSheet(
             }
         }
     }
+}
+
+private fun friendlySourceLabel(raw: String): String {
+    val first = raw.substringBefore(" ·").substringBefore(" /").trim()
+    return first
+        .replace(Regex("""\s+P18.*$"""), "")
+        .replace(Regex("""\s+#\d+.*$"""), "")
+        .replace(Regex("""(?i)\s+(image|banner|thumb|profile).*$"""), "")
+        .ifBlank { raw }
 }
 
 /** Dedupe by image fingerprint; keep the larger / non-thumb variant. */

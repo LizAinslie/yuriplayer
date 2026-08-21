@@ -1,47 +1,181 @@
 package capital.yuri.yuriplayer.activities.ui
 
-import androidx.compose.foundation.clickable
+import android.content.Intent
+import android.net.Uri
+import androidx.activity.compose.BackHandler
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.ArrowBack
-import androidx.compose.material3.HorizontalDivider
-import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
+import androidx.compose.material.icons.filled.Code
+import androidx.compose.material.icons.filled.ColorLens
+import androidx.compose.material.icons.filled.Folder
+import androidx.compose.material.icons.filled.FolderCopy
+import androidx.compose.material.icons.filled.HighQuality
+import androidx.compose.material.icons.filled.History
+import androidx.compose.material.icons.filled.Info
+import androidx.compose.material.icons.filled.LibraryMusic
+import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.SignalCellularAlt
+import androidx.compose.material.icons.filled.Storage
+import androidx.compose.material.icons.filled.Sync
+import androidx.compose.material.icons.filled.Tune
+import androidx.compose.material.icons.outlined.CloudDownload
+import androidx.compose.material.icons.outlined.Gavel
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
-import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
+import capital.yuri.yuriplayer.BuildConfig
+import capital.yuri.yuriplayer.data.LibraryIndex
+import capital.yuri.yuriplayer.data.LibraryScanMode
 import capital.yuri.yuriplayer.data.LibrarySettings
+import capital.yuri.yuriplayer.data.StreamQuality
+import capital.yuri.yuriplayer.data.source.SourceType
+import capital.yuri.yuriplayer.data.theme.ArtColorVariant
+import capital.yuri.yuriplayer.player.PlaybackHistoryStore
+import capital.yuri.yuriplayer.player.engine.AudioPipeline
+import capital.yuri.yuriplayer.player.engine.PlaybackEngineCatalog
+import capital.yuri.yuriplayer.player.engine.PlaybackEngineId
+import capital.yuri.yuriplayer.ui.TestTags
 import org.koin.compose.koinInject
 
+private sealed class SettingsPage {
+    data object Hub : SettingsPage()
+    data object Providers : SettingsPage()
+    data object LocalLibrary : SettingsPage()
+    data object PlaybackEngine : SettingsPage()
+    data object StreamingQuality : SettingsPage()
+    data object PlaybackHistory : SettingsPage()
+    data object Appearance : SettingsPage()
+    data object Sync : SettingsPage()
+    data class Organize(
+        val rootKey: String,
+        val rootLabel: String
+    ) : SettingsPage()
+    data class ProviderEditor(
+        val id: Long?,
+        val createType: SourceType?
+    ) : SettingsPage()
+    data object OpenSourceLicenses : SettingsPage()
+    data object VersionInfo : SettingsPage()
+}
+
 /**
- * Settings scaffold — sources, scrobblers, library paths, appearance.
+ * Settings root — Symfonium-style sectioned hub with nested pages for
+ * Providers and Local library so source management stays separate.
  */
 @Composable
 fun SettingsScreen(onBack: () -> Unit) {
+    var stack by remember { mutableStateOf<List<SettingsPage>>(listOf(SettingsPage.Hub)) }
+    val page = stack.last()
+
+    fun push(p: SettingsPage) {
+        stack = stack + p
+    }
+
+    fun pop() {
+        if (stack.size > 1) stack = stack.dropLast(1) else onBack()
+    }
+
+    BackHandler { pop() }
+
+    when (val p = page) {
+        SettingsPage.Hub -> SettingsHubScreen(
+            onBack = onBack,
+            onOpenProviders = { push(SettingsPage.Providers) },
+            onOpenLocalLibrary = { push(SettingsPage.LocalLibrary) },
+            onOpenPlaybackEngine = { push(SettingsPage.PlaybackEngine) },
+            onOpenStreamingQuality = { push(SettingsPage.StreamingQuality) },
+            onOpenPlaybackHistory = { push(SettingsPage.PlaybackHistory) },
+            onOpenAppearance = { push(SettingsPage.Appearance) },
+            onOpenSync = { push(SettingsPage.Sync) },
+            onOpenLicenses = { push(SettingsPage.OpenSourceLicenses) },
+            onOpenVersion = { push(SettingsPage.VersionInfo) }
+        )
+        SettingsPage.Providers -> ProvidersSettingsScreen(
+            onBack = { pop() },
+            onOpenLocal = { push(SettingsPage.LocalLibrary) },
+            onOpenProvider = { id -> push(SettingsPage.ProviderEditor(id, null)) },
+            onAddProvider = { type -> push(SettingsPage.ProviderEditor(null, type)) }
+        )
+        SettingsPage.LocalLibrary -> LocalLibrarySettingsScreen(
+            onBack = { pop() },
+            onOpenOrganize = { rootKey, rootLabel ->
+                push(SettingsPage.Organize(rootKey, rootLabel))
+            }
+        )
+        SettingsPage.PlaybackEngine -> PlaybackEngineSettingsScreen(onBack = { pop() })
+        SettingsPage.StreamingQuality -> StreamingQualitySettingsScreen(onBack = { pop() })
+        SettingsPage.PlaybackHistory -> PlaybackHistorySettingsScreen(onBack = { pop() })
+        SettingsPage.Appearance -> AppearanceSettingsScreen(onBack = { pop() })
+        SettingsPage.Sync -> SyncSettingsScreen(onBack = { pop() })
+        is SettingsPage.Organize -> OrganizeLayoutScreen(
+            rootKey = p.rootKey,
+            rootLabel = p.rootLabel,
+            onBack = { pop() }
+        )
+        is SettingsPage.ProviderEditor -> ProviderEditorScreen(
+            existingId = p.id,
+            createType = p.createType,
+            onBack = { pop() }
+        )
+        SettingsPage.OpenSourceLicenses -> OpenSourceLicensesScreen(onBack = { pop() })
+        SettingsPage.VersionInfo -> VersionInfoScreen(onBack = { pop() })
+    }
+}
+
+@Composable
+private fun SettingsHubScreen(
+    onBack: () -> Unit,
+    onOpenProviders: () -> Unit,
+    onOpenLocalLibrary: () -> Unit,
+    onOpenPlaybackEngine: () -> Unit,
+    onOpenStreamingQuality: () -> Unit,
+    onOpenPlaybackHistory: () -> Unit,
+    onOpenAppearance: () -> Unit,
+    onOpenSync: () -> Unit,
+    onOpenLicenses: () -> Unit,
+    onOpenVersion: () -> Unit
+) {
+    val context = LocalContext.current
     val settings: LibrarySettings = koinInject()
+    val historyStore: PlaybackHistoryStore = koinInject()
     var autoMetadata by remember {
         mutableStateOf(settings.isAutomaticMetadataEnabled())
     }
     var autoPlayRecommended by remember {
         mutableStateOf(settings.isAutoPlayRecommendedEnabled())
+    }
+    var syncOverMobile by remember {
+        mutableStateOf(settings.isSyncOverMobileDataEnabled())
+    }
+    val scanMode = settings.getScanMode()
+    val streamQuality = settings.getStreamQuality()
+    val coverVariant = settings.getCoverColorVariant()
+    val bannerVariant = settings.getBannerColorVariant()
+    val versionSubtitle = buildString {
+        append(BuildConfig.VERSION_NAME)
+        val short = BuildConfig.GIT_COMMIT_SHORT
+        if (short != "unknown") {
+            append(" · ")
+            append(short)
+            if (BuildConfig.GIT_DIRTY) append("*")
+        }
     }
 
     Column(
@@ -50,123 +184,504 @@ fun SettingsScreen(onBack: () -> Unit) {
             .statusBarsPadding()
             .verticalScroll(rememberScrollState())
     ) {
-        IconButton(onClick = onBack) {
-            Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
+        SettingsTopBar(title = "Settings", onBack = onBack)
+        Spacer(modifier = Modifier.height(8.dp))
+
+        SettingsSectionTitle("Library")
+        SettingsGroup {
+            SettingsNavRow(
+                title = "Providers",
+                subtitle = "Local files, Jellyfin, Subsonic / OpenSubsonic",
+                icon = Icons.Default.Storage,
+                onClick = onOpenProviders
+            )
+            SettingsNavRow(
+                title = "Local library",
+                subtitle = when (scanMode) {
+                    LibraryScanMode.MEDIASTORE -> "MediaStore scan"
+                    LibraryScanMode.MANUAL -> "Manual folders"
+                },
+                icon = Icons.Default.Folder,
+                onClick = onOpenLocalLibrary
+            )
+            SettingsSwitchRow(
+                title = "Sync over mobile data",
+                subtitle = "Allow large remote library indexes on cellular. Off by default to protect your plan.",
+                icon = Icons.Default.SignalCellularAlt,
+                checked = syncOverMobile,
+                onCheckedChange = { enabled ->
+                    syncOverMobile = enabled
+                    settings.setSyncOverMobileDataEnabled(enabled)
+                }
+            )
+            SettingsNavRow(
+                title = "Background sync",
+                subtitle = buildString {
+                    if (settings.isProfileSyncEnabled()) {
+                        append("Playlists ${settings.getProfileSyncInterval().displayName.lowercase()}")
+                    } else {
+                        append("Playlists off")
+                    }
+                    append(" · ")
+                    if (settings.isPartialSyncEnabled()) {
+                        append("libraries ${settings.getPartialSyncInterval().displayName.lowercase()}")
+                    } else {
+                        append("libraries off")
+                    }
+                },
+                icon = Icons.Default.Sync,
+                onClick = onOpenSync
+            )
+            SettingsNavRow(
+                title = "Offline, cache, and download",
+                subtitle = "Coming soon",
+                icon = Icons.Outlined.CloudDownload,
+                onClick = {}
+            )
         }
-        Text(
-            "Settings",
-            style = MaterialTheme.typography.headlineSmall,
-            fontWeight = FontWeight.Bold,
-            modifier = Modifier.padding(horizontal = 16.dp)
-        )
-        Spacer(modifier = Modifier.height(16.dp))
 
-        SettingsSection("Library")
-        SettingsRow("Scan folders", "Choose where local files are indexed") {}
-        SettingsRow("Rescan interval", "Default 12 hours") {}
+        SettingsSectionTitle("Metadata")
+        SettingsGroup {
+            SettingsSwitchRow(
+                title = "Find missing artwork",
+                subtitle = "Fill in album art and release years in the background",
+                icon = Icons.Default.Sync,
+                checked = autoMetadata,
+                onCheckedChange = { enabled ->
+                    autoMetadata = enabled
+                    settings.setAutomaticMetadataEnabled(enabled)
+                }
+            )
+        }
 
-        SettingsSection("Metadata")
-        SettingsSwitchRow(
-            title = "Automatic online metadata",
-            subtitle = "Background year & cover lookup via MusicBrainz. " +
-                "Off by default — use “Fetch additional metadata” on album/artist pages instead.",
-            checked = autoMetadata,
-            onCheckedChange = { enabled ->
-                autoMetadata = enabled
-                settings.setAutomaticMetadataEnabled(enabled)
-            }
-        )
+        SettingsSectionTitle("Playback")
+        SettingsGroup {
+            SettingsNavRow(
+                title = "Streaming quality",
+                subtitle = streamQuality.displayName + " — Jellyfin and Navidrome",
+                icon = Icons.Default.HighQuality,
+                onClick = onOpenStreamingQuality
+            )
+            SettingsSwitchRow(
+                title = "Auto-play recommended",
+                subtitle = "When a queue ends, play another album from the same artist",
+                icon = Icons.Default.PlayArrow,
+                checked = autoPlayRecommended,
+                onCheckedChange = { enabled ->
+                    autoPlayRecommended = enabled
+                    settings.setAutoPlayRecommendedEnabled(enabled)
+                }
+            )
+            SettingsNavRow(
+                title = "Playback history",
+                subtitle = buildString {
+                    append("${historyStore.maxEntries} songs")
+                    if (historyStore.clearOnClose) append(" · clear on close")
+                },
+                icon = Icons.Default.History,
+                onClick = onOpenPlaybackHistory
+            )
+            SettingsNavRow(
+                title = "Advanced playback",
+                subtitle = "Decoder and other low-level options",
+                icon = Icons.Default.Tune,
+                testTag = TestTags.SETTINGS_PLAYBACK_ENGINE,
+                onClick = onOpenPlaybackEngine
+            )
+        }
 
-        SettingsSection("Music sources")
-        SettingsRow("Local files", "On") {}
-        SettingsRow("Add Jellyfin server", "Coming soon") {}
-        SettingsRow("Add Navidrome server", "Coming soon") {}
+        SettingsSectionTitle("Interface")
+        SettingsGroup {
+            SettingsNavRow(
+                title = "Appearance",
+                subtitle = "Cover · ${coverVariant.displayName}  ·  Header · ${bannerVariant.displayName}",
+                icon = Icons.Default.ColorLens,
+                onClick = onOpenAppearance
+            )
+            SettingsNavRow(
+                title = "Library browser",
+                subtitle = "Tabs, sort defaults",
+                icon = Icons.Default.LibraryMusic,
+                onClick = {}
+            )
+        }
 
-        SettingsSection("Scrobbling")
-        SettingsRow("ListenBrainz", "Off") {}
-        SettingsRow("Last.fm", "Off") {}
-
-        SettingsSection("Playback")
-        SettingsSwitchRow(
-            title = "Auto-play recommended",
-            subtitle = "When a queue ends and Repeat is off, play another random " +
-                "album/single from the same artist (skips the album that just " +
-                "finished and the one before it).",
-            checked = autoPlayRecommended,
-            onCheckedChange = { enabled ->
-                autoPlayRecommended = enabled
-                settings.setAutoPlayRecommendedEnabled(enabled)
-            }
-        )
-        SettingsRow("History size", "50") {}
-        SettingsRow("Activity title format", "YuriPlayer: {title} by {artist}") {}
-
-        SettingsSection("Appearance")
-        SettingsRow("Accent color", "Purple (default)") {}
-        SettingsRow("Theme", "Dark") {}
+        SettingsSectionTitle("Developer")
+        SettingsGroup {
+            SettingsNavRow(
+                title = "Version",
+                subtitle = versionSubtitle,
+                icon = Icons.Default.Info,
+                onClick = onOpenVersion
+            )
+            SettingsNavRow(
+                title = "Open source licenses",
+                subtitle = "Libraries and AGPL application license",
+                icon = Icons.Outlined.Gavel,
+                onClick = onOpenLicenses
+            )
+            SettingsNavRow(
+                title = "Source repository",
+                subtitle = "github.com/LizAinslie/yuriplayer",
+                icon = Icons.Default.Code,
+                onClick = {
+                    runCatching {
+                        context.startActivity(
+                            Intent(
+                                Intent.ACTION_VIEW,
+                                Uri.parse(BuildConfig.REPO_URL)
+                            ).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                        )
+                    }
+                }
+            )
+        }
 
         Spacer(modifier = Modifier.height(48.dp))
     }
 }
 
 @Composable
-private fun SettingsSection(title: String) {
+private fun PlaybackEngineSettingsScreen(onBack: () -> Unit) {
+    val settings: LibrarySettings = koinInject()
+    var selected by remember { mutableStateOf(settings.getPlaybackEngineId()) }
+
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .statusBarsPadding()
+            .verticalScroll(rememberScrollState())
+    ) {
+        SettingsTopBar(title = "Advanced playback", onBack = onBack)
+
+        SettingsSectionTitle("Decoder")
+        TextNote(
+            text = "YuriPlayer uses LibVLC by default. Only change this if a " +
+                "specific file or stream fails to play. Applies the next time " +
+                "playback starts (force-stop if a track is mid-play)."
+        )
+        SettingsGroup {
+            PlaybackEngineCatalog.available.forEach { desc ->
+                val id = PlaybackEngineId.fromId(desc.id)
+                val enabled = id != PlaybackEngineId.FFMPEG
+                SettingsNavRow(
+                    title = desc.displayName,
+                    subtitle = desc.description,
+                    trailing = when {
+                        !enabled -> "Soon"
+                        selected == id -> "Selected"
+                        else -> null
+                    },
+                    testTag = "engine_${desc.id}",
+                    onClick = {
+                        if (!enabled) return@SettingsNavRow
+                        settings.setPlaybackEngineId(id)
+                        selected = id
+                    }
+                )
+            }
+        }
+
+        SettingsSectionTitle("Tips")
+        SettingsGroup {
+            TextNote(
+                text = "LibVLC is the default and the best bet for FLAC / APE / odd containers. " +
+                    "Media3 is lighter and fine for most MP3/AAC and HTTP streams. " +
+                    "An FFmpeg AudioTrack engine can share the bundled ffmpeg binary later."
+            )
+        }
+
+        Spacer(modifier = Modifier.height(48.dp))
+    }
+}
+
+@Composable
+private fun StreamingQualitySettingsScreen(onBack: () -> Unit) {
+    val settings: LibrarySettings = koinInject()
+    var selected by remember { mutableStateOf(settings.getStreamQuality()) }
+
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .statusBarsPadding()
+            .verticalScroll(rememberScrollState())
+    ) {
+        SettingsTopBar(title = "Streaming quality", onBack = onBack)
+
+        SettingsSectionTitle("Remote libraries")
+        TextNote(
+            text = "Original plays the file as stored on the server. Lower options " +
+                "use less data. Changes apply to the next song."
+        )
+        val pipeline by AudioPipeline.last.collectAsState()
+        pipeline?.let { snap ->
+            SettingsSectionTitle("Last stream")
+            TextNote(
+                text = "${snap.title}\n${snap.engine} · ${snap.summary}"
+            )
+        }
+        SettingsGroup {
+            StreamQuality.entries.forEach { q ->
+                SettingsNavRow(
+                    title = q.displayName,
+                    subtitle = q.subtitle,
+                    trailing = if (selected == q) "Selected" else null,
+                    onClick = {
+                        settings.setStreamQuality(q)
+                        selected = q
+                    }
+                )
+            }
+        }
+
+        Spacer(modifier = Modifier.height(48.dp))
+    }
+}
+
+@Composable
+private fun PlaybackHistorySettingsScreen(onBack: () -> Unit) {
+    val history: PlaybackHistoryStore = koinInject()
+    var size by remember { mutableStateOf(history.maxEntries) }
+    var clearOnClose by remember { mutableStateOf(history.clearOnClose) }
+
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .statusBarsPadding()
+            .verticalScroll(rememberScrollState())
+    ) {
+        SettingsTopBar(title = "Playback history", onBack = onBack)
+
+        SettingsSectionTitle("Recently played")
+        TextNote(
+            text = "Songs you’ve played show up in the History tab of the queue."
+        )
+        SettingsGroup {
+            SettingsChoiceRow(
+                title = "Keep",
+                subtitle = "Older plays drop off after this many songs",
+                trailing = "$size songs",
+                options = PlaybackHistoryStore.SIZE_OPTIONS.map { n ->
+                    n.toString() to "$n songs"
+                },
+                onSelect = { id ->
+                    val n = id.toIntOrNull() ?: return@SettingsChoiceRow
+                    history.maxEntries = n
+                    size = history.maxEntries
+                }
+            )
+            SettingsSwitchRow(
+                title = "Clear when the app is closed",
+                subtitle = "Wipe recently played if you swipe the app away. Off by default.",
+                checked = clearOnClose,
+                onCheckedChange = { enabled ->
+                    clearOnClose = enabled
+                    history.clearOnClose = enabled
+                }
+            )
+        }
+
+        Spacer(modifier = Modifier.height(48.dp))
+    }
+}
+
+@Composable
+private fun AppearanceSettingsScreen(onBack: () -> Unit) {
+    val settings: LibrarySettings = koinInject()
+    var coverVariant by remember { mutableStateOf(settings.getCoverColorVariant()) }
+    var bannerVariant by remember { mutableStateOf(settings.getBannerColorVariant()) }
+
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .statusBarsPadding()
+            .verticalScroll(rememberScrollState())
+    ) {
+        SettingsTopBar(title = "Appearance", onBack = onBack)
+
+        TextNote(
+            text = "Colors come from your artwork. Album covers and artist headers " +
+                "can use different palettes."
+        )
+
+        SettingsSectionTitle("Cover")
+        SettingsGroup {
+            ArtColorVariant.entries.forEach { variant ->
+                SettingsNavRow(
+                    title = variant.displayName,
+                    subtitle = variant.description,
+                    trailing = if (coverVariant == variant) "Selected" else null,
+                    onClick = {
+                        settings.setCoverColorVariant(variant)
+                        coverVariant = variant
+                    }
+                )
+            }
+        }
+
+        SettingsSectionTitle("Header")
+        SettingsGroup {
+            ArtColorVariant.entries.forEach { variant ->
+                SettingsNavRow(
+                    title = variant.displayName,
+                    subtitle = variant.description,
+                    trailing = if (bannerVariant == variant) "Selected" else null,
+                    onClick = {
+                        settings.setBannerColorVariant(variant)
+                        bannerVariant = variant
+                    }
+                )
+            }
+        }
+
+        Spacer(modifier = Modifier.height(48.dp))
+    }
+}
+
+@Composable
+private fun LocalLibrarySettingsScreen(
+    onBack: () -> Unit,
+    onOpenOrganize: (rootKey: String, rootLabel: String) -> Unit
+) {
+    val context = LocalContext.current
+    val settings: LibrarySettings = koinInject()
+    val library: LibraryIndex = koinInject()
+
+    var scanMode by remember { mutableStateOf(settings.getScanMode()) }
+    var manualTrees by remember { mutableStateOf(settings.getManualTreeUris()) }
+
+    val treePicker = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.OpenDocumentTree()
+    ) { uri: Uri? ->
+        if (uri == null) return@rememberLauncherForActivityResult
+        val flags = Intent.FLAG_GRANT_READ_URI_PERMISSION or
+            Intent.FLAG_GRANT_WRITE_URI_PERMISSION
+        runCatching {
+            context.contentResolver.takePersistableUriPermission(uri, flags)
+        }
+        settings.addManualTreeUri(uri.toString())
+        manualTrees = settings.getManualTreeUris()
+        library.refresh()
+    }
+
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .statusBarsPadding()
+            .verticalScroll(rememberScrollState())
+    ) {
+        SettingsTopBar(title = "Local library", onBack = onBack)
+
+        SettingsSectionTitle("Scan mode")
+        SettingsGroup {
+            SettingsNavRow(
+                title = "MediaStore",
+                subtitle = "System media scanner + folder fill",
+                trailing = if (scanMode == LibraryScanMode.MEDIASTORE) "Selected" else null,
+                onClick = {
+                    settings.setScanMode(LibraryScanMode.MEDIASTORE)
+                    scanMode = LibraryScanMode.MEDIASTORE
+                    library.refresh()
+                }
+            )
+            SettingsNavRow(
+                title = "Manual folders",
+                subtitle = "SAF trees + our tag reader only",
+                trailing = if (scanMode == LibraryScanMode.MANUAL) "Selected" else null,
+                onClick = {
+                    settings.setScanMode(LibraryScanMode.MANUAL)
+                    scanMode = LibraryScanMode.MANUAL
+                    library.refresh()
+                }
+            )
+        }
+
+        if (scanMode == LibraryScanMode.MANUAL) {
+            SettingsSectionTitle("Folders")
+            SettingsGroup {
+                SettingsNavRow(
+                    title = "Add folder",
+                    subtitle = if (manualTrees.isEmpty()) {
+                        "Pick a music directory"
+                    } else {
+                        "${manualTrees.size} folder(s) granted"
+                    },
+                    icon = Icons.Default.Folder,
+                    onClick = { treePicker.launch(null) }
+                )
+                manualTrees.forEach { tree ->
+                    val label = shortTreeLabel(tree)
+                    SettingsNavRow(
+                        title = label,
+                        subtitle = "Tap to remove",
+                        onClick = {
+                            settings.removeManualTreeUri(tree)
+                            manualTrees = settings.getManualTreeUris()
+                            library.refresh()
+                        }
+                    )
+                }
+            }
+
+            if (manualTrees.isNotEmpty()) {
+                SettingsSectionTitle("Organize")
+                SettingsGroup {
+                    TextNote(
+                        text = "Per-folder path templates. Moves stay inside the granted SAF tree. " +
+                            "Same model will apply to remote folder-like sources later."
+                    )
+                    manualTrees.forEach { tree ->
+                        val label = shortTreeLabel(tree)
+                        SettingsNavRow(
+                            title = "Layout · $label",
+                            subtitle = "Album / single patterns · dry-run · apply",
+                            icon = Icons.Default.FolderCopy,
+                            onClick = { onOpenOrganize(tree, label) }
+                        )
+                    }
+                }
+            }
+        } else {
+            SettingsSectionTitle("Roots")
+            SettingsGroup {
+                SettingsNavRow(
+                    title = "Default roots",
+                    subtitle = "Music, Music/library, Download",
+                    onClick = {}
+                )
+            }
+            SettingsSectionTitle("Organize")
+            SettingsGroup {
+                TextNote(
+                    text = "Path-template organize requires Manual folders (SAF) so we can " +
+                        "rename/move inside a writable tree. Switch scan mode to Manual and " +
+                        "grant a folder to configure layouts."
+                )
+            }
+        }
+
+        SettingsSectionTitle("Actions")
+        SettingsGroup {
+            SettingsNavRow(
+                title = "Rescan now",
+                subtitle = "Rebuild the local catalog",
+                icon = Icons.Default.Sync,
+                onClick = { library.refresh() }
+            )
+        }
+
+        Spacer(modifier = Modifier.height(48.dp))
+    }
+}
+
+@Composable
+private fun TextNote(text: String) {
     Text(
-        title,
-        style = MaterialTheme.typography.titleSmall,
-        fontWeight = FontWeight.SemiBold,
-        color = MaterialTheme.colorScheme.primary,
+        text = text,
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.55f),
         modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp)
     )
 }
 
-@Composable
-private fun SettingsRow(title: String, subtitle: String, onClick: () -> Unit) {
-    Column(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clickable(onClick = onClick)
-            .padding(horizontal = 16.dp, vertical = 12.dp)
-    ) {
-        Text(title, style = MaterialTheme.typography.bodyLarge)
-        Text(
-            subtitle,
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.55f)
-        )
-    }
-    HorizontalDivider(
-        modifier = Modifier.padding(start = 16.dp),
-        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.08f)
-    )
-}
-
-@Composable
-private fun SettingsSwitchRow(
-    title: String,
-    subtitle: String,
-    checked: Boolean,
-    onCheckedChange: (Boolean) -> Unit
-) {
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clickable { onCheckedChange(!checked) }
-            .padding(horizontal = 16.dp, vertical = 12.dp),
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        Column(modifier = Modifier.weight(1f).padding(end = 12.dp)) {
-            Text(title, style = MaterialTheme.typography.bodyLarge)
-            Text(
-                subtitle,
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.55f)
-            )
-        }
-        Switch(checked = checked, onCheckedChange = onCheckedChange)
-    }
-    HorizontalDivider(
-        modifier = Modifier.padding(start = 16.dp),
-        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.08f)
-    )
-}
+// shortTreeLabel lives in OrganizeLayoutScreen.kt (same package)

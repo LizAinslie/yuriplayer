@@ -1,5 +1,6 @@
 package capital.yuri.yuriplayer.activities.ui
 
+import MarqueeText
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectVerticalDragGestures
@@ -28,9 +29,11 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.dp
 import capital.yuri.yuriplayer.data.PlayerThemeStore
 import capital.yuri.yuriplayer.data.Song
+import capital.yuri.yuriplayer.ui.TestTags
 import org.koin.compose.koinInject
 
 /**
@@ -55,10 +58,19 @@ fun NowPlayingPreview(
     shadowElevation: androidx.compose.ui.unit.Dp = 4.dp
 ) {
     val themeStore: PlayerThemeStore = koinInject()
-    val theme by themeStore.current.collectAsState()
     val ambient = MaterialTheme.colorScheme
-    val accent = theme?.colors?.accent ?: ambient.primary
-    val onAccent = theme?.colors?.onAccent ?: ambient.onPrimary
+    val theme by themeStore.current.collectAsState()
+    val peekNext by themeStore.peekNext.collectAsState()
+    val peekPrev by themeStore.peekPrev.collectAsState()
+    val matched = when {
+        song == null -> null
+        theme?.songKey == song.songKey -> theme
+        peekNext?.songKey == song.songKey -> peekNext
+        peekPrev?.songKey == song.songKey -> peekPrev
+        else -> null
+    }
+    val accent = matched?.colors?.accent ?: ambient.primary
+    val onAccent = matched?.colors?.onAccent ?: ambient.onPrimary
     val trackInactive = ambient.onBackground.copy(alpha = 0.2f)
 
     Surface(
@@ -68,6 +80,7 @@ fun NowPlayingPreview(
         contentColor = ambient.onBackground,
         modifier = modifier
             .fillMaxWidth()
+            .testTag(TestTags.MINI_PLAYER)
             .then(
                 if (enableSwipeUp) {
                     Modifier.pointerInput(Unit) {
@@ -111,15 +124,20 @@ fun NowPlayingPreview(
                     MarqueeText(
                         text = song?.displayTitle ?: "Not playing",
                         style = MaterialTheme.typography.bodyMedium,
-                        color = ambient.onBackground
+                        color = ambient.onBackground,
+                        modifier = Modifier.testTag(TestTags.MINI_TITLE)
                     )
                     MarqueeText(
                         text = song?.displayArtist ?: "",
                         style = MaterialTheme.typography.bodySmall,
-                        color = ambient.onBackground.copy(alpha = 0.6f)
+                        color = ambient.onBackground.copy(alpha = 0.6f),
+                        modifier = Modifier.testTag(TestTags.MINI_ARTIST)
                     )
                 }
-                IconButton(onClick = onToggle) {
+                IconButton(
+                    onClick = onToggle,
+                    modifier = Modifier.testTag(TestTags.MINI_PLAY_PAUSE)
+                ) {
                     Box(
                         modifier = Modifier
                             .size(40.dp)

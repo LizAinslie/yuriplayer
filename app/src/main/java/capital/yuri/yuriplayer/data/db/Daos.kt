@@ -50,6 +50,12 @@ interface PlaylistPrefsDao {
     suspend fun upsert(entity: PlaylistPrefsEntity): Long
 }
 
+/** Row from GROUP BY count query. */
+data class PlaylistTrackCount(
+    val playlistId: String,
+    val trackCount: Int
+)
+
 @Dao
 interface PlaylistDao {
     @Query("SELECT * FROM playlists ORDER BY updatedAtMs DESC")
@@ -60,6 +66,9 @@ interface PlaylistDao {
 
     @Query("SELECT * FROM playlists WHERE id = :id LIMIT 1")
     suspend fun get(id: String): PlaylistEntity?
+
+    @Query("SELECT * FROM playlists")
+    suspend fun getAll(): List<PlaylistEntity>
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun upsert(entity: PlaylistEntity)
@@ -72,6 +81,12 @@ interface PlaylistDao {
 
     @Query("SELECT * FROM playlist_tracks WHERE playlistId = :playlistId ORDER BY position ASC")
     suspend fun getTracks(playlistId: String): List<PlaylistTrackEntity>
+
+    @Query("SELECT playlistId, COUNT(*) AS trackCount FROM playlist_tracks GROUP BY playlistId")
+    fun observeTrackCounts(): Flow<List<PlaylistTrackCount>>
+
+    @Query("SELECT * FROM playlist_tracks")
+    fun observeAllTracks(): Flow<List<PlaylistTrackEntity>>
 
     @Query("SELECT playlistId FROM playlist_tracks WHERE songKey = :songKey")
     suspend fun playlistIdsContaining(songKey: String): List<String>
@@ -98,6 +113,39 @@ interface PlaylistDao {
             }
         )
     }
+
+    // ── multi covers ──────────────────────────────────────────────────────
+
+    @Query("SELECT * FROM playlist_covers WHERE playlistId = :playlistId ORDER BY sortOrder ASC, createdAtMs ASC")
+    fun observeCovers(playlistId: String): Flow<List<PlaylistCoverEntity>>
+
+    @Query("SELECT * FROM playlist_covers WHERE playlistId = :playlistId ORDER BY sortOrder ASC, createdAtMs ASC")
+    suspend fun getCovers(playlistId: String): List<PlaylistCoverEntity>
+
+    @Query("SELECT * FROM playlist_covers WHERE id = :coverId LIMIT 1")
+    suspend fun getCover(coverId: String): PlaylistCoverEntity?
+
+    /** Covers currently marked active that are secret (session-only art). */
+    @Query(
+        """
+        SELECT c.* FROM playlist_covers c
+        INNER JOIN playlists p ON p.activeCoverId = c.id
+        WHERE c.isSecret = 1
+        """
+    )
+    suspend fun getActiveSecretCovers(): List<PlaylistCoverEntity>
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun upsertCover(entity: PlaylistCoverEntity)
+
+    @Query("DELETE FROM playlist_covers WHERE id = :coverId")
+    suspend fun deleteCover(coverId: String)
+
+    @Query("DELETE FROM playlist_covers WHERE playlistId = :playlistId")
+    suspend fun clearCovers(playlistId: String)
+
+    @Query("SELECT COALESCE(MAX(sortOrder), -1) FROM playlist_covers WHERE playlistId = :playlistId")
+    suspend fun maxCoverSortOrder(playlistId: String): Int
 }
 
 @Dao

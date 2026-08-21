@@ -1,5 +1,6 @@
 package capital.yuri.yuriplayer.activities.ui
 
+import MarqueeText
 import android.net.Uri
 import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -27,7 +28,6 @@ import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
-import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
@@ -35,6 +35,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.ArrowDropDown
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Link
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.PlayArrow
@@ -48,6 +49,7 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Text
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
@@ -55,6 +57,7 @@ import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -78,10 +81,14 @@ import androidx.compose.ui.unit.dp
 import capital.yuri.yuriplayer.data.AlbumItem
 import capital.yuri.yuriplayer.data.ArtistItem
 import capital.yuri.yuriplayer.data.ArtistProfileRepository
+import capital.yuri.yuriplayer.data.CatalogRepository
+import capital.yuri.yuriplayer.data.db.ArtistAliasEntity
+import capital.yuri.yuriplayer.data.LibrarySettings
 import capital.yuri.yuriplayer.data.MyStuffPinStore
 import capital.yuri.yuriplayer.data.ReleaseType
 import capital.yuri.yuriplayer.data.Song
 import capital.yuri.yuriplayer.data.StuffPinKind
+import capital.yuri.yuriplayer.data.albumKey
 import capital.yuri.yuriplayer.data.artistKey
 import capital.yuri.yuriplayer.data.releaseType
 import capital.yuri.yuriplayer.data.releaseYear
@@ -89,6 +96,9 @@ import capital.yuri.yuriplayer.data.source.ArtistEvent
 import capital.yuri.yuriplayer.data.source.ArtistImageKind
 import capital.yuri.yuriplayer.data.source.ArtistInfoService
 import capital.yuri.yuriplayer.data.source.ArtistLink
+import capital.yuri.yuriplayer.ui.AlbumRowSkeleton
+import capital.yuri.yuriplayer.ui.LoadingEstimates
+import capital.yuri.yuriplayer.data.theme.ArtColorSurface
 import capital.yuri.yuriplayer.data.theme.ThemeService
 import capital.yuri.yuriplayer.ui.formatAlbumCount
 import capital.yuri.yuriplayer.ui.formatTrackCount
@@ -141,6 +151,13 @@ private fun sortedReleaseTracks(album: AlbumItem): List<Song> =
             .thenBy(String.CASE_INSENSITIVE_ORDER) { it.displayTitle }
     )
 
+/** Stable, unique Lazy key for a release card / section. */
+private fun releaseLazyKey(album: AlbumItem, index: Int): String {
+    val base = albumKey(album.name, album.artist)
+    val seed = album.songs.firstOrNull()?.songKey.orEmpty()
+    return "$base|$index|$seed"
+}
+
 private val ArtistBannerBodyHeight = 200.dp
 private val ArtistAvatarOnBanner = 132.dp
 private val ArtistAvatarPlain = 160.dp
@@ -162,17 +179,26 @@ private fun parseImageUri(raw: String?): Uri? {
 fun ArtistDetailScreen(
     artist: ArtistItem,
     albums: List<AlbumItem>,
+    appearsOn: List<AlbumItem> = emptyList(),
+    albumsLoading: Boolean = false,
+    appearsOnLoading: Boolean = false,
+    expectedAlbumCount: Int = 8,
+    expectedAppearsOnCount: Int = 6,
     onBack: () -> Unit,
     onOpenAlbum: (AlbumItem) -> Unit,
     onPlaySongs: (List<Song>, Int) -> Unit,
     onStartRadio: () -> Unit = {},
-    onAddToQueue: (Song) -> Unit = {}
+    onAddToQueue: (Song) -> Unit = {},
+    onArtistMerged: (ArtistItem) -> Unit = {}
 ) {
     val themeService: ThemeService = koinInject()
     val profileRepo: ArtistProfileRepository = koinInject()
     val artistInfo: ArtistInfoService = koinInject()
     val pinStore: MyStuffPinStore = koinInject()
+    val catalog: CatalogRepository = koinInject()
+    val settings: LibrarySettings = koinInject()
     val entries by pinStore.entries.collectAsState()
+    val colorRev by settings.colorPrefsRevision.collectAsState()
     val base = MaterialTheme.colorScheme
     val context = LocalContext.current
     val density = LocalDensity.current
@@ -180,8 +206,13 @@ fun ArtistDetailScreen(
     var themeColors by remember { mutableStateOf(fallbackPlayerColors(base)) }
     var filter by remember { mutableStateOf(ArtistReleaseFilter.All) }
     var showAll by remember { mutableStateOf(false) }
+    var showAllAppearsOn by remember { mutableStateOf(false) }
     var discographyFilters by remember { mutableStateOf(DiscographyFilters()) }
+    var appearsOnFilters by remember { mutableStateOf(DiscographyFilters()) }
     var showMenu by remember { mutableStateOf(false) }
+    var showMerge by remember { mutableStateOf(false) }
+    var aliasTick by remember { mutableIntStateOf(0) }
+    var aliases by remember { mutableStateOf<List<ArtistAliasEntity>>(emptyList()) }
     var showDataSources by remember { mutableStateOf(false) }
     var fetchKind by remember { mutableStateOf<ArtistImageKind?>(null) }
     var cropUri by remember { mutableStateOf<Uri?>(null) }
@@ -190,6 +221,7 @@ fun ArtistDetailScreen(
     var events by remember { mutableStateOf<List<ArtistEvent>>(emptyList()) }
     var themeTick by remember { mutableStateOf(0) }
     var bannerUri by remember { mutableStateOf(profileRepo.bannerUri(artist.displayName)) }
+    var resolvedImageUri by remember { mutableStateOf<String?>(null) }
     val uriHandler = LocalUriHandler.current
 
     val profile by profileRepo.observe(artist.displayName).collectAsState(initial = null)
@@ -197,6 +229,9 @@ fun ArtistDetailScreen(
     val artistKeyStr = artistKey(artist.name) ?: artist.displayName.lowercase()
     val artistSaved = remember(entries, artistKeyStr) {
         pinStore.contains(StuffPinKind.ARTIST, artistKeyStr)
+    }
+    LaunchedEffect(artistKeyStr, aliasTick) {
+        aliases = catalog.aliasesForArtist(artistKeyStr)
     }
 
     val pickProfile = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri ->
@@ -216,21 +251,27 @@ fun ArtistDetailScreen(
         val resolved = runCatching { profileRepo.resolve(artist.displayName) }.getOrNull()
         val diskBanner = profileRepo.bannerUri(artist.displayName)
         if (diskBanner != bannerUri) bannerUri = diskBanner
-        val themeUri = parseImageUri(bannerUri)
-            ?: parseImageUri(profile?.imageUri ?: resolved?.imageUri)
+        resolvedImageUri = resolved?.imageUri
 
         dataLinks = (resolved?.links.orEmpty() + profile?.links.orEmpty())
             .distinctBy { it.url.lowercase() }
 
         events = runCatching { artistInfo.upcomingEvents(artist.displayName) }
             .getOrDefault(emptyList())
+    }
 
+    LaunchedEffect(artist.name, bannerUri, profile?.imageUri, resolvedImageUri, themeTick, colorRev) {
+        val themeUri = parseImageUri(bannerUri)
+            ?: parseImageUri(profile?.imageUri)
+            ?: parseImageUri(resolvedImageUri)
         themeColors = if (themeUri != null) {
             themeService.themeFromUri(
                 context = context,
                 key = "artist:${artistKeyStr}:${themeUri}",
                 uri = themeUri,
-                base = base
+                base = base,
+                surface = ArtColorSurface.BANNER,
+                loadBitmap = false
             ).colors
         } else {
             val seed = albums.firstOrNull()?.songs?.firstOrNull()
@@ -239,7 +280,9 @@ fun ArtistDetailScreen(
                 context = context,
                 song = seed,
                 base = base,
-                forceRefresh = true
+                forceRefresh = false,
+                surface = ArtColorSurface.BANNER,
+                loadBitmap = false
             ).colors
         }
     }
@@ -259,11 +302,34 @@ fun ArtistDetailScreen(
     val fadePx = with(density) { ArtistGradientFade.toPx() }
     val headerPx = with(density) { solidHeaderHeight.toPx() }
 
+    // Dedupe again at UI boundary so Lazy keys cannot collide
     val sortedAlbums = remember(albums) {
-        albums.sortedWith(
-            compareByDescending<AlbumItem> { it.releaseYear() ?: Int.MIN_VALUE }
-                .thenBy(String.CASE_INSENSITIVE_ORDER) { it.displayName }
-        )
+        albums
+            .groupBy { albumKey(it.name, it.artist) }
+            .map { (_, group) -> group.maxByOrNull { it.trackCount } ?: group.first() }
+            .sortedWith(
+                compareByDescending<AlbumItem> { it.releaseYear() ?: Int.MIN_VALUE }
+                    .thenBy(String.CASE_INSENSITIVE_ORDER) { it.displayName }
+            )
+    }
+    val sortedAppearsOn = remember(appearsOn) {
+        appearsOn
+            .groupBy { albumKey(it.name, it.artist) }
+            .map { (_, group) -> group.maxByOrNull { it.trackCount } ?: group.first() }
+            .sortedWith(
+                compareByDescending<AlbumItem> { it.releaseYear() ?: Int.MIN_VALUE }
+                    .thenBy(String.CASE_INSENSITIVE_ORDER) { it.displayName }
+            )
+    }
+    val filteredAppearsOn = remember(sortedAppearsOn, filter) {
+        when (filter) {
+            ArtistReleaseFilter.All -> sortedAppearsOn
+            ArtistReleaseFilter.Albums -> sortedAppearsOn.filter {
+                it.releaseType() == ReleaseType.ALBUM || it.releaseType() == ReleaseType.COMPILATION
+            }
+            ArtistReleaseFilter.EPs -> sortedAppearsOn.filter { it.releaseType() == ReleaseType.EP }
+            ArtistReleaseFilter.Singles -> sortedAppearsOn.filter { it.releaseType() == ReleaseType.SINGLE }
+        }
     }
     val filtered = remember(sortedAlbums, filter) {
         when (filter) {
@@ -276,7 +342,6 @@ fun ArtistDetailScreen(
         }
     }
 
-    // Nest LocalArtistNav so ArtistContextSheet (and any child) gets image/banner/links.
     val rootArtistNav = LocalArtistNav.current
     val nestedArtistNav = rootArtistNav.copy(
         startRadio = { onStartRadio() },
@@ -288,7 +353,7 @@ fun ArtistDetailScreen(
             scope.launch {
                 profileRepo.setCustomImage(artist.displayName, null)
                 themeTick++
-                Toast.makeText(context, "Artist image cleared", Toast.LENGTH_SHORT).show()
+                Toast.makeText(context, "Photo removed", Toast.LENGTH_SHORT).show()
             }
         },
         clearBanner = {
@@ -296,7 +361,7 @@ fun ArtistDetailScreen(
                 profileRepo.setBannerImage(artist.displayName, null)
                 bannerUri = null
                 themeTick++
-                Toast.makeText(context, "Banner cleared", Toast.LENGTH_SHORT).show()
+                Toast.makeText(context, "Header removed", Toast.LENGTH_SHORT).show()
             }
         },
         openLinks = { showDataSources = true }
@@ -306,7 +371,7 @@ fun ArtistDetailScreen(
         if (cropUri != null) {
             ImageCropScreen(
                 sourceUri = cropUri!!,
-                title = if (cropKind == ArtistImageKind.BANNER) "Crop banner" else "Crop artist image",
+                title = if (cropKind == ArtistImageKind.BANNER) "Crop header" else "Crop photo",
                 aspect = if (cropKind == ArtistImageKind.BANNER) 16f / 9f else 1f,
                 onCancel = { cropUri = null },
                 onCropped = { cropped ->
@@ -315,7 +380,7 @@ fun ArtistDetailScreen(
                         when (cropKind) {
                             ArtistImageKind.PROFILE -> {
                                 profileRepo.setCustomImage(artist.displayName, cropped.toString())
-                                Toast.makeText(context, "Artist image updated", Toast.LENGTH_SHORT).show()
+                                Toast.makeText(context, "Photo updated", Toast.LENGTH_SHORT).show()
                             }
                             ArtistImageKind.BANNER -> {
                                 val saved = profileRepo.setBannerImage(
@@ -323,7 +388,7 @@ fun ArtistDetailScreen(
                                     cropped.toString()
                                 )
                                 bannerUri = saved
-                                Toast.makeText(context, "Banner updated", Toast.LENGTH_SHORT).show()
+                                Toast.makeText(context, "Header updated", Toast.LENGTH_SHORT).show()
                             }
                         }
                         themeTick++
@@ -354,7 +419,22 @@ fun ArtistDetailScreen(
         if (showMenu) {
             ArtistContextSheet(
                 artist = artist,
-                onDismiss = { showMenu = false }
+                onDismiss = { showMenu = false },
+                onMerge = { showMerge = true }
+            )
+        }
+
+        if (showMerge) {
+            ArtistMergeSheet(
+                artist = artist,
+                catalog = catalog,
+                pinStore = pinStore,
+                onDismiss = { showMerge = false },
+                onMerged = { merged ->
+                    showMerge = false
+                    aliasTick++
+                    onArtistMerged(merged)
+                }
             )
         }
 
@@ -385,6 +465,23 @@ fun ArtistDetailScreen(
             }
         }
 
+        if (showAllAppearsOn) {
+            DiscographyAllScreen(
+                artistName = artist.displayName,
+                albums = sortedAppearsOn,
+                filters = appearsOnFilters,
+                onFiltersChange = { appearsOnFilters = it },
+                titleColor = base.onBackground,
+                mutedColor = base.onBackground.copy(alpha = 0.6f),
+                onBack = { showAllAppearsOn = false },
+                onOpenAlbum = onOpenAlbum,
+                onPlaySongs = onPlaySongs,
+                onAddToQueue = onAddToQueue,
+                heading = "Appears on"
+            )
+            return@CompositionLocalProvider
+        }
+
         if (showAll) {
             DiscographyAllScreen(
                 artistName = artist.displayName,
@@ -396,7 +493,8 @@ fun ArtistDetailScreen(
                 onBack = { showAll = false },
                 onOpenAlbum = onOpenAlbum,
                 onPlaySongs = onPlaySongs,
-                onAddToQueue = onAddToQueue
+                onAddToQueue = onAddToQueue,
+                heading = "Discography"
             )
             return@CompositionLocalProvider
         }
@@ -450,7 +548,7 @@ fun ArtistDetailScreen(
                         bannerUri = bannerUri,
                         bannerTotalHeight = bannerTotalHeight,
                         artBg = artBg,
-                        stats = "${formatAlbumCount(artist.albumCount)} · ${formatTrackCount(artist.trackCount)}",
+                        stats = "${formatAlbumCount(maxOf(artist.albumCount, albums.size))} · ${formatTrackCount(maxOf(artist.trackCount, albums.sumOf { it.trackCount }))}",
                         titleColor = onArt,
                         mutedColor = mutedOnArt,
                         accent = accent,
@@ -468,6 +566,28 @@ fun ArtistDetailScreen(
                         onOpenLinks = { showDataSources = true },
                         onPlayAll = onStartRadio
                     )
+                }
+
+                if (aliases.isNotEmpty()) {
+                    item {
+                        ArtistAliasesSection(
+                            aliases = aliases,
+                            titleColor = base.onBackground,
+                            mutedColor = base.onBackground.copy(alpha = 0.6f),
+                            onUnmerge = { alias ->
+                                scope.launch {
+                                    catalog.unmergeArtist(alias.aliasKey)
+                                    aliasTick++
+                                    onArtistMerged(artist)
+                                    Toast.makeText(
+                                        context,
+                                        "Unmerged ${alias.aliasName}",
+                                        Toast.LENGTH_SHORT
+                                    ).show()
+                                }
+                            }
+                        )
+                    }
                 }
 
                 item {
@@ -531,7 +651,13 @@ fun ArtistDetailScreen(
                 }
 
                 item {
-                    if (filtered.isEmpty()) {
+                    if (albumsLoading && filtered.isEmpty()) {
+                        AlbumRowSkeleton(
+                            count = LoadingEstimates.albums(
+                                expectedAlbumCount.takeIf { it > 0 } ?: artist.albumCount
+                            )
+                        )
+                    } else if (filtered.isEmpty()) {
                         Text(
                             "No releases in this filter.",
                             modifier = Modifier.padding(16.dp),
@@ -542,16 +668,74 @@ fun ArtistDetailScreen(
                             contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
                             horizontalArrangement = Arrangement.spacedBy(14.dp)
                         ) {
-                            items(
+                            itemsIndexed(
                                 filtered,
-                                key = { "${it.name}|${it.artist}|${it.releaseYear()}" }
-                            ) { album ->
+                                key = { i, a -> releaseLazyKey(a, i) }
+                            ) { _, album ->
                                 ArtistReleaseCard(
                                     album = album,
                                     titleColor = base.onBackground,
                                     mutedColor = base.onBackground.copy(alpha = 0.55f),
                                     onClick = { onOpenAlbum(album) }
                                 )
+                            }
+                        }
+                    }
+                }
+
+                if (sortedAppearsOn.isNotEmpty() || appearsOnLoading) {
+                    item {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 16.dp, vertical = 4.dp)
+                                .padding(top = 8.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(
+                                "Appears on",
+                                style = MaterialTheme.typography.titleMedium,
+                                fontWeight = FontWeight.Bold,
+                                color = base.onBackground,
+                                modifier = Modifier.weight(1f)
+                            )
+                            TextButton(
+                                onClick = {
+                                    appearsOnFilters = DiscographyFilters.fromPageFilter(filter)
+                                    showAllAppearsOn = true
+                                }
+                            ) {
+                                Text("Show all", color = accent)
+                            }
+                        }
+                    }
+                    item {
+                        if (appearsOnLoading && filteredAppearsOn.isEmpty()) {
+                            AlbumRowSkeleton(
+                                count = LoadingEstimates.albums(expectedAppearsOnCount)
+                            )
+                        } else if (filteredAppearsOn.isEmpty()) {
+                            Text(
+                                "No appearances in this filter.",
+                                modifier = Modifier.padding(16.dp),
+                                color = base.onBackground.copy(alpha = 0.55f)
+                            )
+                        } else {
+                            LazyRow(
+                                contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
+                                horizontalArrangement = Arrangement.spacedBy(14.dp)
+                            ) {
+                                itemsIndexed(
+                                    filteredAppearsOn,
+                                    key = { i, a -> "ao-${releaseLazyKey(a, i)}" }
+                                ) { _, album ->
+                                    ArtistReleaseCard(
+                                        album = album,
+                                        titleColor = base.onBackground,
+                                        mutedColor = base.onBackground.copy(alpha = 0.55f),
+                                        onClick = { onOpenAlbum(album) }
+                                    )
+                                }
                             }
                         }
                     }
@@ -628,12 +812,16 @@ private fun DiscographyAllScreen(
     onBack: () -> Unit,
     onOpenAlbum: (AlbumItem) -> Unit,
     onPlaySongs: (List<Song>, Int) -> Unit,
-    onAddToQueue: (Song) -> Unit
+    onAddToQueue: (Song) -> Unit,
+    heading: String = "Discography"
 ) {
     val context = LocalContext.current
     var filterMenuOpen by remember { mutableStateOf(false) }
     val visible = remember(albums, filters) {
-        albums.filter { filters.matches(it.releaseType()) }
+        albums
+            .filter { filters.matches(it.releaseType()) }
+            .groupBy { albumKey(it.name, it.artist) }
+            .map { (_, group) -> group.maxByOrNull { it.trackCount } ?: group.first() }
     }
 
     Column(
@@ -656,7 +844,7 @@ private fun DiscographyAllScreen(
             }
             Column(modifier = Modifier.weight(1f)) {
                 Text(
-                    "Discography",
+                    heading,
                     style = MaterialTheme.typography.titleMedium,
                     fontWeight = FontWeight.Bold,
                     color = titleColor
@@ -752,8 +940,8 @@ private fun DiscographyAllScreen(
             modifier = Modifier.fillMaxSize(),
             contentPadding = PaddingValues(bottom = 96.dp)
         ) {
-            visible.forEach { album ->
-                val releaseKey = "${album.name}|${album.artist}|${album.releaseYear()}"
+            visible.forEachIndexed { index, album ->
+                val releaseKey = releaseLazyKey(album, index)
                 val tracks = sortedReleaseTracks(album)
 
                 item(key = "hdr-$releaseKey") {
@@ -768,10 +956,10 @@ private fun DiscographyAllScreen(
                 itemsIndexed(
                     tracks,
                     key = { _, song -> "trk-$releaseKey-${song.songKey}" }
-                ) { index, song ->
+                ) { trackIndex, song ->
                     SwipeAddSongRow(
                         song = song,
-                        onClick = { onPlaySongs(tracks, index) },
+                        onClick = { onPlaySongs(tracks, trackIndex) },
                         onSwipeAdd = {
                             onAddToQueue(song)
                             Toast.makeText(context, "Added to queue", Toast.LENGTH_SHORT).show()
@@ -871,7 +1059,7 @@ private fun ArtistHero(
                             .diskCacheKey(bannerUri)
                             .crossfade(true)
                             .build(),
-                        contentDescription = "$name banner",
+                        contentDescription = "$name header",
                         contentScale = ContentScale.Crop,
                         modifier = Modifier.fillMaxSize()
                     )
@@ -1017,5 +1205,161 @@ private fun ArtistReleaseCard(
             maxLines = 1,
             overflow = TextOverflow.Ellipsis
         )
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun ArtistMergeSheet(
+    artist: ArtistItem,
+    catalog: CatalogRepository,
+    pinStore: MyStuffPinStore,
+    onDismiss: () -> Unit,
+    onMerged: (ArtistItem) -> Unit
+) {
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    var query by remember { mutableStateOf("") }
+    var hits by remember { mutableStateOf<List<ArtistItem>>(emptyList()) }
+    var pending by remember { mutableStateOf<ArtistItem?>(null) }
+    var busy by remember { mutableStateOf(false) }
+    val selfKey = remember(artist.name) { artistKey(artist.name) }
+
+    LaunchedEffect(query) {
+        if (query.trim().length < 2) {
+            hits = emptyList()
+            return@LaunchedEffect
+        }
+        hits = catalog.searchArtistsAsItems(query.trim(), limit = 20)
+            .filter { artistKey(it.name) != selfKey }
+    }
+
+    ModalBottomSheet(
+        onDismissRequest = onDismiss,
+        sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+    ) {
+        Column(modifier = Modifier.padding(horizontal = 20.dp)) {
+            Text(
+                "Merge artists",
+                style = MaterialTheme.typography.titleLarge,
+                fontWeight = FontWeight.Bold
+            )
+            Text(
+                "Pick a duplicate name for ${artist.displayName}. It becomes an alias of this page — you can undo it later.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
+                modifier = Modifier.padding(top = 6.dp, bottom = 12.dp)
+            )
+            OutlinedTextField(
+                value = query,
+                onValueChange = { query = it },
+                modifier = Modifier.fillMaxWidth(),
+                singleLine = true,
+                enabled = !busy,
+                label = { Text("Artist name") }
+            )
+            Spacer(modifier = Modifier.height(8.dp))
+            hits.forEach { hit ->
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable(enabled = !busy) { pending = hit }
+                        .padding(vertical = 10.dp)
+                ) {
+                    Text(hit.displayName, fontWeight = FontWeight.SemiBold)
+                    Text(
+                        formatAlbumCount(hit.albumCount) + " · " + formatTrackCount(hit.trackCount),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
+                    )
+                }
+            }
+            if (query.trim().length >= 2 && hits.isEmpty()) {
+                Text(
+                    "No matching artists",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f),
+                    modifier = Modifier.padding(vertical = 12.dp)
+                )
+            }
+            Spacer(modifier = Modifier.height(24.dp))
+        }
+    }
+
+    val other = pending
+    if (other != null) {
+        androidx.compose.material3.AlertDialog(
+            onDismissRequest = { if (!busy) pending = null },
+            title = { Text("Add alias?") },
+            text = {
+                Text("“${other.displayName}” will show up on ${artist.displayName}’s page. You can unmerge it later.")
+            },
+            confirmButton = {
+                TextButton(
+                    enabled = !busy,
+                    onClick = {
+                        busy = true
+                        scope.launch {
+                            val merged = catalog.mergeArtists(other.displayName, artist.displayName)
+                            if (merged != null) {
+                                pinStore.retargetArtist(other.name, merged)
+                                onMerged(merged)
+                                Toast.makeText(
+                                    context,
+                                    "Aliased ${other.displayName}",
+                                    Toast.LENGTH_SHORT
+                                ).show()
+                            } else {
+                                busy = false
+                                pending = null
+                                Toast.makeText(context, "Merge failed", Toast.LENGTH_SHORT).show()
+                            }
+                        }
+                    }
+                ) { Text("Merge") }
+            },
+            dismissButton = {
+                TextButton(enabled = !busy, onClick = { pending = null }) { Text("Cancel") }
+            }
+        )
+    }
+}
+
+@Composable
+private fun ArtistAliasesSection(
+    aliases: List<ArtistAliasEntity>,
+    titleColor: Color,
+    mutedColor: Color,
+    onUnmerge: (ArtistAliasEntity) -> Unit
+) {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 20.dp, vertical = 8.dp)
+    ) {
+        Text(
+            "Also known as",
+            style = MaterialTheme.typography.titleSmall,
+            fontWeight = FontWeight.SemiBold,
+            color = titleColor
+        )
+        aliases.forEach { alias ->
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(top = 4.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    alias.aliasName,
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = titleColor,
+                    modifier = Modifier.weight(1f)
+                )
+                TextButton(onClick = { onUnmerge(alias) }) {
+                    Text("Unmerge", color = mutedColor)
+                }
+            }
+        }
     }
 }

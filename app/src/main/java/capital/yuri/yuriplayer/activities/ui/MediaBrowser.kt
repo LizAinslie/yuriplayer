@@ -24,6 +24,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -41,8 +42,10 @@ import capital.yuri.yuriplayer.data.MyStuffPinStore
 import capital.yuri.yuriplayer.data.Playlist
 import capital.yuri.yuriplayer.data.Song
 import capital.yuri.yuriplayer.data.SortMode
+import capital.yuri.yuriplayer.data.source.SourceSearchHits
 import capital.yuri.yuriplayer.player.PlayerController
 import capital.yuri.yuriplayer.ui.formatTrackCount
+import kotlinx.coroutines.delay
 import org.koin.compose.koinInject
 
 enum class MediaBrowserSection { Songs, Albums, Artists, Playlists }
@@ -85,7 +88,9 @@ fun MediaBrowser(
     onOpenArtist: (ArtistItem) -> Unit = {},
     onOpenPlaylist: (Playlist) -> Unit = {},
     onEditSong: (Song) -> Unit = {},
-    onEditAlbum: (AlbumItem) -> Unit = {}
+    onEditAlbum: (AlbumItem) -> Unit = {},
+    onSongClick: ((Song) -> Unit)? = null,
+    liveSearch: (suspend (String) -> SourceSearchHits)? = null
 ) {
     val context = LocalContext.current
     val focusManager = LocalFocusManager.current
@@ -102,42 +107,69 @@ fun MediaBrowser(
     }
 
     val q = query.trim()
+    var liveHits by remember { mutableStateOf(SourceSearchHits()) }
+    var searching by remember { mutableStateOf(false) }
 
-    val allSongs = remember(lookup, entries.size) { lookup.songs() }
-    val allAlbums = remember(lookup, entries.size) { lookup.albums() }
-    val allArtists = remember(lookup, entries.size) { lookup.artists() }
+    LaunchedEffect(q, liveSearch != null) {
+        if (liveSearch == null) return@LaunchedEffect
+        if (q.isEmpty()) {
+            liveHits = SourceSearchHits()
+            searching = false
+            return@LaunchedEffect
+        }
+        searching = true
+        delay(280)
+        liveHits = runCatching { liveSearch(q) }.getOrDefault(SourceSearchHits())
+        searching = false
+    }
+
+    val useLive = liveSearch != null
+    val lookupSongs = remember(lookup, entries.size, useLive) {
+        if (useLive) emptyList() else lookup.songs()
+    }
+    val lookupAlbums = remember(lookup, entries.size, useLive) {
+        if (useLive) emptyList() else lookup.albums()
+    }
+    val lookupArtists = remember(lookup, entries.size, useLive) {
+        if (useLive) emptyList() else lookup.artists()
+    }
     val allPlaylists = remember(lookup, entries.size) { lookup.playlists() }
 
-    val filteredSongs = remember(allSongs, q, sortMode) {
-        allSongs
-            .filter {
+    val allSongs = if (useLive) liveHits.songs else lookupSongs
+    val allAlbums = if (useLive) liveHits.albums else lookupAlbums
+    val allArtists = if (useLive) liveHits.artists else lookupArtists
+
+    val filteredSongs = remember(allSongs, q, sortMode, useLive) {
+        val base = if (useLive) {
+            allSongs
+        } else {
+            allSongs.filter {
                 q.isEmpty() ||
                     it.displayTitle.contains(q, true) ||
                     it.displayArtist.contains(q, true) ||
                     it.displayAlbum.contains(q, true)
             }
-            .let { list ->
-                when (sortMode) {
-                    SortMode.TITLE -> list.sortedBy { it.displayTitle.lowercase() }
-                    SortMode.ARTIST -> list.sortedBy { it.displayArtist.lowercase() }
-                    SortMode.ALBUM -> list.sortedBy { it.displayAlbum.lowercase() }
-                    SortMode.TRACK -> list.sortedWith(
-                        compareBy<Song> { it.discNumber ?: 1 }
-                            .thenBy { it.trackNumber ?: Int.MAX_VALUE }
-                            .thenBy { it.displayTitle.lowercase() }
-                    )
-                }
-            }
+        }
+        when (sortMode) {
+            SortMode.TITLE -> base.sortedBy { it.displayTitle.lowercase() }
+            SortMode.ARTIST -> base.sortedBy { it.displayArtist.lowercase() }
+            SortMode.ALBUM -> base.sortedBy { it.displayAlbum.lowercase() }
+            SortMode.TRACK -> base.sortedWith(
+                compareBy<Song> { it.discNumber ?: 1 }
+                    .thenBy { it.trackNumber ?: Int.MAX_VALUE }
+                    .thenBy { it.displayTitle.lowercase() }
+            )
+        }
     }
-    val filteredAlbums = remember(allAlbums, q) {
-        allAlbums.filter {
+    val filteredAlbums = remember(allAlbums, q, useLive) {
+        if (useLive) allAlbums else allAlbums.filter {
             q.isEmpty() ||
                 it.displayName.contains(q, true) ||
                 it.displayArtist.contains(q, true)
         }
     }
-    val filteredArtists = remember(allArtists, q) {
-        allArtists.filter {
+    val filteredArtists = remember(allArtists, q, useLive) {
+        if (useLive) allArtists else allArtists.filter {
             q.isEmpty() || it.displayName.contains(q, true)
         }
     }
@@ -163,7 +195,9 @@ fun MediaBrowser(
                     }
                 }
             },
-            placeholder = { Text("Filter songs, albums, artists…") },
+            placeholder = {
+                Text(if (liveSearch != null) "Search this library…" else "Filter songs, albums, artists…")
+            },
             keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
             keyboardActions = KeyboardActions(
                 onSearch = {
@@ -207,13 +241,23 @@ fun MediaBrowser(
         when (section) {
             MediaBrowserSection.Songs -> {
                 if (filteredSongs.isEmpty()) {
-                    Text("Nothing here yet.", modifier = Modifier.padding(16.dp))
+                    Text(
+                        when {
+                            liveSearch != null && q.isEmpty() -> "Type to search this library."
+                            searching -> "Searching…"
+                            else -> "Nothing here yet."
+                        },
+                        modifier = Modifier.padding(16.dp)
+                    )
                 } else {
                     LazyColumn(modifier = Modifier.fillMaxSize()) {
                         itemsIndexed(filteredSongs, key = { _, s -> s.songKey }) { index, song ->
                             SwipeAddSongRow(
                                 song = song,
-                                onClick = { onPlay(filteredSongs, index) },
+                                onClick = {
+                                    if (onSongClick != null) onSongClick(song)
+                                    else onPlay(filteredSongs, index)
+                                },
                                 onSwipeAdd = {
                                     onAddToQueue(song)
                                     Toast.makeText(context, "Added to queue", Toast.LENGTH_SHORT).show()

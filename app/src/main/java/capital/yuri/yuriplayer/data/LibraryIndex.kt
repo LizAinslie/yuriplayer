@@ -1,10 +1,12 @@
 package capital.yuri.yuriplayer.data
 
+import android.content.Context
 import android.util.Log
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.channels.BufferOverflow
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharedFlow
@@ -15,17 +17,20 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
 /**
- * In-memory view of the **persisted** catalog for UI.
- *
- * Continuous lists → StateFlows. Discrete scan moments → [events].
+ * In-memory view of the **local** device library for My Stuff / browser UI.
+ * Remote tracks live in [ExploreSearchService], not here — so cold start does
+ * not load tens of thousands of Jellyfin rows onto the main thread.
  */
 class LibraryIndex(
+    private val context: Context,
     private val repository: MusicRepository,
     private val cache: LibraryCache,
-    private val catalog: CatalogRepository
+    private val catalog: CatalogRepository,
+    private val notifier: LibraryScanNotifier
 ) {
 
-    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
+    // Default dispatcher: never block Main while loading large lists
+    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
 
     private val _songs = MutableStateFlow<List<Song>>(emptyList())
     val songs: StateFlow<List<Song>> = _songs.asStateFlow()
@@ -45,49 +50,111 @@ class LibraryIndex(
     )
     val events: SharedFlow<LibraryEvent> = _events.asSharedFlow()
 
+    /**
+     * Fast path for cold start:
+     * 1. Disk cache only (instant) — enough for My Stuff UI
+     * 2. Room local only if cache was empty
+     * 3. Full MediaStore rescan only if still empty / stale, after long delays
+     *    so MusicService restore + first Play own the CPU
+     */
     fun bootstrap(staleAfterMs: Long = DEFAULT_STALE_MS) {
         scope.launch {
-            val fromDb = withContext(Dispatchers.IO) { catalog.getAllSongs() }
-            if (fromDb.isNotEmpty()) {
-                _songs.value = fromDb
-                _lastScannedAt.value = System.currentTimeMillis()
-            } else {
-                val cached = withContext(Dispatchers.IO) { cache.load() }
-                if (cached != null && cached.songs.isNotEmpty()) {
-                    _songs.value = cached.songs
-                    _lastScannedAt.value = cached.scannedAt
+            // 1) Cache first — no Room, no MediaStore
+            val cached = runCatching { cache.load() }.getOrNull()
+            val hadCache = cached != null && cached.songs.isNotEmpty()
+            if (hadCache) {
+                _songs.value = cached!!.songs
+                _lastScannedAt.value = cached.scannedAt
+                Log.i(TAG, "bootstrap from cache: ${cached.songs.size} tracks")
+            }
+
+            // 2) Room only when cache missed — avoid loading large local tables
+            //    while playback is still restoring.
+            if (!hadCache) {
+                val fromDb = runCatching { catalog.getLocalSongs() }.getOrDefault(emptyList())
+                if (fromDb.isNotEmpty()) {
+                    _songs.value = fromDb
+                    _lastScannedAt.value = System.currentTimeMillis()
+                    Log.i(TAG, "bootstrap from Room local: ${fromDb.size} tracks")
                 }
             }
+
             val age = System.currentTimeMillis() - _lastScannedAt.value
-            if (_songs.value.isEmpty() || age > staleAfterMs) {
-                refresh()
+            when {
+                // Nothing at all — wait so playback restore finishes first
+                _songs.value.isEmpty() -> {
+                    delay(COLD_EMPTY_RESCAN_DELAY_MS)
+                    if (_songs.value.isEmpty() && !_isLoading.value) {
+                        Log.i(TAG, "bootstrap: empty after delay → local rescan")
+                        refresh()
+                    }
+                }
+                // Warm cache: optionally reconcile Room much later (no MediaStore)
+                hadCache -> {
+                    delay(ROOM_RECONCILE_DELAY_MS)
+                    if (!_isLoading.value) {
+                        runCatching { reloadFromCatalog() }
+                        val stillStale = System.currentTimeMillis() - _lastScannedAt.value > staleAfterMs
+                        if (stillStale && !_isLoading.value) {
+                            delay(STALE_RESCAN_DELAY_MS)
+                            if (!_isLoading.value) {
+                                Log.i(TAG, "bootstrap: stale after reconcile → deferred local rescan")
+                                refresh()
+                            }
+                        }
+                    }
+                }
+                // Had Room rows but no cache — rescan later if stale
+                age > staleAfterMs -> {
+                    delay(STALE_RESCAN_DELAY_MS)
+                    if (!_isLoading.value) {
+                        Log.i(TAG, "bootstrap: stale (${age}ms) → deferred local rescan")
+                        refresh()
+                    }
+                }
+                else -> Log.i(TAG, "bootstrap: warm local index, skip auto-rescan")
             }
         }
     }
 
+    /** Reload **local** Room tracks into the in-memory index (not remote). */
+    suspend fun reloadFromCatalog() {
+        val local = withContext(Dispatchers.IO) { catalog.getLocalSongs() }
+        _songs.value = local
+        _lastScannedAt.value = System.currentTimeMillis()
+        Log.i(TAG, "reloadFromCatalog (local): ${local.size} tracks")
+    }
+
     fun refresh() {
         if (_isLoading.value) return
-        scope.launch {
-            _isLoading.value = true
-            _error.value = null
-            _events.tryEmit(LibraryEvent.ScanStarted())
-            try {
-                val songs = withContext(Dispatchers.IO) {
-                    catalog.syncLocalLibrary().also { cache.save(it) }
-                }
-                _songs.value = songs
-                _lastScannedAt.value = System.currentTimeMillis()
-                _events.tryEmit(LibraryEvent.ScanCompleted(songCount = songs.size))
-            } catch (e: SecurityException) {
-                _error.value = "Storage permission required"
-                _events.tryEmit(LibraryEvent.ScanFailed("Storage permission required"))
-            } catch (e: Exception) {
-                _error.value = e.message ?: "Scan failed"
-                Log.e(TAG, "Refresh failed", e)
-                _events.tryEmit(LibraryEvent.ScanFailed(e.message ?: "Scan failed"))
-            } finally {
-                _isLoading.value = false
+        LibraryScanService.startLocal(context.applicationContext)
+    }
+
+    suspend fun refreshAndAwait() {
+        if (_isLoading.value) return
+        _isLoading.value = true
+        _error.value = null
+        _events.tryEmit(LibraryEvent.ScanStarted())
+        notifier.update("Scanning library", "Reading local files…")
+        try {
+            val songs = withContext(Dispatchers.IO) {
+                catalog.syncLocalLibrary().also { cache.save(it) }
             }
+            _songs.value = songs
+            _lastScannedAt.value = System.currentTimeMillis()
+            _events.tryEmit(LibraryEvent.ScanCompleted(songCount = songs.size))
+            notifier.finish("Library scan", "${songs.size} tracks on this device")
+        } catch (e: SecurityException) {
+            _error.value = "Storage permission required"
+            _events.tryEmit(LibraryEvent.ScanFailed("Storage permission required"))
+            notifier.finish("Library scan", "Storage permission required")
+        } catch (e: Exception) {
+            _error.value = e.message ?: "Scan failed"
+            Log.e(TAG, "Refresh failed", e)
+            _events.tryEmit(LibraryEvent.ScanFailed(e.message ?: "Scan failed"))
+            notifier.finish("Library scan", e.message ?: "Scan failed")
+        } finally {
+            _isLoading.value = false
         }
     }
 
@@ -141,11 +208,17 @@ class LibraryIndex(
                 if (albumKeyNorm == null) return@mapNotNull null
 
                 val albumArtistVotes = tracks
-                    .mapNotNull { it.albumArtist?.let { a -> normalizeKey(a) to a } }
+                    .mapNotNull {
+                        val raw = primaryArtistName(it.albumArtist) ?: it.albumArtist
+                        raw?.let { a -> normalizeKey(a) to a }
+                    }
                     .groupingBy { it.first }
                     .eachCount()
                 val trackArtistVotes = tracks
-                    .mapNotNull { it.artist?.let { a -> normalizeKey(a) to a } }
+                    .mapNotNull {
+                        val raw = primaryArtistName(it.artist) ?: it.artist
+                        raw?.let { a -> normalizeKey(a) to a }
+                    }
                     .groupingBy { it.first }
                     .eachCount()
 
@@ -200,19 +273,19 @@ class LibraryIndex(
         } else _songs.value
 
         return source
-            .groupBy { normalizeKey(it.effectiveAlbumArtist) }
-            .mapNotNull { (artistKeyNorm, tracks) ->
-                if (artistKeyNorm == null) return@mapNotNull null
+            .groupBy { artistKey(it.effectiveAlbumArtist) }
+            .mapNotNull { (key, tracks) ->
+                if (key.isNullOrBlank()) return@mapNotNull null
                 val displayName = tracks
-                    .mapNotNull { it.effectiveAlbumArtist }
-                    .groupingBy { it }
-                    .eachCount()
+                    .mapNotNull { primaryArtistName(it.effectiveAlbumArtist) ?: it.effectiveAlbumArtist }
+                    .groupingBy { it }.eachCount()
                     .maxByOrNull { it.value }
                     ?.key
+                if (isCombinedArtistName(displayName)) return@mapNotNull null
                 val deduped = tracks.distinctBy {
                     it.path?.lowercase() ?: it.contentUri.toString()
                 }
-                val albumKeys = deduped.mapNotNull { normalizeKey(it.album) }.toSet()
+                val albumKeys = deduped.mapNotNull { albumKey(it.album, it.effectiveAlbumArtist) }.toSet()
                 ArtistItem(
                     name = displayName,
                     trackCount = deduped.size,
@@ -233,6 +306,11 @@ class LibraryIndex(
     companion object {
         private const val TAG = "LibraryIndex"
         const val DEFAULT_STALE_MS = 12L * 60 * 60 * 1000
+        /** Wait so MusicService can restore + user can hit Play first. */
+        private const val COLD_EMPTY_RESCAN_DELAY_MS = 5_000L
+        private const val STALE_RESCAN_DELAY_MS = 12_000L
+        /** After a warm cache hit, wait before touching Room at all. */
+        private const val ROOM_RECONCILE_DELAY_MS = 8_000L
 
         fun normalizeKey(value: String?): String? {
             if (value == null) return null
@@ -285,7 +363,8 @@ data class AlbumItem(
     val songs: List<Song>
 ) {
     val displayName: String get() = name ?: "Unknown Album"
-    val displayArtist: String get() = artist ?: "Unknown Artist"
+    val displayArtist: String
+        get() = primaryArtistName(artist) ?: artist ?: "Unknown Artist"
 }
 
 data class ArtistItem(
@@ -294,5 +373,5 @@ data class ArtistItem(
     val albumCount: Int,
     val songs: List<Song>
 ) {
-    val displayName: String get() = name ?: "Unknown Artist"
+    val displayName: String get() = primaryArtistName(name) ?: name ?: "Unknown Artist"
 }

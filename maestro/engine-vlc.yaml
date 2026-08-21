@@ -1,0 +1,14 @@
+appId: capital.yuri.yuriplayer
+---
+# Switch the live engine to LibVLC. Force-stop the app after if a track is playing.
+- launchApp:
+    appId: capital.yuri.yuriplayer
+    clearState: false
+- tapOn:
+    id: settings
+- tapOn:
+    id: settings_playback_engine
+- tapOn:
+    id: engine_vlc
+- back
+- back

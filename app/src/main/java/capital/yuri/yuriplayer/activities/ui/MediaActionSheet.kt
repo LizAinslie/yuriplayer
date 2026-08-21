@@ -48,12 +48,18 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import capital.yuri.yuriplayer.data.AlbumItem
 import capital.yuri.yuriplayer.data.ArtistItem
+import capital.yuri.yuriplayer.data.Song
+import capital.yuri.yuriplayer.data.allCreditsForSong
+import capital.yuri.yuriplayer.data.isCombinedArtistName
+import capital.yuri.yuriplayer.data.primaryArtistName
 import capital.yuri.yuriplayer.data.MyStuffPinStore
 import capital.yuri.yuriplayer.data.Playlist
 import capital.yuri.yuriplayer.data.PlaylistRepository
-import capital.yuri.yuriplayer.data.Song
 import capital.yuri.yuriplayer.data.StuffPin
 import capital.yuri.yuriplayer.data.StuffPinKind
+import capital.yuri.yuriplayer.data.albumKey
+import capital.yuri.yuriplayer.data.artistKey
+import capital.yuri.yuriplayer.data.source.SourceOffering
 import capital.yuri.yuriplayer.player.PlayerController
 import kotlinx.coroutines.launch
 import org.koin.compose.koinInject
@@ -128,7 +134,6 @@ fun PlaylistSheetHeader(
     HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
 }
 
-/** Artist sheet header — circular profile art (no album-cover fallback). */
 @Composable
 fun ArtistSheetHeader(
     artistName: String,
@@ -199,14 +204,49 @@ fun MediaSheetBottomPad() {
 }
 
 private fun songArtistNames(song: Song): List<String> {
-    val credits = song.creditArtists
-    if (credits.isNotEmpty()) return credits
-    val single = song.effectiveAlbumArtist?.takeIf { it.isNotBlank() }
-        ?: song.artist?.takeIf { it.isNotBlank() }
-    return listOfNotNull(single)
+    val credits = allCreditsForSong(song)
+        .map { it.name.trim() }
+        .filter { it.isNotEmpty() && !isCombinedArtistName(it) }
+    if (credits.isNotEmpty()) return credits.distinctBy { it.lowercase() }
+    val single = primaryArtistName(song.effectiveAlbumArtist)
+        ?: primaryArtistName(song.artist)
+        ?: song.primaryArtist.takeIf { it.isNotBlank() && it != "Unknown Artist" }
+    return listOfNotNull(single?.takeUnless { isCombinedArtistName(it) })
 }
 
-/** Shared song sheet — defaults Go to album / artist from [LocalSongNav]. */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun GoToArtistSheet(
+    songTitle: String,
+    artists: List<String>,
+    onPick: (String) -> Unit,
+    onDismiss: () -> Unit
+) {
+    ModalBottomSheet(
+        onDismissRequest = onDismiss,
+        sheetState = rememberModalBottomSheetState()
+    ) {
+        Text(
+            "Go to artist",
+            style = MaterialTheme.typography.titleMedium,
+            fontWeight = FontWeight.SemiBold,
+            modifier = Modifier.padding(horizontal = 20.dp, vertical = 8.dp)
+        )
+        Text(
+            songTitle,
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.55f),
+            modifier = Modifier.padding(horizontal = 20.dp)
+        )
+        HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
+        artists.forEach { name ->
+            MediaSheetItem(name) { onPick(name) }
+        }
+        MediaSheetBottomPad()
+    }
+}
+
+/** Shared song sheet — Sources is always available; multi badge is separate. */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun SongContextSheet(
@@ -219,7 +259,9 @@ fun SongContextSheet(
     onAddToQueue: (() -> Unit)? = null,
     onStartRadio: (() -> Unit)? = null,
     onAddToPlaylist: (() -> Unit)? = null,
-    onAddToMyStuff: (() -> Unit)? = null
+    onAddToMyStuff: (() -> Unit)? = null,
+    sourceOfferings: List<SourceOffering>? = null,
+    onPreferSource: ((SourceOffering) -> Unit)? = null
 ) {
     val pinStore: MyStuffPinStore = koinInject()
     val player: PlayerController = koinInject()
@@ -227,7 +269,16 @@ fun SongContextSheet(
     val songNav = LocalSongNav.current
     var showPlaylistPicker by remember { mutableStateOf(false) }
     var showArtistPicker by remember { mutableStateOf(false) }
+    var showSourcesPicker by remember { mutableStateOf(false) }
     val artists = remember(song) { songArtistNames(song) }
+    val entries by pinStore.entries.collectAsState()
+    val inMyStuff = remember(entries, song.songKey) {
+        pinStore.contains(StuffPinKind.SONG, song.songKey)
+    }
+
+    // Always resolve so album/playlist/discography long-press works without parents.
+    val offerings = rememberSongOfferings(song, sourceOfferings)
+    val preferHandler = onPreferSource ?: rememberPreferSourceHandler(song)
 
     val goToAlbum = onGoToAlbum ?: { songNav.openAlbumForSong(song) }
     val goToArtist = onGoToArtist ?: { name -> songNav.openArtistByName(name) }
@@ -244,35 +295,37 @@ fun SongContextSheet(
     }
 
     if (showArtistPicker) {
-        ModalBottomSheet(
-            onDismissRequest = {
+        GoToArtistSheet(
+            songTitle = song.displayTitle,
+            artists = artists,
+            onPick = { name ->
                 showArtistPicker = false
                 onDismiss()
+                goToArtist(name)
             },
-            sheetState = rememberModalBottomSheetState()
-        ) {
-            Text(
-                "Go to artist",
-                style = MaterialTheme.typography.titleMedium,
-                fontWeight = FontWeight.SemiBold,
-                modifier = Modifier.padding(horizontal = 20.dp, vertical = 8.dp)
-            )
-            Text(
-                song.displayTitle,
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.55f),
-                modifier = Modifier.padding(horizontal = 20.dp)
-            )
-            HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
-            artists.forEach { name ->
-                MediaSheetItem(name) {
-                    showArtistPicker = false
-                    onDismiss()
-                    goToArtist(name)
-                }
+            onDismiss = {
+                showArtistPicker = false
+                onDismiss()
             }
-            MediaSheetBottomPad()
-        }
+        )
+        return
+    }
+
+    if (showSourcesPicker) {
+        SourcesPickerSheet(
+            songTitle = song.displayTitle,
+            offerings = offerings,
+            preferred = offerings.firstOrNull(),
+            onDismiss = {
+                showSourcesPicker = false
+                onDismiss()
+            },
+            onPick = { off ->
+                preferHandler(off)
+                showSourcesPicker = false
+                onDismiss()
+            }
+        )
         return
     }
 
@@ -306,19 +359,17 @@ fun SongContextSheet(
                 showPlaylistPicker = true
             }
         }
-        MediaSheetItem("Add to My Stuff") {
+        MediaSheetItem(if (inMyStuff) "Remove from My Stuff" else "Add to My Stuff") {
             onDismiss()
-            if (onAddToMyStuff != null) onAddToMyStuff()
-            else {
-                pinStore.addEntry(
-                    StuffPin(
-                        kind = StuffPinKind.SONG,
-                        id = song.songKey,
-                        title = song.displayTitle,
-                        subtitle = song.displayArtist
-                    )
-                )
-                Toast.makeText(context, "Added to My Stuff", Toast.LENGTH_SHORT).show()
+            if (onAddToMyStuff != null) {
+                onAddToMyStuff()
+            } else {
+                val added = pinStore.toggleSong(song)
+                Toast.makeText(
+                    context,
+                    if (added) "Added to My Stuff" else "Removed from My Stuff",
+                    Toast.LENGTH_SHORT
+                ).show()
             }
         }
         if (!hideGoToAlbum && !song.album.isNullOrBlank()) {
@@ -337,6 +388,10 @@ fun SongContextSheet(
                 }
             }
         }
+        // Always available — even with a single local/Jellyfin source.
+        MediaSheetItem("Sources") {
+            showSourcesPicker = true
+        }
         if (onEditMetadata != null) {
             MediaSheetItem("Edit metadata") {
                 onDismiss()
@@ -347,7 +402,6 @@ fun SongContextSheet(
     }
 }
 
-/** Shared album sheet — defaults from [LocalAlbumNav]. */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun AlbumContextSheet(
@@ -361,13 +415,19 @@ fun AlbumContextSheet(
     onAddToMyStuff: (() -> Unit)? = null
 ) {
     val albumNav = LocalAlbumNav.current
+    val pinStore: MyStuffPinStore = koinInject()
+    val context = LocalContext.current
     var showPlaylistPicker by remember { mutableStateOf(false) }
+    val entries by pinStore.entries.collectAsState()
+    val aKey = remember(album.name, album.artist) { albumKey(album.name, album.artist) }
+    val inMyStuff = remember(entries, aKey) {
+        pinStore.contains(StuffPinKind.ALBUM, aKey)
+    }
 
     val goToArtist = onGoToArtist ?: { albumNav.openArtist(album) }
     val editMeta = onEditMetadata ?: { albumNav.editMetadata(album) }
     val addQueue = onAddToQueue ?: { albumNav.addToQueue(album) }
     val startRadio = onStartRadio ?: { albumNav.startRadio(album) }
-    val addMyStuff = onAddToMyStuff ?: { albumNav.addToMyStuff(album) }
 
     if (showPlaylistPicker) {
         AddToPlaylistSheet(
@@ -397,9 +457,18 @@ fun AlbumContextSheet(
         MediaSheetItem("Add to playlist") {
             showPlaylistPicker = true
         }
-        MediaSheetItem("Add to My Stuff") {
+        MediaSheetItem(if (inMyStuff) "Remove from My Stuff" else "Add to My Stuff") {
             onDismiss()
-            addMyStuff()
+            if (onAddToMyStuff != null) {
+                onAddToMyStuff()
+            } else {
+                val added = pinStore.toggleAlbum(album)
+                Toast.makeText(
+                    context,
+                    if (added) "Added to My Stuff" else "Removed from My Stuff",
+                    Toast.LENGTH_SHORT
+                ).show()
+            }
         }
         if (album.artist?.isNotBlank() == true) {
             MediaSheetItem("Go to artist") {
@@ -412,7 +481,7 @@ fun AlbumContextSheet(
             editMeta()
         }
         if (onFetchMetadata != null) {
-            MediaSheetItem("Fetch additional metadata") {
+            MediaSheetItem("Find artwork") {
                 onDismiss()
                 onFetchMetadata()
             }
@@ -421,7 +490,6 @@ fun AlbumContextSheet(
     }
 }
 
-/** Shared artist sheet — defaults from [LocalArtistNav], including optional image/links. */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun ArtistContextSheet(
@@ -435,13 +503,22 @@ fun ArtistContextSheet(
     onClearImage: (() -> Unit)? = null,
     onClearBanner: (() -> Unit)? = null,
     onOpenLinks: (() -> Unit)? = null,
-    onAddToMyStuff: (() -> Unit)? = null
+    onAddToMyStuff: (() -> Unit)? = null,
+    onMerge: (() -> Unit)? = null
 ) {
     val artistNav = LocalArtistNav.current
+    val pinStore: MyStuffPinStore = koinInject()
+    val context = LocalContext.current
     val name = artist.displayName
+    val entries by pinStore.entries.collectAsState()
+    val aKey = remember(artist.name, artist.displayName) {
+        artistKey(artist.name) ?: artist.displayName.lowercase()
+    }
+    val inMyStuff = remember(entries, aKey) {
+        pinStore.contains(StuffPinKind.ARTIST, aKey)
+    }
 
     val startRadio = onStartRadio ?: { artistNav.startRadio(name) }
-    val addMyStuff = onAddToMyStuff ?: { artistNav.addToMyStuff(artist) }
     val changeImage = onChangeImage ?: artistNav.changeImage?.let { fn -> { fn(name) } }
     val fetchImage = onFetchImage ?: artistNav.fetchImage?.let { fn -> { fn(name) } }
     val changeBanner = onChangeBanner ?: artistNav.changeBanner?.let { fn -> { fn(name) } }
@@ -463,42 +540,51 @@ fun ArtistContextSheet(
             onDismiss()
             startRadio()
         }
-        MediaSheetItem("Add to My Stuff") {
+        MediaSheetItem(if (inMyStuff) "Remove from My Stuff" else "Add to My Stuff") {
             onDismiss()
-            addMyStuff()
+            if (onAddToMyStuff != null) {
+                onAddToMyStuff()
+            } else {
+                val added = pinStore.toggleArtist(artist)
+                Toast.makeText(
+                    context,
+                    if (added) "Added to My Stuff" else "Removed from My Stuff",
+                    Toast.LENGTH_SHORT
+                ).show()
+            }
         }
         if (fetchImage != null) {
-            MediaSheetItem("Fetch artist image") {
+            MediaSheetItem("Find photos") {
                 onDismiss()
                 fetchImage()
             }
         }
         if (changeImage != null) {
-            MediaSheetItem("Change artist image") {
+            MediaSheetItem("Choose photo") {
                 onDismiss()
                 changeImage()
             }
         }
         if (clearImage != null) {
-            MediaSheetItem("Clear artist image") {
+            MediaSheetItem("Remove photo") {
                 onDismiss()
                 clearImage()
             }
         }
         if (fetchBanner != null) {
-            MediaSheetItem("Fetch banner") {
+            MediaSheetItem("Find header") {
                 onDismiss()
                 fetchBanner()
             }
         }
         if (changeBanner != null) {
-            MediaSheetItem("Change banner") {
+            MediaSheetItem("Choose header") {
                 onDismiss()
                 changeBanner()
             }
         }
         if (clearBanner != null) {
-            MediaSheetItem("Clear banner") {
+            MediaSheetItem("Remove header") {
                 onDismiss()
                 clearBanner()
             }
@@ -509,11 +595,16 @@ fun ArtistContextSheet(
                 openLinks()
             }
         }
+        if (onMerge != null) {
+            MediaSheetItem("Merge artists") {
+                onDismiss()
+                onMerge()
+            }
+        }
         MediaSheetBottomPad()
     }
 }
 
-/** Shared playlist sheet — defaults from [LocalPlaylistNav]. Uses playlist cover art. */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun PlaylistContextSheet(
@@ -526,9 +617,14 @@ fun PlaylistContextSheet(
     onAddToMyStuff: (() -> Unit)? = null
 ) {
     val playlistNav = LocalPlaylistNav.current
+    val pinStore: MyStuffPinStore = koinInject()
+    val context = LocalContext.current
+    val entries by pinStore.entries.collectAsState()
+    val inMyStuff = remember(entries, playlist.id) {
+        pinStore.contains(StuffPinKind.PLAYLIST, playlist.id)
+    }
 
     val startRadio = onStartRadio ?: { playlistNav.startRadio(playlist) }
-    val addMyStuff = onAddToMyStuff ?: { playlistNav.addToMyStuff(playlist) }
     val changeCover = onChangeCover ?: playlistNav.changeCover?.let { fn -> { fn(playlist.id) } }
     val edit = onEdit ?: playlistNav.edit?.let { fn -> { fn(playlist.id) } }
     val delete = onDelete ?: playlistNav.delete?.let { fn -> { fn(playlist.id) } }
@@ -546,9 +642,24 @@ fun PlaylistContextSheet(
             onDismiss()
             startRadio()
         }
-        MediaSheetItem("Add to My Stuff") {
+        MediaSheetItem(if (inMyStuff) "Remove from My Stuff" else "Add to My Stuff") {
             onDismiss()
-            addMyStuff()
+            if (onAddToMyStuff != null) {
+                onAddToMyStuff()
+            } else {
+                val pin = StuffPin(
+                    kind = StuffPinKind.PLAYLIST,
+                    id = playlist.id,
+                    title = playlist.name,
+                    subtitle = "Playlist"
+                )
+                val added = pinStore.toggleEntry(pin)
+                Toast.makeText(
+                    context,
+                    if (added) "Added to My Stuff" else "Removed from My Stuff",
+                    Toast.LENGTH_SHORT
+                ).show()
+            }
         }
         if (changeCover != null) {
             MediaSheetItem("Change cover") {
@@ -596,8 +707,6 @@ fun AddToPlaylistSheet(
         ready = true
     }
 
-    // Filter by name; selection is independent of visibility so filtered-out
-    // checked playlists stay selected. Checked rows always sort first.
     val visiblePlaylists = remember(playlists, query, selected) {
         val q = query.trim()
         val filtered = if (q.isEmpty()) {

@@ -5,6 +5,8 @@ import android.net.Uri
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.io.File
+import java.io.FileInputStream
+import java.io.InputStream
 
 /**
  * Copies picker content:// (or other transient) URIs into app-private storage
@@ -13,6 +15,11 @@ import java.io.File
  *
  * Each persist uses a unique timestamped filename so Coil / UI models always
  * see a new URI when the user replaces an image (same stable key otherwise).
+ *
+ * Manual clears are remembered via a `.cleared` marker file so auto-fetch /
+ * provider resolve will not re-populate that slot until the user sets a new image.
+ *
+ * [persistSlot] keeps sibling slots under the same key (multi playlist covers).
  */
 class UserImageStore(private val context: Context) {
 
@@ -32,17 +39,21 @@ class UserImageStore(private val context: Context) {
     ): String? = withContext(Dispatchers.IO) {
         val src = runCatching { Uri.parse(sourceUri) }.getOrNull() ?: return@withContext null
         val dir = File(root, namespace).also { if (!it.exists()) it.mkdirs() }
-        val safeKey = key.replace(Regex("[^a-zA-Z0-9._-]"), "_")
+        val safeKey = safe(key)
 
-        // Drop previous versions for this key first
-        dir.listFiles()?.filter { it.name.startsWith("${safeKey}.") }?.forEach { it.delete() }
+        // User is choosing art again — drop any prior clear veto
+        clearedMarker(dir, safeKey).delete()
 
-        val ext = guessExtension(context, src)
-        // Timestamp keeps the URI unique so image loaders bust cache on replace
-        val dest = File(dir, "${safeKey}.${System.currentTimeMillis()}.$ext")
+        // Drop previous image versions for this key first
+        dir.listFiles()?.filter {
+            it.isFile && it.name.startsWith("$safeKey.") && !it.name.endsWith(CLEARED_SUFFIX)
+        }?.forEach { it.delete() }
+
+        val ext = guessExtension(context, src, sourceUri)
+        val dest = File(dir, "$safeKey.${System.currentTimeMillis()}.$ext")
 
         try {
-            context.contentResolver.openInputStream(src)?.use { input ->
+            openSource(context, src, sourceUri)?.use { input ->
                 dest.outputStream().use { output -> input.copyTo(output) }
             } ?: return@withContext null
             if (!dest.isFile || dest.length() == 0L) {
@@ -56,33 +67,150 @@ class UserImageStore(private val context: Context) {
         }
     }
 
-    /** Existing persisted file:// URI for [key], or null. */
+    /**
+     * Persist under `key-slotId` without deleting other slots of [key].
+     * Used for multiple playlist covers.
+     */
+    suspend fun persistSlot(
+        sourceUri: String,
+        namespace: String,
+        key: String,
+        slotId: String
+    ): String? = withContext(Dispatchers.IO) {
+        val src = runCatching { Uri.parse(sourceUri) }.getOrNull() ?: return@withContext null
+        val dir = File(root, namespace).also { if (!it.exists()) it.mkdirs() }
+        val safeKey = safe("$key-$slotId")
+
+        dir.listFiles()?.filter {
+            it.isFile && it.name.startsWith("$safeKey.") && !it.name.endsWith(CLEARED_SUFFIX)
+        }?.forEach { it.delete() }
+
+        val ext = guessExtension(context, src, sourceUri)
+        val dest = File(dir, "$safeKey.${System.currentTimeMillis()}.$ext")
+        try {
+            openSource(context, src, sourceUri)?.use { input ->
+                dest.outputStream().use { output -> input.copyTo(output) }
+            } ?: return@withContext null
+            if (!dest.isFile || dest.length() == 0L) {
+                dest.delete()
+                return@withContext null
+            }
+            Uri.fromFile(dest).toString()
+        } catch (_: Exception) {
+            dest.delete()
+            null
+        }
+    }
+
+    suspend fun deleteSlot(namespace: String, key: String, slotId: String) =
+        withContext(Dispatchers.IO) {
+            val dir = File(root, namespace)
+            if (!dir.isDirectory) return@withContext
+            val safeKey = safe("$key-$slotId")
+            dir.listFiles()?.filter {
+                it.isFile && it.name.startsWith("$safeKey.") && !it.name.endsWith(CLEARED_SUFFIX)
+            }?.forEach { it.delete() }
+        }
+
+    /** Existing persisted file:// URI for [key], or null (ignores clear markers). */
     fun resolve(namespace: String, key: String): String? {
         val dir = File(root, namespace)
         if (!dir.isDirectory) return null
-        val safeKey = key.replace(Regex("[^a-zA-Z0-9._-]"), "_")
+        val safeKey = safe(key)
+        if (clearedMarker(dir, safeKey).isFile) return null
         val file = dir.listFiles()
-            ?.filter { it.isFile && it.name.startsWith("${safeKey}.") && it.length() > 0L }
+            ?.filter {
+                it.isFile &&
+                    it.name.startsWith("$safeKey.") &&
+                    !it.name.endsWith(CLEARED_SUFFIX) &&
+                    it.length() > 0L
+            }
             ?.maxByOrNull { it.lastModified() }
             ?: return null
         return Uri.fromFile(file).toString()
     }
 
-    /** Delete persisted image(s) for a key. */
+    /** True if the user explicitly cleared this slot (do not auto-set). */
+    fun isCleared(namespace: String, key: String): Boolean {
+        val dir = File(root, namespace)
+        if (!dir.isDirectory) return false
+        return clearedMarker(dir, safe(key)).isFile
+    }
+
+    /**
+     * Record a forced clear: delete any local image and write a durable marker
+     * so providers / auto-fetch leave the slot empty until the user sets art again.
+     */
+    suspend fun markCleared(namespace: String, key: String) = withContext(Dispatchers.IO) {
+        val dir = File(root, namespace).also { if (!it.exists()) it.mkdirs() }
+        val safeKey = safe(key)
+        dir.listFiles()?.filter {
+            it.isFile && it.name.startsWith("$safeKey.") && !it.name.endsWith(CLEARED_SUFFIX)
+        }?.forEach { it.delete() }
+        val marker = clearedMarker(dir, safeKey)
+        if (!marker.exists()) {
+            runCatching { marker.writeText("1") }
+        }
+    }
+
+    /** Remove clear marker only (used if we need to unlock without setting art). */
+    suspend fun clearClearedFlag(namespace: String, key: String) = withContext(Dispatchers.IO) {
+        val dir = File(root, namespace)
+        if (!dir.isDirectory) return@withContext
+        clearedMarker(dir, safe(key)).delete()
+    }
+
+    /** Delete persisted image(s) for a key (does not write a clear marker). */
     suspend fun delete(namespace: String, key: String) = withContext(Dispatchers.IO) {
         val dir = File(root, namespace)
         if (!dir.isDirectory) return@withContext
-        val safeKey = key.replace(Regex("[^a-zA-Z0-9._-]"), "_")
-        dir.listFiles()?.filter { it.name.startsWith("${safeKey}.") }?.forEach { it.delete() }
+        val safeKey = safe(key)
+        dir.listFiles()?.filter {
+            it.isFile && it.name.startsWith("$safeKey.") && !it.name.endsWith(CLEARED_SUFFIX)
+        }?.forEach { it.delete() }
     }
+
+    private fun clearedMarker(dir: File, safeKey: String): File =
+        File(dir, "$safeKey$CLEARED_SUFFIX")
 
     companion object {
         const val DIR = "user_images"
         const val NS_PLAYLISTS = "playlists"
         const val NS_ARTISTS = "artists"
         const val NS_ARTIST_BANNERS = "artist_banners"
+        private const val CLEARED_SUFFIX = ".cleared"
 
-        private fun guessExtension(context: Context, uri: Uri): String {
+        private fun safe(key: String): String =
+            key.replace(Regex("[^a-zA-Z0-9._-]"), "_")
+
+        /**
+         * Open a source for copy. [ImageCropScreen] returns `file://` cache URIs;
+         * [ContentResolver.openInputStream] often fails on those, so prefer
+         * [FileInputStream] for file paths and absolute paths.
+         */
+        private fun openSource(
+            context: Context,
+            uri: Uri,
+            raw: String
+        ): InputStream? {
+            val scheme = uri.scheme?.lowercase()
+            when {
+                scheme == "file" -> {
+                    val path = uri.path ?: return null
+                    val f = File(path)
+                    return if (f.isFile && f.canRead()) FileInputStream(f) else null
+                }
+                scheme.isNullOrEmpty() || raw.startsWith("/") -> {
+                    val f = File(if (raw.startsWith("/")) raw else uri.path.orEmpty())
+                    return if (f.isFile && f.canRead()) FileInputStream(f) else null
+                }
+                else -> return runCatching {
+                    context.contentResolver.openInputStream(uri)
+                }.getOrNull()
+            }
+        }
+
+        private fun guessExtension(context: Context, uri: Uri, raw: String): String {
             val type = runCatching { context.contentResolver.getType(uri) }.getOrNull()
             return when (type) {
                 "image/png" -> "png"
@@ -90,7 +218,7 @@ class UserImageStore(private val context: Context) {
                 "image/gif" -> "gif"
                 "image/jpeg", "image/jpg" -> "jpg"
                 else -> {
-                    val path = uri.lastPathSegment.orEmpty().lowercase()
+                    val path = (uri.lastPathSegment ?: raw).lowercase()
                     when {
                         path.endsWith(".png") -> "png"
                         path.endsWith(".webp") -> "webp"

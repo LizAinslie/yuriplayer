@@ -4,6 +4,7 @@ import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.net.Uri
+import android.util.Log
 import androidx.compose.material3.ColorScheme
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.luminance
@@ -12,8 +13,11 @@ import androidx.palette.graphics.Palette
 import capital.yuri.yuriplayer.activities.ui.PlayerColors
 import capital.yuri.yuriplayer.activities.ui.fallbackPlayerColors
 import capital.yuri.yuriplayer.data.AlbumArtCache
+import capital.yuri.yuriplayer.data.LibrarySettings
 import capital.yuri.yuriplayer.data.Song
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import java.util.concurrent.ConcurrentHashMap
 import kotlin.math.max
@@ -21,12 +25,14 @@ import kotlin.math.max
 /**
  * Resolves Material-ish themes from **any** image (album art, playlist cover, …).
  *
- * Preference:
- * - Background → darkMuted / muted, forced dark + desaturated
- * - Accent → vibrant / lightVibrant, boosted saturation & mid lightness
+ * Colors are cached in memory + on disk, keyed by art identity + surface
+ * (cover vs banner) + the user-selected [ArtColorVariant]. Re-extract only
+ * when the artwork or those settings change.
  */
 class ThemeService(
-    private val artCache: AlbumArtCache
+    context: Context,
+    private val artCache: AlbumArtCache,
+    private val settings: LibrarySettings
 ) {
     data class ResolvedTheme(
         val key: String,
@@ -34,40 +40,70 @@ class ThemeService(
         val bitmap: Bitmap?
     )
 
+    private val appContext = context.applicationContext
     private val cache = ConcurrentHashMap<String, PlayerColors>()
+    private val disk = appContext.getSharedPreferences(DISK_PREFS, Context.MODE_PRIVATE)
+    private val diskLock = Mutex()
+
+    fun colorCacheKey(artKey: String, surface: ArtColorSurface): String {
+        val variant = settings.variantFor(surface)
+        return "$artKey|${surface.id}|${variant.id}"
+    }
+
+    fun peekCached(artKey: String, surface: ArtColorSurface): PlayerColors? {
+        val key = colorCacheKey(artKey, surface)
+        cache[key]?.let { return it }
+        return readDiskUnlocked(key)?.also { cache[key] = it }
+    }
 
     suspend fun themeFromSong(
         context: Context,
         song: Song?,
         base: ColorScheme,
-        maxSize: Int = 768,
-        forceRefresh: Boolean = false
-    ): ResolvedTheme {
+        maxSize: Int = AlbumArtCache.HERO_DECODE_SIZE,
+        forceRefresh: Boolean = false,
+        surface: ArtColorSurface = ArtColorSurface.COVER,
+        loadBitmap: Boolean = true
+    ): ResolvedTheme = withContext(Dispatchers.Default) {
         if (song == null) {
-            return ResolvedTheme("none", fallbackPlayerColors(base), null)
+            return@withContext ResolvedTheme("none", fallbackPlayerColors(base), null)
         }
-        val key = artCache.artKey(song)
-        if (!forceRefresh) {
-            cache[key]?.let {
-                return ResolvedTheme(key, it, artCache.get(context, song, maxSize))
-            }
-        } else {
+        val identity = artCache.artKey(song)
+        val key = colorCacheKey(identity, surface)
+        if (forceRefresh) {
             cache.remove(key)
+            diskLock.withLock { disk.edit().remove(key).apply() }
+        } else {
+            val hit = cache[key] ?: readDisk(key)?.also { cache[key] = it }
+            if (hit != null) {
+                val bmp = if (loadBitmap) artCache.get(context, song, maxSize) else null
+                return@withContext ResolvedTheme(identity, hit, bmp)
+            }
         }
         val bmp = artCache.get(context, song, maxSize)
-        val colors = extractFromBitmap(bmp, base)
+        if (bmp == null || bmp.isRecycled) {
+            return@withContext ResolvedTheme(identity, fallbackPlayerColors(base), null)
+        }
+        val colors = extractFromBitmap(bmp, base, settings.variantFor(surface))
         cache[key] = colors
-        return ResolvedTheme(key, colors, bmp)
+        writeDisk(key, colors)
+        ResolvedTheme(identity, colors, if (loadBitmap) bmp else null)
     }
 
     suspend fun themeFromBitmap(
         key: String,
         bitmap: Bitmap?,
-        base: ColorScheme
+        base: ColorScheme,
+        surface: ArtColorSurface = ArtColorSurface.COVER
     ): ResolvedTheme = withContext(Dispatchers.Default) {
-        cache[key]?.let { return@withContext ResolvedTheme(key, it, bitmap) }
-        val colors = extractFromBitmap(bitmap, base)
-        cache[key] = colors
+        val cacheKey = colorCacheKey(key, surface)
+        cache[cacheKey]?.let { return@withContext ResolvedTheme(key, it, bitmap) }
+        if (bitmap == null || bitmap.isRecycled) {
+            return@withContext ResolvedTheme(key, fallbackPlayerColors(base), bitmap)
+        }
+        val colors = extractFromBitmap(bitmap, base, settings.variantFor(surface))
+        cache[cacheKey] = colors
+        writeDisk(cacheKey, colors)
         ResolvedTheme(key, colors, bitmap)
     }
 
@@ -76,44 +112,122 @@ class ThemeService(
         key: String,
         uri: Uri?,
         base: ColorScheme,
-        maxSize: Int = 512
+        maxSize: Int = AlbumArtCache.HERO_DECODE_SIZE,
+        surface: ArtColorSurface = ArtColorSurface.COVER,
+        forceRefresh: Boolean = false,
+        loadBitmap: Boolean = false
     ): ResolvedTheme = withContext(Dispatchers.IO) {
-        cache[key]?.let { return@withContext ResolvedTheme(key, it, null) }
-        val bmp = uri?.let { loadBitmap(context, it, maxSize) }
-        val colors = extractFromBitmap(bmp, base)
-        cache[key] = colors
-        ResolvedTheme(key, colors, bmp)
+        val cacheKey = colorCacheKey(key, surface)
+        if (forceRefresh) {
+            cache.remove(cacheKey)
+            diskLock.withLock { disk.edit().remove(cacheKey).apply() }
+        } else {
+            val hit = cache[cacheKey] ?: readDisk(cacheKey)?.also { cache[cacheKey] = it }
+            if (hit != null) {
+                val bmp = if (loadBitmap && uri != null) decodeUriBitmap(context, uri, maxSize) else null
+                return@withContext ResolvedTheme(key, hit, bmp)
+            }
+        }
+        val bmp = uri?.let { decodeUriBitmap(context, it, maxSize) }
+        if (bmp == null || bmp.isRecycled) {
+            return@withContext ResolvedTheme(key, fallbackPlayerColors(base), null)
+        }
+        val colors = extractFromBitmap(bmp, base, settings.variantFor(surface))
+        cache[cacheKey] = colors
+        writeDisk(cacheKey, colors)
+        ResolvedTheme(key, colors, if (loadBitmap) bmp else null)
     }
 
     fun peekCached(key: String): PlayerColors? = cache[key]
 
     fun invalidate(key: String) {
-        cache.remove(key)
+        cache.keys.filter { it == key || it.startsWith("$key|") }.forEach { cache.remove(it) }
     }
 
     fun invalidateAll() = cache.clear()
 
-    fun clearCache() = cache.clear()
+    fun clearCache() {
+        cache.clear()
+        disk.edit().clear().apply()
+    }
 
-    private fun loadBitmap(context: Context, uri: Uri, maxSize: Int): Bitmap? {
+    private suspend fun readDisk(key: String): PlayerColors? = diskLock.withLock {
+        readDiskUnlocked(key)
+    }
+
+    private fun readDiskUnlocked(key: String): PlayerColors? {
+        val packed = disk.getString(key, null) ?: return null
+        return unpackColors(packed)
+    }
+
+    private suspend fun writeDisk(key: String, colors: PlayerColors) = diskLock.withLock {
+        val order = disk.getString(DISK_ORDER, "")
+            .orEmpty()
+            .split('\n')
+            .filter { it.isNotEmpty() }
+            .toMutableList()
+        order.remove(key)
+        order.add(key)
+        val editor = disk.edit().putString(key, packColors(colors))
+        while (order.size > MAX_DISK) {
+            val drop = order.removeAt(0)
+            editor.remove(drop)
+        }
+        editor.putString(DISK_ORDER, order.joinToString("\n")).apply()
+    }
+
+    private fun decodeUriBitmap(context: Context, uri: Uri, maxSize: Int): Bitmap? {
         return try {
-            context.contentResolver.openInputStream(uri)?.use { stream ->
-                val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+            val resolver = context.contentResolver
+            val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+            resolver.openInputStream(uri)?.use { stream ->
                 BitmapFactory.decodeStream(stream, null, bounds)
             }
-            context.contentResolver.openInputStream(uri)?.use { stream ->
-                val opts = BitmapFactory.Options().apply {
-                    inSampleSize = 1
-                }
-                BitmapFactory.decodeStream(stream, null, opts)
+            val opts = BitmapFactory.Options().apply {
+                inSampleSize = sampleSize(bounds.outWidth, bounds.outHeight, maxSize)
             }
-        } catch (_: Exception) {
+            val decoded = resolver.openInputStream(uri)?.use { stream ->
+                BitmapFactory.decodeStream(stream, null, opts)
+            } ?: return null
+            scaleTo(decoded, maxSize)
+        } catch (e: Exception) {
+            Log.w(TAG, "uri decode failed $uri", e)
             null
         }
     }
 
+    private fun sampleSize(w: Int, h: Int, maxSize: Int): Int {
+        if (w <= 0 || h <= 0 || maxSize <= 0) return 1
+        var inSampleSize = 1
+        val halfW = w / 2
+        val halfH = h / 2
+        while (halfW / inSampleSize >= maxSize && halfH / inSampleSize >= maxSize) {
+            inSampleSize *= 2
+        }
+        return inSampleSize.coerceAtLeast(1)
+    }
+
+    private fun scaleTo(src: Bitmap, maxSize: Int): Bitmap {
+        val w = src.width
+        val h = src.height
+        if (w <= maxSize && h <= maxSize) return src
+        val scale = maxSize.toFloat() / maxOf(w, h)
+        val nw = (w * scale).toInt().coerceAtLeast(1)
+        val nh = (h * scale).toInt().coerceAtLeast(1)
+        return Bitmap.createScaledBitmap(src, nw, nh, true)
+    }
+
     companion object {
-        fun extractFromBitmap(bitmap: Bitmap?, fallback: ColorScheme): PlayerColors {
+        private const val TAG = "YuriPlayer.Theme"
+        private const val DISK_PREFS = "theme_color_cache"
+        private const val DISK_ORDER = "__order"
+        private const val MAX_DISK = 256
+
+        fun extractFromBitmap(
+            bitmap: Bitmap?,
+            fallback: ColorScheme,
+            variant: ArtColorVariant = ArtColorVariant.AUTO
+        ): PlayerColors {
             if (bitmap == null || bitmap.isRecycled) return fallbackPlayerColors(fallback)
             val palette = try {
                 Palette.from(bitmap).maximumColorCount(24).generate()
@@ -126,20 +240,44 @@ class ThemeService(
                 palette.getMutedColor(palette.getDarkVibrantColor(dominant))
             )
             val muted = palette.getMutedColor(darkMuted)
+            val lightMuted = palette.getLightMutedColor(muted)
             val vibrant = palette.getVibrantColor(
                 palette.getLightVibrantColor(
                     palette.getDarkVibrantColor(dominant)
                 )
             )
             val lightVibrant = palette.getLightVibrantColor(vibrant)
+            val darkVibrant = palette.getDarkVibrantColor(dominant)
 
-            val bgSeed = Color(darkMuted).let { c ->
-                if (c.luminance() > 0.25f) Color(muted) else c
+            val bgSeed = when (variant) {
+                ArtColorVariant.AUTO -> Color(darkMuted).let { c ->
+                    if (c.luminance() > 0.25f) Color(muted) else c
+                }
+                ArtColorVariant.VIBRANT -> Color(darkVibrant).let { c ->
+                    if (c.luminance() > 0.35f) Color(vibrant) else c
+                }
+                ArtColorVariant.MUTED -> Color(muted)
+                ArtColorVariant.DARK_MUTED -> Color(darkMuted)
+                ArtColorVariant.DOMINANT -> Color(dominant)
             }
             val container = toMutedBackground(bgSeed)
 
-            val accentSeed = Color(vibrant).let { c ->
-                if (c.luminance() < 0.15f) Color(lightVibrant) else c
+            val accentSeed = when (variant) {
+                ArtColorVariant.AUTO -> Color(vibrant).let { c ->
+                    if (c.luminance() < 0.15f) Color(lightVibrant) else c
+                }
+                ArtColorVariant.VIBRANT -> Color(vibrant).let { c ->
+                    if (c.luminance() < 0.20f) Color(lightVibrant) else c
+                }
+                ArtColorVariant.MUTED -> Color(lightMuted).let { c ->
+                    if (c.luminance() < 0.20f) Color(muted) else c
+                }
+                ArtColorVariant.DARK_MUTED -> Color(muted).let { c ->
+                    if (c.luminance() < 0.20f) Color(lightMuted) else c
+                }
+                ArtColorVariant.DOMINANT -> Color(vibrant).let { c ->
+                    if (c.luminance() < 0.15f) Color(dominant) else c
+                }
             }
             val accent = ensureAccentContrast(toPunchyAccent(accentSeed), container)
 
@@ -227,6 +365,37 @@ class ThemeService(
             val l1 = a.luminance() + 0.05f
             val l2 = b.luminance() + 0.05f
             return max(l1, l2) / kotlin.math.min(l1, l2)
+        }
+
+        fun packColors(colors: PlayerColors): String = listOf(
+            colors.container,
+            colors.onContainer,
+            colors.accent,
+            colors.onAccent,
+            colors.muted,
+            colors.surface,
+            colors.onSurface
+        ).joinToString(",") { c ->
+            Integer.toHexString(c.toArgb()).uppercase().padStart(8, '0')
+        }
+
+        fun unpackColors(packed: String): PlayerColors? {
+            val parts = packed.split(',')
+            if (parts.size != 7) return null
+            return try {
+                fun c(i: Int): Color = Color(parts[i].toLong(16).toInt())
+                PlayerColors(
+                    container = c(0),
+                    onContainer = c(1),
+                    accent = c(2),
+                    onAccent = c(3),
+                    muted = c(4),
+                    surface = c(5),
+                    onSurface = c(6)
+                )
+            } catch (_: Exception) {
+                null
+            }
         }
     }
 }

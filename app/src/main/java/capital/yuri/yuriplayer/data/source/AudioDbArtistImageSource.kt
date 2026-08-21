@@ -2,6 +2,7 @@ package capital.yuri.yuriplayer.data.source
 
 import android.util.Log
 import capital.yuri.yuriplayer.data.artistKey
+import capital.yuri.yuriplayer.http.url
 import io.ktor.client.HttpClient
 import io.ktor.client.request.get
 import io.ktor.client.statement.bodyAsText
@@ -9,7 +10,6 @@ import io.ktor.http.isSuccess
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import org.json.JSONObject
-import java.net.URLEncoder
 
 /**
  * TheAudioDB free API (demo key "2").
@@ -86,8 +86,11 @@ class AudioDbArtistImageSource(
     }
 
     private suspend fun firstArtist(artistName: String): JSONObject? {
-        val q = URLEncoder.encode(artistName.trim(), "UTF-8")
-        val body = get("https://www.theaudiodb.com/api/v1/json/$API_KEY/search.php?s=$q")
+        val requestUrl = url("https://www.theaudiodb.com") {
+            path("api", "v1", "json", API_KEY, "search.php")
+            param("s", artistName.trim())
+        }
+        val body = get(requestUrl)
             ?: return null
         return try {
             JSONObject(body).optJSONArray("artists")?.optJSONObject(0)
