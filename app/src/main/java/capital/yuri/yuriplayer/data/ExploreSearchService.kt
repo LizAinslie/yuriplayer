@@ -204,15 +204,30 @@ class ExploreSearchService(
     suspend fun searchWithPrefer(query: String, forceRescan: Boolean = false): List<Hit> =
         search(query, forceRescan)
 
-    suspend fun searchLive(query: String, limit: Int = 80): List<Hit> =
+    suspend fun searchLive(
+        query: String,
+        limit: Int = 80,
+        sourceFilters: List<Pair<String, Long?>>? = null
+    ): List<Hit> =
         withContext(Dispatchers.IO) {
             val q = query.trim()
             if (q.isEmpty()) return@withContext emptyList()
-            buildHitsFromDb(q, limit = limit)
+            val songs = if (sourceFilters.isNullOrEmpty()) {
+                catalog.searchSongs(q, limit = limit * 3)
+            } else {
+                sourceFilters.flatMap { (type, instanceId) ->
+                    catalog.searchSongsForSource(type, instanceId, q, limit)
+                }.distinctBy { it.songKey }
+            }
+            hitsFromSongs(songs, limit)
         }
 
     private suspend fun buildHitsFromDb(needle: String, limit: Int): List<Hit> {
         val songs = catalog.searchSongs(needle, limit = limit * 3)
+        return hitsFromSongs(songs, limit)
+    }
+
+    private suspend fun hitsFromSongs(songs: List<Song>, limit: Int): List<Hit> {
         if (songs.isEmpty()) return emptyList()
 
         val grouped = songs.groupBy { TrackIdentity.of(it) }

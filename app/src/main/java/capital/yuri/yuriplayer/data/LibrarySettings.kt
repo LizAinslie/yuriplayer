@@ -283,6 +283,17 @@ class LibrarySettings(context: Context) {
         bumpColorPrefs()
     }
 
+    /**
+     * Explore library filter keys. Empty means every library.
+     * `local` = on this device; `i:{id}` = a [SourceInstanceEntity] id.
+     */
+    fun getExploreLibraryKeys(): Set<String> =
+        prefs.getStringSet(KEY_EXPLORE_LIBS, emptySet())?.toSet().orEmpty()
+
+    fun setExploreLibraryKeys(keys: Set<String>) {
+        prefs.edit().putStringSet(KEY_EXPLORE_LIBS, keys).apply()
+    }
+
     private fun bumpColorPrefs() {
         _colorPrefsRevision.value = System.currentTimeMillis()
     }
@@ -330,6 +341,7 @@ class LibrarySettings(context: Context) {
         private const val KEY_THEME_MODE = "theme_mode"
         private const val KEY_ACCENT = "accent_id"
         private const val KEY_HOME_ROWS = "home_rows"
+        private const val KEY_EXPLORE_LIBS = "explore_library_keys"
 
         val DEFAULT_ROOTS = listOf(
             "Music",

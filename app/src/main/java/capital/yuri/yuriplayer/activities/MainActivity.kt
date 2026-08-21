@@ -63,6 +63,7 @@ import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -81,6 +82,7 @@ import capital.yuri.yuriplayer.activities.ui.EditAlbumMetadataScreen
 import capital.yuri.yuriplayer.activities.ui.EditSongMetadataScreen
 import capital.yuri.yuriplayer.activities.ui.ExploreScanMenu
 import capital.yuri.yuriplayer.activities.ui.ExploreScreen
+import capital.yuri.yuriplayer.activities.ui.ExploreSearchTopBar
 import capital.yuri.yuriplayer.activities.ui.HomeFeedScreen
 import capital.yuri.yuriplayer.activities.ui.LocalAlbumNav
 import capital.yuri.yuriplayer.activities.ui.LocalArtistNav
@@ -401,6 +403,7 @@ fun YuriApp(
     }
 
     var topTab by remember { mutableStateOf(TopTab.Home) }
+    var exploreQuery by rememberSaveable { mutableStateOf("") }
     var playerExpanded by remember { mutableStateOf(false) }
     var detailStack by remember { mutableStateOf<List<DetailRoute>>(emptyList()) }
     var npPlaylistSong by remember { mutableStateOf<Song?>(null) }
@@ -667,21 +670,12 @@ fun YuriApp(
                 },
                 topBar = {
                     if (detail == null) {
-                        TopAppBar(
-                            title = {
-                                Text(
-                                    topTab.label,
-                                    modifier = if (topTab == TopTab.MyStuff) {
-                                        Modifier.testTag(TestTags.CATALOG_TITLE)
-                                    } else {
-                                        Modifier
-                                    }
-                                )
-                            },
-                            actions = {
-                                if (topTab == TopTab.Explore) {
-                                    ExploreScanMenu()
-                                }
+                        if (topTab == TopTab.Explore) {
+                            ExploreSearchTopBar(
+                                query = exploreQuery,
+                                onQueryChange = { exploreQuery = it }
+                            ) {
+                                ExploreScanMenu()
                                 IconButton(
                                     onClick = { pushDetail(DetailRoute.Settings) },
                                     modifier = Modifier.testTag(TestTags.SETTINGS)
@@ -689,7 +683,28 @@ fun YuriApp(
                                     Icon(Icons.Default.Settings, contentDescription = "Settings")
                                 }
                             }
-                        )
+                        } else {
+                            TopAppBar(
+                                title = {
+                                    Text(
+                                        topTab.label,
+                                        modifier = if (topTab == TopTab.MyStuff) {
+                                            Modifier.testTag(TestTags.CATALOG_TITLE)
+                                        } else {
+                                            Modifier
+                                        }
+                                    )
+                                },
+                                actions = {
+                                    IconButton(
+                                        onClick = { pushDetail(DetailRoute.Settings) },
+                                        modifier = Modifier.testTag(TestTags.SETTINGS)
+                                    ) {
+                                        Icon(Icons.Default.Settings, contentDescription = "Settings")
+                                    }
+                                }
+                            )
+                        }
                     }
                 },
                 bottomBar = {
@@ -969,6 +984,8 @@ fun YuriApp(
                                 onOpenSongAlbum = { openAlbumForSong(it) }
                             )
                             TopTab.Explore -> ExploreScreen(
+                                query = exploreQuery,
+                                onQueryChange = { exploreQuery = it },
                                 nowPlaying = currentSong,
                                 isPlaybackActive = playing,
                                 onPlay = { songs, index -> player.playSource(songs, index) },
