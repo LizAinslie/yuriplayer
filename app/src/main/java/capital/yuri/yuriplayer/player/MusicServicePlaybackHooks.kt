@@ -3,6 +3,7 @@ package capital.yuri.yuriplayer.player
 import android.net.Uri
 import androidx.media3.common.MediaItem
 import capital.yuri.yuriplayer.data.Song
+import capital.yuri.yuriplayer.data.StreamQuality
 import capital.yuri.yuriplayer.player.engine.resolvePlayableUri
 import capital.yuri.yuriplayer.player.engine.toPlaybackMedia
 import capital.yuri.yuriplayer.player.engine.urisMatch
@@ -12,12 +13,12 @@ import capital.yuri.yuriplayer.player.engine.urisMatch
  * as [capital.yuri.yuriplayer.player.engine.PlaybackEngine].
  */
 internal object MusicServicePlaybackHooks {
-    fun songUri(song: Song): Uri = resolvePlayableUri(song)
+    fun songUri(song: Song): Uri = resolvePlayableUri(song, StreamQuality.active)
 
     fun urisEqual(a: Uri?, b: Uri?): Boolean = urisMatch(a, b)
 
     fun toMediaItem(song: Song, mediaIdSuffix: String? = null): MediaItem {
-        val media = song.toPlaybackMedia(mediaIdSuffix)
+        val media = song.toPlaybackMedia(mediaIdSuffix, StreamQuality.active)
         return MediaItem.Builder()
             .setUri(media.uri)
             .setMediaId(media.mediaId)

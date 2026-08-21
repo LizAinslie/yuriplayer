@@ -145,6 +145,26 @@ class LibrarySettings(context: Context) {
         prefs.edit().putString(KEY_PLAYBACK_ENGINE, id.id).apply()
     }
 
+    // ── streaming quality (Jellyfin / Subsonic buffer + play) ─────────────
+
+    private val _streamQuality = MutableStateFlow(readStreamQuality())
+    val streamQuality: StateFlow<StreamQuality> = _streamQuality.asStateFlow()
+
+    fun getStreamQuality(): StreamQuality = _streamQuality.value
+
+    fun setStreamQuality(quality: StreamQuality) {
+        if (quality == _streamQuality.value) return
+        prefs.edit().putString(KEY_STREAM_QUALITY, quality.id).apply()
+        _streamQuality.value = quality
+        StreamQuality.active = quality
+    }
+
+    private fun readStreamQuality(): StreamQuality {
+        val q = StreamQuality.fromId(prefs.getString(KEY_STREAM_QUALITY, StreamQuality.ORIGINAL.id))
+        StreamQuality.active = q
+        return q
+    }
+
     // ── appearance / artwork colors ───────────────────────────────────────
 
     fun getCoverColorVariant(): ArtColorVariant =
@@ -205,6 +225,7 @@ class LibrarySettings(context: Context) {
         private const val KEY_NETWORK_META = "network_metadata_enabled"
         private const val KEY_SYNC_OVER_MOBILE_DATA = "sync_over_mobile_data"
         private const val KEY_PLAYBACK_ENGINE = "playback_engine_id"
+        private const val KEY_STREAM_QUALITY = "stream_quality"
         private const val KEY_COVER_COLOR_VARIANT = "cover_color_variant"
         private const val KEY_BANNER_COLOR_VARIANT = "banner_color_variant"
 

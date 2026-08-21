@@ -31,6 +31,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.drop
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -138,6 +139,12 @@ class MusicService : Service() {
         restorePlaybackState()
         startPeriodicPersist()
         startStallWatchdog()
+        serviceScope.launch {
+            librarySettings.streamQuality.drop(1).collect { q ->
+                Log.i(TAG, "stream quality → ${q.id} — rebuffer next")
+                syncPreparedNext()
+            }
+        }
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {

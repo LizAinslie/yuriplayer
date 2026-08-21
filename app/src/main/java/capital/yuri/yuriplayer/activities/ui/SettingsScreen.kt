@@ -18,6 +18,7 @@ import androidx.compose.material.icons.filled.Code
 import androidx.compose.material.icons.filled.ColorLens
 import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.FolderCopy
+import androidx.compose.material.icons.filled.HighQuality
 import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.LibraryMusic
@@ -42,6 +43,7 @@ import capital.yuri.yuriplayer.BuildConfig
 import capital.yuri.yuriplayer.data.LibraryIndex
 import capital.yuri.yuriplayer.data.LibraryScanMode
 import capital.yuri.yuriplayer.data.LibrarySettings
+import capital.yuri.yuriplayer.data.StreamQuality
 import capital.yuri.yuriplayer.data.source.SourceType
 import capital.yuri.yuriplayer.data.theme.ArtColorVariant
 import capital.yuri.yuriplayer.player.engine.PlaybackEngineCatalog
@@ -53,6 +55,7 @@ private sealed class SettingsPage {
     data object Providers : SettingsPage()
     data object LocalLibrary : SettingsPage()
     data object PlaybackEngine : SettingsPage()
+    data object StreamingQuality : SettingsPage()
     data object Appearance : SettingsPage()
     data class Organize(
         val rootKey: String,
@@ -91,6 +94,7 @@ fun SettingsScreen(onBack: () -> Unit) {
             onOpenProviders = { push(SettingsPage.Providers) },
             onOpenLocalLibrary = { push(SettingsPage.LocalLibrary) },
             onOpenPlaybackEngine = { push(SettingsPage.PlaybackEngine) },
+            onOpenStreamingQuality = { push(SettingsPage.StreamingQuality) },
             onOpenAppearance = { push(SettingsPage.Appearance) },
             onOpenLicenses = { push(SettingsPage.OpenSourceLicenses) },
             onOpenVersion = { push(SettingsPage.VersionInfo) }
@@ -108,6 +112,7 @@ fun SettingsScreen(onBack: () -> Unit) {
             }
         )
         SettingsPage.PlaybackEngine -> PlaybackEngineSettingsScreen(onBack = { pop() })
+        SettingsPage.StreamingQuality -> StreamingQualitySettingsScreen(onBack = { pop() })
         SettingsPage.Appearance -> AppearanceSettingsScreen(onBack = { pop() })
         is SettingsPage.Organize -> OrganizeLayoutScreen(
             rootKey = p.rootKey,
@@ -130,6 +135,7 @@ private fun SettingsHubScreen(
     onOpenProviders: () -> Unit,
     onOpenLocalLibrary: () -> Unit,
     onOpenPlaybackEngine: () -> Unit,
+    onOpenStreamingQuality: () -> Unit,
     onOpenAppearance: () -> Unit,
     onOpenLicenses: () -> Unit,
     onOpenVersion: () -> Unit
@@ -147,6 +153,7 @@ private fun SettingsHubScreen(
     }
     val scanMode = settings.getScanMode()
     val engineDesc = PlaybackEngineCatalog.descriptor(settings.getPlaybackEngineId())
+    val streamQuality = settings.getStreamQuality()
     val coverVariant = settings.getCoverColorVariant()
     val bannerVariant = settings.getBannerColorVariant()
     val versionSubtitle = buildString {
@@ -224,6 +231,12 @@ private fun SettingsHubScreen(
                 subtitle = engineDesc.displayName,
                 icon = Icons.Default.SettingsInputComponent,
                 onClick = onOpenPlaybackEngine
+            )
+            SettingsNavRow(
+                title = "Streaming quality",
+                subtitle = streamQuality.displayName + " — Jellyfin & Subsonic buffer",
+                icon = Icons.Default.HighQuality,
+                onClick = onOpenStreamingQuality
             )
             SettingsSwitchRow(
                 title = "Auto-play recommended",
@@ -341,6 +354,43 @@ private fun PlaybackEngineSettingsScreen(onBack: () -> Unit) {
                     "Media3 is lighter and fine for most MP3/AAC and HTTP streams. " +
                     "An FFmpeg AudioTrack engine can share the bundled ffmpeg binary later."
             )
+        }
+
+        Spacer(modifier = Modifier.height(48.dp))
+    }
+}
+
+@Composable
+private fun StreamingQualitySettingsScreen(onBack: () -> Unit) {
+    val settings: LibrarySettings = koinInject()
+    var selected by remember { mutableStateOf(settings.getStreamQuality()) }
+
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .statusBarsPadding()
+            .verticalScroll(rememberScrollState())
+    ) {
+        SettingsTopBar(title = "Streaming quality", onBack = onBack)
+
+        SettingsSectionTitle("Jellyfin & Subsonic")
+        TextNote(
+            text = "Quality for playback and the next-track buffer. Original is the " +
+                "server file. Lower steps transcode so prefetch uses less data. " +
+                "Applies to the next track — the current song keeps playing as-is."
+        )
+        SettingsGroup {
+            StreamQuality.entries.forEach { q ->
+                SettingsNavRow(
+                    title = q.displayName,
+                    subtitle = q.subtitle,
+                    trailing = if (selected == q) "Selected" else null,
+                    onClick = {
+                        settings.setStreamQuality(q)
+                        selected = q
+                    }
+                )
+            }
         }
 
         Spacer(modifier = Modifier.height(48.dp))

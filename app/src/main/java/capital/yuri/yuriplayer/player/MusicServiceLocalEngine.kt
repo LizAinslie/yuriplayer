@@ -19,7 +19,7 @@ import capital.yuri.yuriplayer.player.engine.toPlaybackMedia
  */
 class MusicServiceLocalEngine(
     context: Context,
-    settings: LibrarySettings,
+    private val settings: LibrarySettings,
     sessionActivity: android.app.PendingIntent,
     onPlay: () -> Unit,
     onPause: () -> Unit,
@@ -65,12 +65,13 @@ class MusicServiceLocalEngine(
 
     /** Load current and pre-buffer [next] so the following track can start immediately. */
     fun playWindow(song: Song, next: Song?, startPositionMs: Long, autoPlay: Boolean) {
-        val item = song.toPlaybackMedia()
-        val nextItem = next?.toPlaybackMedia()
+        val quality = settings.getStreamQuality()
+        val item = song.toPlaybackMedia(quality = quality)
+        val nextItem = next?.toPlaybackMedia(quality = quality)
         Log.i(
             TAG,
             "playWindow engine=$engineId '${song.displayTitle}' " +
-                "uri=${item.uri} scheme=${item.uri.scheme} " +
+                "uri=${item.uri} scheme=${item.uri.scheme} quality=${quality.id} " +
                 "autoPlay=$autoPlay pos=$startPositionMs peek=${next?.displayTitle}"
         )
         engine.setPlayWhenReady(autoPlay)
@@ -84,7 +85,7 @@ class MusicServiceLocalEngine(
     }
 
     fun setNext(song: Song?) {
-        engine.setNext(song?.toPlaybackMedia())
+        engine.setNext(song?.toPlaybackMedia(quality = settings.getStreamQuality()))
     }
 
     fun hasPreparedNext(): Boolean = engine.hasPreparedNext()

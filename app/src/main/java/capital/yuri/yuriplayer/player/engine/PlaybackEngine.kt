@@ -2,6 +2,7 @@ package capital.yuri.yuriplayer.player.engine
 
 import android.net.Uri
 import capital.yuri.yuriplayer.data.Song
+import capital.yuri.yuriplayer.data.StreamQuality
 import kotlinx.coroutines.flow.StateFlow
 
 /**
@@ -105,11 +106,24 @@ data class PlaybackEngineDescriptor(
 )
 
 /** Resolve a [Song] into a [PlaybackMedia] the active engine can play. */
-fun Song.toPlaybackMedia(mediaIdSuffix: String? = null): PlaybackMedia {
-    val id = if (mediaIdSuffix != null) "${this.id}-$mediaIdSuffix" else this.id.toString()
-    val uri = resolvePlayableUri(this)
+fun Song.toPlaybackMedia(
+    mediaIdSuffix: String? = null,
+    quality: StreamQuality = StreamQuality.active
+): PlaybackMedia {
+    val uri = resolvePlayableUri(this, quality)
     val network = isNetworkUri(uri) || isVirtualLibraryPath(path)
     val headers = extractStreamHeaders(this)
+    val id = buildString {
+        append(this@toPlaybackMedia.id)
+        if (mediaIdSuffix != null) {
+            append('-')
+            append(mediaIdSuffix)
+        }
+        if (network) {
+            append("-q")
+            append(quality.id)
+        }
+    }
     return PlaybackMedia(
         mediaId = id,
         uri = uri,
@@ -123,7 +137,10 @@ fun Song.toPlaybackMedia(mediaIdSuffix: String? = null): PlaybackMedia {
     )
 }
 
-fun resolvePlayableUri(song: Song): Uri {
+fun resolvePlayableUri(
+    song: Song,
+    quality: StreamQuality = StreamQuality.active
+): Uri {
     val path = song.path
     // Virtual remote keys (jellyfin:…, subsonic:…) are catalog ids, not files
     if (!path.isNullOrBlank() && !isVirtualLibraryPath(path) && !path.contains("://")) {
@@ -131,17 +148,26 @@ fun resolvePlayableUri(song: Song): Uri {
         if (file.exists() && file.canRead()) return Uri.fromFile(file)
     }
     if (!path.isNullOrBlank() && path.startsWith("jellyfin:")) {
-        return jellyfinPlayableUri(song.contentUri, path.removePrefix("jellyfin:"))
+        return jellyfinPlayableUri(song.contentUri, path.removePrefix("jellyfin:"), quality)
+    }
+    if (!path.isNullOrBlank() &&
+        (path.startsWith("subsonic:") || path.startsWith("navidrome:"))
+    ) {
+        return subsonicPlayableUri(song.contentUri, quality)
     }
     return song.contentUri
 }
 
 /**
- * Normalize Jellyfin catalog URIs to the direct `/Audio/{id}/stream?static=true`
- * URL that actually plays. Rows stored as `/universal` (DeviceId mismatch → 401)
- * or `stream.$ext` are rewritten at play time so a rescan isn't required.
+ * Rewrite Jellyfin catalog URIs at play time.
+ * Original → `/stream?static=true`. Other qualities request an AAC/MP3 transcode
+ * at the chosen bitrate so prefetch stays small on cellular.
  */
-fun jellyfinPlayableUri(uri: Uri, itemId: String): Uri {
+fun jellyfinPlayableUri(
+    uri: Uri,
+    itemId: String,
+    quality: StreamQuality = StreamQuality.active
+): Uri {
     val scheme = uri.scheme?.lowercase() ?: return uri
     if (scheme != "http" && scheme != "https") return uri
     val host = uri.encodedAuthority ?: return uri
@@ -155,9 +181,40 @@ fun jellyfinPlayableUri(uri: Uri, itemId: String): Uri {
                 segs.getOrNull(i + 1)
             }
     } ?: return uri
-    return Uri.parse(
-        "$scheme://$host/Audio/$id/stream?static=true&api_key=${Uri.encode(apiKey)}&_id=$id"
-    )
+    val auth = "api_key=${Uri.encode(apiKey)}&_id=$id"
+    return if (quality.bitRate == null) {
+        Uri.parse("$scheme://$host/Audio/$id/stream?static=true&$auth")
+    } else {
+        val bps = quality.bitRate
+        Uri.parse(
+            "$scheme://$host/Audio/$id/stream?$auth" +
+                "&audioCodec=aac&container=mp3" +
+                "&audioBitRate=$bps&maxStreamingBitrate=$bps"
+        )
+    }
+}
+
+/** Subsonic/OpenSubsonic: `format=raw` for original, else mp3 + maxBitRate. */
+fun subsonicPlayableUri(
+    uri: Uri,
+    quality: StreamQuality = StreamQuality.active
+): Uri {
+    val path = uri.path.orEmpty()
+    if (!path.contains("stream", ignoreCase = true)) return uri
+    val b = uri.buildUpon().clearQuery()
+    for (name in uri.queryParameterNames) {
+        if (name.equals("format", true) || name.equals("maxBitRate", true)) continue
+        uri.getQueryParameters(name).forEach { value ->
+            b.appendQueryParameter(name, value)
+        }
+    }
+    if (quality.bitRate == null) {
+        b.appendQueryParameter("format", "raw")
+    } else {
+        b.appendQueryParameter("format", "mp3")
+        b.appendQueryParameter("maxBitRate", quality.kbps.toString())
+    }
+    return b.build()
 }
 
 fun isVirtualLibraryPath(path: String?): Boolean {
