@@ -530,19 +530,6 @@ fun YuriApp(
         }
     }
 
-    fun openArtistForSong(song: Song) {
-        val credits = allCreditsForSong(song)
-        val name = credits.firstOrNull { it.role == ArtistRole.PRIMARY }?.name
-            ?: credits.firstOrNull()?.name
-            ?: song.effectiveAlbumArtist
-            ?: song.artist
-        if (name.isNullOrBlank()) {
-            Toast.makeText(context, "No artist tag", Toast.LENGTH_SHORT).show()
-            return
-        }
-        openArtistByName(name)
-    }
-
     fun openArtistByName(name: String) {
         val resolved = primaryArtistName(name) ?: name
         if (resolved.isBlank()) {
@@ -554,6 +541,19 @@ fun YuriApp(
             val fromCatalog = withContext(Dispatchers.IO) { catalog.artistItemForKey(key, resolved) }
             openArtistResolved(fromCatalog ?: resolveArtistLocal(resolved))
         }
+    }
+
+    fun openArtistForSong(song: Song) {
+        val credits = allCreditsForSong(song)
+        val name = credits.firstOrNull { it.role == ArtistRole.PRIMARY }?.name
+            ?: credits.firstOrNull()?.name
+            ?: song.effectiveAlbumArtist
+            ?: song.artist
+        if (name.isNullOrBlank()) {
+            Toast.makeText(context, "No artist tag", Toast.LENGTH_SHORT).show()
+            return
+        }
+        openArtistByName(name)
     }
 
     CompositionLocalProvider(
