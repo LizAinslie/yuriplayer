@@ -18,13 +18,10 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
-import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -64,8 +61,7 @@ fun MyStuffPinsHost(
     allSongs: List<Song>,
     onOpenPin: (StuffPin) -> Unit,
     onUnpin: (StuffPin) -> Unit,
-    onAddPinSlot: () -> Unit,
-    onPlayAll: () -> Unit
+    onAddPinSlot: () -> Unit
 ) {
     var reorderMode by remember { mutableStateOf(false) }
     var pinForSheet by remember { mutableStateOf<StuffPin?>(null) }
@@ -87,28 +83,6 @@ fun MyStuffPinsHost(
     }
 
     Column(modifier = Modifier.fillMaxWidth()) {
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 16.dp, vertical = 4.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.End
-        ) {
-            IconButton(
-                onClick = onPlayAll,
-                modifier = Modifier
-                    .size(48.dp)
-                    .clip(CircleShape)
-                    .border(1.5.dp, MaterialTheme.colorScheme.onSurface.copy(alpha = 0.35f), CircleShape)
-            ) {
-                Icon(
-                    Icons.Default.PlayArrow,
-                    contentDescription = "Start radio from My Stuff",
-                    modifier = Modifier.size(28.dp)
-                )
-            }
-        }
-
         Column(
             modifier = Modifier
                 .fillMaxWidth()

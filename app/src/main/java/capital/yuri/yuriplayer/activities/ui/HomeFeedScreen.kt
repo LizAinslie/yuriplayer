@@ -1,6 +1,5 @@
 package capital.yuri.yuriplayer.activities.ui
 
-import android.widget.Toast
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
@@ -49,7 +48,6 @@ import capital.yuri.yuriplayer.data.PlaylistRepository
 import capital.yuri.yuriplayer.data.Song
 import capital.yuri.yuriplayer.data.StuffPinKind
 import capital.yuri.yuriplayer.player.PlaybackHistoryStore
-import capital.yuri.yuriplayer.player.PlayerController
 import capital.yuri.yuriplayer.ui.TestTags
 import kotlinx.coroutines.launch
 import org.koin.compose.koinInject
@@ -66,7 +64,6 @@ fun HomeFeedScreen(
     val pinStore: MyStuffPinStore = koinInject()
     val playlistsRepo: PlaylistRepository = koinInject()
     val catalog: CatalogRepository = koinInject()
-    val player: PlayerController = koinInject()
     val history: PlaybackHistoryStore = koinInject()
     val settings: LibrarySettings = koinInject()
     val pins by pinStore.pins.collectAsState()
@@ -114,17 +111,7 @@ fun HomeFeedScreen(
                     }
                 },
                 onUnpin = { pinStore.unpin(it) },
-                onAddPinSlot = { showAddPin = true },
-                onPlayAll = {
-                    scope.launch {
-                        val songs = resolveCollectionSongs(entries, library, playlistsRepo)
-                        if (songs.isEmpty()) {
-                            Toast.makeText(context, "Nothing in My Stuff yet", Toast.LENGTH_SHORT).show()
-                        } else {
-                            player.startPlaylistRadio(songs, "My Stuff")
-                        }
-                    }
-                }
+                onAddPinSlot = { showAddPin = true }
             )
         }
         if (HomeRowId.RECENTS in rows && historyEntries.isNotEmpty()) {

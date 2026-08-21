@@ -19,8 +19,7 @@ fun MyStuffPinsTabPublic(
     allSongs: List<Song>,
     onOpenPin: (StuffPin) -> Unit,
     onUnpin: (StuffPin) -> Unit,
-    onAddPinSlot: () -> Unit,
-    onPlayAll: () -> Unit
+    onAddPinSlot: () -> Unit
 ) {
     MyStuffPinsHost(
         pins = pins,
@@ -29,7 +28,6 @@ fun MyStuffPinsTabPublic(
         allSongs = allSongs,
         onOpenPin = onOpenPin,
         onUnpin = onUnpin,
-        onAddPinSlot = onAddPinSlot,
-        onPlayAll = onPlayAll
+        onAddPinSlot = onAddPinSlot
     )
 }
