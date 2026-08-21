@@ -5,6 +5,7 @@ import android.content.Intent
 import android.os.Handler
 import android.os.Looper
 import androidx.core.content.ContextCompat
+import capital.yuri.yuriplayer.core.platform.AndroidAppDirectories
 import capital.yuri.yuriplayer.data.LibraryIndex
 import capital.yuri.yuriplayer.data.LibrarySettings
 import capital.yuri.yuriplayer.di.appModule
@@ -30,6 +31,7 @@ import org.koin.core.qualifier.named
 class YuriPlayerApp : Application(), SingletonImageLoader.Factory {
     override fun onCreate() {
         super.onCreate()
+        AndroidAppDirectories.install(this)
 
         startKoin {
             androidLogger(Level.ERROR)

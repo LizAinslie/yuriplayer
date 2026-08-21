@@ -1,0 +1,121 @@
+package capital.yuri.yuriplayer.core.player
+
+import capital.yuri.yuriplayer.core.library.Track
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
+
+/**
+ * Host-side queue + now-playing. Engines only produce sound.
+ * Previous within [RESTART_WINDOW_MS] seeks to 0 (Spotify 3s rule).
+ */
+class PlayerSession(
+    private val engine: PlaybackEngine
+) {
+    private val _queue = MutableStateFlow<List<Track>>(emptyList())
+    val queue: StateFlow<List<Track>> = _queue.asStateFlow()
+
+    private val _index = MutableStateFlow(0)
+    val index: StateFlow<Int> = _index.asStateFlow()
+
+    private val _current = MutableStateFlow<Track?>(null)
+    val current: StateFlow<Track?> = _current.asStateFlow()
+
+    val isPlaying: StateFlow<Boolean> = engine.isPlaying
+
+    private val listener = object : PlaybackEngine.Listener {
+        override fun onEnded() {
+            if (!engine.playPreparedNext()) next()
+        }
+
+        override fun onAutoAdvanced() {
+            val q = _queue.value
+            val i = _index.value + 1
+            if (i in q.indices) {
+                _index.value = i
+                _current.value = q[i]
+                warmSuccessor()
+            }
+        }
+    }
+
+    init {
+        engine.addListener(listener)
+    }
+
+    fun play(tracks: List<Track>, startIndex: Int = 0) {
+        if (tracks.isEmpty()) return
+        _queue.value = tracks
+        loadAt(startIndex.coerceIn(tracks.indices), 0L, play = true)
+    }
+
+    fun togglePlay() {
+        if (_current.value == null) {
+            val q = _queue.value
+            if (q.isNotEmpty()) loadAt(_index.value.coerceIn(q.indices), 0L, play = true)
+            return
+        }
+        if (engine.isPlaying.value) engine.pause() else engine.play()
+    }
+
+    fun pause() = engine.pause()
+
+    fun stop() = engine.stop()
+
+    fun next() {
+        val q = _queue.value
+        if (q.isEmpty()) return
+        if (engine.playPreparedNext()) {
+            val i = (_index.value + 1).coerceAtMost(q.lastIndex)
+            _index.value = i
+            _current.value = q[i]
+            warmSuccessor()
+            return
+        }
+        val i = _index.value + 1
+        if (i in q.indices) loadAt(i, 0L, play = true)
+    }
+
+    fun previous() {
+        val q = _queue.value
+        if (q.isEmpty()) return
+        if (engine.getPositionMs() > RESTART_WINDOW_MS) {
+            engine.seekTo(0)
+            return
+        }
+        val i = _index.value - 1
+        if (i in q.indices) loadAt(i, 0L, play = true)
+        else engine.seekTo(0)
+    }
+
+    fun seekTo(positionMs: Long) = engine.seekTo(positionMs.coerceAtLeast(0))
+
+    fun positionMs(): Long = engine.getPositionMs()
+    fun durationMs(): Long = engine.getDurationMs()
+
+    fun release() {
+        engine.removeListener(listener)
+        engine.release()
+    }
+
+    private fun loadAt(i: Int, startMs: Long, play: Boolean) {
+        val q = _queue.value
+        val track = q.getOrNull(i) ?: return
+        _index.value = i
+        _current.value = track
+        val next = q.getOrNull(i + 1)
+        engine.load(track.toPlaybackMedia(), next?.toPlaybackMedia(), startMs)
+        if (play) engine.play() else engine.pause()
+        warmSuccessor()
+    }
+
+    private fun warmSuccessor() {
+        val next = _queue.value.getOrNull(_index.value + 1) ?: return
+        engine.setNext(next.toPlaybackMedia())
+        engine.warmupNext()
+    }
+
+    companion object {
+        const val RESTART_WINDOW_MS = 3_000L
+    }
+}
