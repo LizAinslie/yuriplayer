@@ -84,7 +84,7 @@ fun SyncSettingsScreen(onBack: () -> Unit) {
         SettingsSectionTitle("Libraries")
         SettingsNote(
             "Checks the server song count. If it grew, only the new tracks are pulled. " +
-                "A full 40k-track walk happens only when you force a rescan from Explore. " +
+                "A full track walk happens only when you force a rescan from Explore. " +
                 "Libraries are not auto-indexed the first time."
         )
         SettingsGroup {

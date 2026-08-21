@@ -363,11 +363,11 @@ private fun QueueTabContent(
                 Text(
                     when {
                         isRadio && radioShuffled && shuffleUnit == RadioShuffleUnit.RELEASES ->
-                            "Shuffle plays whole releases at random (tracks stay in order). Drag to reorder · edges scroll."
+                            "Shuffle plays whole releases at random (tracks stay in order). Drag to reorder."
                         isRadio && radioShuffled ->
-                            "Shuffle picks random tracks from this radio pool. Drag to reorder · hold near edges to scroll."
+                            "Shuffle picks random tracks from this radio pool. Drag to reorder."
                         isRadio ->
-                            "Plays whole releases in order. Drag to reorder · hold near edges to scroll."
+                            "Plays whole releases in order. Drag to reorder."
                         showHotSection ->
                             "Drag to reorder · swipe left to remove · swipe right or drag up to promote · edges scroll"
                         else ->
