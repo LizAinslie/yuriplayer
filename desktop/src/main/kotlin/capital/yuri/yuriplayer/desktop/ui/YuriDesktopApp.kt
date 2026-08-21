@@ -422,9 +422,9 @@ private fun HomeFeed(
         }.distinctBy { it.id }
     }
     val likedTracks = remember(liked, tracks) { tracks.filter { it.id in liked } }
-    val shortcuts = remember(pins, liked, recents, albums, playlists, tracks) {
+    val shortcuts = remember(pins, liked, likedTracks, albums, playlists, tracks) {
         buildHomeShortcuts(
-            pins, liked, likedTracks, recents, albums, playlists, tracks,
+            pins, liked, likedTracks, albums, playlists, tracks,
             onOpenAlbum, onOpenPlaylist, onOpenArtist, onPlayTracks
         )
     }
@@ -436,16 +436,21 @@ private fun HomeFeed(
             else -> "Good evening"
         }
     }
-    val stuffAlbums = remember(pins, liked, albums, tracks) {
+    val stuffAlbums = remember(pins, liked, albums) {
         val pinnedAlbumIds = pins.filter { it.kind == DesktopCollection.Kind.ALBUM }.map { it.id }.toSet()
+        val pinnedTitles = pins.filter { it.kind == DesktopCollection.Kind.ALBUM }
+            .map { it.title.lowercase() }.toSet()
         albums.filter { album ->
             album.id in pinnedAlbumIds ||
+                album.title.lowercase() in pinnedTitles ||
                 album.tracks.any { it.id in liked }
-        }.ifEmpty { albums }
+        }
     }
-    val stuffArtists = remember(pins, albums) {
+    val stuffArtists = remember(pins, liked, albums, tracks) {
         val pinned = pins.filter { it.kind == DesktopCollection.Kind.ARTIST }.map { it.title }
-        pinned.ifEmpty { albums.map { it.artist }.distinct() }
+        val fromAlbums = stuffAlbums.map { it.artist }
+        val fromLiked = tracks.filter { it.id in liked }.map { it.displayArtist }
+        (pinned + fromAlbums + fromLiked).map { it.trim() }.filter { it.isNotEmpty() }.distinct()
     }
 
     Column(
@@ -562,9 +567,16 @@ private fun HomeFeed(
             }
             Spacer(Modifier.height(24.dp))
         }
-        if (albums.isEmpty() && playlists.isEmpty() && recents.isEmpty()) {
+        if (shortcuts.isEmpty() && stuffAlbums.isEmpty() && playlists.isEmpty() && recents.isEmpty()) {
             Text(
-                status.ifBlank { "Nothing in My Stuff yet. Pin albums from the library rail." },
+                "Pin albums, artists, or playlists from My Stuff and they’ll show up here.",
+                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
+                modifier = Modifier.padding(top = 24.dp)
+            )
+        }
+        if (albums.isEmpty() && playlists.isEmpty() && recents.isEmpty() && tracks.isEmpty()) {
+            Text(
+                status.ifBlank { "Nothing in the library yet." },
                 color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
             )
         }
@@ -583,7 +595,6 @@ private fun buildHomeShortcuts(
     pins: List<DesktopCollection.Pin>,
     liked: Set<String>,
     likedTracks: List<Track>,
-    recents: List<Track>,
     albums: List<AlbumPageModel>,
     playlists: List<capital.yuri.yuriplayer.desktop.DesktopPlaylist>,
     tracks: List<Track>,
@@ -604,13 +615,14 @@ private fun buildHomeShortcuts(
                 id = "liked",
                 title = "Liked Songs",
                 artworkUri = likedTracks.firstOrNull()?.artworkUri
-            ) { onPlayTracks(likedTracks.ifEmpty { tracks }, 0) }
+            ) { onPlayTracks(likedTracks, 0) }
         )
     }
     for (pin in pins) {
         when (pin.kind) {
             DesktopCollection.Kind.ALBUM -> {
                 val album = albums.firstOrNull { it.id == pin.id }
+                    ?: albums.firstOrNull { it.title.equals(pin.title, true) }
                 add(
                     SpotifyPin(pin.id, pin.title, album?.artworkUri) {
                         album?.let(onOpenAlbum)
@@ -621,7 +633,7 @@ private fun buildHomeShortcuts(
                 SpotifyPin(
                     pin.id,
                     pin.title,
-                    tracks.firstOrNull { it.displayArtist == pin.title }?.artworkUri,
+                    tracks.firstOrNull { it.displayArtist.equals(pin.title, true) }?.artworkUri,
                     circular = true
                 ) { onOpenArtist(pin.title) }
             )
@@ -629,7 +641,7 @@ private fun buildHomeShortcuts(
                 val t = tracks.firstOrNull { it.id == pin.id }
                 add(
                     SpotifyPin(pin.id, pin.title, t?.artworkUri) {
-                        t?.let { onPlayTracks(listOf(it) + tracks, 0) }
+                        t?.let { onPlayTracks(listOf(it), 0) }
                     }
                 )
             }
@@ -642,21 +654,6 @@ private fun buildHomeShortcuts(
                 )
             }
         }
-    }
-    recents.mapNotNull { t -> albums.firstOrNull { a -> a.tracks.any { it.id == t.id } } }
-        .distinctBy { it.id }
-        .forEach { album ->
-            add(SpotifyPin(album.id, album.title, album.artworkUri) { onOpenAlbum(album) })
-        }
-    playlists.forEach { pl ->
-        add(
-            SpotifyPin("playlist:${pl.id}", pl.name, pl.artworkUri(tracks)) {
-                onOpenPlaylist(pl)
-            }
-        )
-    }
-    albums.forEach { album ->
-        add(SpotifyPin(album.id, album.title, album.artworkUri) { onOpenAlbum(album) })
     }
     return out
 }
