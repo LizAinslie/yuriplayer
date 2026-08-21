@@ -1,5 +1,6 @@
 package capital.yuri.yuriplayer.desktop
 
+import capital.yuri.yuriplayer.core.library.CoverPixels
 import capital.yuri.yuriplayer.core.library.LocalLibraryScanner
 import capital.yuri.yuriplayer.core.library.Track
 import capital.yuri.yuriplayer.core.os.OsMediaControls
@@ -38,6 +39,9 @@ class DesktopSession {
     private val _durationMs = MutableStateFlow(0L)
     val durationMs: StateFlow<Long> = _durationMs.asStateFlow()
 
+    private val _coverPixels = MutableStateFlow<IntArray?>(null)
+    val coverPixels: StateFlow<IntArray?> = _coverPixels.asStateFlow()
+
     val dirs = appDirectories()
 
     private var ticker: Job? = null
@@ -66,6 +70,11 @@ class DesktopSession {
                     durationMs = _durationMs.value
                 )
                 delay(250)
+            }
+        }
+        scope.launch(Dispatchers.IO) {
+            player.current.collect { track ->
+                _coverPixels.value = CoverPixels.argb(track?.artworkUri, track?.path)
             }
         }
         scope.launch(Dispatchers.IO) {

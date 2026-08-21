@@ -30,7 +30,9 @@ import capital.yuri.yuriplayer.components.model.toCover
 import capital.yuri.yuriplayer.components.model.toRow
 import capital.yuri.yuriplayer.components.player.BottomPlayerBar
 import capital.yuri.yuriplayer.components.player.NowPlayingSidebar
+import capital.yuri.yuriplayer.components.theme.PlayerChromeTheme
 import capital.yuri.yuriplayer.components.theme.YuriTheme
+import capital.yuri.yuriplayer.components.theme.playerColorsFromPixels
 import capital.yuri.yuriplayer.desktop.DesktopSession
 
 private sealed class Route {
@@ -40,7 +42,11 @@ private sealed class Route {
 
 @Composable
 fun YuriDesktopApp(session: DesktopSession) {
-    YuriTheme {
+    val coverPixels by session.coverPixels.collectAsState()
+    val playerColors = remember(coverPixels) {
+        coverPixels?.let { playerColorsFromPixels(it) }
+    }
+    YuriTheme(playerColors = playerColors) {
         val tracks by session.tracks.collectAsState()
         val current by session.player.current.collectAsState()
         val playing by session.player.isPlaying.collectAsState()
@@ -57,33 +63,37 @@ fun YuriDesktopApp(session: DesktopSession) {
             AdaptiveShell(
                 widthClass = widthClass,
                 bottomBar = {
-                    BottomPlayerBar(
-                        track = current?.toCover(),
-                        playing = playing,
-                        positionMs = position,
-                        durationMs = duration,
-                        onPrev = session.player::previous,
-                        onToggle = session.player::togglePlay,
-                        onNext = session.player::next,
-                        onSeek = session.player::seekTo
-                    )
+                    PlayerChromeTheme(playerColors, useArtBackground = false) {
+                        BottomPlayerBar(
+                            track = current?.toCover(),
+                            playing = playing,
+                            positionMs = position,
+                            durationMs = duration,
+                            onPrev = session.player::previous,
+                            onToggle = session.player::togglePlay,
+                            onNext = session.player::next,
+                            onSeek = session.player::seekTo
+                        )
+                    }
                 },
                 sidebar = {
-                    NowPlayingSidebar(
-                        track = current?.toCover(),
-                        queue = queue.map { it.toRow(highlighted = it.id == current?.id) },
-                        history = history.map { it.toRow() },
-                        onQueueTrack = { row ->
-                            session.player.playTrack(
-                                queue.first { it.id == row.id },
-                                queue
-                            )
-                        },
-                        onHistoryTrack = { row ->
-                            val t = history.firstOrNull { it.id == row.id } ?: return@NowPlayingSidebar
-                            session.player.playTrack(t, tracks.ifEmpty { listOf(t) })
-                        }
-                    )
+                    PlayerChromeTheme(playerColors, useArtBackground = true) {
+                        NowPlayingSidebar(
+                            track = current?.toCover(),
+                            queue = queue.map { it.toRow(highlighted = it.id == current?.id) },
+                            history = history.map { it.toRow() },
+                            onQueueTrack = { row ->
+                                session.player.playTrack(
+                                    queue.first { it.id == row.id },
+                                    queue
+                                )
+                            },
+                            onHistoryTrack = { row ->
+                                val t = history.firstOrNull { it.id == row.id } ?: return@NowPlayingSidebar
+                                session.player.playTrack(t, tracks.ifEmpty { listOf(t) })
+                            }
+                        )
+                    }
                 }
             ) {
                 when (val r = route) {

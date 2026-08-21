@@ -39,7 +39,12 @@ fun BottomPlayerBar(
     onSeek: (Long) -> Unit,
     modifier: Modifier = Modifier
 ) {
-    Surface(modifier = modifier.fillMaxWidth(), tonalElevation = 2.dp) {
+    Surface(
+        modifier = modifier.fillMaxWidth(),
+        color = MaterialTheme.colorScheme.surface,
+        contentColor = MaterialTheme.colorScheme.onSurface,
+        tonalElevation = 0.dp
+    ) {
         Column(Modifier.padding(horizontal = 16.dp, vertical = 8.dp)) {
             if (durationMs > 0) {
                 Slider(

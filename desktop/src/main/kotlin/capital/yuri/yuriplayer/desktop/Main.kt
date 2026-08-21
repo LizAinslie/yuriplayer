@@ -39,6 +39,7 @@ fun main() = application {
         title = "Yuri Player",
         state = state
     ) {
+        window.background = java.awt.Color(0x12, 0x10, 0x18)
         DisposableEffect(Unit) {
             onDispose { session.release() }
         }

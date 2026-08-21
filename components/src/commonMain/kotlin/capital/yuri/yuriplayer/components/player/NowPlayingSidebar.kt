@@ -1,5 +1,6 @@
 package capital.yuri.yuriplayer.components.player
 
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.aspectRatio
@@ -39,7 +40,12 @@ fun NowPlayingSidebar(
     modifier: Modifier = Modifier
 ) {
     var tab by remember { mutableIntStateOf(0) }
-    Column(modifier.fillMaxSize().padding(16.dp)) {
+    Column(
+        modifier
+            .fillMaxSize()
+            .background(MaterialTheme.colorScheme.background)
+            .padding(16.dp)
+    ) {
         ScrollableTabRow(selectedTabIndex = tab, edgePadding = 0.dp) {
             Tab(selected = tab == 0, onClick = { tab = 0 }, text = { Text("Now playing") })
             Tab(selected = tab == 1, onClick = { tab = 1 }, text = { Text("Queue") })
