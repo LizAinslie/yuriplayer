@@ -1,5 +1,6 @@
 package capital.yuri.yuriplayer.components.album
 
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -22,8 +23,10 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import capital.yuri.yuriplayer.components.art.CoverArt
@@ -31,6 +34,8 @@ import capital.yuri.yuriplayer.components.layout.WindowWidthClass
 import capital.yuri.yuriplayer.components.layout.windowWidthClass
 import capital.yuri.yuriplayer.components.list.TrackRow
 import capital.yuri.yuriplayer.components.model.AlbumPageModel
+import capital.yuri.yuriplayer.components.theme.AlbumArtBackdrop
+import capital.yuri.yuriplayer.components.theme.rememberCoverColors
 
 @Composable
 fun AlbumPage(
@@ -41,16 +46,28 @@ fun AlbumPage(
     onTrack: (Int) -> Unit,
     modifier: Modifier = Modifier
 ) {
-    BoxWithConstraints(modifier.fillMaxSize()) {
-        val widthClass = windowWidthClass(maxWidth)
-        when (widthClass) {
-            WindowWidthClass.Compact -> AlbumPageCompact(
-                album, playing, onBack, onPlay, onTrack
-            )
-            WindowWidthClass.Medium,
-            WindowWidthClass.Expanded -> AlbumPageWide(
-                album, playing, onBack, onPlay, onTrack
-            )
+    val coverColors by rememberCoverColors(
+        artworkUri = album.artworkUri,
+        audioPath = album.tracks.firstOrNull()?.id
+    )
+    AlbumArtBackdrop(
+        wash = coverColors?.container ?: Color.Transparent,
+        accent = coverColors?.accent ?: Color.Transparent,
+        modifier = modifier
+            .fillMaxSize()
+            .background(MaterialTheme.colorScheme.background)
+    ) {
+        BoxWithConstraints(Modifier.fillMaxSize()) {
+            val widthClass = windowWidthClass(maxWidth)
+            when (widthClass) {
+                WindowWidthClass.Compact -> AlbumPageCompact(
+                    album, playing, onBack, onPlay, onTrack
+                )
+                WindowWidthClass.Medium,
+                WindowWidthClass.Expanded -> AlbumPageWide(
+                    album, playing, onBack, onPlay, onTrack
+                )
+            }
         }
     }
 }

@@ -52,10 +52,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.clipToBounds
-import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.geometry.Size
-import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
@@ -76,6 +73,7 @@ import capital.yuri.yuriplayer.data.MetadataEnrichmentService
 import capital.yuri.yuriplayer.data.MyStuffPinStore
 import capital.yuri.yuriplayer.data.Song
 import capital.yuri.yuriplayer.data.StuffPinKind
+import capital.yuri.yuriplayer.components.theme.AlbumArtBackdrop
 import capital.yuri.yuriplayer.data.albumKey
 import capital.yuri.yuriplayer.data.albumTrackOrder
 import capital.yuri.yuriplayer.data.AlbumLog
@@ -94,7 +92,6 @@ import kotlin.math.sqrt
 
 private val ExpandedHeaderBody = 420.dp
 private val CollapsedBarHeight = 56.dp
-private val GradientFadeLength = 220.dp
 
 @Composable
 private fun CircularPlayButton(
@@ -326,49 +323,18 @@ fun AlbumDetailScreen(
         else onPlayAlbum(liveAlbum.songs, 0)
     }
 
-    val fadePx = with(density) { GradientFadeLength.toPx() }
-
     ThemedStatusBar(color = albumBg, enabled = true)
 
     MaterialTheme(colorScheme = scheme) {
-        BoxWithConstraints(
+        AlbumArtBackdrop(
+            wash = albumBg,
+            accent = themeColors.accent,
             modifier = Modifier
                 .fillMaxSize()
                 .nestedScroll(nestedScroll)
                 .background(defaultBg)
-                .drawBehind {
-                    val headerEnd = headerBodyH.toPx()
-                    val solidEnd = headerEnd + with(density) { 48.dp.toPx() }
-                    val fadeEnd = solidEnd + fadePx
-
-                    drawRect(
-                        color = albumBg,
-                        topLeft = Offset.Zero,
-                        size = Size(size.width, solidEnd.coerceAtMost(size.height))
-                    )
-
-                    if (fadeEnd > solidEnd) {
-                        drawRect(
-                            brush = Brush.verticalGradient(
-                                colors = listOf(
-                                    albumBg,
-                                    albumBg.copy(alpha = 0.85f),
-                                    albumBg.copy(alpha = 0.45f),
-                                    albumBg.copy(alpha = 0.15f),
-                                    Color.Transparent
-                                ),
-                                startY = solidEnd,
-                                endY = fadeEnd
-                            ),
-                            topLeft = Offset(0f, solidEnd),
-                            size = Size(
-                                size.width,
-                                (fadeEnd - solidEnd).coerceAtMost(size.height - solidEnd)
-                            )
-                        )
-                    }
-                }
         ) {
+            BoxWithConstraints(Modifier.fillMaxSize()) {
             val compact = maxWidth < 600.dp
             if (!compact) {
                 Row(
@@ -608,6 +574,7 @@ fun AlbumDetailScreen(
                     onDismiss = { showCoverPicker = false }
                 )
             }
+        }
         }
     }
 }

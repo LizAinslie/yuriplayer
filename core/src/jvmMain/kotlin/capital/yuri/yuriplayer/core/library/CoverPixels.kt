@@ -8,6 +8,9 @@ import java.io.File
 import java.net.URI
 import javax.imageio.ImageIO
 
+actual fun sampleCoverArgb(artworkUri: String?, audioPath: String?, size: Int): IntArray? =
+    CoverPixels.argb(artworkUri, audioPath, size)
+
 /** Downsampled ARGB for theme extraction. Folder art first, then embedded. */
 object CoverPixels {
     fun argb(artworkUri: String?, audioPath: String?, size: Int = 48): IntArray? {
