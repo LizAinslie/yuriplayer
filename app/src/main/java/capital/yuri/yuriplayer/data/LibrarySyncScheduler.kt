@@ -65,8 +65,16 @@ class LibrarySyncScheduler(
         for (row in rows) {
             val interval = row.effectivePartialInterval(global)
             if (!interval.isActive) continue
-            val last = settings.lastPartialSyncAt(row.id)
+            val last = settings.lastPartialSyncAt(row.id).let { stored ->
+                if (stored > 0L) stored
+                else checkpoints.get(row.id)?.updatedAtMs ?: 0L
+            }
             if (last > 0L && now - last < interval.millis) continue
+            val cp = checkpoints.get(row.id)
+            if (cp?.status == SourceScanStatus.RUNNING) {
+                Log.i(TAG, "skip partial ${row.name} — scan already running")
+                continue
+            }
             val type = when (SourceType.from(row.type)) {
                 SourceType.JELLYFIN -> "JELLYFIN"
                 SourceType.SUBSONIC, SourceType.NAVIDROME -> "SUBSONIC"

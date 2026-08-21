@@ -403,6 +403,7 @@ class ExploreSearchService(
                         keepKeys = keepKeys,
                         startFrom = resumeFrom,
                         priorDelivered = priorDelivered,
+                        knownCount = existing,
                         incremental = incremental
                     )
                     SourceType.SUBSONIC, SourceType.NAVIDROME -> scanSubsonic(
@@ -414,8 +415,9 @@ class ExploreSearchService(
                         secret = row.secret,
                         seenAt = seenAt,
                         keepKeys = keepKeys,
-                        startAlbumOffset = resumeFrom,
-                        priorDelivered = priorDelivered
+                        startAlbumOffset = if (incremental) 0 else resumeFrom,
+                        priorDelivered = priorDelivered,
+                        incremental = incremental
                     )
                     else -> RemoteScanResult()
                 }
@@ -502,6 +504,76 @@ class ExploreSearchService(
         notifier.update("Syncing libraries", text)
     }
 
+    /**
+     * Minimal update: ask Jellyfin for the AUDIO total. If it didn't grow, skip.
+     * If it grew, pull only the newest [delta] items. Never walks the library.
+     */
+    private suspend fun scanJellyfinDelta(
+        session: JellyfinClient.Session,
+        rowId: Long,
+        sourceName: String,
+        seenAt: Long,
+        knownCount: Int,
+        totalHint: Int?
+    ): RemoteScanResult {
+        val remoteTotal = jellyfinClient.audioItemCount(session).getOrElse {
+            Log.w(TAG, "delta count failed $sourceName: ${it.message}")
+            _lastError.value = "$sourceName: ${it.message}"
+            return RemoteScanResult()
+        }
+        val known = maxOf(knownCount, totalHint ?: 0)
+        if (remoteTotal <= known) {
+            checkpoints.markDone(rowId, sourceName, known, remoteTotal)
+            refreshCheckpointSnapshot()
+            progress("$sourceName: up to date ($remoteTotal)")
+            Log.i(TAG, "jellyfin delta skip $sourceName known=$known remote=$remoteTotal")
+            return RemoteScanResult(delivered = 0)
+        }
+        val grow = remoteTotal - known
+        val cap = (grow + 64).coerceIn(1, 2_000)
+        progress("$sourceName: $grow new tracks")
+        Log.i(TAG, "jellyfin delta $sourceName +$grow known=$known remote=$remoteTotal cap=$cap")
+
+        var inserted = 0
+        var updated = 0
+        var delivered = 0
+        jellyfinClient.listAudioItemsPaged(
+            session = session,
+            pageSize = minOf(budget.pageSize, cap),
+            maxItems = cap,
+            mode = JellyfinClient.ListingMode.LIGHT,
+            sortBy = org.jellyfin.sdk.model.api.ItemSortBy.DATE_CREATED,
+            sortOrder = org.jellyfin.sdk.model.api.SortOrder.DESCENDING
+        ) { page, _, total, _ ->
+            if (page.isNotEmpty()) {
+                val stats = catalog.ingestRemoteBatch(
+                    songs = page,
+                    sourceType = CatalogSources.JELLYFIN,
+                    sourceInstanceId = rowId,
+                    seenAt = seenAt
+                )
+                inserted += stats.inserted
+                updated += stats.updated
+                delivered += page.size
+            }
+            bumpIndexedCount(known + delivered, force = true)
+            val n = total ?: remoteTotal
+            progress("$sourceName: +$inserted new · $n on server")
+        }.onFailure {
+            Log.w(TAG, "jellyfin delta fetch failed $sourceName: ${it.message}")
+            _lastError.value = "$sourceName: ${it.message}"
+        }
+
+        checkpoints.markDone(rowId, sourceName, knownCount + delivered, remoteTotal)
+        refreshCheckpointSnapshot()
+        Log.i(TAG, "jellyfin delta done $sourceName +$inserted ~$updated of $grow")
+        return RemoteScanResult(
+            delivered = delivered,
+            inserted = inserted,
+            updated = updated
+        )
+    }
+
     private suspend fun scanJellyfin(
         rowId: Long,
         sourceName: String,
@@ -512,6 +584,7 @@ class ExploreSearchService(
         keepKeys: Set<String>,
         startFrom: Int,
         priorDelivered: Int,
+        knownCount: Int,
         incremental: Boolean
     ): RemoteScanResult {
         val url = baseUrl ?: return RemoteScanResult()
@@ -525,6 +598,17 @@ class ExploreSearchService(
                 _lastError.value = "$sourceName: ${it.message}"
                 return RemoteScanResult()
             }.also { jellyfinSessions[rowId] = it }
+
+        if (incremental) {
+            return scanJellyfinDelta(
+                session = session,
+                rowId = rowId,
+                sourceName = sourceName,
+                seenAt = seenAt,
+                knownCount = knownCount,
+                totalHint = checkpoints.get(rowId)?.totalHint
+            )
+        }
 
         var delivered = priorDelivered
         var cursor = startFrom
@@ -679,6 +763,46 @@ class ExploreSearchService(
         Log.i(TAG, "passive art pass: attempted=$attempted cached=${cachedAlbumArtKeys.size}")
     }
 
+    private suspend fun scanSubsonicNewest(
+        session: SubsonicClient.Session,
+        instanceId: Long,
+        sourceName: String,
+        catalogType: String,
+        seenAt: Long
+    ): RemoteScanResult {
+        progress("$sourceName: checking newest albums…")
+        val page = subsonicClient.listAlbumsPage(
+            session = session,
+            offset = 0,
+            pageSize = 20,
+            type = "newest"
+        ).getOrElse {
+            Log.w(TAG, "subsonic newest failed $sourceName: ${it.message}")
+            return RemoteScanResult()
+        }
+        var inserted = 0
+        var updated = 0
+        var delivered = 0
+        for (album in page.albums) {
+            val songs = subsonicClient.listSongsForAlbum(session, album.id).getOrElse { emptyList() }
+            if (songs.isEmpty()) continue
+            val stats = catalog.ingestRemoteBatch(
+                songs = songs,
+                sourceType = catalogType,
+                sourceInstanceId = instanceId,
+                seenAt = seenAt
+            )
+            inserted += stats.inserted
+            updated += stats.updated
+            delivered += songs.size
+        }
+        checkpoints.markDone(instanceId, sourceName, delivered, null)
+        refreshCheckpointSnapshot()
+        Log.i(TAG, "subsonic newest $sourceName albums=${page.albums.size} +$inserted ~$updated")
+        progress("$sourceName: +$inserted new")
+        return RemoteScanResult(delivered = delivered, inserted = inserted, updated = updated)
+    }
+
     /**
      * Subsonic / OpenSubsonic scan via getAlbumList2 paging.
      * [startAlbumOffset] is the album-list cursor (not song index).
@@ -693,7 +817,8 @@ class ExploreSearchService(
         seenAt: Long,
         keepKeys: Set<String>,
         startAlbumOffset: Int,
-        priorDelivered: Int
+        priorDelivered: Int,
+        incremental: Boolean = false
     ): RemoteScanResult {
         val url = baseUrl ?: return RemoteScanResult()
         val user = username ?: return RemoteScanResult()
@@ -711,6 +836,16 @@ class ExploreSearchService(
             Log.w(TAG, "subsonic ping failed: ${it.message}")
             _lastError.value = "$sourceName: ${it.message}"
             return RemoteScanResult()
+        }
+
+        if (incremental) {
+            return scanSubsonicNewest(
+                session = session,
+                instanceId = instanceId,
+                sourceName = sourceName,
+                catalogType = catalogType,
+                seenAt = seenAt
+            )
         }
 
         var delivered = priorDelivered

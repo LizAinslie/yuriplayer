@@ -91,12 +91,30 @@ class JellyfinClient(
 
     enum class ListingMode { FULL, LIGHT }
 
+    /** Cheap total for AUDIO items — one tiny request, no library walk. */
+    suspend fun audioItemCount(session: Session): Result<Int> = runCatching {
+        val userId = runCatching { UUID.fromString(session.userId) }.getOrNull()
+            ?: error("Invalid Jellyfin userId")
+        val result by session.api.itemsApi.getItems(
+            userId = userId,
+            recursive = true,
+            includeItemTypes = listOf(BaseItemKind.AUDIO),
+            enableImages = false,
+            enableTotalRecordCount = true,
+            limit = 1,
+            startIndex = 0
+        )
+        result.totalRecordCount ?: 0
+    }.onFailure { Log.w(TAG, "audioItemCount failed: ${it.message}") }
+
     suspend fun listAudioItemsPaged(
         session: Session,
         pageSize: Int = 500,
         maxItems: Int = 50_000,
         startFromIndex: Int = 0,
         mode: ListingMode = ListingMode.FULL,
+        sortBy: ItemSortBy = ItemSortBy.SORT_NAME,
+        sortOrder: SortOrder = SortOrder.ASCENDING,
         onPage: suspend (songs: List<Song>, startIndex: Int, totalHint: Int?, liveIds: List<String>) -> Unit
     ): Result<Int> = runCatching {
         val userId = runCatching { UUID.fromString(session.userId) }.getOrNull()
@@ -123,8 +141,8 @@ class JellyfinClient(
                 imageTypeLimit = 1,
                 enableImageTypes = listOf(ImageType.PRIMARY),
                 enableTotalRecordCount = true,
-                sortBy = listOf(ItemSortBy.SORT_NAME),
-                sortOrder = listOf(SortOrder.ASCENDING),
+                sortBy = listOf(sortBy),
+                sortOrder = listOf(sortOrder),
                 startIndex = start,
                 limit = take
             )
@@ -147,7 +165,7 @@ class JellyfinClient(
             Log.i(
                 TAG,
                 "page#$pageNum start=$start raw=${raw.size} mapped=${page.size} " +
-                    "delivered=$delivered totalHint=$totalHint mode=$mode"
+                    "delivered=$delivered totalHint=$totalHint mode=$mode sort=$sortBy"
             )
             onPage(page, start, totalHint, liveIds)
             delivered += raw.size

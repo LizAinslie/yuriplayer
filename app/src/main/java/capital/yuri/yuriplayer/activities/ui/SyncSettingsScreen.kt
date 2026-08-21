@@ -83,8 +83,9 @@ fun SyncSettingsScreen(onBack: () -> Unit) {
 
         SettingsSectionTitle("Libraries")
         SettingsNote(
-            "Incremental scans skip tracks we already indexed and prune deletions. " +
-                "A library is not auto-indexed the first time — scan it once from Explore."
+            "Checks the server song count. If it grew, only the new tracks are pulled. " +
+                "A full 40k-track walk happens only when you force a rescan from Explore. " +
+                "Libraries are not auto-indexed the first time."
         )
         SettingsGroup {
             SettingsSwitchRow(

@@ -16,13 +16,14 @@ enum class SyncInterval(
     H3("3h", "Every 3 hours", 3L * 60L * 60_000L),
     H6("6h", "Every 6 hours", 6L * 60L * 60_000L),
     H12("12h", "Every 12 hours", 12L * 60L * 60_000L),
-    D1("1d", "Daily", 24L * 60L * 60_000L);
+    D1("1d", "Daily", 24L * 60L * 60_000L),
+    W1("1w", "Weekly", 7L * 24L * 60L * 60_000L);
 
     val isActive: Boolean get() = millis > 0L
 
     companion object {
         val DEFAULT_PROFILE = H1
-        val DEFAULT_PARTIAL = H6
+        val DEFAULT_PARTIAL = W1
 
         fun fromId(raw: String?): SyncInterval {
             if (raw.isNullOrBlank()) return OFF

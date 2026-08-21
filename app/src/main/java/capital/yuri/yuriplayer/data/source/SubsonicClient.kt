@@ -74,10 +74,11 @@ class SubsonicClient(
     suspend fun listAlbumsPage(
         session: Session,
         offset: Int = 0,
-        pageSize: Int = 100
+        pageSize: Int = 100,
+        type: String = "alphabeticalByName"
     ): Result<AlbumPage> = runCatching {
         val body = apiGet(session, "getAlbumList2") {
-            param("type", "alphabeticalByName")
+            param("type", type)
             param("size", pageSize.coerceIn(1, 500))
             param("offset", offset.coerceAtLeast(0))
         }
