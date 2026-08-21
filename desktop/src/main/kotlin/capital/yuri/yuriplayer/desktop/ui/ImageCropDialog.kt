@@ -6,6 +6,7 @@ import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
@@ -29,21 +30,28 @@ import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.toComposeImageBitmap
 import androidx.compose.ui.input.pointer.PointerEventType
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.unit.IntOffset
+import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import capital.yuri.yuriplayer.components.dialog.InWindowPanel
+import java.awt.RenderingHints
 import java.awt.image.BufferedImage
 import java.io.File
 import javax.imageio.ImageIO
 import kotlin.math.max
 import kotlin.math.min
+import kotlin.math.roundToInt
 
 /**
- * Pan/zoom square crop. Source is scaled to cover the frame; wheel zooms, drag pans.
+ * Pan/zoom crop for any aspect. `aspect` is width / height (1 = square cover,
+ * 3 = Twitter-style header). Source is scaled to cover the frame.
  */
 @Composable
 fun ImageCropDialog(
     source: File,
-    title: String = "Crop cover",
+    title: String = "Crop",
+    aspect: Float = 1f,
     onCancel: () -> Unit,
     onCropped: (File) -> Unit
 ) {
@@ -55,8 +63,11 @@ fun ImageCropDialog(
     val bitmap = remember(image) { image.toComposeImageBitmap() }
     var zoom by remember { mutableFloatStateOf(1f) }
     var pan by remember { mutableStateOf(Offset.Zero) }
+    var stage by remember { mutableStateOf(Size.Zero) }
+    val wide = aspect >= 1.4f
+    val panel = if (wide) Modifier.size(760.dp, 520.dp) else Modifier.size(560.dp, 640.dp)
 
-    InWindowPanel(onDismiss = onCancel, modifier = Modifier.size(560.dp, 640.dp)) {
+    InWindowPanel(onDismiss = onCancel, modifier = panel) {
         Surface(color = MaterialTheme.colorScheme.surface) {
             Column(Modifier.fillMaxSize().padding(16.dp)) {
                 Text(title, style = MaterialTheme.typography.titleLarge)
@@ -71,6 +82,7 @@ fun ImageCropDialog(
                         .fillMaxWidth()
                         .weight(1f)
                         .background(Color.Black)
+                        .onSizeChanged { stage = Size(it.width.toFloat(), it.height.toFloat()) }
                         .pointerInput(image) {
                             awaitPointerEventScope {
                                 while (true) {
@@ -91,55 +103,50 @@ fun ImageCropDialog(
                     contentAlignment = Alignment.Center
                 ) {
                     Canvas(Modifier.fillMaxSize()) {
-                        val frame = min(size.width, size.height) * 0.82f
-                        val frameLeft = (size.width - frame) / 2f
-                        val frameTop = (size.height - frame) / 2f
-                        val imgW = image.width.toFloat()
-                        val imgH = image.height.toFloat()
-                        val cover = max(frame / imgW, frame / imgH) * zoom
-                        val drawW = imgW * cover
-                        val drawH = imgH * cover
-                        val maxPanX = max(0f, (drawW - frame) / 2f)
-                        val maxPanY = max(0f, (drawH - frame) / 2f)
-                        val px = pan.x.coerceIn(-maxPanX, maxPanX)
-                        val py = pan.y.coerceIn(-maxPanY, maxPanY)
-                        val left = frameLeft + (frame - drawW) / 2f + px
-                        val top = frameTop + (frame - drawH) / 2f + py
+                        val layout = cropLayout(size, image.width, image.height, aspect, zoom, pan)
                         drawImage(
                             image = bitmap,
-                            dstOffset = androidx.compose.ui.unit.IntOffset(left.toInt(), top.toInt()),
-                            dstSize = androidx.compose.ui.unit.IntSize(drawW.toInt(), drawH.toInt())
+                            dstOffset = IntOffset(layout.drawLeft.roundToInt(), layout.drawTop.roundToInt()),
+                            dstSize = IntSize(layout.drawW.roundToInt().coerceAtLeast(1), layout.drawH.roundToInt().coerceAtLeast(1))
                         )
-                        drawRect(Color.Black.copy(alpha = 0.45f), size = Size(size.width, frameTop))
+                        val dim = Color.Black.copy(alpha = 0.5f)
+                        drawRect(dim, size = Size(size.width, layout.frameTop))
                         drawRect(
-                            Color.Black.copy(alpha = 0.45f),
-                            topLeft = Offset(0f, frameTop + frame),
-                            size = Size(size.width, size.height - frameTop - frame)
-                        )
-                        drawRect(
-                            Color.Black.copy(alpha = 0.45f),
-                            topLeft = Offset(0f, frameTop),
-                            size = Size(frameLeft, frame)
+                            dim,
+                            topLeft = Offset(0f, layout.frameTop + layout.frameH),
+                            size = Size(size.width, size.height - layout.frameTop - layout.frameH)
                         )
                         drawRect(
-                            Color.Black.copy(alpha = 0.45f),
-                            topLeft = Offset(frameLeft + frame, frameTop),
-                            size = Size(size.width - frameLeft - frame, frame)
+                            dim,
+                            topLeft = Offset(0f, layout.frameTop),
+                            size = Size(layout.frameLeft, layout.frameH)
                         )
+                        drawRect(
+                            dim,
+                            topLeft = Offset(layout.frameLeft + layout.frameW, layout.frameTop),
+                            size = Size(size.width - layout.frameLeft - layout.frameW, layout.frameH)
+                        )
+                        val grid = Color.White.copy(alpha = 0.28f)
+                        for (i in 1..2) {
+                            val x = layout.frameLeft + layout.frameW * i / 3f
+                            val y = layout.frameTop + layout.frameH * i / 3f
+                            drawLine(grid, Offset(x, layout.frameTop), Offset(x, layout.frameTop + layout.frameH), 1f)
+                            drawLine(grid, Offset(layout.frameLeft, y), Offset(layout.frameLeft + layout.frameW, y), 1f)
+                        }
                         drawRect(
                             Color.White,
-                            topLeft = Offset(frameLeft, frameTop),
-                            size = Size(frame, frame),
+                            topLeft = Offset(layout.frameLeft, layout.frameTop),
+                            size = Size(layout.frameW, layout.frameH),
                             style = Stroke(width = 2.dp.toPx())
                         )
                     }
                 }
                 Row(Modifier.fillMaxWidth().padding(top = 12.dp), verticalAlignment = Alignment.CenterVertically) {
                     TextButton(onClick = onCancel) { Text("Cancel") }
-                    androidx.compose.foundation.layout.Spacer(Modifier.weight(1f))
+                    Spacer(Modifier.weight(1f))
                     TextButton(
                         onClick = {
-                            val out = cropToSquare(image, zoom, pan)
+                            val out = cropToAspect(image, aspect, zoom, pan, stage)
                             if (out != null) onCropped(out) else onCancel()
                         }
                     ) { Text("Use photo") }
@@ -149,30 +156,78 @@ fun ImageCropDialog(
     }
 }
 
-private fun cropToSquare(src: BufferedImage, zoom: Float, pan: Offset): File? {
-    val imgW = src.width.toFloat()
-    val imgH = src.height.toFloat()
-    val frame = 1024f
-    val cover = max(frame / imgW, frame / imgH) * zoom.coerceAtLeast(1f)
+private data class CropLayout(
+    val frameLeft: Float,
+    val frameTop: Float,
+    val frameW: Float,
+    val frameH: Float,
+    val drawLeft: Float,
+    val drawTop: Float,
+    val drawW: Float,
+    val drawH: Float,
+    val cover: Float,
+    val panX: Float,
+    val panY: Float
+)
+
+private fun cropLayout(
+    canvas: Size,
+    imgWpx: Int,
+    imgHpx: Int,
+    aspect: Float,
+    zoom: Float,
+    pan: Offset
+): CropLayout {
+    val maxW = canvas.width * 0.9f
+    val maxH = canvas.height * 0.88f
+    val ratio = aspect.coerceAtLeast(0.2f)
+    val (frameW, frameH) = if (maxW / maxH > ratio) {
+        maxH * ratio to maxH
+    } else {
+        maxW to maxW / ratio
+    }
+    val frameLeft = (canvas.width - frameW) / 2f
+    val frameTop = (canvas.height - frameH) / 2f
+    val imgW = imgWpx.toFloat()
+    val imgH = imgHpx.toFloat()
+    val cover = max(frameW / imgW, frameH / imgH) * zoom.coerceAtLeast(1f)
     val drawW = imgW * cover
     val drawH = imgH * cover
-    val maxPanX = max(0f, (drawW - frame) / 2f)
-    val maxPanY = max(0f, (drawH - frame) / 2f)
+    val maxPanX = max(0f, (drawW - frameW) / 2f)
+    val maxPanY = max(0f, (drawH - frameH) / 2f)
     val px = pan.x.coerceIn(-maxPanX, maxPanX)
     val py = pan.y.coerceIn(-maxPanY, maxPanY)
-    val left = (drawW - frame) / 2f - px
-    val top = (drawH - frame) / 2f - py
-    val srcX = (left / cover).toInt().coerceIn(0, src.width - 1)
-    val srcY = (top / cover).toInt().coerceIn(0, src.height - 1)
-    val srcSide = (frame / cover).toInt().coerceAtLeast(1)
-    val w = min(srcSide, src.width - srcX)
-    val h = min(srcSide, src.height - srcY)
-    val cropped = src.getSubimage(srcX, srcY, w, h)
-    val square = BufferedImage(1024, 1024, BufferedImage.TYPE_INT_RGB)
-    val g = square.createGraphics()
-    g.drawImage(cropped, 0, 0, 1024, 1024, null)
+    val drawLeft = frameLeft + (frameW - drawW) / 2f + px
+    val drawTop = frameTop + (frameH - drawH) / 2f + py
+    return CropLayout(frameLeft, frameTop, frameW, frameH, drawLeft, drawTop, drawW, drawH, cover, px, py)
+}
+
+internal fun cropToAspect(
+    src: BufferedImage,
+    aspect: Float,
+    zoom: Float,
+    pan: Offset,
+    canvas: Size,
+    longEdge: Int = 1536
+): File? {
+    if (canvas.width <= 1f || canvas.height <= 1f) return null
+    val layout = cropLayout(canvas, src.width, src.height, aspect.coerceAtLeast(0.2f), zoom, pan)
+    val left = (layout.drawW - layout.frameW) / 2f - layout.panX
+    val top = (layout.drawH - layout.frameH) / 2f - layout.panY
+    val srcX = (left / layout.cover).toInt().coerceIn(0, src.width - 1)
+    val srcY = (top / layout.cover).toInt().coerceIn(0, src.height - 1)
+    val srcW = (layout.frameW / layout.cover).toInt().coerceAtLeast(1).coerceAtMost(src.width - srcX)
+    val srcH = (layout.frameH / layout.cover).toInt().coerceAtLeast(1).coerceAtMost(src.height - srcY)
+    val cropped = src.getSubimage(srcX, srcY, srcW, srcH)
+    val ratio = aspect.coerceAtLeast(0.2f)
+    val outW = if (ratio >= 1f) longEdge else (longEdge * ratio).roundToInt().coerceAtLeast(1)
+    val outH = if (ratio >= 1f) (longEdge / ratio).roundToInt().coerceAtLeast(1) else longEdge
+    val dest = BufferedImage(outW, outH, BufferedImage.TYPE_INT_RGB)
+    val g = dest.createGraphics()
+    g.setRenderingHint(RenderingHints.KEY_INTERPOLATION, RenderingHints.VALUE_INTERPOLATION_BILINEAR)
+    g.drawImage(cropped, 0, 0, outW, outH, null)
     g.dispose()
     val out = File.createTempFile("yuri-crop-", ".jpg")
-    ImageIO.write(square, "jpg", out)
+    ImageIO.write(dest, "jpg", out)
     return out
 }

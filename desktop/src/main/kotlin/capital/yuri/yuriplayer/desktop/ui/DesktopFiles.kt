@@ -3,6 +3,7 @@ package capital.yuri.yuriplayer.desktop.ui
 import java.awt.FileDialog
 import java.awt.Frame
 import java.io.File
+import java.net.URI
 import javax.swing.SwingUtilities
 
 object DesktopFiles {
@@ -27,4 +28,12 @@ object DesktopFiles {
         else SwingUtilities.invokeAndWait(task)
         return result?.toList().orEmpty()
     }
+
+    fun downloadImage(url: String): File? = runCatching {
+        val out = File.createTempFile("yuri-img-", ".img")
+        URI(url).toURL().openStream().use { input ->
+            out.outputStream().use { input.copyTo(it) }
+        }
+        out.takeIf { it.length() > 32 }
+    }.getOrNull()
 }

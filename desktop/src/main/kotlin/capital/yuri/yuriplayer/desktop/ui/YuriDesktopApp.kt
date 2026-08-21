@@ -525,6 +525,7 @@ fun YuriDesktopApp(session: DesktopSession) {
                 is Route.Artist -> {
                     var profile by remember(r.name) { mutableStateOf<ArtistProfile?>(null) }
                     var pickBanner by remember { mutableStateOf(false) }
+                    var cropBanner by remember { mutableStateOf<java.io.File?>(null) }
                     LaunchedEffect(r.name) {
                         profile = runCatching { session.artists.resolve(r.name) }.getOrNull()
                     }
@@ -567,9 +568,7 @@ fun YuriDesktopApp(session: DesktopSession) {
                         },
                         onOpenAlbum = ::openAlbum,
                         onChangeHeader = {
-                            DesktopFiles.pickImage("Choose header")?.let { file ->
-                                profile = session.artists.applyLocalBanner(r.name, file)
-                            }
+                            DesktopFiles.pickImage("Choose header")?.let { cropBanner = it }
                         },
                         onFetchHeader = { pickBanner = true },
                         onClearHeader = {
@@ -600,10 +599,20 @@ fun YuriDesktopApp(session: DesktopSession) {
                             onPicked = { c ->
                                 pickBanner = false
                                 scope.launch {
-                                    profile = runCatching {
-                                        session.artists.applyBannerUrl(r.name, c.url)
-                                    }.getOrNull() ?: profile
+                                    cropBanner = DesktopFiles.downloadImage(c.url)
                                 }
+                            }
+                        )
+                    }
+                    cropBanner?.let { src ->
+                        ImageCropDialog(
+                            source = src,
+                            title = "Crop header",
+                            aspect = 3f,
+                            onCancel = { cropBanner = null },
+                            onCropped = { cropped ->
+                                cropBanner = null
+                                profile = session.artists.applyLocalBanner(r.name, cropped)
                             }
                         )
                     }
