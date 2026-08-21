@@ -11,6 +11,7 @@ plugins {
     alias(libs.plugins.kotlin.compose)
     alias(libs.plugins.kotlin.serialization)
     alias(libs.plugins.ksp)
+    alias(libs.plugins.androidx.room)
     alias(libs.plugins.aboutlibraries)
     alias(libs.plugins.aboutlibraries.android)
 }
@@ -160,6 +161,10 @@ android {
     }
 }
 
+room {
+    schemaDirectory(layout.projectDirectory.dir("schemas").asFile.absolutePath)
+}
+
 aboutLibraries {
     library {
         duplicationMode.set(com.mikepenz.aboutlibraries.plugin.DuplicateMode.MERGE)
@@ -267,6 +272,7 @@ dependencies {
 
     implementation(libs.androidx.room.runtime)
     implementation(libs.androidx.room.ktx)
+    implementation(libs.androidx.sqlite.bundled)
     ksp(libs.androidx.room.compiler)
 
     implementation(libs.jaudiotagger)

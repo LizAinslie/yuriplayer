@@ -39,6 +39,14 @@ class LibrarySettings(context: Context) {
     /** Ticks when cover/banner color variants change so themed pages re-resolve once. */
     val colorPrefsRevision: StateFlow<Long> = _colorPrefsRevision.asStateFlow()
 
+    fun useSystemColors(): Boolean = prefs.getBoolean(KEY_SYSTEM_COLORS, true)
+
+    fun setUseSystemColors(enabled: Boolean) {
+        if (enabled == useSystemColors()) return
+        prefs.edit().putBoolean(KEY_SYSTEM_COLORS, enabled).apply()
+        bumpColorPrefs()
+    }
+
     // ── local scan mode ───────────────────────────────────────────────────
 
     fun getScanMode(): LibraryScanMode {
@@ -284,6 +292,7 @@ class LibrarySettings(context: Context) {
         private const val KEY_STREAM_QUALITY = "stream_quality"
         private const val KEY_COVER_COLOR_VARIANT = "cover_color_variant"
         private const val KEY_BANNER_COLOR_VARIANT = "banner_color_variant"
+        private const val KEY_SYSTEM_COLORS = "system_colors"
 
         val DEFAULT_ROOTS = listOf(
             "Music",

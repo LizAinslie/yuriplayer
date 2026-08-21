@@ -1,15 +1,16 @@
 package capital.yuri.yuriplayer.desktop.ui
 
 import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
@@ -21,8 +22,8 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import capital.yuri.yuriplayer.components.album.AlbumPage
-import capital.yuri.yuriplayer.components.layout.AdaptiveShell
-import capital.yuri.yuriplayer.components.layout.windowWidthClass
+import capital.yuri.yuriplayer.components.layout.DesktopNav
+import capital.yuri.yuriplayer.components.layout.SpotifyShell
 import capital.yuri.yuriplayer.components.list.AlbumCard
 import capital.yuri.yuriplayer.components.model.AlbumPageModel
 import capital.yuri.yuriplayer.components.model.albums
@@ -58,73 +59,89 @@ fun YuriDesktopApp(session: DesktopSession) {
         val engineMessage by session.engineMessage.collectAsState()
         val albums = remember(tracks) { tracks.albums() }
         var route by remember { mutableStateOf<Route>(Route.Library) }
+        var nav by remember { mutableStateOf(DesktopNav.Home) }
+        var showSettings by remember { mutableStateOf(false) }
+        var query by remember { mutableStateOf("") }
 
-        BoxWithConstraints(Modifier.fillMaxSize()) {
-            val widthClass = windowWidthClass(maxWidth)
-            AdaptiveShell(
-                widthClass = widthClass,
-                bottomBar = {
-                    BottomPlayerBar(
+        SpotifyShell(
+            nav = nav,
+            onNav = {
+                nav = it
+                route = Route.Library
+            },
+            onSettings = { showSettings = true },
+            bottomBar = {
+                BottomPlayerBar(
+                    track = current?.toCover(),
+                    playing = playing,
+                    positionMs = position,
+                    durationMs = duration,
+                    onPrev = session.player::previous,
+                    onToggle = session.player::togglePlay,
+                    onNext = session.player::next,
+                    onSeek = session.player::seekTo,
+                    accent = playerColors?.accent ?: MaterialTheme.colorScheme.primary
+                )
+            },
+            sidebar = {
+                PlayerChromeTheme(playerColors, useArtBackground = true) {
+                    NowPlayingSidebar(
                         track = current?.toCover(),
-                        playing = playing,
-                        positionMs = position,
-                        durationMs = duration,
-                        onPrev = session.player::previous,
-                        onToggle = session.player::togglePlay,
-                        onNext = session.player::next,
-                        onSeek = session.player::seekTo
-                    )
-                },
-                sidebar = {
-                    PlayerChromeTheme(playerColors, useArtBackground = true) {
-                        NowPlayingSidebar(
-                            track = current?.toCover(),
-                            queue = queue.map { it.toRow(highlighted = it.id == current?.id) },
-                            history = history.map { it.toRow() },
-                            onQueueTrack = { row ->
-                                session.player.playTrack(
-                                    queue.first { it.id == row.id },
-                                    queue
-                                )
-                            },
-                            onHistoryTrack = { row ->
-                                val t = history.firstOrNull { it.id == row.id } ?: return@NowPlayingSidebar
-                                session.player.playTrack(t, tracks.ifEmpty { listOf(t) })
-                            }
-                        )
-                    }
-                }
-            ) {
-                when (val r = route) {
-                    Route.Library -> LibraryGrid(
-                        albums = albums,
-                        status = engineMessage ?: status,
-                        roots = session.dirs.defaultMusicRoots,
-                        onOpen = { route = Route.Album(it) }
-                    )
-                    is Route.Album -> {
-                        val live = albums.firstOrNull { it.id == r.album.id } ?: r.album
-                        val albumTracks = live.tracks.mapNotNull { row ->
-                            tracks.firstOrNull { it.id == row.id }
+                        queue = queue.map { it.toRow(highlighted = it.id == current?.id) },
+                        history = history.map { it.toRow() },
+                        onQueueTrack = { row ->
+                            session.player.playTrack(
+                                queue.first { it.id == row.id },
+                                queue
+                            )
+                        },
+                        onHistoryTrack = { row ->
+                            val t = history.firstOrNull { it.id == row.id } ?: return@NowPlayingSidebar
+                            session.player.playTrack(t, tracks.ifEmpty { listOf(t) })
                         }
-                        AlbumPage(
-                            album = live.copy(
-                                tracks = live.tracks.map {
-                                    it.copy(highlighted = it.id == current?.id)
-                                }
-                            ),
-                            playing = playing && albumTracks.any { it.id == current?.id },
-                            onBack = { route = Route.Library },
-                            onPlay = {
-                                if (albumTracks.isNotEmpty()) session.player.play(albumTracks, 0)
-                            },
-                            onTrack = { i ->
-                                if (i in albumTracks.indices) session.player.play(albumTracks, i)
-                            }
-                        )
-                    }
+                    )
                 }
             }
+        ) {
+            when (val r = route) {
+                Route.Library -> LibraryGrid(
+                    albums = albums.filter {
+                        nav != DesktopNav.Search || query.isBlank() ||
+                            it.title.contains(query, true) ||
+                            it.artist.contains(query, true)
+                    },
+                    status = engineMessage ?: status,
+                    roots = session.dirs.defaultMusicRoots,
+                    showSearch = nav == DesktopNav.Search,
+                    query = query,
+                    onQuery = { query = it },
+                    onOpen = { route = Route.Album(it) }
+                )
+                is Route.Album -> {
+                    val live = albums.firstOrNull { it.id == r.album.id } ?: r.album
+                    val albumTracks = live.tracks.mapNotNull { row ->
+                        tracks.firstOrNull { it.id == row.id }
+                    }
+                    AlbumPage(
+                        album = live.copy(
+                            tracks = live.tracks.map {
+                                it.copy(highlighted = it.id == current?.id)
+                            }
+                        ),
+                        playing = playing && albumTracks.any { it.id == current?.id },
+                        onBack = { route = Route.Library },
+                        onPlay = {
+                            if (albumTracks.isNotEmpty()) session.player.play(albumTracks, 0)
+                        },
+                        onTrack = { i ->
+                            if (i in albumTracks.indices) session.player.play(albumTracks, i)
+                        }
+                    )
+                }
+            }
+        }
+        if (showSettings) {
+            DesktopSettingsDialog(onDismiss = { showSettings = false })
         }
     }
 }
@@ -134,20 +151,39 @@ private fun LibraryGrid(
     albums: List<AlbumPageModel>,
     status: String,
     roots: List<String>,
+    showSearch: Boolean,
+    query: String,
+    onQuery: (String) -> Unit,
     onOpen: (AlbumPageModel) -> Unit
 ) {
-    Column(Modifier.fillMaxSize().padding(horizontal = 20.dp, vertical = 12.dp)) {
-        Text("Library", style = MaterialTheme.typography.headlineSmall, color = MaterialTheme.colorScheme.onBackground)
+    Column(Modifier.fillMaxSize().padding(horizontal = 20.dp, vertical = 16.dp)) {
         Text(
-            status,
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.55f),
-            modifier = Modifier.padding(bottom = 12.dp)
+            if (showSearch) "Search" else "Library",
+            style = MaterialTheme.typography.headlineSmall,
+            color = MaterialTheme.colorScheme.onBackground
         )
+        if (showSearch) {
+            OutlinedTextField(
+                value = query,
+                onValueChange = onQuery,
+                modifier = Modifier.fillMaxWidth().padding(vertical = 12.dp),
+                placeholder = { Text("Albums and artists") },
+                singleLine = true,
+                shape = MaterialTheme.shapes.large
+            )
+        } else {
+            Text(
+                status,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.55f),
+                modifier = Modifier.padding(bottom = 12.dp, top = 4.dp)
+            )
+        }
         if (albums.isEmpty()) {
             Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                 Text(
-                    "Nothing in the default music folders yet.\n" +
+                    if (showSearch) "Nothing matches."
+                    else "Nothing in the default music folders yet.\n" +
                         roots.joinToString("\n").ifBlank { "Add files to Music, then restart." },
                     color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
                 )

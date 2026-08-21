@@ -353,6 +353,10 @@ private fun PlaybackEngineSettingsScreen(onBack: () -> Unit) {
             .verticalScroll(rememberScrollState())
     ) {
         SettingsTopBar(title = "Advanced playback", onBack = onBack)
+        TextNote(
+            "This list is Android-only. Desktop always uses LibVLC. " +
+                "The choice applies the next time a song starts."
+        )
 
         SettingsSectionTitle("Decoder")
         TextNote(
@@ -490,6 +494,7 @@ private fun AppearanceSettingsScreen(onBack: () -> Unit) {
     val settings: LibrarySettings = koinInject()
     var coverVariant by remember { mutableStateOf(settings.getCoverColorVariant()) }
     var bannerVariant by remember { mutableStateOf(settings.getBannerColorVariant()) }
+    var systemColors by remember { mutableStateOf(settings.useSystemColors()) }
 
     Column(
         modifier = Modifier
@@ -500,9 +505,22 @@ private fun AppearanceSettingsScreen(onBack: () -> Unit) {
         SettingsTopBar(title = "Appearance", onBack = onBack)
 
         TextNote(
-            text = "Colors come from your artwork. Album covers and artist headers " +
-                "can use different palettes."
+            text = "On Android 12 and newer, the app chrome can follow your system " +
+                "palette. Playing artwork still tints now playing."
         )
+
+        SettingsSectionTitle("System")
+        SettingsGroup {
+            SettingsSwitchRow(
+                title = "Use system colors",
+                subtitle = "Material You on devices that support it. Desktop stays Yuri purple.",
+                checked = systemColors,
+                onCheckedChange = {
+                    settings.setUseSystemColors(it)
+                    systemColors = it
+                }
+            )
+        }
 
         SettingsSectionTitle("Cover")
         SettingsGroup {

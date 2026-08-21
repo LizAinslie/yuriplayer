@@ -1,19 +1,25 @@
 package capital.yuri.yuriplayer.components.theme
 
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.material3.ColorScheme
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 
 @Composable
-fun YuriTheme(content: @Composable () -> Unit) {
-    val scheme = YuriDarkColorScheme
-    MaterialTheme(colorScheme = scheme) {
+fun YuriTheme(
+    colorScheme: ColorScheme = YuriDarkColorScheme,
+    content: @Composable () -> Unit
+) {
+    MaterialTheme(
+        colorScheme = colorScheme,
+        shapes = YuriShapes
+    ) {
         Surface(
             modifier = Modifier.fillMaxSize(),
-            color = scheme.background,
-            contentColor = scheme.onBackground
+            color = colorScheme.background,
+            contentColor = colorScheme.onBackground
         ) {
             content()
         }
@@ -32,12 +38,5 @@ fun PlayerChromeTheme(
     } else {
         base
     }
-    MaterialTheme(colorScheme = scheme) {
-        Surface(
-            modifier = Modifier.fillMaxSize(),
-            color = scheme.background,
-            contentColor = scheme.onBackground,
-            content = content
-        )
-    }
+    MaterialTheme(colorScheme = scheme, shapes = YuriShapes, content = content)
 }

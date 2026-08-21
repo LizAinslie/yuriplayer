@@ -4,6 +4,8 @@ import android.content.Context
 import androidx.room.Database
 import androidx.room.Room
 import androidx.room.RoomDatabase
+import androidx.sqlite.driver.bundled.BundledSQLiteDriver
+import kotlinx.coroutines.Dispatchers
 
 @Database(
     entities = [
@@ -46,8 +48,8 @@ abstract class YuriDatabase : RoomDatabase() {
                 YuriDatabase::class.java,
                 "yuriplayer.db"
             )
-                // Never wipe user data on schema change. When bumping [version],
-                // add a Migration in YuriMigrations and register it here.
+                .setDriver(BundledSQLiteDriver())
+                .setQueryCoroutineContext(Dispatchers.IO)
                 .addMigrations(*YuriMigrations.ALL)
                 .build()
     }
