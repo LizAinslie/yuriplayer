@@ -24,7 +24,7 @@ class MacNowPlayingControls : OsMediaControls {
             .onFailure { System.err.println("macOS media keys: ${it.message}") }
     }
 
-    override fun update(track: Track?, playing: Boolean, positionMs: Long, durationMs: Long) {
+    override fun update(track: Track?, playing: Boolean, positionMs: Long, durationMs: Long, volume: Float) {
         MacNowPlayingStore.track = track
         MacNowPlayingStore.playing = playing
         MacNowPlayingStore.positionMs = positionMs

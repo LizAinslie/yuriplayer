@@ -8,7 +8,13 @@ import capital.yuri.yuriplayer.core.library.Track
  */
 interface OsMediaControls {
     fun attach(callbacks: Callbacks)
-    fun update(track: Track?, playing: Boolean, positionMs: Long, durationMs: Long)
+    fun update(
+        track: Track?,
+        playing: Boolean,
+        positionMs: Long,
+        durationMs: Long,
+        volume: Float = 1f
+    )
     fun release()
 
     interface Callbacks {
@@ -19,6 +25,7 @@ interface OsMediaControls {
         fun onNext()
         fun onPrevious()
         fun onSeek(positionMs: Long)
+        fun onVolume(value: Float) {}
         fun onRaise() {}
         fun onQuit() {}
     }
@@ -30,7 +37,8 @@ object NoOpMediaControls : OsMediaControls {
         track: Track?,
         playing: Boolean,
         positionMs: Long,
-        durationMs: Long
+        durationMs: Long,
+        volume: Float
     ) {}
     override fun release() {}
 }

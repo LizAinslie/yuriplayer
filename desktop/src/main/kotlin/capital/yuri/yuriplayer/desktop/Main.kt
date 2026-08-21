@@ -5,6 +5,11 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
+import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.input.key.key
+import androidx.compose.ui.input.key.onPreviewKeyEvent
+import androidx.compose.ui.input.key.type
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Window
 import androidx.compose.ui.window.application
@@ -44,9 +49,45 @@ fun main() {
                 exitApplication()
             },
             title = "Yuri Player",
-            state = state
+            state = state,
+            onPreviewKeyEvent = { event ->
+                if (event.type != KeyEventType.KeyDown) return@Window false
+                when (event.key) {
+                    Key.MediaPlayPause, Key.MediaPlay -> {
+                        session.player.togglePlay(); true
+                    }
+                    Key.MediaPause -> {
+                        session.player.pause(); true
+                    }
+                    Key.MediaStop -> {
+                        session.player.stop(); true
+                    }
+                    Key.MediaNext, Key.MediaSkipForward -> {
+                        session.player.next(); true
+                    }
+                    Key.MediaPrevious, Key.MediaSkipBackward -> {
+                        session.player.previous(); true
+                    }
+                    Key.VolumeUp -> {
+                        session.player.setVolume(session.player.volume.value + 0.05f); true
+                    }
+                    Key.VolumeDown -> {
+                        session.player.setVolume(session.player.volume.value - 0.05f); true
+                    }
+                    Key.VolumeMute -> {
+                        val v = session.player.volume.value
+                        session.player.setVolume(if (v > 0f) 0f else 1f); true
+                    }
+                    else -> false
+                }
+            }
         ) {
             window.background = java.awt.Color(0x12, 0x10, 0x18)
+            session.onRaise = {
+                window.isMinimized = false
+                window.toFront()
+                window.requestFocus()
+            }
             DisposableEffect(Unit) {
                 onDispose { session.release() }
             }

@@ -13,6 +13,7 @@ import java.io.File
 import java.net.URI
 import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.Executors
+import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicLong
 import java.util.concurrent.atomic.AtomicReference
 
@@ -34,6 +35,7 @@ class VlcjPlaybackEngine : PlaybackEngine {
     private val _currentUri = MutableStateFlow<String?>(null)
     private val positionMs = AtomicLong(0)
     private val durationMs = AtomicLong(0)
+    private val volumePercent = AtomicInteger(100)
     private val preparedNext = AtomicReference<PlaybackMedia?>(null)
     val nativeError: String?
 
@@ -99,7 +101,7 @@ class VlcjPlaybackEngine : PlaybackEngine {
             }
         })
         onVlc {
-            player?.audio()?.setVolume(100)
+            player?.audio()?.setVolume(volumePercent.get())
             player?.audio()?.setMute(false)
         }
     }
@@ -118,7 +120,7 @@ class VlcjPlaybackEngine : PlaybackEngine {
                 listeners.forEach { it.onError("Could not open ${current.title}", recoverable = true) }
                 return@onVlc
             }
-            p.audio().setVolume(100)
+            p.audio().setVolume(volumePercent.get())
             p.audio().setMute(false)
             if (startPositionMs > 0) p.controls().setTime(startPositionMs)
             p.controls().setPause(true)
@@ -155,8 +157,11 @@ class VlcjPlaybackEngine : PlaybackEngine {
     override fun getDurationMs(): Long = durationMs.get()
 
     override fun setVolume(percent: Int) {
-        onVlc { player?.audio()?.setVolume(percent.coerceIn(0, 100)) }
+        volumePercent.set(percent.coerceIn(0, 100))
+        onVlc { player?.audio()?.setVolume(volumePercent.get()) }
     }
+
+    override fun getVolume(): Int = volumePercent.get()
 
     override fun setNext(item: PlaybackMedia?) {
         preparedNext.set(item)

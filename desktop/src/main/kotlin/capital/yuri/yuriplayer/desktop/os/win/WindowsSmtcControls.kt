@@ -29,7 +29,7 @@ class WindowsSmtcControls : OsMediaControls {
         }
     }
 
-    override fun update(track: Track?, playing: Boolean, positionMs: Long, durationMs: Long) {
+    override fun update(track: Track?, playing: Boolean, positionMs: Long, durationMs: Long, volume: Float) {
         WindowsNowPlaying.track = track
         WindowsNowPlaying.playing = playing
         WindowsNowPlaying.positionMs = positionMs

@@ -7,6 +7,7 @@ import org.freedesktop.dbus.annotations.DBusInterfaceName
 import org.freedesktop.dbus.connections.impl.DBusConnection
 import org.freedesktop.dbus.connections.impl.DBusConnectionBuilder
 import org.freedesktop.dbus.interfaces.DBusInterface
+import org.freedesktop.dbus.interfaces.Introspectable
 import org.freedesktop.dbus.interfaces.Properties
 import org.freedesktop.dbus.types.Variant
 import java.net.URLEncoder
@@ -37,11 +38,14 @@ class MprisMediaControls : OsMediaControls {
         }
     }
 
-    override fun update(track: Track?, playing: Boolean, positionMs: Long, durationMs: Long) {
-        val next = NowPlaying(track, playing, positionMs, durationMs)
+    override fun update(track: Track?, playing: Boolean, positionMs: Long, durationMs: Long, volume: Float) {
+        val next = NowPlaying(track, playing, positionMs, durationMs, volume.coerceIn(0f, 1f))
         val prev = state.getAndSet(next)
         val conn = connection ?: return
-        if (prev.playing != next.playing || prev.track?.id != next.track?.id) {
+        if (prev.playing != next.playing ||
+            prev.track?.id != next.track?.id ||
+            kotlin.math.abs(prev.volume - next.volume) > 0.01f
+        ) {
             runCatching {
                 conn.sendMessage(
                     Properties.PropertiesChanged(
@@ -75,7 +79,8 @@ internal data class NowPlaying(
     val track: Track? = null,
     val playing: Boolean = false,
     val positionMs: Long = 0L,
-    val durationMs: Long = 0L
+    val durationMs: Long = 0L,
+    val volume: Float = 1f
 )
 
 @DBusInterfaceName("org.mpris.MediaPlayer2")
@@ -100,7 +105,7 @@ interface MprisPlayer : DBusInterface {
 internal class MprisObject(
     private val callbacks: OsMediaControls.Callbacks,
     private val state: AtomicReference<NowPlaying>
-) : MediaPlayer2, MprisPlayer, Properties {
+) : MediaPlayer2, MprisPlayer, Properties, Introspectable {
 
     override fun getObjectPath(): String = MprisMediaControls.OBJECT_PATH
 
@@ -124,16 +129,25 @@ internal class MprisObject(
     override fun OpenUri(uri: String) {}
 
     override fun <A : Any> Get(interface_name: String, property_name: String): A {
+        val variant = propertiesFor(interface_name, state.get())[property_name]
         @Suppress("UNCHECKED_CAST")
-        return (propertiesFor(interface_name, state.get())[property_name] ?: Variant("")) as A
+        return (variant?.value ?: "") as A
     }
 
     override fun GetAll(interface_name: String): Map<String, Variant<*>> =
         propertiesFor(interface_name, state.get())
 
     override fun <A : Any> Set(interface_name: String, property_name: String, value: A) {
-        if (property_name == "Volume") return
+        if (property_name != "Volume") return
+        val raw = when (value) {
+            is Variant<*> -> value.value
+            else -> value
+        }
+        val v = (raw as? Number)?.toDouble() ?: return
+        callbacks.onVolume(v.coerceIn(0.0, 1.0).toFloat())
     }
+
+    override fun Introspect(): String = INTROSPECT_XML
 
     fun properties(now: NowPlaying): Map<String, Variant<*>> =
         propertiesFor(MprisMediaControls.PLAYER_IFACE, now)
@@ -167,7 +181,7 @@ internal class MprisObject(
             "Rate" to Variant(1.0),
             "Shuffle" to Variant(false),
             "Metadata" to Variant(metadata(now)),
-            "Volume" to Variant(1.0),
+            "Volume" to Variant(now.volume.toDouble()),
             "Position" to Variant(now.positionMs * 1000),
             "MinimumRate" to Variant(1.0),
             "MaximumRate" to Variant(1.0),
@@ -199,5 +213,73 @@ internal class MprisObject(
         }
         track.artworkUri?.let { map["mpris:artUrl"] = Variant(it) }
         return map
+    }
+
+    companion object {
+        private val INTROSPECT_XML = """
+            <!DOCTYPE node PUBLIC "-//freedesktop//DTD D-BUS Object Introspection 1.0//EN"
+            "http://www.freedesktop.org/standards/dbus/1.0/introspect.dtd">
+            <node>
+              <interface name="org.freedesktop.DBus.Introspectable">
+                <method name="Introspect"><arg type="s" direction="out"/></method>
+              </interface>
+              <interface name="org.freedesktop.DBus.Properties">
+                <method name="Get">
+                  <arg type="s" name="interface_name" direction="in"/>
+                  <arg type="s" name="property_name" direction="in"/>
+                  <arg type="v" name="value" direction="out"/>
+                </method>
+                <method name="GetAll">
+                  <arg type="s" name="interface_name" direction="in"/>
+                  <arg type="a{sv}" name="properties" direction="out"/>
+                </method>
+                <method name="Set">
+                  <arg type="s" name="interface_name" direction="in"/>
+                  <arg type="s" name="property_name" direction="in"/>
+                  <arg type="v" name="value" direction="in"/>
+                </method>
+              </interface>
+              <interface name="org.mpris.MediaPlayer2">
+                <method name="Raise"/>
+                <method name="Quit"/>
+                <property name="CanQuit" type="b" access="read"/>
+                <property name="CanRaise" type="b" access="read"/>
+                <property name="HasTrackList" type="b" access="read"/>
+                <property name="Identity" type="s" access="read"/>
+                <property name="DesktopEntry" type="s" access="read"/>
+                <property name="SupportedUriSchemes" type="as" access="read"/>
+                <property name="SupportedMimeTypes" type="as" access="read"/>
+              </interface>
+              <interface name="org.mpris.MediaPlayer2.Player">
+                <method name="Next"/>
+                <method name="Previous"/>
+                <method name="Pause"/>
+                <method name="PlayPause"/>
+                <method name="Stop"/>
+                <method name="Play"/>
+                <method name="Seek"><arg type="x" name="Offset" direction="in"/></method>
+                <method name="SetPosition">
+                  <arg type="o" name="TrackId" direction="in"/>
+                  <arg type="x" name="Position" direction="in"/>
+                </method>
+                <method name="OpenUri"><arg type="s" name="Uri" direction="in"/></method>
+                <property name="PlaybackStatus" type="s" access="read"/>
+                <property name="LoopStatus" type="s" access="readwrite"/>
+                <property name="Rate" type="d" access="readwrite"/>
+                <property name="Shuffle" type="b" access="readwrite"/>
+                <property name="Metadata" type="a{sv}" access="read"/>
+                <property name="Volume" type="d" access="readwrite"/>
+                <property name="Position" type="x" access="read"/>
+                <property name="MinimumRate" type="d" access="read"/>
+                <property name="MaximumRate" type="d" access="read"/>
+                <property name="CanGoNext" type="b" access="read"/>
+                <property name="CanGoPrevious" type="b" access="read"/>
+                <property name="CanPlay" type="b" access="read"/>
+                <property name="CanPause" type="b" access="read"/>
+                <property name="CanSeek" type="b" access="read"/>
+                <property name="CanControl" type="b" access="read"/>
+              </interface>
+            </node>
+        """.trimIndent()
     }
 }

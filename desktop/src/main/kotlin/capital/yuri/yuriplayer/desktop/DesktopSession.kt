@@ -113,6 +113,8 @@ class DesktopSession {
     private val stoppedIds = ConcurrentHashMap.newKeySet<String>()
     private val currentSourceId = AtomicReference<String?>(null)
 
+    var onRaise: (() -> Unit)? = null
+
     init {
         engine.addListener(object : capital.yuri.yuriplayer.core.player.PlaybackEngine.Listener {
             override fun onError(message: String, recoverable: Boolean) {
@@ -129,6 +131,8 @@ class DesktopSession {
             override fun onNext() = player.next()
             override fun onPrevious() = player.previous()
             override fun onSeek(positionMs: Long) = player.seekTo(positionMs)
+            override fun onVolume(value: Float) = player.setVolume(value)
+            override fun onRaise() { onRaise?.invoke() }
             override fun onQuit() = release()
         })
         ticker = scope.launch {
@@ -139,7 +143,8 @@ class DesktopSession {
                     track = player.current.value,
                     playing = player.isPlaying.value,
                     positionMs = _positionMs.value,
-                    durationMs = _durationMs.value
+                    durationMs = _durationMs.value,
+                    volume = player.volume.value
                 )
                 delay(250)
             }
