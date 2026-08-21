@@ -39,6 +39,7 @@ import androidx.compose.ui.graphics.PathEffect
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.PointerEventType
+import androidx.compose.ui.input.pointer.isSecondaryPressed
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.boundsInParent
 import androidx.compose.ui.layout.onGloballyPositioned
@@ -84,14 +85,16 @@ fun YuriContextMenu(
                         pointerInPredictionCone(pointer, origin, submenuRect)
                     if (!blocked) openSubmenu = index
                 },
+                onOpenSubmenu = { openSubmenu = it },
                 onDismiss = onDismiss
             )
-            val sub = entries.getOrNull(openSubmenu) as? MenuEntry.Submenu
-            if (sub != null) {
+            val nested = entries.getOrNull(openSubmenu)?.nestedChildren()
+            if (!nested.isNullOrEmpty()) {
                 MenuColumn(
-                    entries = sub.children,
+                    entries = nested,
                     openSubmenu = -1,
                     onHover = {},
+                    onOpenSubmenu = {},
                     onDismiss = onDismiss,
                     modifier = Modifier.onGloballyPositioned {
                         submenuRect = it.boundsInParent()
@@ -127,11 +130,18 @@ fun YuriContextMenu(
     }
 }
 
+private fun MenuEntry.nestedChildren(): List<MenuEntry>? = when (this) {
+    is MenuEntry.Submenu -> children
+    is MenuEntry.Item -> alternate.takeIf { it.isNotEmpty() }
+    is MenuEntry.Divider -> null
+}
+
 @Composable
 private fun MenuColumn(
-    entries: List<MenuEntry>,
+    entries: List<out MenuEntry>,
     openSubmenu: Int,
     onHover: (Int) -> Unit,
+    onOpenSubmenu: (Int) -> Unit,
     onDismiss: () -> Unit,
     modifier: Modifier = Modifier
 ) {
@@ -158,15 +168,18 @@ private fun MenuColumn(
                         shortcut = entry.shortcut,
                         destructive = entry.destructive,
                         enabled = entry.enabled,
-                        selected = false,
-                        hasSubmenu = false,
+                        selected = openSubmenu == index && entry.alternate.isNotEmpty(),
+                        hasSubmenu = entry.alternate.isNotEmpty(),
                         onHover = { onHover(-1) },
                         onClick = {
                             if (entry.enabled) {
                                 onDismiss()
                                 entry.onClick()
                             }
-                        }
+                        },
+                        onAltClick = if (entry.alternate.isNotEmpty()) {
+                            { onOpenSubmenu(index) }
+                        } else null
                     )
                     is MenuEntry.Submenu -> MenuItemRow(
                         label = entry.label,
@@ -193,7 +206,8 @@ private fun MenuItemRow(
     selected: Boolean,
     hasSubmenu: Boolean,
     onHover: () -> Unit,
-    onClick: () -> Unit
+    onClick: () -> Unit,
+    onAltClick: (() -> Unit)? = null
 ) {
     val interaction = remember { MutableInteractionSource() }
     val hovered by interaction.collectIsHoveredAsState()
@@ -213,12 +227,19 @@ private fun MenuItemRow(
                 else Color.Transparent
             )
             .hoverable(interaction)
-            .pointerInput(label) {
+            .pointerInput(label, onAltClick) {
                 awaitPointerEventScope {
                     while (true) {
                         val e = awaitPointerEvent()
                         if (e.type == PointerEventType.Enter || e.type == PointerEventType.Move) {
-                            onHover()
+                            if (!e.buttons.isSecondaryPressed) onHover()
+                        }
+                        if (e.type == PointerEventType.Press && e.buttons.isSecondaryPressed) {
+                            val alt = onAltClick
+                            if (alt != null) {
+                                e.changes.forEach { it.consume() }
+                                alt()
+                            }
                         }
                     }
                 }

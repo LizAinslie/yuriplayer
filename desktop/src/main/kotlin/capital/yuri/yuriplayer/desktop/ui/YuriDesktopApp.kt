@@ -50,6 +50,7 @@ import capital.yuri.yuriplayer.components.layout.LibraryRailItem
 import capital.yuri.yuriplayer.components.list.AlbumCard
 import capital.yuri.yuriplayer.components.list.ContextAction
 import capital.yuri.yuriplayer.components.list.ContextMenuAnchor
+import capital.yuri.yuriplayer.components.menu.ContextMenuScope
 import capital.yuri.yuriplayer.components.menu.MenuEntry
 import capital.yuri.yuriplayer.components.menu.buildContextMenu
 import capital.yuri.yuriplayer.components.model.AlbumPageModel
@@ -137,12 +138,28 @@ fun YuriDesktopApp(session: DesktopSession) {
         fun openAlbum(album: AlbumPageModel) = push(Route.Album(album))
         fun openArtist(name: String) = push(Route.Artist(name))
 
+        fun playlistAddAlternate(songs: List<Track>): ContextMenuScope.() -> Unit = {
+            val ids = songs.map { it.id }
+            val candidates = playlists
+                .filter { pl -> ids.any { it !in pl.trackIds } }
+                .sortedBy { it.name.lowercase() }
+            if (candidates.isEmpty()) {
+                item("Already in every playlist", enabled = false) {}
+            } else {
+                candidates.forEach { pl ->
+                    item(pl.name) { session.playlists.addTracks(pl.id, ids) }
+                }
+            }
+        }
+
         fun songMenu(
             track: Track,
             onAlbumPage: Boolean = false,
             playlistId: String? = null
         ): List<MenuEntry> = buildContextMenu {
-            item("Add to playlist") { addToPlaylist = listOf(track) }
+            item("Add to playlist", alternate = playlistAddAlternate(listOf(track))) {
+                addToPlaylist = listOf(track)
+            }
             item("Add to queue") { session.player.enqueue(track) }
             submenu("Go to") {
                 if (!onAlbumPage) {
@@ -328,8 +345,14 @@ fun YuriDesktopApp(session: DesktopSession) {
                             add(ContextAction("Play") { session.player.play(playable, 0) })
                             add(ContextAction("Add to queue") { session.player.enqueueAll(playable) })
                         }
-                        if (playable.size == 1) {
-                            add(ContextAction("Add to playlist") { addToPlaylist = playable })
+                        if (playable.isNotEmpty()) {
+                            add(
+                                ContextAction(
+                                    label = "Add to playlist",
+                                    alternate = buildContextMenu(playlistAddAlternate(playable)),
+                                    onClick = { addToPlaylist = playable }
+                                )
+                            )
                         }
                         if (item.pinned) {
                             val kind = when {
@@ -440,7 +463,8 @@ fun YuriDesktopApp(session: DesktopSession) {
                     onPlayTracks = { list, i -> session.player.play(list, i) },
                     onEnqueue = { session.player.enqueueAll(it) },
                     onUnpin = { kind, id -> session.collection.unpin(kind, id) },
-                    onAddToPlaylist = { addToPlaylist = it }
+                    onAddToPlaylist = { addToPlaylist = it },
+                    playlistQuickAdd = { songs -> buildContextMenu(playlistAddAlternate(songs)) }
                 )
                 Route.Search -> DesktopExplore(
                     session = session,
@@ -683,7 +707,8 @@ private fun HomeFeed(
     onPlayTracks: (List<Track>, Int) -> Unit,
     onEnqueue: (List<Track>) -> Unit = {},
     onUnpin: (DesktopCollection.Kind, String) -> Unit = { _, _ -> },
-    onAddToPlaylist: (List<Track>) -> Unit = {}
+    onAddToPlaylist: (List<Track>) -> Unit = {},
+    playlistQuickAdd: (List<Track>) -> List<MenuEntry> = { emptyList() }
 ) {
     val recentAlbums = remember(recents, albums) {
         recents.mapNotNull { t ->
@@ -695,7 +720,7 @@ private fun HomeFeed(
         buildHomeShortcuts(
             pins, liked, likedTracks, albums, playlists, tracks,
             onOpenAlbum, onOpenPlaylist, onOpenArtist, onPlayTracks,
-            onEnqueue, onUnpin, onAddToPlaylist
+            onEnqueue, onUnpin, onAddToPlaylist, playlistQuickAdd
         )
     }
     val greeting = remember {
@@ -875,7 +900,8 @@ private fun buildHomeShortcuts(
     onPlayTracks: (List<Track>, Int) -> Unit,
     onEnqueue: (List<Track>) -> Unit,
     onUnpin: (DesktopCollection.Kind, String) -> Unit,
-    onAddToPlaylist: (List<Track>) -> Unit
+    onAddToPlaylist: (List<Track>) -> Unit,
+    playlistQuickAdd: (List<Track>) -> List<MenuEntry>
 ): List<SpotifyPin> {
     val out = ArrayList<SpotifyPin>(8)
     fun add(pin: SpotifyPin) {
@@ -895,8 +921,14 @@ private fun buildHomeShortcuts(
         if (playable.isNotEmpty()) {
             add(ContextAction("Add to queue") { onEnqueue(playable) })
         }
-        if (playable.size == 1) {
-            add(ContextAction("Add to playlist") { onAddToPlaylist(playable) })
+        if (playable.isNotEmpty()) {
+            add(
+                ContextAction(
+                    label = "Add to playlist",
+                    alternate = playlistQuickAdd(playable),
+                    onClick = { onAddToPlaylist(playable) }
+                )
+            )
         }
         if (kind != null) {
             add(ContextAction("Unpin", destructive = true) { onUnpin(kind, id) })

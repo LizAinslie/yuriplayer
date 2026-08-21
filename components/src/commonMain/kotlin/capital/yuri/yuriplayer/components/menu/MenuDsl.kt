@@ -6,7 +6,9 @@ package capital.yuri.yuriplayer.components.menu
  *
  * ```
  * buildContextMenu {
- *   item("Add to queue") { enqueue() }
+ *   item("Add to playlist", alternate = {
+ *     item("Chill") { addTo("chill") }
+ *   }) { openPicker() }
  *   submenu("Go to") {
  *     item("Album") { openAlbum() }
  *     item("Artist") { openArtist() }
@@ -22,6 +24,7 @@ sealed class MenuEntry {
         val shortcut: String? = null,
         val destructive: Boolean = false,
         val enabled: Boolean = true,
+        val alternate: List<MenuEntry> = emptyList(),
         val onClick: () -> Unit
     ) : MenuEntry()
 
@@ -45,9 +48,11 @@ class ContextMenuScope {
         shortcut: String? = null,
         destructive: Boolean = false,
         enabled: Boolean = true,
+        alternate: (ContextMenuScope.() -> Unit)? = null,
         onClick: () -> Unit
     ) {
-        entries += MenuEntry.Item(label, shortcut, destructive, enabled, onClick)
+        val alt = alternate?.let { ContextMenuScope().apply(it).build() }.orEmpty()
+        entries += MenuEntry.Item(label, shortcut, destructive, enabled, alt, onClick)
     }
 
     fun submenu(label: String, block: ContextMenuScope.() -> Unit) {
