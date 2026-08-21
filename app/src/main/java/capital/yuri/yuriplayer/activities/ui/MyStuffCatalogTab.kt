@@ -59,6 +59,7 @@ import capital.yuri.yuriplayer.data.db.SourceInstanceEntity
 import capital.yuri.yuriplayer.data.source.LibraryFaviconStore
 import capital.yuri.yuriplayer.data.source.RemotePlaylistService
 import capital.yuri.yuriplayer.data.source.SourceInstanceRepository
+import capital.yuri.yuriplayer.data.source.SourceLiveSearch
 import capital.yuri.yuriplayer.ui.TestTags
 import capital.yuri.yuriplayer.ui.formatTrackCount
 import coil3.compose.AsyncImage
@@ -579,32 +580,31 @@ private fun LibrarySourceBrowser(
     onOpenSongAlbum: (Song) -> Unit
 ) {
     val catalog: CatalogRepository = koinInject()
-    var songs by remember { mutableStateOf<List<Song>>(emptyList()) }
+    val liveSearch: SourceLiveSearch = koinInject()
+    var indexed by remember { mutableStateOf(0) }
     LaunchedEffect(sourceType, instanceId) {
-        songs = withContext(Dispatchers.IO) { catalog.songsForSource(sourceType, instanceId) }
-    }
-    val albums = remember(songs) {
-        songs.filter { !it.album.isNullOrBlank() }
-            .groupBy { albumKey(it.album, it.effectiveAlbumArtist) }
-            .map { (_, tracks) ->
-                AlbumItem(
-                    name = tracks.first().album,
-                    artist = tracks.first().effectiveAlbumArtist,
-                    trackCount = tracks.size,
-                    songs = tracks
-                )
-            }
+        indexed = withContext(Dispatchers.IO) {
+            catalog.countTracksForSource(sourceType, instanceId)
+        }
     }
     MediaBrowser(
-        lookup = mediaBrowserLookup(songs = songs, albums = albums),
+        lookup = mediaBrowserLookup(),
         nowPlaying = nowPlaying,
         isPlaybackActive = isPlaybackActive,
-        sections = listOf(MediaBrowserSection.Songs, MediaBrowserSection.Albums),
-        statusLine = formatTrackCount(songs.size),
+        sections = listOf(
+            MediaBrowserSection.Songs,
+            MediaBrowserSection.Albums,
+            MediaBrowserSection.Artists
+        ),
+        statusLine = buildString {
+            append(formatTrackCount(indexed))
+            append(" indexed")
+        },
         onPlay = onPlay,
         onAddToQueue = onAddToQueue,
         onOpenAlbum = onOpenAlbum,
         onOpenArtist = onOpenArtist,
-        onSongClick = onOpenSongAlbum
+        onSongClick = onOpenSongAlbum,
+        liveSearch = { q -> liveSearch.search(sourceType, instanceId, q) }
     )
 }

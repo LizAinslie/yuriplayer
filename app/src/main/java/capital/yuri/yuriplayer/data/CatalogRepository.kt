@@ -197,6 +197,33 @@ class CatalogRepository(
             dao.getTracksForSourceInstance(sourceType, sourceInstanceId).map { it.toSong() }
         }
 
+    suspend fun searchSongsForSource(
+        sourceType: String,
+        sourceInstanceId: Long?,
+        query: String,
+        limit: Int = 80
+    ): List<Song> = withContext(Dispatchers.IO) {
+        val q = query.trim()
+        if (q.isEmpty()) return@withContext emptyList()
+        dao.searchTracksForSource(sourceType, sourceInstanceId, q, limit).map { it.toSong() }
+    }
+
+    suspend fun songsByExternalIds(
+        sourceType: String,
+        sourceInstanceId: Long?,
+        ids: List<String>
+    ): Map<String, Song> = withContext(Dispatchers.IO) {
+        if (ids.isEmpty()) return@withContext emptyMap()
+        val out = HashMap<String, Song>(ids.size)
+        ids.chunked(400).forEach { chunk ->
+            dao.tracksByExternalIds(sourceType, sourceInstanceId, chunk).forEach { row ->
+                val id = row.externalId ?: return@forEach
+                out[id] = row.toSong()
+            }
+        }
+        out
+    }
+
     suspend fun offeringsMatchingSong(song: Song, limit: Int = 12): List<SourceOffering> =
         withContext(Dispatchers.IO) {
             val title = song.title?.trim().orEmpty()

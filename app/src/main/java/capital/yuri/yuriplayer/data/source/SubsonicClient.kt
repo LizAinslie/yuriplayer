@@ -210,28 +210,56 @@ class SubsonicClient(
         children.mapNotNull { it.toSong(session) }
     }.onFailure { Log.w(TAG, "similarSongs failed: ${it.message}") }
 
+    data class LibraryHits(
+        val songs: List<Song>,
+        val albums: List<AlbumRef>,
+        val artists: List<ArtistHit>
+    )
+
+    suspend fun searchLibrary(
+        session: Session,
+        query: String,
+        songCount: Int = 40,
+        albumCount: Int = 20,
+        artistCount: Int = 20
+    ): Result<LibraryHits> = runCatching {
+        val q = query.trim()
+        if (q.isEmpty()) return@runCatching LibraryHits(emptyList(), emptyList(), emptyList())
+        val body = apiGet(session, "search3") {
+            param("query", q)
+            param("songCount", songCount.coerceIn(0, 100))
+            param("albumCount", albumCount.coerceIn(0, 50))
+            param("artistCount", artistCount.coerceIn(0, 50))
+        }
+        val result = json.decodeFromString<SubsonicResponse>(body).subsonicResponse.searchResult3
+        val songs = result?.song.orEmpty().mapNotNull { it.toSong(session) }
+        val albums = result?.album.orEmpty().mapNotNull { a ->
+            val id = a.id ?: return@mapNotNull null
+            AlbumRef(
+                id = id,
+                name = a.name ?: a.album,
+                artist = a.artist,
+                coverArt = a.coverArt,
+                year = a.year,
+                songCount = a.songCount
+            )
+        }
+        val artists = result?.artist.orEmpty().mapNotNull { a ->
+            val id = a.id ?: return@mapNotNull null
+            val name = a.name?.takeIf { it.isNotBlank() } ?: return@mapNotNull null
+            ArtistHit(id = id, name = name, coverArt = a.coverArt)
+        }
+        LibraryHits(songs = songs, albums = albums, artists = artists)
+    }.onFailure { Log.w(TAG, "searchLibrary failed: ${it.message}") }
+
     suspend fun searchArtists(
         session: Session,
         query: String,
         count: Int = 12
     ): Result<List<ArtistHit>> = runCatching {
-        val body = apiGet(session, "search3") {
-            param("query", query)
-            param("artistCount", count.coerceIn(1, 40))
-            param("albumCount", 0)
-            param("songCount", 0)
-        }
-        val artists = json.decodeFromString<SubsonicResponse>(body)
-            .subsonicResponse.searchResult3?.artist.orEmpty()
-        artists.mapNotNull { a ->
-            val id = a.id ?: return@mapNotNull null
-            val name = a.name?.takeIf { it.isNotBlank() } ?: return@mapNotNull null
-            ArtistHit(
-                id = id,
-                name = name,
-                coverArt = a.coverArt
-            )
-        }
+        searchLibrary(session, query, songCount = 0, albumCount = 0, artistCount = count)
+            .getOrThrow()
+            .artists
     }.onFailure { Log.w(TAG, "searchArtists failed: ${it.message}") }
 
     data class ArtistHit(
@@ -502,7 +530,9 @@ class SubsonicClient(
 
     @Serializable
     private data class SubsonicSearchResult3(
-        val artist: List<SubsonicArtist>? = null
+        val artist: List<SubsonicArtist>? = null,
+        val album: List<SubsonicAlbumRef>? = null,
+        val song: List<SubsonicChild>? = null
     )
 
     @Serializable

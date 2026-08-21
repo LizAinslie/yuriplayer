@@ -143,6 +143,22 @@ interface CatalogDao {
     )
     suspend fun searchTracks(q: String, limit: Int): List<CatalogTrackEntity>
 
+    @Query(
+        "SELECT * FROM catalog_tracks WHERE sourceType = :sourceType " +
+            "AND (sourceInstanceId IS :sourceInstanceId OR (sourceInstanceId IS NULL AND :sourceInstanceId IS NULL)) " +
+            "AND (title LIKE '%' || :q || '%' COLLATE NOCASE " +
+            "OR artist LIKE '%' || :q || '%' COLLATE NOCASE " +
+            "OR albumArtist LIKE '%' || :q || '%' COLLATE NOCASE " +
+            "OR album LIKE '%' || :q || '%' COLLATE NOCASE) " +
+            "LIMIT :limit"
+    )
+    suspend fun searchTracksForSource(
+        sourceType: String,
+        sourceInstanceId: Long?,
+        q: String,
+        limit: Int
+    ): List<CatalogTrackEntity>
+
     @Query("SELECT * FROM catalog_tracks WHERE albumKey = :albumKey ORDER BY discNumber, trackNumber, title")
     suspend fun getTracksForAlbum(albumKey: String): List<CatalogTrackEntity>
 

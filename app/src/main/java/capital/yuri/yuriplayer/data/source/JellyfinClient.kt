@@ -259,6 +259,76 @@ class JellyfinClient(
             result.items.orEmpty().mapNotNull { it.toSong(session) }
         }.onFailure { Log.w(TAG, "playlistSongs failed: ${it.message}") }
 
+    suspend fun searchAudio(
+        session: Session,
+        query: String,
+        limit: Int = 40
+    ): Result<List<Song>> = searchItems(session, query, BaseItemKind.AUDIO, limit) { it.toSong(session) }
+
+    data class AlbumHit(
+        val id: String,
+        val name: String,
+        val artist: String?,
+        val trackCount: Int
+    )
+
+    data class ArtistHit(
+        val id: String,
+        val name: String
+    )
+
+    suspend fun searchAlbums(
+        session: Session,
+        query: String,
+        limit: Int = 20
+    ): Result<List<AlbumHit>> = searchItems(session, query, BaseItemKind.MUSIC_ALBUM, limit) { item ->
+        val id = item.id?.toString() ?: return@searchItems null
+        val name = item.name?.takeIf { it.isNotBlank() } ?: return@searchItems null
+        AlbumHit(
+            id = id,
+            name = name,
+            artist = item.albumArtist?.takeIf { it.isNotBlank() }
+                ?: item.artists?.firstOrNull(),
+            trackCount = item.childCount ?: 0
+        )
+    }
+
+    suspend fun searchMusicArtists(
+        session: Session,
+        query: String,
+        limit: Int = 20
+    ): Result<List<ArtistHit>> = searchItems(session, query, BaseItemKind.MUSIC_ARTIST, limit) { item ->
+        val id = item.id?.toString() ?: return@searchItems null
+        val name = item.name?.takeIf { it.isNotBlank() } ?: return@searchItems null
+        ArtistHit(id = id, name = name)
+    }
+
+    private suspend fun <T> searchItems(
+        session: Session,
+        query: String,
+        kind: BaseItemKind,
+        limit: Int,
+        map: (org.jellyfin.sdk.model.api.BaseItemDto) -> T?
+    ): Result<List<T>> = runCatching {
+        val q = query.trim()
+        if (q.isEmpty()) return@runCatching emptyList()
+        val userId = runCatching { UUID.fromString(session.userId) }.getOrNull()
+            ?: error("Invalid Jellyfin userId")
+        val result by session.api.itemsApi.getItems(
+            userId = userId,
+            recursive = true,
+            includeItemTypes = listOf(kind),
+            searchTerm = q,
+            fields = if (kind == BaseItemKind.AUDIO) LIGHT_FIELDS else null,
+            enableImages = true,
+            imageTypeLimit = 1,
+            enableImageTypes = listOf(ImageType.PRIMARY),
+            enableTotalRecordCount = false,
+            limit = limit.coerceIn(1, 100)
+        )
+        result.items.orEmpty().mapNotNull(map)
+    }.onFailure { Log.w(TAG, "search $kind failed: ${it.message}") }
+
     fun streamUrl(session: Session, itemId: String, container: String? = null): String =
         url(session.baseUrl) {
             path("Audio", itemId, "stream")

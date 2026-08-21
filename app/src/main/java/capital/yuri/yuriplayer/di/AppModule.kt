@@ -41,6 +41,7 @@ import capital.yuri.yuriplayer.data.source.MusicBrainzArtistProfileProvider
 import capital.yuri.yuriplayer.data.source.MusicBrainzClient
 import capital.yuri.yuriplayer.data.source.RemotePlaylistService
 import capital.yuri.yuriplayer.data.source.SourceInstanceRepository
+import capital.yuri.yuriplayer.data.source.SourceLiveSearch
 import capital.yuri.yuriplayer.data.source.SourceResolver
 import capital.yuri.yuriplayer.data.source.SubsonicArtistImageSource
 import capital.yuri.yuriplayer.data.source.SubsonicClient
@@ -166,6 +167,7 @@ val appModule = module {
     single { PlaylistRepository(get(), get(), get()) }
     single { LibraryFaviconStore(androidContext(), get()) }
     single { RemotePlaylistService(get(), get(), get(), get()) }
+    single { SourceLiveSearch(get(), get(), get(), get()) }
 
     single(createdAtStart = true) {
         LibrarySyncScheduler(
