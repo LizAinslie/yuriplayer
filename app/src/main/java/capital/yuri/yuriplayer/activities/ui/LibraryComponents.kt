@@ -397,6 +397,7 @@ fun SwipeAddSongRow(
     showTrackNumber: Boolean = false,
     isPlaying: Boolean = false,
     isPlaybackActive: Boolean = false,
+    isHighlighted: Boolean = false,
     transparentSurface: Boolean = false,
     surfaceColor: Color? = null,
     showHeart: Boolean = true,
@@ -433,6 +434,7 @@ fun SwipeAddSongRow(
 
     val rowBg = when {
         isPlaying -> accent.copy(alpha = 0.18f)
+        isHighlighted -> onSurface.copy(alpha = 0.08f)
         transparentSurface -> Color.Transparent
         surfaceColor != null -> surfaceColor
         else -> MaterialTheme.colorScheme.surface

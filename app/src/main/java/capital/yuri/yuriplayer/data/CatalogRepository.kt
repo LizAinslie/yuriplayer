@@ -190,6 +190,11 @@ class CatalogRepository(
             dao.countTracksForSource(sourceType, sourceInstanceId)
         }
 
+    suspend fun songsForSource(sourceType: String, sourceInstanceId: Long?): List<Song> =
+        withContext(Dispatchers.IO) {
+            dao.getTracksForSourceInstance(sourceType, sourceInstanceId).map { it.toSong() }
+        }
+
     suspend fun offeringsMatchingSong(song: Song, limit: Int = 12): List<SourceOffering> =
         withContext(Dispatchers.IO) {
             val title = song.title?.trim().orEmpty()
@@ -668,7 +673,7 @@ class CatalogRepository(
         val credits = ArrayList<CatalogCreditEntity>()
         val albumSeen = HashSet<String>()
         val artistStubs = LinkedHashMap<String, CatalogArtistEntity>()
-        val existingArtists = dao.getAllArtists().associateBy { it.artistKey }
+        val existingArtists = dao.getAllArtists().associateBy { it.artistKey }.toMutableMap()
         for (song in songs) {
             if (!replaceAll) dao.deleteCredits("TRACK", song.songKey)
             allCreditsForSong(song).forEach { c ->

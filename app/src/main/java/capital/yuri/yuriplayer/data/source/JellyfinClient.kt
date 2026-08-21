@@ -185,6 +185,58 @@ class JellyfinClient(
         result.items.orEmpty().mapNotNull { it.toSong(session) }
     }.onFailure { Log.w(TAG, "instantMixFromItem failed: ${it.message}") }
 
+    data class PlaylistRef(
+        val id: String,
+        val name: String,
+        val songCount: Int,
+        val coverUrl: String?
+    )
+
+    suspend fun listPlaylists(session: Session): Result<List<PlaylistRef>> = runCatching {
+        val userId = runCatching { UUID.fromString(session.userId) }.getOrNull()
+            ?: error("Invalid Jellyfin userId")
+        val result by session.api.itemsApi.getItems(
+            userId = userId,
+            recursive = true,
+            includeItemTypes = listOf(BaseItemKind.PLAYLIST),
+            enableImages = true,
+            imageTypeLimit = 1,
+            enableImageTypes = listOf(ImageType.PRIMARY),
+            sortBy = listOf(ItemSortBy.SORT_NAME),
+            limit = 400
+        )
+        result.items.orEmpty().mapNotNull { item ->
+            val id = item.id?.toString() ?: return@mapNotNull null
+            val name = item.name?.takeIf { it.isNotBlank() } ?: return@mapNotNull null
+            PlaylistRef(
+                id = id,
+                name = name,
+                songCount = item.childCount ?: 0,
+                coverUrl = primaryImageUrl(session, id, 256)
+            )
+        }
+    }.onFailure { Log.w(TAG, "listPlaylists failed: ${it.message}") }
+
+    suspend fun playlistSongs(session: Session, playlistId: String): Result<List<Song>> =
+        runCatching {
+            val userId = runCatching { UUID.fromString(session.userId) }.getOrNull()
+                ?: error("Invalid Jellyfin userId")
+            val parent = runCatching { UUID.fromString(playlistId) }.getOrNull()
+                ?: error("Invalid playlist id")
+            val result by session.api.itemsApi.getItems(
+                userId = userId,
+                parentId = parent,
+                recursive = true,
+                includeItemTypes = listOf(BaseItemKind.AUDIO),
+                fields = AUDIO_FIELDS,
+                enableImages = true,
+                imageTypeLimit = 1,
+                enableImageTypes = listOf(ImageType.PRIMARY),
+                limit = 2_000
+            )
+            result.items.orEmpty().mapNotNull { it.toSong(session) }
+        }.onFailure { Log.w(TAG, "playlistSongs failed: ${it.message}") }
+
     fun streamUrl(session: Session, itemId: String, container: String? = null): String {
         val root = session.baseUrl.trimEnd('/')
         // Direct original-file stream. /universal 401s unless DeviceId matches the
@@ -281,7 +333,6 @@ class JellyfinClient(
         private const val KEY_DEVICE_ID = "device_id"
 
         private val LIGHT_FIELDS = listOf(
-            ItemFields.PRODUCTION_YEAR,
             ItemFields.PARENT_ID,
             ItemFields.GENRES
         )

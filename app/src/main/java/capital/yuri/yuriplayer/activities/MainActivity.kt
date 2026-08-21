@@ -300,7 +300,7 @@ private enum class TopTab(val label: String, val icon: ImageVector) {
 }
 
 private sealed class DetailRoute {
-    data class Album(val album: AlbumItem) : DetailRoute()
+    data class Album(val album: AlbumItem, val highlightSongKey: String? = null) : DetailRoute()
     data class Artist(val artist: ArtistItem) : DetailRoute()
     data class Playlist(val playlistId: String) : DetailRoute()
     data class EditSong(val song: Song) : DetailRoute()
@@ -494,9 +494,9 @@ fun YuriApp(
         )
     }
 
-    fun openAlbumResolved(seed: AlbumItem) {
+    fun openAlbumResolved(seed: AlbumItem, highlightSongKey: String? = null) {
         playerExpanded = false
-        pushDetail(DetailRoute.Album(seed))
+        pushDetail(DetailRoute.Album(seed, highlightSongKey))
     }
 
     fun openArtistResolved(seed: ArtistItem) {
@@ -528,7 +528,7 @@ fun YuriApp(
                 )
                 else -> null
             }
-            if (album != null) openAlbumResolved(album)
+            if (album != null) openAlbumResolved(album, song.songKey)
             else Toast.makeText(context, "Album not found in library", Toast.LENGTH_SHORT).show()
         }
     }
@@ -718,6 +718,7 @@ fun YuriApp(
                                 isSourceActive = snapshot.isPlayingFromAlbum(key),
                                 isPlaying = playing,
                                 shuffleEnabled = snapshot.shuffleEnabled,
+                                highlightSongKey = d.highlightSongKey,
                                 onBack = { popDetail() },
                                 onPlayAlbum = { songs, index ->
                                     val item = resolvedAlbum.copy(
@@ -888,7 +889,8 @@ fun YuriApp(
                                 onOpenArtist = { openArtistResolved(it) },
                                 onOpenPlaylist = { pl: Playlist ->
                                     pushDetail(DetailRoute.Playlist(pl.id))
-                                }
+                                },
+                                onOpenSongAlbum = { openAlbumForSong(it) }
                             )
                             TopTab.Explore -> ExploreScreen(
                                 nowPlaying = currentSong,
@@ -896,7 +898,10 @@ fun YuriApp(
                                 onPlay = { songs, index -> player.playSource(songs, index) },
                                 onAddToQueue = { player.addToHotQueue(it) },
                                 onOpenAlbum = { album -> openAlbumResolved(album) },
-                                onOpenArtist = { artist -> openArtistResolved(artist) }
+                                onOpenArtist = { artist -> openArtistResolved(artist) },
+                                onOpenPlaylist = { pl: Playlist ->
+                                    pushDetail(DetailRoute.Playlist(pl.id))
+                                }
                             )
                         }
                     }

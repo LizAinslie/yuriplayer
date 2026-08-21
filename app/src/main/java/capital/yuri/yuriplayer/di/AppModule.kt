@@ -29,6 +29,7 @@ import capital.yuri.yuriplayer.data.source.DeezerArtistImageSource
 import capital.yuri.yuriplayer.data.source.DiscogsArtistImageSource
 import capital.yuri.yuriplayer.data.source.JellyfinArtistImageSource
 import capital.yuri.yuriplayer.data.source.JellyfinClient
+import capital.yuri.yuriplayer.data.source.LibraryFaviconStore
 import capital.yuri.yuriplayer.data.source.LibrarySource
 import capital.yuri.yuriplayer.data.source.LibrarySourceFactory
 import capital.yuri.yuriplayer.data.source.LibrarySourceRegistry
@@ -36,6 +37,7 @@ import capital.yuri.yuriplayer.data.source.LocalArtistProfileProvider
 import capital.yuri.yuriplayer.data.source.LocalLibrarySource
 import capital.yuri.yuriplayer.data.source.MusicBrainzArtistProfileProvider
 import capital.yuri.yuriplayer.data.source.MusicBrainzClient
+import capital.yuri.yuriplayer.data.source.RemotePlaylistService
 import capital.yuri.yuriplayer.data.source.SourceInstanceRepository
 import capital.yuri.yuriplayer.data.source.SourceResolver
 import capital.yuri.yuriplayer.data.source.SubsonicArtistImageSource
@@ -160,6 +162,8 @@ val appModule = module {
     }
 
     single { PlaylistRepository(get(), get(), get()) }
+    single { LibraryFaviconStore(androidContext(), get()) }
+    single { RemotePlaylistService(get(), get(), get(), get()) }
 
     // Secret covers are session-only — reset on background / lock / cold start
     single(createdAtStart = true) {

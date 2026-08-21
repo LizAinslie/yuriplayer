@@ -52,7 +52,11 @@ import capital.yuri.yuriplayer.data.AlbumItem
 import capital.yuri.yuriplayer.data.ArtistItem
 import capital.yuri.yuriplayer.data.CatalogRepository
 import capital.yuri.yuriplayer.data.ExploreSearchService
+import capital.yuri.yuriplayer.data.Playlist
+import capital.yuri.yuriplayer.data.PlaylistRepository
 import capital.yuri.yuriplayer.data.Song
+import capital.yuri.yuriplayer.data.source.RemotePlaylist
+import capital.yuri.yuriplayer.data.source.RemotePlaylistService
 import capital.yuri.yuriplayer.data.source.SourceOffering
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
@@ -67,10 +71,14 @@ fun ExploreScreen(
     onPlay: (List<Song>, Int) -> Unit,
     onAddToQueue: (Song) -> Unit,
     onOpenAlbum: (AlbumItem) -> Unit = {},
-    onOpenArtist: (ArtistItem) -> Unit = {}
+    onOpenArtist: (ArtistItem) -> Unit = {},
+    onOpenPlaylist: (Playlist) -> Unit = {}
 ) {
     val explore: ExploreSearchService = koinInject()
     val catalog: CatalogRepository = koinInject()
+    val playlistsRepo: PlaylistRepository = koinInject()
+    val remotePls: RemotePlaylistService = koinInject()
+    val localPlaylists by playlistsRepo.observePlaylists().collectAsState(initial = emptyList())
     val context = LocalContext.current
     val focusManager = LocalFocusManager.current
     val keyboard = LocalSoftwareKeyboardController.current
@@ -87,6 +95,8 @@ fun ExploreScreen(
     var hits by remember { mutableStateOf<List<ExploreSearchService.Hit>>(emptyList()) }
     var albumHits by remember { mutableStateOf<List<AlbumItem>>(emptyList()) }
     var artistHits by remember { mutableStateOf<List<ArtistItem>>(emptyList()) }
+    var playlistHits by remember { mutableStateOf<List<Playlist>>(emptyList()) }
+    var remotePlaylistHits by remember { mutableStateOf<List<RemotePlaylist>>(emptyList()) }
     var searchBusy by remember { mutableStateOf(false) }
 
     LaunchedEffect(Unit) {
@@ -99,6 +109,8 @@ fun ExploreScreen(
             hits = emptyList()
             albumHits = emptyList()
             artistHits = emptyList()
+            playlistHits = emptyList()
+            remotePlaylistHits = emptyList()
             searchBusy = false
             return@LaunchedEffect
         }
@@ -121,9 +133,15 @@ fun ExploreScreen(
         }
         if (query.trim() != q) return@LaunchedEffect
 
+        val localPl = localPlaylists.filter { it.name.contains(q, true) }.take(12)
+        val remotePl = withContext(Dispatchers.IO) { remotePls.search(q).take(12) }
+        if (query.trim() != q) return@LaunchedEffect
+
         hits = songHits
         albumHits = albums
         artistHits = artists
+        playlistHits = localPl
+        remotePlaylistHits = remotePl
         searchBusy = false
     }
 
@@ -221,7 +239,8 @@ fun ExploreScreen(
                     }
                 }
             }
-            !searchBusy && hits.isEmpty() && albumHits.isEmpty() && artistHits.isEmpty() -> {
+            !searchBusy && hits.isEmpty() && albumHits.isEmpty() && artistHits.isEmpty() &&
+                playlistHits.isEmpty() && remotePlaylistHits.isEmpty() -> {
                 Text(
                     "No matches for \"${query.trim()}\".",
                     modifier = Modifier.padding(16.dp),
@@ -247,6 +266,40 @@ fun ExploreScreen(
                                 album = album,
                                 onClick = { onOpenAlbum(album) }
                             )
+                        }
+                    }
+                    if (playlistHits.isNotEmpty() || remotePlaylistHits.isNotEmpty()) {
+                        item { SectionHeader("Playlists") }
+                        items(playlistHits, key = { "pl-${it.id}" }) { pl ->
+                            PlaylistRow(pl, onClick = { onOpenPlaylist(pl) })
+                        }
+                        items(remotePlaylistHits, key = { it.stableId }) { remote ->
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clickable {
+                                        scope.launch {
+                                            val created = withContext(Dispatchers.IO) {
+                                                remotePls.importToLocal(remote)
+                                            }
+                                            if (created != null) onOpenPlaylist(created)
+                                            else Toast.makeText(context, "Couldn't import playlist", Toast.LENGTH_SHORT).show()
+                                        }
+                                    }
+                                    .padding(horizontal = 16.dp, vertical = 10.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Icon(Icons.Default.Cloud, null, Modifier.size(40.dp).padding(8.dp))
+                                Spacer(modifier = Modifier.width(12.dp))
+                                Column {
+                                    Text(remote.name, fontWeight = FontWeight.SemiBold)
+                                    Text(
+                                        "${remote.sourceName} · tap to add",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.55f)
+                                    )
+                                }
+                            }
                         }
                     }
                     if (hits.isNotEmpty()) {

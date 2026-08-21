@@ -42,6 +42,16 @@ interface CatalogDao {
     @Query("SELECT * FROM catalog_tracks WHERE sourceType = :sourceType")
     suspend fun getTracksBySource(sourceType: String): List<CatalogTrackEntity>
 
+    @Query(
+        "SELECT * FROM catalog_tracks WHERE sourceType = :sourceType " +
+            "AND (sourceInstanceId IS :sourceInstanceId OR (sourceInstanceId IS NULL AND :sourceInstanceId IS NULL)) " +
+            "ORDER BY album COLLATE NOCASE, discNumber, trackNumber, title COLLATE NOCASE"
+    )
+    suspend fun getTracksForSourceInstance(
+        sourceType: String,
+        sourceInstanceId: Long?
+    ): List<CatalogTrackEntity>
+
     @Query("SELECT * FROM catalog_tracks WHERE sourceType = :sourceType LIMIT :limit")
     suspend fun getTracksBySourceLimited(sourceType: String, limit: Int): List<CatalogTrackEntity>
 

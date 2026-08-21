@@ -62,6 +62,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import capital.yuri.yuriplayer.data.AlbumItem
 import capital.yuri.yuriplayer.data.ArtistItem
+import capital.yuri.yuriplayer.data.CatalogRepository
 import capital.yuri.yuriplayer.data.LibraryIndex
 import capital.yuri.yuriplayer.data.MyStuffPinStore
 import capital.yuri.yuriplayer.data.Playlist
@@ -89,10 +90,12 @@ fun MyStuffScreen(
     onAddToQueue: (Song) -> Unit,
     onOpenAlbum: (AlbumItem) -> Unit,
     onOpenArtist: (ArtistItem) -> Unit,
-    onOpenPlaylist: (Playlist) -> Unit
+    onOpenPlaylist: (Playlist) -> Unit,
+    onOpenSongAlbum: (Song) -> Unit
 ) {
     val pinStore: MyStuffPinStore = koinInject()
     val playlistsRepo: PlaylistRepository = koinInject()
+    val catalog: CatalogRepository = koinInject()
     val player: PlayerController = koinInject()
     val pins by pinStore.pins.collectAsState()
     val entries by pinStore.entries.collectAsState()
@@ -120,10 +123,12 @@ fun MyStuffScreen(
                     playlists = playlists,
                     allSongs = allSongs,
                     onOpenPin = { pin ->
-                        openPin(
-                            pin, library, playlists, allSongs,
-                            onOpenAlbum, onOpenArtist, onOpenPlaylist, onPlay, context
-                        )
+                        scope.launch {
+                            openPin(
+                                pin, library, playlists, allSongs, catalog,
+                                onOpenAlbum, onOpenArtist, onOpenPlaylist, onOpenSongAlbum, context
+                            )
+                        }
                     },
                     onUnpin = { pinStore.unpin(it) },
                     onAddPinSlot = { showAddPin = true },
@@ -139,13 +144,18 @@ fun MyStuffScreen(
                         }
                     }
                 )
-                MyStuffTab.Collection -> MyStuffCollectionTab(
+                MyStuffTab.Collection -> MyStuffCatalogTab(
                     entries = entries.filter { it.kind != StuffPinKind.PLAYLIST },
                     library = library,
+                    playlists = playlists,
+                    nowPlaying = nowPlaying,
+                    isPlaybackActive = isPlaybackActive,
                     onOpenAlbum = onOpenAlbum,
                     onOpenArtist = onOpenArtist,
-                    onPlaySong = { song -> onPlay(listOf(song), 0) },
-                    onRemoveEntry = { pinStore.removeEntry(it) }
+                    onOpenPlaylist = onOpenPlaylist,
+                    onOpenSongAlbum = onOpenSongAlbum,
+                    onPlay = onPlay,
+                    onAddToQueue = onAddToQueue
                 )
                 MyStuffTab.Playlists -> MyStuffPlaylistsList(
                     playlists = playlists,
@@ -176,7 +186,7 @@ fun MyStuffScreen(
                         contentDescription = null
                     )
                 },
-                label = { Text("Collection") }
+                label = { Text("Catalog") }
             )
             NavigationBarItem(
                 selected = tab == MyStuffTab.Playlists,
@@ -527,27 +537,30 @@ private fun AddPinFromCollectionSheet(
     }
 }
 
-private fun openPin(
+private suspend fun openPin(
     pin: StuffPin,
     library: LibraryIndex,
     playlists: List<Playlist>,
     allSongs: List<Song>,
+    catalog: CatalogRepository,
     onOpenAlbum: (AlbumItem) -> Unit,
     onOpenArtist: (ArtistItem) -> Unit,
     onOpenPlaylist: (Playlist) -> Unit,
-    onPlay: (List<Song>, Int) -> Unit,
+    onOpenSongAlbum: (Song) -> Unit,
     context: android.content.Context
 ) {
     when (pin.kind) {
         StuffPinKind.ALBUM -> {
-            val album = library.albums(taggedOnly = false)
-                .firstOrNull { albumKey(it.name, it.artist) == pin.id }
+            val album = catalog.albumItemForKey(pin.id)
+                ?: library.albums(taggedOnly = false)
+                    .firstOrNull { albumKey(it.name, it.artist) == pin.id }
             if (album != null) onOpenAlbum(album)
             else Toast.makeText(context, "Album not found", Toast.LENGTH_SHORT).show()
         }
         StuffPinKind.ARTIST -> {
-            val artist = library.artists(taggedOnly = false)
-                .firstOrNull { artistKey(it.name) == pin.id }
+            val artist = catalog.artistItemForKey(pin.id, pin.title)
+                ?: library.artists(taggedOnly = false)
+                    .firstOrNull { artistKey(it.name) == pin.id }
             if (artist != null) onOpenArtist(artist)
             else Toast.makeText(context, "Artist not found", Toast.LENGTH_SHORT).show()
         }
@@ -557,8 +570,9 @@ private fun openPin(
             else Toast.makeText(context, "Playlist not found", Toast.LENGTH_SHORT).show()
         }
         StuffPinKind.SONG -> {
-            val song = allSongs.firstOrNull { it.songKey == pin.id }
-            if (song != null) onPlay(listOf(song), 0)
+            val song = catalog.getSongsByKeys(listOf(pin.id)).firstOrNull()
+                ?: allSongs.firstOrNull { it.songKey == pin.id }
+            if (song != null) onOpenSongAlbum(song)
             else Toast.makeText(context, "Song not found", Toast.LENGTH_SHORT).show()
         }
     }

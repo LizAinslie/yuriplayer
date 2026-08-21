@@ -85,7 +85,8 @@ fun MediaBrowser(
     onOpenArtist: (ArtistItem) -> Unit = {},
     onOpenPlaylist: (Playlist) -> Unit = {},
     onEditSong: (Song) -> Unit = {},
-    onEditAlbum: (AlbumItem) -> Unit = {}
+    onEditAlbum: (AlbumItem) -> Unit = {},
+    onSongClick: ((Song) -> Unit)? = null
 ) {
     val context = LocalContext.current
     val focusManager = LocalFocusManager.current
@@ -213,7 +214,10 @@ fun MediaBrowser(
                         itemsIndexed(filteredSongs, key = { _, s -> s.songKey }) { index, song ->
                             SwipeAddSongRow(
                                 song = song,
-                                onClick = { onPlay(filteredSongs, index) },
+                                onClick = {
+                                    if (onSongClick != null) onSongClick(song)
+                                    else onPlay(filteredSongs, index)
+                                },
                                 onSwipeAdd = {
                                     onAddToQueue(song)
                                     Toast.makeText(context, "Added to queue", Toast.LENGTH_SHORT).show()

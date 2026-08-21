@@ -19,8 +19,9 @@ import androidx.core.app.NotificationCompat
 import capital.yuri.yuriplayer.activities.MainActivity
 import capital.yuri.yuriplayer.data.LibrarySettings
 import capital.yuri.yuriplayer.data.Song
-import capital.yuri.yuriplayer.player.engine.toPlaybackMedia
+import capital.yuri.yuriplayer.player.engine.isNetworkUri
 import capital.yuri.yuriplayer.player.engine.isVirtualLibraryPath
+import capital.yuri.yuriplayer.player.engine.toPlaybackMedia
 import capital.yuri.yuriplayer.player.radio.RadioSourcePrefs
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers

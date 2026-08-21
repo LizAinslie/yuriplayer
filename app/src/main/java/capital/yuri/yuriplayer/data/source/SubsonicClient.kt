@@ -238,6 +238,38 @@ class SubsonicClient(
         val coverArt: String?
     )
 
+    data class PlaylistRef(
+        val id: String,
+        val name: String,
+        val songCount: Int,
+        val coverArt: String?
+    )
+
+    suspend fun listPlaylists(session: Session): Result<List<PlaylistRef>> = runCatching {
+        val body = apiGet(session, "getPlaylists")
+        val lists = json.decodeFromString<SubsonicResponse>(body)
+            .subsonicResponse.playlists?.playlist.orEmpty()
+        lists.mapNotNull { p ->
+            val id = p.id ?: return@mapNotNull null
+            val name = p.name?.takeIf { it.isNotBlank() } ?: return@mapNotNull null
+            PlaylistRef(
+                id = id,
+                name = name,
+                songCount = p.songCount ?: 0,
+                coverArt = p.coverArt
+            )
+        }
+    }.onFailure { Log.w(TAG, "listPlaylists failed: ${it.message}") }
+
+    suspend fun playlistSongs(session: Session, playlistId: String): Result<List<Song>> =
+        runCatching {
+            val body = apiGet(session, "getPlaylist") {
+                parameter("id", playlistId)
+            }
+            val detail = json.decodeFromString<SubsonicResponse>(body).subsonicResponse.playlist
+            detail?.entry.orEmpty().mapNotNull { it.toSong(session, albumCoverArt = detail.coverArt) }
+        }.onFailure { Log.w(TAG, "playlistSongs failed: ${it.message}") }
+
     fun streamUrl(session: Session, id: String): String {
         val (token, salt) = tokenPair(session.password)
         return buildString {
@@ -376,7 +408,9 @@ class SubsonicClient(
         val albumList2: SubsonicAlbumList2? = null,
         val similarSongs: SubsonicSongList? = null,
         val similarSongs2: SubsonicSongList? = null,
-        val searchResult3: SubsonicSearchResult3? = null
+        val searchResult3: SubsonicSearchResult3? = null,
+        val playlists: SubsonicPlaylists? = null,
+        val playlist: SubsonicPlaylistDetail? = null
     )
 
     @Serializable
@@ -443,6 +477,29 @@ class SubsonicClient(
     @Serializable
     private data class SubsonicSongList(
         val song: List<SubsonicChild>? = null
+    )
+
+    @Serializable
+    private data class SubsonicPlaylists(
+        val playlist: List<SubsonicPlaylistRef>? = null
+    )
+
+    @Serializable
+    private data class SubsonicPlaylistRef(
+        val id: String? = null,
+        val name: String? = null,
+        val songCount: Int? = null,
+        val coverArt: String? = null,
+        val owner: String? = null
+    )
+
+    @Serializable
+    private data class SubsonicPlaylistDetail(
+        val id: String? = null,
+        val name: String? = null,
+        val songCount: Int? = null,
+        val coverArt: String? = null,
+        val entry: List<SubsonicChild>? = null
     )
 
     @Serializable

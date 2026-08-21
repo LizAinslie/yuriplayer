@@ -143,7 +143,8 @@ fun AlbumDetailScreen(
     onAddSongToQueue: (Song) -> Unit,
     onAddAlbumToQueue: (List<Song>) -> Unit,
     onStartRadio: () -> Unit = {},
-    onExpanded: (AlbumItem) -> Unit = {}
+    onExpanded: (AlbumItem) -> Unit = {},
+    highlightSongKey: String? = null
 ) {
     val context = LocalContext.current
     val themeService: ThemeService = koinInject()
@@ -267,6 +268,19 @@ fun AlbumDetailScreen(
 
     val discs = remember(liveAlbum.songs) { groupByDisc(liveAlbum.songs) }
     val multiDisc = discs.size > 1 || discs.keys.any { it != null && it > 1 }
+    LaunchedEffect(highlightSongKey, discs, multiDisc) {
+        val want = highlightSongKey ?: return@LaunchedEffect
+        var index = 0
+        for ((_, tracks) in discs) {
+            if (multiDisc) index++
+            val hit = tracks.indexOfFirst { it.songKey == want }
+            if (hit >= 0) {
+                listState.animateScrollToItem((index + hit).coerceAtLeast(0))
+                return@LaunchedEffect
+            }
+            index += tracks.size
+        }
+    }
     val scheme = playerColorScheme(themeColors, base)
     val albumBg = scheme.background
     val defaultBg = base.background
@@ -439,6 +453,8 @@ fun AlbumDetailScreen(
                                 showTrackNumber = true,
                                 isPlaying = song.isSameAs(nowPlaying),
                                 isPlaybackActive = isPlaying,
+                                isHighlighted = highlightSongKey != null &&
+                                    (song.songKey == highlightSongKey),
                                 transparentSurface = true,
                                 showHeart = true,
                                 hideGoToAlbum = true,
