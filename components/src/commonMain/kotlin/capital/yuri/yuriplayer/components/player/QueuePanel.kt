@@ -11,6 +11,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.MaterialTheme
@@ -56,20 +57,28 @@ fun QueuePanel(
             Modifier
                 .fillMaxWidth()
                 .padding(horizontal = 8.dp, vertical = 4.dp),
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            FilterChip(
-                selected = tab == QueueTab.Queue,
-                onClick = { tab = QueueTab.Queue },
-                label = { Text("Queue") }
-            )
-            FilterChip(
-                selected = tab == QueueTab.History,
-                onClick = { tab = QueueTab.History },
-                label = { Text("Recently played") }
-            )
-            Spacer(Modifier.weight(1f))
+            LazyRow(
+                modifier = Modifier.weight(1f),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                item {
+                    FilterChip(
+                        selected = tab == QueueTab.Queue,
+                        onClick = { tab = QueueTab.Queue },
+                        label = { Text("Queue", maxLines = 1) }
+                    )
+                }
+                item {
+                    FilterChip(
+                        selected = tab == QueueTab.History,
+                        onClick = { tab = QueueTab.History },
+                        label = { Text("Recently played", maxLines = 1) }
+                    )
+                }
+            }
             if (tab == QueueTab.Queue && upcoming.isNotEmpty()) {
                 TextButton(onClick = onClearQueue) { Text("Clear") }
             }

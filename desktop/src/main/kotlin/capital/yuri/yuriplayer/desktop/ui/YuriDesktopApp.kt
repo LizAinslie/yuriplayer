@@ -220,6 +220,7 @@ fun YuriDesktopApp(session: DesktopSession) {
             canBack = stack.size > 1,
             canForward = forward.isNotEmpty(),
             onSettings = { showSettings = true },
+            scanMenu = { DesktopScanMenu(session) },
             libraryFilter = libraryFilter,
             onLibraryFilter = { libraryFilter = it },
             libraryItems = libraryItems,

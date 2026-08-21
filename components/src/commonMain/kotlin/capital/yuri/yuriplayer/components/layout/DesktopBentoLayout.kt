@@ -88,6 +88,7 @@ fun DesktopBentoLayout(
     canBack: Boolean,
     canForward: Boolean,
     onSettings: () -> Unit,
+    scanMenu: @Composable () -> Unit = {},
     libraryFilter: LibraryFilter,
     onLibraryFilter: (LibraryFilter) -> Unit,
     libraryItems: List<LibraryRailItem>,
@@ -114,7 +115,8 @@ fun DesktopBentoLayout(
             onForward = onForward,
             canBack = canBack,
             canForward = canForward,
-            onSettings = onSettings
+            onSettings = onSettings,
+            scanMenu = scanMenu
         )
         BoxWithConstraints(
             Modifier
@@ -275,7 +277,8 @@ private fun TopChrome(
     onForward: () -> Unit,
     canBack: Boolean,
     canForward: Boolean,
-    onSettings: () -> Unit
+    onSettings: () -> Unit,
+    scanMenu: @Composable () -> Unit = {}
 ) {
     Row(
         Modifier
@@ -314,15 +317,13 @@ private fun TopChrome(
             )
         )
         Spacer(Modifier.weight(1f))
-        FilledIconButton(
-            onClick = onSettings,
-            shape = CircleShape,
-            colors = IconButtonDefaults.filledIconButtonColors(
-                containerColor = MaterialTheme.colorScheme.primary,
-                contentColor = MaterialTheme.colorScheme.onPrimary
+        scanMenu()
+        IconButton(onClick = onSettings) {
+            Icon(
+                Icons.Default.Settings,
+                contentDescription = "Settings",
+                tint = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.55f)
             )
-        ) {
-            Icon(Icons.Default.Settings, contentDescription = "Settings")
         }
     }
 }
