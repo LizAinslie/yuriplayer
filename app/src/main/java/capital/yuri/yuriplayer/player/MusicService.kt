@@ -260,7 +260,8 @@ class MusicService : Service() {
             endedForWindow = -1
             ignoreAutoAdvancedUntilElapsed = 0L
             lastAdvanceElapsed = SystemClock.elapsedRealtime()
-            ignoreWatchdogUntilElapsed = lastAdvanceElapsed + WATCHDOG_GRACE_MS
+            ignoreWatchdogUntilElapsed = lastAdvanceElapsed +
+                if (isRemoteSong(current)) NETWORK_WATCHDOG_GRACE_MS else WATCHDOG_GRACE_MS
             stallSamplePos = -1L
             if (autoPlay) {
                 userWantsPlay = true
@@ -1176,6 +1177,7 @@ class MusicService : Service() {
         private const val ADVANCE_DEBOUNCE_MS = 600L
         private const val AUTO_ADVANCE_IGNORE_MS = 800L
         private const val WATCHDOG_GRACE_MS = 2_000L
+        private const val NETWORK_WATCHDOG_GRACE_MS = 8_000L
         private const val STICKY_SEEK_MS = 1_200L
         private const val USER_SEEK_GUARD_MS = 1_000L
         private const val SEEK_CONFIRM_MS = 600L

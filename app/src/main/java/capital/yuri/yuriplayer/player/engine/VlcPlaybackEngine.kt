@@ -57,6 +57,8 @@ class VlcPlaybackEngine(
     private var loadGeneration: Int = 0
     private var eventGeneration: Int = 0
     @Volatile private var buffering: Boolean = false
+    /** False until this window has actually started audio. Stopped before that is a load, not EOF. */
+    @Volatile private var windowHasPlayed: Boolean = false
 
     private var currentPfd: ParcelFileDescriptor? = null
     private var currentAfd: AssetFileDescriptor? = null
@@ -93,12 +95,9 @@ class VlcPlaybackEngine(
             MediaPlayer.Event.Playing -> {
                 playWhenReady = true
                 buffering = false
+                windowHasPlayed = true
                 _isPlaying.value = true
-                val seek = pendingSeekMs
-                if (seek > 0L) {
-                    pendingSeekMs = -1L
-                    runCatching { mp.time = seek }
-                }
+                applyPendingSeek(mp)
                 dispatch { onIsPlayingChanged(true) }
                 dispatch { onPlaybackStateChanged(PlaybackEngine.PlaybackState.READY) }
             }
@@ -126,6 +125,10 @@ class VlcPlaybackEngine(
                 dispatch { onIsPlayingChanged(false) }
                 dispatch { onPlaybackStateChanged(PlaybackEngine.PlaybackState.IDLE) }
                 if (!playWhenReady) return
+                if (!windowHasPlayed) {
+                    Log.i(TAG, "stopped before play — load, not EOF")
+                    return
+                }
                 if (currentIsLive()) {
                     Log.i(TAG, "live stopped → reconnect")
                     runCatching { mp.play() }
@@ -176,6 +179,7 @@ class VlcPlaybackEngine(
                     dispatch { onPlaybackStateChanged(PlaybackEngine.PlaybackState.BUFFERING) }
                 } else {
                     dispatch { onPlaybackStateChanged(PlaybackEngine.PlaybackState.READY) }
+                    applyPendingSeek(mp)
                 }
             }
             else -> Unit
@@ -371,9 +375,11 @@ class VlcPlaybackEngine(
         eventGeneration = gen
         pendingSeekMs = if (startPositionMs > 0L) startPositionMs else -1L
         if (autoPlay) playWhenReady = true
-        // Stop the current decoder immediately so skip-ahead cannot keep
-        // playing the old song under the new artwork.
+        windowHasPlayed = false
+        // Ignore Stopped from this halt — it is not end-of-track.
+        eventGeneration = -1
         runCatching { active().stop() }
+        eventGeneration = gen
         _isPlaying.value = false
         buffering = true
         dispatch { onPlaybackStateChanged(PlaybackEngine.PlaybackState.BUFFERING) }
@@ -433,6 +439,18 @@ class VlcPlaybackEngine(
             "attached uri=${item.uri} network=${item.isNetwork} autoPlay=$playWhenReady"
         )
         if (playWhenReady) active().play()
+    }
+
+    private fun applyPendingSeek(mp: MediaPlayer) {
+        val seek = pendingSeekMs
+        if (seek <= 0L) return
+        val len = mp.length
+        if (len <= 0L) return
+        pendingSeekMs = -1L
+        val max = (len - 1_000L).coerceAtLeast(0L)
+        val target = seek.coerceIn(0L, max)
+        Log.i(TAG, "seek ${seek}ms → ${target}ms of ${len}ms")
+        runCatching { mp.time = target }
     }
 
     private fun prepareStandby(item: PlaybackMedia) {
@@ -524,6 +542,7 @@ class VlcPlaybackEngine(
         nextGeneration += 1
         eventGeneration = loadGeneration
         playWhenReady = true
+        windowHasPlayed = false
         runCatching { np.volume = 100 }
         np.play()
         _isPlaying.value = true
