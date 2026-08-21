@@ -1136,6 +1136,9 @@ class MusicService : Service() {
         } catch (e: Exception) {
             Log.w(TAG, "persist on close", e)
         }
+        if (historyStore.clearOnClose) {
+            historyStore.clear()
+        }
         stopForeground(STOP_FOREGROUND_REMOVE)
         stopSelf()
     }

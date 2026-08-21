@@ -46,6 +46,7 @@ import capital.yuri.yuriplayer.data.LibrarySettings
 import capital.yuri.yuriplayer.data.StreamQuality
 import capital.yuri.yuriplayer.data.source.SourceType
 import capital.yuri.yuriplayer.data.theme.ArtColorVariant
+import capital.yuri.yuriplayer.player.PlaybackHistoryStore
 import capital.yuri.yuriplayer.player.engine.AudioPipeline
 import capital.yuri.yuriplayer.player.engine.PlaybackEngineCatalog
 import capital.yuri.yuriplayer.player.engine.PlaybackEngineId
@@ -58,6 +59,7 @@ private sealed class SettingsPage {
     data object LocalLibrary : SettingsPage()
     data object PlaybackEngine : SettingsPage()
     data object StreamingQuality : SettingsPage()
+    data object PlaybackHistory : SettingsPage()
     data object Appearance : SettingsPage()
     data object Sync : SettingsPage()
     data class Organize(
@@ -98,6 +100,7 @@ fun SettingsScreen(onBack: () -> Unit) {
             onOpenLocalLibrary = { push(SettingsPage.LocalLibrary) },
             onOpenPlaybackEngine = { push(SettingsPage.PlaybackEngine) },
             onOpenStreamingQuality = { push(SettingsPage.StreamingQuality) },
+            onOpenPlaybackHistory = { push(SettingsPage.PlaybackHistory) },
             onOpenAppearance = { push(SettingsPage.Appearance) },
             onOpenSync = { push(SettingsPage.Sync) },
             onOpenLicenses = { push(SettingsPage.OpenSourceLicenses) },
@@ -117,6 +120,7 @@ fun SettingsScreen(onBack: () -> Unit) {
         )
         SettingsPage.PlaybackEngine -> PlaybackEngineSettingsScreen(onBack = { pop() })
         SettingsPage.StreamingQuality -> StreamingQualitySettingsScreen(onBack = { pop() })
+        SettingsPage.PlaybackHistory -> PlaybackHistorySettingsScreen(onBack = { pop() })
         SettingsPage.Appearance -> AppearanceSettingsScreen(onBack = { pop() })
         SettingsPage.Sync -> SyncSettingsScreen(onBack = { pop() })
         is SettingsPage.Organize -> OrganizeLayoutScreen(
@@ -141,6 +145,7 @@ private fun SettingsHubScreen(
     onOpenLocalLibrary: () -> Unit,
     onOpenPlaybackEngine: () -> Unit,
     onOpenStreamingQuality: () -> Unit,
+    onOpenPlaybackHistory: () -> Unit,
     onOpenAppearance: () -> Unit,
     onOpenSync: () -> Unit,
     onOpenLicenses: () -> Unit,
@@ -148,6 +153,7 @@ private fun SettingsHubScreen(
 ) {
     val context = LocalContext.current
     val settings: LibrarySettings = koinInject()
+    val historyStore: PlaybackHistoryStore = koinInject()
     var autoMetadata by remember {
         mutableStateOf(settings.isAutomaticMetadataEnabled())
     }
@@ -266,11 +272,13 @@ private fun SettingsHubScreen(
                 }
             )
             SettingsNavRow(
-                title = "History size",
-                subtitle = "Tracks kept in recently played",
+                title = "Playback history",
+                subtitle = buildString {
+                    append("${historyStore.maxEntries} songs")
+                    if (historyStore.clearOnClose) append(" · clear on close")
+                },
                 icon = Icons.Default.History,
-                trailing = "50",
-                onClick = {}
+                onClick = onOpenPlaybackHistory
             )
             SettingsNavRow(
                 title = "Advanced playback",
@@ -423,6 +431,53 @@ private fun StreamingQualitySettingsScreen(onBack: () -> Unit) {
                     }
                 )
             }
+        }
+
+        Spacer(modifier = Modifier.height(48.dp))
+    }
+}
+
+@Composable
+private fun PlaybackHistorySettingsScreen(onBack: () -> Unit) {
+    val history: PlaybackHistoryStore = koinInject()
+    var size by remember { mutableStateOf(history.maxEntries) }
+    var clearOnClose by remember { mutableStateOf(history.clearOnClose) }
+
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .statusBarsPadding()
+            .verticalScroll(rememberScrollState())
+    ) {
+        SettingsTopBar(title = "Playback history", onBack = onBack)
+
+        SettingsSectionTitle("Recently played")
+        TextNote(
+            text = "Songs you’ve played show up in the History tab of the queue."
+        )
+        SettingsGroup {
+            SettingsChoiceRow(
+                title = "Keep",
+                subtitle = "Older plays drop off after this many songs",
+                trailing = "$size songs",
+                options = PlaybackHistoryStore.SIZE_OPTIONS.map { n ->
+                    n.toString() to "$n songs"
+                },
+                onSelect = { id ->
+                    val n = id.toIntOrNull() ?: return@SettingsChoiceRow
+                    history.maxEntries = n
+                    size = history.maxEntries
+                }
+            )
+            SettingsSwitchRow(
+                title = "Clear when the app is closed",
+                subtitle = "Wipe recently played if you swipe the app away. Off by default.",
+                checked = clearOnClose,
+                onCheckedChange = { enabled ->
+                    clearOnClose = enabled
+                    history.clearOnClose = enabled
+                }
+            )
         }
 
         Spacer(modifier = Modifier.height(48.dp))
