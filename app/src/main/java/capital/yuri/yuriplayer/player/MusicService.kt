@@ -1064,7 +1064,7 @@ class MusicService : Service() {
         private const val NETWORK_STALL_MS = 12_000L
         private const val NEAR_END_MS = 2_500L
         private const val NEAR_END_ADVANCE_MS = 700L
-        private const val WARMUP_NEXT_MS = 4_000L
+        private const val WARMUP_NEXT_MS = 8_000L
         private const val ENDED_SILENCE_MS = 1_500L
         private const val UNEXPECTED_PAUSE_MS = 1_200L
         private const val ADVANCE_DEBOUNCE_MS = 600L

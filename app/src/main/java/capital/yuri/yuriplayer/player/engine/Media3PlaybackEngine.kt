@@ -57,7 +57,7 @@ class Media3PlaybackEngine(
         .build()
 
     private val loadControl = DefaultLoadControl.Builder()
-        .setBufferDurationsMs(20_000, 60_000, 1_000, 2_000)
+        .setBufferDurationsMs(30_000, 120_000, 2_000, 5_000)
         .setPrioritizeTimeOverSizeThresholds(true)
         .build()
 
@@ -314,7 +314,7 @@ class Media3PlaybackEngine(
 
     companion object {
         private const val TAG = "Media3Engine"
-        private const val NEXT_PRELOAD_US = 15_000_000L
+        private const val NEXT_PRELOAD_US = 30_000_000L
 
         val DESCRIPTOR = PlaybackEngineDescriptor(
             id = "media3",

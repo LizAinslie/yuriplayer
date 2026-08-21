@@ -65,6 +65,12 @@ class VlcPlaybackEngine(
     private var currentMedia: Media? = null
     private var nextMedia: Media? = null
 
+    private val prefetcher = StreamPrefetcher(
+        cacheDir = appContext.cacheDir,
+        ioHandler = ioHandler,
+        mainHandler = mainHandler
+    )
+
     private var nextItem: PlaybackMedia? = null
     @Volatile private var nextReady: Boolean = false
     @Volatile private var nextPreparing: Boolean = false
@@ -284,13 +290,16 @@ class VlcPlaybackEngine(
 
     override fun setNext(item: PlaybackMedia?) {
         if (item == null) {
+            prefetcher.cancel()
             clearNext()
             return
         }
+        prefetcher.start(item) { file -> onPrefetchReady(item, file) }
         if (nextItem?.uri == item.uri && (standby().media != null || nextPreparing)) {
             return
         }
-        prepareStandby(item)
+        val local = prefetcher.fileIfReady(item.mediaId)
+        prepareStandby(if (local != null) item.copy(uri = Uri.fromFile(local), isNetwork = false) else item)
     }
 
     override fun hasPreparedNext(): Boolean = nextItem != null && standby().media != null
@@ -300,6 +309,7 @@ class VlcPlaybackEngine(
     override fun warmupNext() {
         val item = nextItem ?: return
         if (!item.isNetwork) return
+        if (prefetcher.fileIfReady(item.mediaId) != null) return
         if (nextWarming) return
         val sp = standby()
         if (sp.media == null) return
@@ -309,6 +319,15 @@ class VlcPlaybackEngine(
             runCatching { sp.play() }
         }
         Log.i(TAG, "warmup next '${item.title}'")
+    }
+
+    private fun onPrefetchReady(item: PlaybackMedia, file: File) {
+        if (nextItem?.mediaId != item.mediaId) return
+        if (nextItem?.uri?.scheme == "file") return
+        val local = item.copy(uri = Uri.fromFile(file), isNetwork = false)
+        Log.i(TAG, "standby ← disk '${item.title}' ${file.length()}B")
+        nextWarming = false
+        prepareStandby(local)
     }
 
     override fun release() {
@@ -327,6 +346,7 @@ class VlcPlaybackEngine(
         runCatching { nextMedia?.release() }
         currentMedia = null
         nextMedia = null
+        prefetcher.release()
         closeDescriptors()
         closeNextDescriptors()
         runCatching { libVLC.release() }
@@ -511,6 +531,10 @@ class VlcPlaybackEngine(
     }
 
     private fun openInput(item: PlaybackMedia): OpenedInput {
+        prefetcher.fileIfReady(item.mediaId)?.let { f ->
+            Log.i(TAG, "open disk '${item.title}' ${f.length()}B")
+            return OpenedInput.Path(f.absolutePath)
+        }
         val uri = item.uri
         val scheme = uri.scheme?.lowercase().orEmpty()
         return when {
@@ -556,6 +580,7 @@ class VlcPlaybackEngine(
         }
         if (item.isNetwork) {
             media.addOption(":network-caching=$NETWORK_CACHE_MS")
+            media.addOption(":http-reconnect")
         } else {
             media.addOption(":file-caching=$FILE_CACHE_MS")
         }
@@ -637,9 +662,9 @@ class VlcPlaybackEngine(
 
     companion object {
         private const val TAG = "VlcEngine"
-        private const val FILE_CACHE_MS = 1500
-        private const val NETWORK_CACHE_MS = 6000
-        private const val PREFETCH_BYTES = 4 * 1024 * 1024
+        private const val FILE_CACHE_MS = 2500
+        private const val NETWORK_CACHE_MS = 20_000
+        private const val PREFETCH_BYTES = 16 * 1024 * 1024
         private val SPEAKER_AOUTS = arrayOf("android_audiotrack", "aaudio", "opensles")
 
         val DESCRIPTOR = PlaybackEngineDescriptor(
