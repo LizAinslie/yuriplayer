@@ -173,7 +173,8 @@ suspend fun expandAlbumTracksByName(
  */
 fun dedupeAlbumPageTracks(tracks: List<Song>): List<Song> {
     if (tracks.isEmpty()) return emptyList()
-    val groups = tracks.groupBy { albumPageIdentity(it) }
+    val unique = tracks.distinctBy { it.songKey }
+    val groups = unique.groupBy { albumPageIdentity(it) }
     val albumHint = tracks.firstOrNull()?.album
     if (groups.any { it.value.size > 1 } || groups.size != tracks.size) {
         AlbumLog.identityGroups(albumHint, groups)

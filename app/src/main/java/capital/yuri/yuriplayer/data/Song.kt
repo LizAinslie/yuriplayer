@@ -142,8 +142,14 @@ fun foldTagToken(value: String): String {
         .replace('ł', 'l')
         .replace('đ', 'd')
         .replace("ß", "ss")
+    // Jenna's vs Jenna's (U+2019) split Clancy track 7 into two rows.
+    t = t.replace(APOSTROPHE_LIKE, "")
     return t
 }
+
+private val APOSTROPHE_LIKE = Regex(
+    "[\u0027\u0060\u00B4\u2018\u2019\u201A\u201B\u2032\u02BB\u02BC\uFF07]"
+)
 
 fun albumKey(name: String?, artist: String?): String {
     val a = artistKey(artist) ?: foldTagToken(primaryArtistName(artist) ?: artist ?: "")
