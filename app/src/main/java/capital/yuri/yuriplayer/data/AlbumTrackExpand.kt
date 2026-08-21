@@ -41,6 +41,56 @@ suspend fun expandAlbumTracks(
     )
 }
 
+/** Two SQL lookups, no search. Enough to paint the album page immediately. */
+suspend fun fastExpandAlbumTracks(
+    dao: CatalogDao,
+    albumName: String?,
+    artistName: String?,
+    seedKey: String? = null,
+    extraSeedSongs: List<Song> = emptyList()
+): List<Song> {
+    val name = albumName?.trim().orEmpty()
+    val artist = artistName?.trim().orEmpty()
+    if (name.isEmpty() && seedKey.isNullOrBlank() && extraSeedSongs.isEmpty()) return emptyList()
+
+    val bySongKey = LinkedHashMap<String, CatalogTrackEntity>()
+    fun put(row: CatalogTrackEntity) { bySongKey.putIfAbsent(row.songKey, row) }
+
+    if (!seedKey.isNullOrBlank()) {
+        dao.getTracksForAlbum(seedKey).forEach { put(it) }
+    }
+    if (name.isNotEmpty()) {
+        dao.getTracksForAlbumNameArtist(name, artist, limit = 400).forEach { put(it) }
+        if (bySongKey.size < 4) {
+            dao.getTracksByAlbumName(name, limit = 400).forEach { put(it) }
+        }
+    }
+
+    val artistFolded = foldTagToken(primaryArtistName(artistName) ?: artistName ?: "")
+    val songs = bySongKey.values.filter { row ->
+        val albumOk = name.isEmpty() ||
+            TrackIdentity.albumsMatch(row.album, name) ||
+            TrackIdentity.albumsNearlyMatch(row.album, name) ||
+            (!seedKey.isNullOrBlank() && row.albumKey == seedKey)
+        if (!albumOk) return@filter false
+        if (artistFolded.isEmpty()) return@filter true
+        val aa = foldTagToken(
+            primaryArtistName(row.albumArtist ?: row.artist) ?: row.albumArtist ?: row.artist ?: ""
+        )
+        val ta = foldTagToken(primaryArtistName(row.artist) ?: row.artist ?: "")
+        aa.isEmpty() || aa == artistFolded || ta == artistFolded ||
+            aa.contains(artistFolded) || artistFolded.contains(aa)
+    }.map { it.toSong() }
+
+    val deduped = dedupeAlbumPageTracks(songs + extraSeedSongs)
+    AlbumLog.i(name, "fast expand n=${deduped.size} raw=${bySongKey.size}")
+    return deduped.sortedWith(
+        compareBy<Song> { it.discNumber ?: 1 }
+            .thenBy { it.trackNumber ?: Int.MAX_VALUE }
+            .thenBy(String.CASE_INSENSITIVE_ORDER) { it.displayTitle }
+    )
+}
+
 suspend fun expandAlbumTracksByName(
     dao: CatalogDao,
     albumName: String?,

@@ -21,6 +21,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
@@ -43,6 +44,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -78,12 +80,11 @@ import capital.yuri.yuriplayer.data.albumKey
 import capital.yuri.yuriplayer.data.AlbumLog
 import capital.yuri.yuriplayer.data.dedupeAlbumPageTracks
 import capital.yuri.yuriplayer.data.db.CatalogDao
-import capital.yuri.yuriplayer.data.findLocalAlbum
-import capital.yuri.yuriplayer.data.mergeAlbumSources
 import capital.yuri.yuriplayer.data.primaryArtistName
 import capital.yuri.yuriplayer.data.resolveAlbumItem
 import capital.yuri.yuriplayer.data.theme.ArtColorSurface
 import capital.yuri.yuriplayer.data.theme.ThemeService
+import capital.yuri.yuriplayer.ui.SongRowSkeleton
 import capital.yuri.yuriplayer.ui.formatTrackCount
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -180,59 +181,59 @@ fun AlbumDetailScreen(
     }
 
     var liveAlbum by remember(stableKey) { mutableStateOf(album) }
+    var expanding by remember(stableKey) { mutableStateOf(true) }
+    var expectedTrackCount by remember(stableKey) {
+        mutableIntStateOf(album.trackCount.coerceAtLeast(album.songs.size))
+    }
     LaunchedEffect(stableKey) {
         AlbumLog.i(
             album.name,
             "PAGE open stableKey='$stableKey' albumKey='$albumKeyStr' seed=${album.songs.size} artist='${album.artist}'"
         )
-        AlbumLog.songs(album.name, "page.seed", album.songs)
+        var current = album
+        fun publish(next: AlbumItem, stage: String) {
+            val union = dedupeAlbumPageTracks(current.songs + next.songs + album.songs)
+            val before = current.songs.size
+            val songs = if (union.size < before && before > 1) {
+                AlbumLog.w(album.name, "PAGE $stage would shrink $before → ${union.size}")
+                dedupeAlbumPageTracks(current.songs + album.songs + next.songs)
+            } else union
+            current = next.copy(
+                artist = primaryArtistName(next.artist) ?: next.artist,
+                songs = songs,
+                trackCount = songs.size.coerceAtLeast(next.trackCount)
+            )
+            liveAlbum = current
+            expectedTrackCount = expectedTrackCount.coerceAtLeast(current.trackCount)
+            onExpanded(current)
+            AlbumLog.i(album.name, "PAGE $stage n=${current.songs.size}")
+        }
+
+        expanding = true
+        val artistName = primaryArtistName(album.artist) ?: album.artist
+        val counted = withContext(Dispatchers.IO) {
+            catalog.albumTrackCount(stableKey)
+                ?: catalog.albumTrackCount(albumKeyStr)
+        }
+        if (counted != null) expectedTrackCount = expectedTrackCount.coerceAtLeast(counted)
+
+        val fast = withContext(Dispatchers.IO) {
+            catalog.fastAlbumItem(album.name, artistName, stableKey, album.songs)
+                ?: catalog.fastAlbumItem(album.name, artistName, albumKeyStr, album.songs)
+        }
+        if (fast != null) publish(fast, "fast")
+
         val resolved = withContext(Dispatchers.IO) {
             resolveAlbumItem(
                 dao = catalogDao,
                 name = album.name,
-                artist = primaryArtistName(album.artist) ?: album.artist,
-                seedSongs = album.songs,
+                artist = artistName,
+                seedSongs = current.songs,
                 library = library
             )
         }
-        AlbumLog.i(album.name, "PAGE resolved n=${resolved?.songs?.size ?: 0}")
-        val fromCatalog = withContext(Dispatchers.IO) {
-            catalog.albumItemForKey(stableKey)
-                ?: catalog.albumItemForKey(albumKeyStr)
-        }
-        AlbumLog.i(album.name, "PAGE catalog n=${fromCatalog?.songs?.size ?: 0} name='${fromCatalog?.name}'")
-        val fromLocal = findLocalAlbum(
-            library,
-            album.name,
-            primaryArtistName(album.artist) ?: album.artist
-        )
-        AlbumLog.i(album.name, "PAGE local n=${fromLocal?.songs?.size ?: 0}")
-        val merged = mergeAlbumSources(
-            seed = resolved ?: album,
-            fromCatalog = fromCatalog,
-            fromLocal = fromLocal
-        )
-        val union = dedupeAlbumPageTracks(liveAlbum.songs + merged.songs + album.songs)
-        var next = merged.copy(
-            artist = primaryArtistName(merged.artist) ?: merged.artist,
-            songs = union,
-            trackCount = union.size.coerceAtLeast(merged.trackCount)
-        )
-        val before = maxOf(liveAlbum.songs.size, album.songs.size)
-        if (next.songs.size < before && before > 1) {
-            AlbumLog.w(
-                album.name,
-                "PAGE WOULD SHRINK $before → ${next.songs.size} titles=${next.songs.joinToString { it.displayTitle }} — keeping $before"
-            )
-            AlbumLog.songs(album.name, "page.wouldKeep", liveAlbum.songs + album.songs)
-            AlbumLog.songs(album.name, "page.wouldDropTo", next.songs)
-            val kept = dedupeAlbumPageTracks(liveAlbum.songs + album.songs + next.songs)
-            next = next.copy(songs = kept, trackCount = kept.size.coerceAtLeast(before))
-        }
-        AlbumLog.i(album.name, "PAGE apply n=${next.songs.size} artist='${next.artist}'")
-        AlbumLog.songs(album.name, "page.apply", next.songs)
-        liveAlbum = next
-        onExpanded(next)
+        if (resolved != null) publish(resolved, "full")
+        expanding = false
     }
 
     val collapseRangePx = with(density) { (ExpandedHeaderBody - CollapsedBarHeight).toPx() }
@@ -483,6 +484,10 @@ fun AlbumDetailScreen(
                                 onEditMetadata = { onEditSong(song) }
                             )
                         }
+                    }
+                    if (expanding && liveAlbum.songs.size < expectedTrackCount) {
+                        val extra = (expectedTrackCount - liveAlbum.songs.size).coerceIn(1, 16)
+                        items(extra) { SongRowSkeleton() }
                     }
                 }
             }

@@ -153,6 +153,29 @@ class CatalogRepository(
             lightAppearsOnForArtist(dao, artistKey, displayName)
         }
 
+    suspend fun fastAlbumItem(
+        name: String?,
+        artist: String?,
+        albumKey: String?,
+        seed: List<Song> = emptyList()
+    ): AlbumItem? = withContext(Dispatchers.IO) {
+        val songs = fastExpandAlbumTracks(dao, name, artist, albumKey, seed)
+        if (songs.isEmpty() && seed.isEmpty()) return@withContext null
+        val row = albumKey?.takeIf { it.isNotBlank() }?.let { dao.getAlbum(it) }
+        val merged = dedupeAlbumPageTracks(songs + seed)
+        AlbumItem(
+            name = name ?: row?.name ?: merged.firstOrNull()?.album,
+            artist = artist ?: row?.artist ?: merged.firstOrNull()?.effectiveAlbumArtist,
+            trackCount = merged.size.coerceAtLeast(row?.trackCount ?: 0),
+            songs = merged
+        )
+    }
+
+    suspend fun albumTrackCount(albumKey: String): Int? = withContext(Dispatchers.IO) {
+        if (albumKey.isBlank()) return@withContext null
+        dao.getAlbum(albumKey)?.trackCount
+    }
+
     suspend fun albumItemForKey(albumKey: String): AlbumItem? = withContext(Dispatchers.IO) {
         albumItemForKeyLocked(albumKey)
     }

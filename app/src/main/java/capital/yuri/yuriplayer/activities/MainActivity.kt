@@ -513,28 +513,23 @@ fun YuriApp(
 
     fun openAlbumForSong(song: Song) {
         val key = albumKey(song.album, song.effectiveAlbumArtist)
-        scope.launch {
-            val fromCatalog = withContext(Dispatchers.IO) { catalog.albumItemForKey(key) }
-            val fromLocal = library.albums(taggedOnly = false).firstOrNull {
-                albumKey(it.name, it.artist) == key
-            } ?: library.albums(taggedOnly = false).firstOrNull {
-                it.name.equals(song.album, ignoreCase = true)
-            }
-            val album = when {
-                fromCatalog != null && fromCatalog.songs.isNotEmpty() -> fromCatalog
-                fromLocal != null && fromLocal.songs.isNotEmpty() -> fromLocal
-                fromCatalog != null -> fromCatalog
-                song.hasAlbum -> AlbumItem(
-                    name = song.album,
-                    artist = song.effectiveAlbumArtist,
-                    trackCount = 1,
-                    songs = listOf(song)
-                )
-                else -> null
-            }
-            if (album != null) openAlbumResolved(album, song.songKey)
-            else Toast.makeText(context, "Album not found in library", Toast.LENGTH_SHORT).show()
+        val fromLocal = library.albums(taggedOnly = false).firstOrNull {
+            albumKey(it.name, it.artist) == key
+        } ?: library.albums(taggedOnly = false).firstOrNull {
+            it.name.equals(song.album, ignoreCase = true)
         }
+        val seed = when {
+            fromLocal != null && fromLocal.songs.isNotEmpty() -> fromLocal
+            song.hasAlbum -> AlbumItem(
+                name = song.album,
+                artist = song.effectiveAlbumArtist,
+                trackCount = 1,
+                songs = listOf(song)
+            )
+            else -> null
+        }
+        if (seed != null) openAlbumResolved(seed, song.songKey)
+        else Toast.makeText(context, "Album not found in library", Toast.LENGTH_SHORT).show()
     }
 
     fun openArtistByName(name: String) {
