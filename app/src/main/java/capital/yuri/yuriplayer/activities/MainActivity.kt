@@ -457,33 +457,24 @@ fun YuriApp(
             themeStore.updateCurrent(context, null, baseScheme)
             return@LaunchedEffect
         }
-        val cur = themeStore.current.value
-        val already = cur != null && (
-            cur.songId == incoming.id ||
-                (incoming.path != null && cur.path == incoming.path)
-            )
-        val peek = themeStore.peekNext.value
-        val warmNext = peek != null && (
-            peek.songId == incoming.id ||
-                (incoming.path != null && peek.path == incoming.path)
-            )
+        val already = themeStore.isShowing(incoming)
+        val warmNext = themeStore.themeIsFor(themeStore.peekNext.value, incoming)
+        val warmPrev = themeStore.themeIsFor(themeStore.peekPrev.value, incoming)
         if (already) {
-            // Cover already matches; still refresh neighbors.
+            // Cover already matches this song.
         } else if (warmNext) {
             // SwipeableAlbumArt slides then promoteNext. Snap if that doesn't.
             delay(320)
-            val still = themeStore.current.value
-            val ok = still != null && (
-                still.songId == incoming.id ||
-                    (incoming.path != null && still.path == incoming.path)
-                )
-            if (!ok) themeStore.promoteNext()
-            val after = themeStore.current.value
-            val ok2 = after != null && (
-                after.songId == incoming.id ||
-                    (incoming.path != null && after.path == incoming.path)
-                )
-            if (!ok2) themeStore.updateCurrent(context, incoming, baseScheme)
+            if (!themeStore.isShowing(incoming)) themeStore.promoteNext()
+            if (!themeStore.isShowing(incoming)) {
+                themeStore.updateCurrent(context, incoming, baseScheme)
+            }
+        } else if (warmPrev) {
+            delay(320)
+            if (!themeStore.isShowing(incoming)) themeStore.promotePrev()
+            if (!themeStore.isShowing(incoming)) {
+                themeStore.updateCurrent(context, incoming, baseScheme)
+            }
         } else {
             themeStore.updateCurrent(context, incoming, baseScheme)
         }

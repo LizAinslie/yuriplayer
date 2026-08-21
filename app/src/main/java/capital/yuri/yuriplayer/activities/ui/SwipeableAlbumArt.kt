@@ -78,6 +78,7 @@ fun SwipeableAlbumArt(
     /** Playing track identity — when this changes (end-of-track, skip), slide art. */
     playingSongId: Long? = null,
     playingSongKey: String? = null,
+    playingArtKey: String? = null,
     modifier: Modifier = Modifier,
     horizontalInset: androidx.compose.ui.unit.Dp = 20.dp
 ) {
@@ -221,23 +222,23 @@ fun SwipeableAlbumArt(
         val prv = latestPrev.value
         val id = playingSongId
         val path = playingSongKey
-        val matchesNext = nxt != null && themeMatches(nxt, id, path)
-        val matchesPrev = prv != null && themeMatches(prv, id, path)
+        val matchesNext = nxt != null && themeMatches(nxt, id, path, playingArtKey)
+        val matchesPrev = prv != null && themeMatches(prv, id, path, playingArtKey)
 
         when {
-            matchesNext -> {
-                animatingSkip = -1
-                animateSkipTo(-screenWidthPx)
-                latestPromoteNext.value()
+            matchesPrev -> {
+                animatingSkip = 1
+                animateSkipTo(screenWidthPx)
+                latestPromotePrev.value()
                 onHorizontalFraction(0f)
                 offsetX.snapTo(0f)
                 offsetY.snapTo(0f)
                 animatingSkip = 0
             }
-            matchesPrev -> {
-                animatingSkip = 1
-                animateSkipTo(screenWidthPx)
-                latestPromotePrev.value()
+            matchesNext -> {
+                animatingSkip = -1
+                animateSkipTo(-screenWidthPx)
+                latestPromoteNext.value()
                 onHorizontalFraction(0f)
                 offsetX.snapTo(0f)
                 offsetY.snapTo(0f)
@@ -337,8 +338,10 @@ fun SwipeableAlbumArt(
 private fun themeMatches(
     theme: PlayerThemeStore.Theme,
     songId: Long?,
-    songKey: String?
+    songKey: String?,
+    artKey: String?
 ): Boolean {
+    if (!artKey.isNullOrBlank() && theme.artKey != artKey) return false
     if (songId != null && theme.songId == songId) return true
     if (!songKey.isNullOrBlank() && theme.path == songKey) return true
     return false

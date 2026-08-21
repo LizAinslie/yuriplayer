@@ -104,12 +104,11 @@ class Media3PlaybackEngine(
                 buffering = false
                 if (player.hasNextMediaItem()) {
                     // Some HTTP streams never AUTO-transition; kick the
-                    // already-queued next item ourselves instead of sitting
-                    // on ENDED until the user skips.
+                    // already-queued next item. Queue advance comes from
+                    // the AUTO onMediaItemTransition — don't fire
+                    // onAutoAdvanced here or we skip two tracks.
                     player.seekToNextMediaItem()
                     player.playWhenReady = true
-                    compactPlayed()
-                    dispatch { onAutoAdvanced() }
                 } else {
                     dispatch { onEnded() }
                 }
