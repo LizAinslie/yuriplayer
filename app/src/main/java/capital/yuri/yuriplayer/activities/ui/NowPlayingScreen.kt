@@ -221,22 +221,33 @@ fun NowPlayingScreen(
 
     fun requestSkipNext() {
         skipDirection = -1
+        skipToken += 1
         onNext()
     }
 
     fun requestSkipPrev() {
         if (!buttonGoesToPrevTrack) {
             skipDirection = 0
+            skipToken += 1
+            hFrac = 0f
             onPrev()
             return
         }
         skipDirection = 1
+        skipToken += 1
         onForcePrev()
     }
 
     LaunchedEffect(songKey) {
         sliding = false
         sliderPosition = 0f
+        hFrac = 0f
+        dismissFrac = 0f
+    }
+
+    LaunchedEffect(snapshot.shuffleEnabled) {
+        hFrac = 0f
+        skipDirection = 0
     }
 
     // Theme is kept warm by MainActivity on song change. Don't re-extract here —

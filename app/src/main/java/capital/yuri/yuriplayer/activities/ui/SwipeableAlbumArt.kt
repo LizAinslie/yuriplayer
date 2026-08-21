@@ -115,29 +115,35 @@ fun SwipeableAlbumArt(
         }
     }
 
+    suspend fun resetOffsets() {
+        offsetX.snapTo(0f)
+        offsetY.snapTo(0f)
+        onHorizontalFraction(0f)
+        onDismissFraction(0f)
+        animatingSkip = 0
+        slideOutBmp = null
+        slideInBmp = null
+        suppressSongAnim = false
+    }
+
     suspend fun finishNext(commit: Boolean) {
         suppressSongAnim = true
         onPromoteNext()
-        onHorizontalFraction(0f)
-        offsetX.snapTo(0f)
-        offsetY.snapTo(0f)
         if (commit) onSwipeNext()
+        resetOffsets()
     }
 
     suspend fun finishPrev(commit: Boolean) {
         suppressSongAnim = true
         onPromotePrev()
-        onHorizontalFraction(0f)
-        offsetX.snapTo(0f)
-        offsetY.snapTo(0f)
         if (commit) onSwipePrev()
+        resetOffsets()
     }
 
     /** Restart current track only — no art/theme swap. */
     suspend fun finishRestartOnly() {
-        onHorizontalFraction(0f)
+        resetOffsets()
         offsetX.animateTo(0f, spring(stiffness = Spring.StiffnessMedium))
-        offsetY.snapTo(0f)
         onRestartCurrent()
     }
 
@@ -184,31 +190,30 @@ fun SwipeableAlbumArt(
     }
 
     LaunchedEffect(skipToken) {
-        if (skipToken == 0L || skipDirection == 0) return@LaunchedEffect
+        if (skipToken == 0L) return@LaunchedEffect
         if (animatingSkip != 0) {
             onSkipConsumed()
             return@LaunchedEffect
         }
-        when {
-            skipDirection < 0 && nextSong != null -> {
-                animatingSkip = -1
-                animateSkipTo(-screenWidthPx)
-                finishNext(commit = commitSkip)
-                animatingSkip = 0
+        try {
+            when {
+                skipDirection == 0 -> resetOffsets()
+                skipDirection < 0 && nextSong != null -> {
+                    animatingSkip = -1
+                    animateSkipTo(-screenWidthPx)
+                    // Parent already committed the skip (button / auto).
+                    finishNext(commit = false)
+                }
+                skipDirection > 0 && effectivePrev != null -> {
+                    animatingSkip = 1
+                    animateSkipTo(screenWidthPx)
+                    finishPrev(commit = false)
+                }
+                else -> resetOffsets()
             }
-            skipDirection > 0 && effectivePrev != null -> {
-                animatingSkip = 1
-                animateSkipTo(screenWidthPx)
-                finishPrev(commit = commitSkip)
-                animatingSkip = 0
-            }
-            // Button Previous while still in the "restart current" window.
-            skipDirection > 0 -> {
-                if (commitSkip) onSwipePrev()
-            }
-            skipDirection < 0 -> if (commitSkip) onSwipeNext()
+        } finally {
+            onSkipConsumed()
         }
-        onSkipConsumed()
     }
 
     val latestPromoteNext = rememberUpdatedState(onPromoteNext)
@@ -220,12 +225,16 @@ fun SwipeableAlbumArt(
         val previousKey = lastSongKey
         lastSongKey = playingSongKey
         if (previousKey == null || playingSongKey == null || previousKey == playingSongKey) {
-            if (animatingSkip == 0) heldOutgoingBmp = currentBmp
+            if (animatingSkip == 0) {
+                heldOutgoingBmp = currentBmp
+                resetOffsets()
+            }
             return@LaunchedEffect
         }
         if (suppressSongAnim) {
             suppressSongAnim = false
             heldOutgoingBmp = currentBmp
+            resetOffsets()
             return@LaunchedEffect
         }
         if (animatingSkip != 0) {
@@ -233,20 +242,24 @@ fun SwipeableAlbumArt(
             return@LaunchedEffect
         }
 
-        val dir = if (latestSkipDir.value > 0) 1 else -1
-        slideOutBmp = heldOutgoingBmp ?: currentBmp
-        slideInBmp = currentBmp
-        animatingSkip = dir
-        animateSkipTo(if (dir > 0) screenWidthPx else -screenWidthPx)
-        if (dir > 0) latestPromotePrev.value() else latestPromoteNext.value()
-        onHorizontalFraction(0f)
-        offsetX.snapTo(0f)
-        offsetY.snapTo(0f)
-        slideOutBmp = null
-        slideInBmp = null
-        animatingSkip = 0
-        heldOutgoingBmp = currentBmp
-        onSkipConsumed()
+        val dir = latestSkipDir.value
+        if (dir == 0) {
+            heldOutgoingBmp = currentBmp
+            resetOffsets()
+            onSkipConsumed()
+            return@LaunchedEffect
+        }
+        try {
+            slideOutBmp = heldOutgoingBmp ?: currentBmp
+            slideInBmp = currentBmp
+            animatingSkip = dir
+            animateSkipTo(if (dir > 0) screenWidthPx else -screenWidthPx)
+            if (dir > 0) latestPromotePrev.value() else latestPromoteNext.value()
+        } finally {
+            resetOffsets()
+            heldOutgoingBmp = currentBmp
+            onSkipConsumed()
+        }
     }
 
     LaunchedEffect(currentBmp, playingSongKey) {

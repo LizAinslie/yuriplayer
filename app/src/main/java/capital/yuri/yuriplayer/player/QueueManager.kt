@@ -126,7 +126,19 @@ class QueueManager {
         }
     }
 
-    fun peekPrevious(): Song? = playedStack.lastOrNull()
+    fun peekPrevious(): Song? {
+        linearPrevious()?.let { return it }
+        return playedStack.lastOrNull()
+    }
+
+    /** Previous item still sitting in the queue (unshuffled album/playlist). */
+    private fun linearPrevious(): Song? {
+        if (shuffleEnabled || floatingCurrent != null) return null
+        return when (lane) {
+            QueueLane.HOT -> hotQueue.getOrNull(indexInLane - 1)
+            QueueLane.COLD -> coldQueue.getOrNull(indexInLane - 1)
+        }
+    }
 
     /** Next [limit] songs after current, hot then cold then radio. */
     fun upcoming(limit: Int = 2): List<Song> {
@@ -837,11 +849,18 @@ class QueueManager {
         forceTrackChange: Boolean = false
     ): AdvanceResult {
         val current = currentSong()
-        val canGoPrev = playedStack.isNotEmpty()
-        if (!canGoPrev) {
+        if (!forceTrackChange && currentPositionMs >= PREV_RESTART_MS) {
             return AdvanceResult(song = current, seekToStart = true)
         }
-        if (!forceTrackChange && currentPositionMs >= PREV_RESTART_MS) {
+
+        linearPrevious()?.let { prev ->
+            indexInLane -= 1
+            publish()
+            Log.i(TAG, "skipPrevious linear → '${prev.displayTitle}' idx=$indexInLane")
+            return AdvanceResult(song = prev)
+        }
+
+        if (playedStack.isEmpty()) {
             return AdvanceResult(song = current, seekToStart = true)
         }
 
@@ -875,6 +894,7 @@ class QueueManager {
         floatingCurrent = null
 
         publish()
+        Log.i(TAG, "skipPrevious history → '${prev.displayTitle}'")
         return AdvanceResult(song = prev)
     }
 
