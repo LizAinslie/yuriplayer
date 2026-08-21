@@ -210,6 +210,35 @@ class PlayerSession(
     fun positionMs(): Long = engine.getPositionMs()
     fun durationMs(): Long = engine.getDurationMs()
 
+    fun snapshot(): PlaybackSnapshot = PlaybackSnapshot(
+        queue = _queue.value,
+        linear = linear,
+        index = _index.value,
+        history = _history.value,
+        shuffle = _shuffle.value,
+        repeat = _repeat.value,
+        volume = _volume.value,
+        positionMs = engine.getPositionMs()
+    )
+
+    fun restore(snap: PlaybackSnapshot, play: Boolean = false) {
+        if (snap.queue.isEmpty()) return
+        linear = snap.linear.ifEmpty { snap.queue }
+        _shuffle.value = snap.shuffle
+        _repeat.value = snap.repeat
+        setVolume(snap.volume)
+        _queue.value = snap.queue
+        _history.value = snap.history
+        val i = snap.index.coerceIn(snap.queue.indices)
+        _index.value = i
+        _current.value = snap.queue[i]
+        val nextIdx = peekNextIndex(fromUser = false)
+        val next = nextIdx?.let { snap.queue.getOrNull(it) }?.takeIf { it.id != snap.queue[i].id }
+        engine.load(snap.queue[i].toPlaybackMedia(), next?.toPlaybackMedia(), snap.positionMs.coerceAtLeast(0L))
+        if (play) engine.play() else engine.pause()
+        warmSuccessor()
+    }
+
     fun release() {
         engine.removeListener(listener)
         engine.release()
@@ -290,3 +319,14 @@ class PlayerSession(
         private const val HISTORY_CAP = 50
     }
 }
+
+data class PlaybackSnapshot(
+    val queue: List<Track> = emptyList(),
+    val linear: List<Track> = emptyList(),
+    val index: Int = 0,
+    val history: List<Track> = emptyList(),
+    val shuffle: Boolean = false,
+    val repeat: RepeatMode = RepeatMode.OFF,
+    val volume: Float = 1f,
+    val positionMs: Long = 0L
+)

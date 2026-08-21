@@ -68,14 +68,38 @@ class DesktopPlaylistStore(configDir: String) {
         update(id) { pl ->
             val existing = pl.trackIds.toMutableList()
             val seen = existing.toHashSet()
+            val snaps = pl.snapshots.toMutableList()
             for (t in tracks) {
                 val already = t.playlistKeys().any { it in seen }
                 if (!already) {
-                    existing += t.catalogKey()
+                    existing += t.id
                     seen += t.playlistKeys()
                 }
+                val i = snaps.indexOfFirst { s ->
+                    s.id == t.id || s.catalogKey() == t.catalogKey() || t.id in s.playlistKeys()
+                }
+                if (i < 0) snaps += t else snaps[i] = t
             }
-            pl.copy(trackIds = existing)
+            pl.copy(trackIds = existing, snapshots = snaps)
+        }
+    }
+
+    fun remember(tracks: List<Track>) {
+        if (tracks.isEmpty()) return
+        var changed = false
+        val next = _playlists.value.map { pl ->
+            var snaps = pl.snapshots
+            for (t in tracks) {
+                if (pl.trackIds.none { it in t.playlistKeys() }) continue
+                val i = snaps.indexOfFirst { s -> s.id == t.id || s.catalogKey() == t.catalogKey() }
+                snaps = if (i < 0) snaps + t else snaps.toMutableList().also { it[i] = t }
+                changed = true
+            }
+            if (snaps === pl.snapshots) pl else pl.copy(snapshots = snaps)
+        }
+        if (changed) {
+            _playlists.value = next
+            persist()
         }
     }
 
@@ -89,7 +113,12 @@ class DesktopPlaylistStore(configDir: String) {
 
     fun removeTracks(id: String, tracks: List<Track>) {
         val drop = tracks.flatMap { it.playlistKeys() }.toHashSet()
-        update(id) { it.copy(trackIds = it.trackIds.filterNot { key -> key in drop }) }
+        update(id) {
+            it.copy(
+                trackIds = it.trackIds.filterNot { key -> key in drop },
+                snapshots = it.snapshots.filterNot { t -> t.playlistKeys().any { k -> k in drop } }
+            )
+        }
     }
 
     fun moveTrack(id: String, from: Int, to: Int) {
@@ -215,20 +244,23 @@ data class DesktopPlaylist(
     val covers: List<DesktopCover> = emptyList(),
     val activeCoverId: String? = null,
     val createdAtMs: Long = 0L,
-    val updatedAtMs: Long = 0L
+    val updatedAtMs: Long = 0L,
+    val snapshots: List<Track> = emptyList()
 ) {
     fun artworkUri(library: List<Track>): String? {
         val active = covers.firstOrNull { it.id == activeCoverId } ?: covers.firstOrNull { !it.isSecret }
         if (active != null) return File(active.path).toURI().toString()
-        return trackIds.firstNotNullOfOrNull { id ->
-            library.firstOrNull { it.id == id || it.catalogKey() == id }?.artworkUri
-        }
+        return tracks(library).firstOrNull()?.artworkUri
     }
 
     fun tracks(library: List<Track>): List<Track> {
-        if (trackIds.isEmpty() || library.isEmpty()) return emptyList()
-        val byKey = HashMap<String, Track>(library.size * 2)
+        if (trackIds.isEmpty()) return emptyList()
+        val byKey = HashMap<String, Track>()
         for (t in library) {
+            byKey.putIfAbsent(t.id, t)
+            byKey.putIfAbsent(t.catalogKey(), t)
+        }
+        for (t in snapshots) {
             byKey.putIfAbsent(t.id, t)
             byKey.putIfAbsent(t.catalogKey(), t)
         }

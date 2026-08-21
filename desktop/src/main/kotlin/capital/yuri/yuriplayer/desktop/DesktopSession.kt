@@ -9,6 +9,7 @@ import capital.yuri.yuriplayer.core.library.Track
 import capital.yuri.yuriplayer.core.os.OsMediaControls
 import capital.yuri.yuriplayer.core.platform.appDirectories
 import capital.yuri.yuriplayer.core.player.PlayerSession
+import capital.yuri.yuriplayer.core.player.PlaybackSnapshot
 import capital.yuri.yuriplayer.core.source.JellyfinCatalog
 import capital.yuri.yuriplayer.core.source.LibrarySourceStore
 import capital.yuri.yuriplayer.core.source.RemoteAccount
@@ -92,6 +93,7 @@ class DesktopSession {
     val playlists = DesktopPlaylistStore(dirs.configDir)
     val sources = LibrarySourceStore(dirs.configDir)
     private val index = DesktopIndexStore(dirs.cacheDir)
+    private val playbackStore = DesktopPlaybackStore(dirs.configDir)
     val jellyfin = JellyfinCatalog(http, sources.deviceId)
     val subsonic = SubsonicCatalog(http)
     val artists = ArtistInfoClient(
@@ -100,6 +102,7 @@ class DesktopSession {
     ) { name -> libraryArtistImages(name) }
 
     private var ticker: Job? = null
+    private var persistJob: Job? = null
     private var scanJob: Job? = null
     private var sourceJob: Job? = null
     private val scanGate = Mutex()
@@ -149,6 +152,8 @@ class DesktopSession {
             sources.remotes.collect { refreshScanSources() }
         }
         hydrateIndex()
+        restorePlayback()
+        startPersist()
     }
 
     private fun hydrateIndex() {
@@ -174,8 +179,43 @@ class DesktopSession {
             cached.isEmpty() -> "Indexing…"
             else -> "${cached.size} tracks"
         }
-        // Same as mobile: warm index → partial; empty → first full walk.
+        val snaps = playlists.playlists.value.flatMap { it.snapshots }
+        if (snaps.isNotEmpty()) mergeTracks(snaps)
         requestScan(force = cached.isEmpty())
+    }
+
+    private fun restorePlayback() {
+        val snap = playbackStore.load() ?: return
+        player.restore(resolveSnap(snap), play = false)
+        _positionMs.value = player.positionMs()
+        _durationMs.value = player.durationMs()
+    }
+
+    private fun resolveSnap(snap: PlaybackSnapshot): PlaybackSnapshot {
+        val lib = _tracks.value
+        if (lib.isEmpty()) return snap
+        val byKey = HashMap<String, Track>(lib.size * 2)
+        for (t in lib) {
+            byKey.putIfAbsent(t.id, t)
+            byKey.putIfAbsent(t.catalogKey(), t)
+        }
+        fun resolve(list: List<Track>) = list.map { t ->
+            byKey[t.id] ?: byKey[t.catalogKey()] ?: t
+        }
+        return snap.copy(
+            queue = resolve(snap.queue),
+            linear = resolve(snap.linear),
+            history = resolve(snap.history)
+        )
+    }
+
+    private fun startPersist() {
+        persistJob = scope.launch {
+            while (isActive) {
+                delay(5_000)
+                playbackStore.save(player.snapshot())
+            }
+        }
     }
 
     fun playTrack(track: Track) {
@@ -327,6 +367,7 @@ class DesktopSession {
         if (incoming.isEmpty()) return
         mergeTracks(incoming)
         persistIndex()
+        playlists.remember(incoming)
     }
 
     private fun replaceSourceTracks(sourceId: String, incoming: List<Track>) {
@@ -780,7 +821,9 @@ class DesktopSession {
     }
 
     fun release() {
+        persistJob?.cancel()
         ticker?.cancel()
+        playbackStore.save(player.snapshot())
         media.release()
         player.release()
         runCatching { http.close() }

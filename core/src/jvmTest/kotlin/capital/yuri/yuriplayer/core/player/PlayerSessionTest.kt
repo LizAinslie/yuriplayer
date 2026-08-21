@@ -70,6 +70,23 @@ class PlayerSessionTest {
         assertEquals("1", session.current.value?.id)
         assertEquals(listOf("1", "2", "9"), session.queue.value.map { it.id })
     }
+
+    @Test
+    fun restoreKeepsQueueAndDoesNotPlay() {
+        val engine = FakeEngine()
+        val session = PlayerSession(engine)
+        val list = tracks(4)
+        session.play(list, 2)
+        session.cycleRepeat()
+        val snap = session.snapshot().copy(positionMs = 12_000L)
+        val other = PlayerSession(FakeEngine())
+        other.restore(snap, play = false)
+        assertEquals("3", other.current.value?.id)
+        assertEquals(12_000L, other.positionMs())
+        assertEquals(listOf("1", "2", "3", "4"), other.queue.value.map { it.id })
+        assertEquals(RepeatMode.ALL, other.repeat.value)
+        assertFalse(other.isPlaying.value)
+    }
 }
 
 private class FakeEngine : PlaybackEngine {
@@ -81,11 +98,14 @@ private class FakeEngine : PlaybackEngine {
     var lastSeek = -1L
     var played = false
     private var next: PlaybackMedia? = null
+    private var pos = 0L
 
     override fun load(current: PlaybackMedia, successor: PlaybackMedia?, startPositionMs: Long) {
         _uri.value = current.uri
         next = successor
-        _playing.value = true
+        lastSeek = startPositionMs
+        pos = startPositionMs
+        _playing.value = false
     }
 
     override fun play() {
@@ -103,9 +123,10 @@ private class FakeEngine : PlaybackEngine {
 
     override fun seekTo(positionMs: Long) {
         lastSeek = positionMs
+        pos = positionMs
     }
 
-    override fun getPositionMs(): Long = 0
+    override fun getPositionMs(): Long = pos
     override fun getDurationMs(): Long = 180_000
     override fun hasPreparedNext(): Boolean = next != null
     override fun playPreparedNext(): Boolean = false

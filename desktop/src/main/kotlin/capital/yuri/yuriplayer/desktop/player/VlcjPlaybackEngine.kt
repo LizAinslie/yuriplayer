@@ -112,8 +112,8 @@ class VlcjPlaybackEngine : PlaybackEngine {
                 return@onVlc
             }
             val mrl = toMrl(current.uri)
-            System.err.println("Vlcj play $mrl")
-            val ok = p.media().play(mrl, *mediaOptions(current))
+            System.err.println("Vlcj load $mrl")
+            val ok = p.media().prepare(mrl, *mediaOptions(current))
             if (!ok) {
                 listeners.forEach { it.onError("Could not open ${current.title}", recoverable = true) }
                 return@onVlc
@@ -121,8 +121,9 @@ class VlcjPlaybackEngine : PlaybackEngine {
             p.audio().setVolume(100)
             p.audio().setMute(false)
             if (startPositionMs > 0) p.controls().setTime(startPositionMs)
+            p.controls().setPause(true)
             _currentUri.value = current.uri
-            _isPlaying.value = true
+            _isPlaying.value = false
         }
     }
 
