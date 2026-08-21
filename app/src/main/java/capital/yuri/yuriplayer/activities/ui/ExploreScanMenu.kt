@@ -180,10 +180,22 @@ fun ExploreScanMenu() {
                                 text = { Text("  Scan ${row.name} only") },
                                 onClick = {
                                     expanded = false
+                                    explore.requestRemoteScan(force = false, sourceId = row.id)
+                                    Toast.makeText(
+                                        context,
+                                        "Checking ${row.name} for changes…",
+                                        Toast.LENGTH_SHORT
+                                    ).show()
+                                }
+                            )
+                            DropdownMenuItem(
+                                text = { Text("  Force re-scan ${row.name}") },
+                                onClick = {
+                                    expanded = false
                                     explore.requestRemoteScan(force = true, sourceId = row.id)
                                     Toast.makeText(
                                         context,
-                                        "Scanning ${row.name}…",
+                                        "Re-scanning ${row.name}…",
                                         Toast.LENGTH_SHORT
                                     ).show()
                                 }

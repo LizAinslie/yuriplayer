@@ -293,9 +293,32 @@ class CatalogRepository(
         sourceType: String,
         sourceInstanceId: Long?,
         seenAt: Long = System.currentTimeMillis()
-    ) = withContext(Dispatchers.IO) {
-        if (songs.isEmpty()) return@withContext
-        val entities = songs.map { song ->
+    ): IngestStats = withContext(Dispatchers.IO) {
+        ingestRemoteDeltaLocked(songs, sourceType, sourceInstanceId, seenAt)
+    }
+
+    data class IngestStats(
+        val inserted: Int = 0,
+        val updated: Int = 0,
+        val unchanged: Int = 0
+    ) {
+        val changed: Int get() = inserted + updated
+        val seen: Int get() = inserted + updated + unchanged
+        operator fun plus(other: IngestStats) = IngestStats(
+            inserted = inserted + other.inserted,
+            updated = updated + other.updated,
+            unchanged = unchanged + other.unchanged
+        )
+    }
+
+    private suspend fun ingestRemoteDeltaLocked(
+        songs: List<Song>,
+        sourceType: String,
+        sourceInstanceId: Long?,
+        seenAt: Long
+    ): IngestStats {
+        if (songs.isEmpty()) return IngestStats()
+        val incoming = songs.map { song ->
             song.toTrackEntity(
                 sourceType = sourceType,
                 sourceInstanceId = sourceInstanceId,
@@ -303,8 +326,86 @@ class CatalogRepository(
                 seenAt = seenAt
             )
         }
-        dao.upsertTracks(entities)
-        persistCreditsLocked(songs)
+        val ids = incoming.mapNotNull { it.externalId }
+        val existing = HashMap<String, CatalogTrackEntity>(ids.size)
+        ids.chunked(400).forEach { chunk ->
+            dao.tracksByExternalIds(sourceType, sourceInstanceId, chunk).forEach { row ->
+                val key = row.externalId ?: return@forEach
+                existing[key] = row
+            }
+        }
+        val upsert = ArrayList<CatalogTrackEntity>()
+        val patchSongs = ArrayList<Song>()
+        val touch = ArrayList<String>()
+        var inserted = 0
+        var updated = 0
+        incoming.forEachIndexed { i, ent ->
+            val id = ent.externalId
+            val prev = id?.let { existing[it] }
+            when {
+                prev == null -> {
+                    upsert += ent
+                    patchSongs += songs[i]
+                    inserted++
+                }
+                prev.sameRemoteMeta(ent) -> {
+                    if (id != null) touch += id
+                }
+                else -> {
+                    upsert += ent.copy(id = prev.id, songKey = prev.songKey)
+                    patchSongs += songs[i]
+                    updated++
+                }
+            }
+        }
+        if (touch.isNotEmpty()) {
+            touch.chunked(400).forEach { chunk ->
+                dao.touchLastSeenByExternalIds(sourceType, sourceInstanceId, chunk, seenAt)
+            }
+        }
+        if (upsert.isNotEmpty()) {
+            dao.upsertTracks(upsert)
+            persistCreditsLocked(patchSongs)
+        }
+        return IngestStats(
+            inserted = inserted,
+            updated = updated,
+            unchanged = touch.size
+        )
+    }
+
+    suspend fun externalIdsForSource(sourceType: String, sourceInstanceId: Long?): Set<String> =
+        withContext(Dispatchers.IO) {
+            dao.externalIdsForSource(sourceType, sourceInstanceId).toHashSet()
+        }
+
+    /**
+     * Drop rows for this source whose [externalId] is not in [liveIds].
+     * Incomplete scans must not call this.
+     */
+    suspend fun pruneMissingExternalIds(
+        sourceType: String,
+        sourceInstanceId: Long?,
+        liveIds: Set<String>,
+        keepSongKeys: Set<String>
+    ): Int = withContext(Dispatchers.IO) {
+        val existing = dao.externalIdsForSource(sourceType, sourceInstanceId)
+        val gone = existing.filter { it !in liveIds }
+        if (gone.isEmpty()) return@withContext 0
+        var deleted = 0
+        gone.chunked(400).forEach { chunk ->
+            val keys = dao.songKeysForExternalIds(sourceType, sourceInstanceId, chunk)
+                .filter { it !in keepSongKeys }
+            if (keys.isEmpty()) return@forEach
+            dao.deleteCreditsForTracks(keys)
+            deleted += dao.deleteTracksByKeys(keys)
+        }
+        if (deleted > 0) {
+            dao.deleteOrphanAlbums()
+            dao.deleteOrphanArtists()
+            Log.i(TAG, "pruned $deleted missing $sourceType rows (live=${liveIds.size})")
+        }
+        deleted
     }
 
     suspend fun ensureTracksPresent(songs: List<Song>) = withContext(Dispatchers.IO) {
@@ -613,6 +714,20 @@ class CatalogRepository(
             updatedAtMs = seenAt,
             lastSeenAtMs = seenAt
         )
+    }
+
+    private fun CatalogTrackEntity.sameRemoteMeta(incoming: CatalogTrackEntity): Boolean {
+        if (!incoming.title.isNullOrBlank() && title != incoming.title) return false
+        if (!incoming.artist.isNullOrBlank() && artist != incoming.artist) return false
+        if (!incoming.albumArtist.isNullOrBlank() && albumArtist != incoming.albumArtist) return false
+        if (!incoming.album.isNullOrBlank() && album != incoming.album) return false
+        if (incoming.year != null && year != incoming.year) return false
+        if (incoming.trackNumber != null && trackNumber != incoming.trackNumber) return false
+        if (incoming.discNumber != null && discNumber != incoming.discNumber) return false
+        if (incoming.durationMs != null && incoming.durationMs > 0 && durationMs != incoming.durationMs) return false
+        if (incoming.albumArtUri != null && albumArtUri != incoming.albumArtUri) return false
+        if (incoming.mimeType != null && mimeType != incoming.mimeType) return false
+        return true
     }
 
     private fun CatalogTrackEntity.toSong(): Song = Song(

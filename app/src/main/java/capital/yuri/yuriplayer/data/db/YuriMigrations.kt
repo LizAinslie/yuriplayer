@@ -82,5 +82,15 @@ object YuriMigrations {
         }
     }
 
-    val ALL: Array<Migration> = arrayOf(MIGRATION_6_7, MIGRATION_7_8)
+    val MIGRATION_8_9 = object : Migration(8, 9) {
+        override fun migrate(db: SupportSQLiteDatabase) {
+            db.execSQL(
+                "CREATE INDEX IF NOT EXISTS " +
+                    "index_catalog_tracks_sourceType_sourceInstanceId_externalId " +
+                    "ON catalog_tracks(sourceType, sourceInstanceId, externalId)"
+            )
+        }
+    }
+
+    val ALL: Array<Migration> = arrayOf(MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9)
 }

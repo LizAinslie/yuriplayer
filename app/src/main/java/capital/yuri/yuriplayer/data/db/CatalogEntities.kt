@@ -30,6 +30,7 @@ object CatalogSources {
     indices = [
         Index(value = ["songKey"], unique = true),
         Index(value = ["sourceType", "sourceInstanceId"]),
+        Index(value = ["sourceType", "sourceInstanceId", "externalId"]),
         Index(value = ["albumKey"]),
         Index(value = ["artistKey"]),
         Index(value = ["title"]),

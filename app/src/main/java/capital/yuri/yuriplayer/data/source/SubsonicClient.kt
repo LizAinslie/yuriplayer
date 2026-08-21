@@ -125,7 +125,8 @@ class SubsonicClient(
             songs: List<Song>,
             albumOffset: Int,
             albumsInPage: Int,
-            exhausted: Boolean
+            exhausted: Boolean,
+            albumFetchFailed: Boolean
         ) -> Unit
     ): Result<Int> = runCatching {
         var offset = startAlbumOffset.coerceAtLeast(0)
@@ -133,19 +134,24 @@ class SubsonicClient(
         while (delivered < maxSongs) {
             val page = listAlbumsPage(session, offset = offset, pageSize = pageSize).getOrThrow()
             if (page.albums.isEmpty()) {
-                onPage(emptyList(), offset, 0, true)
+                onPage(emptyList(), offset, 0, true, false)
                 break
             }
             val batch = mutableListOf<Song>()
+            var albumFetchFailed = false
             for (album in page.albums) {
-                val songs = listSongsForAlbum(session, album.id).getOrElse { emptyList() }
+                val songs = listSongsForAlbum(session, album.id).getOrElse {
+                    Log.w(TAG, "getAlbum failed ${album.id}: ${it.message}")
+                    albumFetchFailed = true
+                    emptyList()
+                }
                 batch += songs
             }
             if (batch.isNotEmpty()) {
-                onPage(batch, offset, page.albums.size, page.exhausted)
+                onPage(batch, offset, page.albums.size, page.exhausted, albumFetchFailed)
                 delivered += batch.size
             } else {
-                onPage(emptyList(), offset, page.albums.size, page.exhausted)
+                onPage(emptyList(), offset, page.albums.size, page.exhausted, albumFetchFailed)
             }
             offset += page.albums.size
             if (page.exhausted) break
@@ -158,7 +164,7 @@ class SubsonicClient(
      */
     suspend fun listAllSongs(session: Session): Result<List<Song>> = runCatching {
         val out = mutableListOf<Song>()
-        listSongsPaged(session) { songs, _, _, _ ->
+        listSongsPaged(session) { songs, _, _, _, _ ->
             out += songs
         }.getOrThrow()
         out

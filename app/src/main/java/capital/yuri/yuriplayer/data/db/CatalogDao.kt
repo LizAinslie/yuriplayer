@@ -51,6 +51,53 @@ interface CatalogDao {
     )
     suspend fun countTracksForSource(sourceType: String, sourceInstanceId: Long?): Int
 
+    @Query(
+        "SELECT externalId FROM catalog_tracks WHERE sourceType = :sourceType " +
+            "AND (sourceInstanceId IS :sourceInstanceId OR (sourceInstanceId IS NULL AND :sourceInstanceId IS NULL)) " +
+            "AND externalId IS NOT NULL"
+    )
+    suspend fun externalIdsForSource(sourceType: String, sourceInstanceId: Long?): List<String>
+
+    @Query(
+        "SELECT * FROM catalog_tracks WHERE sourceType = :sourceType " +
+            "AND (sourceInstanceId IS :sourceInstanceId OR (sourceInstanceId IS NULL AND :sourceInstanceId IS NULL)) " +
+            "AND externalId IN (:ids)"
+    )
+    suspend fun tracksByExternalIds(
+        sourceType: String,
+        sourceInstanceId: Long?,
+        ids: List<String>
+    ): List<CatalogTrackEntity>
+
+    @Query(
+        "SELECT songKey FROM catalog_tracks WHERE sourceType = :sourceType " +
+            "AND (sourceInstanceId IS :sourceInstanceId OR (sourceInstanceId IS NULL AND :sourceInstanceId IS NULL)) " +
+            "AND externalId IN (:ids)"
+    )
+    suspend fun songKeysForExternalIds(
+        sourceType: String,
+        sourceInstanceId: Long?,
+        ids: List<String>
+    ): List<String>
+
+    @Query(
+        "UPDATE catalog_tracks SET lastSeenAtMs = :seenAt WHERE sourceType = :sourceType " +
+            "AND (sourceInstanceId IS :sourceInstanceId OR (sourceInstanceId IS NULL AND :sourceInstanceId IS NULL)) " +
+            "AND externalId IN (:ids)"
+    )
+    suspend fun touchLastSeenByExternalIds(
+        sourceType: String,
+        sourceInstanceId: Long?,
+        ids: List<String>,
+        seenAt: Long
+    ): Int
+
+    @Query("DELETE FROM catalog_tracks WHERE songKey IN (:keys)")
+    suspend fun deleteTracksByKeys(keys: List<String>): Int
+
+    @Query("DELETE FROM catalog_credits WHERE subjectType = 'TRACK' AND subjectKey IN (:keys)")
+    suspend fun deleteCreditsForTracks(keys: List<String>)
+
     @Query("SELECT COUNT(*) FROM catalog_tracks WHERE sourceType != :localType")
     suspend fun countNonLocalTracks(localType: String = CatalogSources.LOCAL): Int
 

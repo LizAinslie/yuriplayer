@@ -82,18 +82,21 @@ class JellyfinClient(
     suspend fun listAudioItems(session: Session, limit: Int = 50_000): Result<List<Song>> =
         runCatching {
             val out = mutableListOf<Song>()
-            listAudioItemsPaged(session, pageSize = 500, maxItems = limit) { page, _, _ ->
+            listAudioItemsPaged(session, pageSize = 500, maxItems = limit) { page, _, _, _ ->
                 out += page
             }.getOrThrow()
             out
         }.onFailure { Log.w(TAG, "listAudioItems failed: ${it.message}") }
+
+    enum class ListingMode { FULL, LIGHT }
 
     suspend fun listAudioItemsPaged(
         session: Session,
         pageSize: Int = 500,
         maxItems: Int = 50_000,
         startFromIndex: Int = 0,
-        onPage: suspend (songs: List<Song>, startIndex: Int, totalHint: Int?) -> Unit
+        mode: ListingMode = ListingMode.FULL,
+        onPage: suspend (songs: List<Song>, startIndex: Int, totalHint: Int?, liveIds: List<String>) -> Unit
     ): Result<Int> = runCatching {
         val userId = runCatching { UUID.fromString(session.userId) }.getOrNull()
             ?: error("Invalid Jellyfin userId")
@@ -101,9 +104,11 @@ class JellyfinClient(
         var delivered = 0
         var totalHint: Int? = null
         var pageNum = 0
+        val fields = if (mode == ListingMode.LIGHT) LIGHT_FIELDS else AUDIO_FIELDS
+        val wantImages = true
 
         if (start > 0) {
-            Log.i(TAG, "resume paging from startIndex=$start")
+            Log.i(TAG, "resume paging from startIndex=$start mode=$mode")
         }
 
         while (delivered < maxItems) {
@@ -112,8 +117,8 @@ class JellyfinClient(
                 userId = userId,
                 recursive = true,
                 includeItemTypes = listOf(BaseItemKind.AUDIO),
-                fields = AUDIO_FIELDS,
-                enableImages = true,
+                fields = fields,
+                enableImages = wantImages,
                 imageTypeLimit = 1,
                 enableImageTypes = listOf(ImageType.PRIMARY),
                 enableTotalRecordCount = true,
@@ -134,16 +139,17 @@ class JellyfinClient(
                     .onFailure { e -> Log.w(TAG, "toSong failed for '${item.name}': ${e.message}") }
                     .getOrNull()
             }
+            val liveIds = raw.mapNotNull { item ->
+                item.id?.toString()?.let { "jellyfin:$it" }
+            }
             pageNum++
             Log.i(
                 TAG,
                 "page#$pageNum start=$start raw=${raw.size} mapped=${page.size} " +
-                    "delivered=$delivered totalHint=$totalHint"
+                    "delivered=$delivered totalHint=$totalHint mode=$mode"
             )
-            if (page.isNotEmpty()) {
-                onPage(page, start, totalHint)
-                delivered += page.size
-            }
+            onPage(page, start, totalHint, liveIds)
+            delivered += raw.size
 
             start += raw.size
             if (raw.size < take) break
@@ -275,6 +281,12 @@ class JellyfinClient(
         private const val TAG = "JellyfinClient"
         private const val PREFS = "jellyfin_client"
         private const val KEY_DEVICE_ID = "device_id"
+
+        private val LIGHT_FIELDS = listOf(
+            ItemFields.PRODUCTION_YEAR,
+            ItemFields.PARENT_ID,
+            ItemFields.GENRES
+        )
 
         private val AUDIO_FIELDS = listOf(
             ItemFields.PATH,

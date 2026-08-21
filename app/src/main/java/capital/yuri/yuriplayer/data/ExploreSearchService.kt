@@ -330,6 +330,17 @@ class ExploreSearchService(
                 .map { it.id }
                 .toSet()
 
+            val needsFirstIndex = onlySourceId == null && !force && rows.any { row ->
+                val type = SourceType.from(row.type)
+                val ct = catalogTypeOf(type) ?: return@any false
+                val n = catalog.countTracksForSource(ct, row.id)
+                val st = checkpoints.get(row.id)?.status
+                n < WARM_SOURCE_MIN_TRACKS &&
+                    st != SourceScanStatus.DONE &&
+                    st != SourceScanStatus.PAUSED &&
+                    st != SourceScanStatus.STOPPED
+            }
+
             var totalIngested = 0
             var anySourceScanned = false
             var abortedForNetwork = false
@@ -346,51 +357,41 @@ class ExploreSearchService(
                 val instanceId = row.id
                 val seenAt = System.currentTimeMillis()
                 val cp = checkpoints.get(instanceId)
+                val catalogType = catalogTypeOf(type)
 
-                if (!force && cp?.status == SourceScanStatus.DONE) {
-                    val existing = catalog.countTracksForSource(
-                        when (type) {
-                            SourceType.JELLYFIN -> CatalogSources.JELLYFIN
-                            SourceType.NAVIDROME -> CatalogSources.NAVIDROME
-                            SourceType.SUBSONIC -> CatalogSources.SUBSONIC
-                            else -> CatalogSources.LOCAL
-                        },
-                        instanceId
-                    )
-                    progress("$sourceName: done ($existing)")
+                val existing = if (catalogType != null) {
+                    catalog.countTracksForSource(catalogType, instanceId)
+                } else 0
+                val alreadyIndexed = existing > 0 &&
+                    (cp?.status == SourceScanStatus.DONE || existing >= WARM_SOURCE_MIN_TRACKS)
+
+                // While a first-time index is running, leave already-indexed libraries alone.
+                if (!force && alreadyIndexed && needsFirstIndex &&
+                    (cp?.status == SourceScanStatus.DONE || cp?.status == SourceScanStatus.IDLE)
+                ) {
+                    progress("$sourceName: indexed ($existing) — skip")
                     totalIngested += existing
                     bumpIndexedCount(totalIngested, force = true)
                     continue
                 }
 
-                if (!force && (cp == null || cp.status == SourceScanStatus.IDLE)) {
-                    val catalogType = when (type) {
-                        SourceType.JELLYFIN -> CatalogSources.JELLYFIN
-                        SourceType.NAVIDROME -> CatalogSources.NAVIDROME
-                        SourceType.SUBSONIC -> CatalogSources.SUBSONIC
-                        else -> null
-                    }
-                    if (catalogType != null) {
-                        val existing = catalog.countTracksForSource(catalogType, instanceId)
-                        if (existing >= WARM_SOURCE_MIN_TRACKS) {
-                            checkpoints.markDone(instanceId, sourceName, existing, existing)
-                            progress("$sourceName: already indexed ($existing)")
-                            totalIngested += existing
-                            bumpIndexedCount(totalIngested, force = true)
-                            continue
-                        }
-                    }
-                }
-
                 anySourceScanned = true
-                val resumeFrom = if (force) 0 else (cp?.startIndex ?: 0)
-                val priorDelivered = if (force) 0 else (cp?.delivered ?: 0)
+                val incremental = !force && alreadyIndexed
+                val resumeFrom = when {
+                    incremental -> 0
+                    force -> 0
+                    else -> cp?.startIndex ?: 0
+                }
+                val priorDelivered = if (force || incremental) 0 else (cp?.delivered ?: 0)
                 progress(
-                    if (resumeFrom > 0) "Resuming $sourceName from $resumeFrom…"
-                    else "Scanning $sourceName…"
+                    when {
+                        incremental -> "Checking $sourceName for changes…"
+                        resumeFrom > 0 -> "Resuming $sourceName from $resumeFrom…"
+                        else -> "Scanning $sourceName…"
+                    }
                 )
 
-                val ingested = when (type) {
+                val result = when (type) {
                     SourceType.JELLYFIN -> scanJellyfin(
                         rowId = instanceId,
                         sourceName = sourceName,
@@ -400,7 +401,8 @@ class ExploreSearchService(
                         seenAt = seenAt,
                         keepKeys = keepKeys,
                         startFrom = resumeFrom,
-                        priorDelivered = priorDelivered
+                        priorDelivered = priorDelivered,
+                        incremental = incremental
                     )
                     SourceType.SUBSONIC, SourceType.NAVIDROME -> scanSubsonic(
                         type = type,
@@ -414,16 +416,16 @@ class ExploreSearchService(
                         startAlbumOffset = resumeFrom,
                         priorDelivered = priorDelivered
                     )
-                    else -> 0
+                    else -> RemoteScanResult()
                 }
-                if (ingested < 0) {
-                    totalIngested += -ingested
+                if (result.aborted) {
+                    totalIngested += result.delivered
                     if (abortedForNetwork || stopAll.get() || pauseAll.get()) break
                     continue
                 }
-                totalIngested += ingested
+                totalIngested += result.delivered
                 bumpIndexedCount(totalIngested, force = true)
-                if (ingested > 0) {
+                if (result.changed) {
                     runCatching { catalog.rebuildRollups() }
                 }
             }
@@ -508,18 +510,19 @@ class ExploreSearchService(
         seenAt: Long,
         keepKeys: Set<String>,
         startFrom: Int,
-        priorDelivered: Int
-    ): Int {
-        val url = baseUrl ?: return 0
-        val user = username ?: return 0
-        val pass = secret ?: return 0
+        priorDelivered: Int,
+        incremental: Boolean
+    ): RemoteScanResult {
+        val url = baseUrl ?: return RemoteScanResult()
+        val user = username ?: return RemoteScanResult()
+        val pass = secret ?: return RemoteScanResult()
 
         val session = jellyfinSessions[rowId] ?: jellyfinClient.authenticate(url, user, pass)
             .getOrElse {
                 if (it is CancellationException) throw it
                 Log.w(TAG, "jellyfin auth failed: ${it.message}")
                 _lastError.value = "$sourceName: ${it.message}"
-                return 0
+                return RemoteScanResult()
             }.also { jellyfinSessions[rowId] = it }
 
         var delivered = priorDelivered
@@ -527,14 +530,19 @@ class ExploreSearchService(
         var totalHint: Int? = checkpoints.get(rowId)?.totalHint
         var aborted = false
         var paused = false
+        var inserted = 0
+        var updated = 0
+        val liveIds = HashSet<String>()
+        val walkedFromStart = startFrom == 0
 
         checkpoints.markRunning(rowId, sourceName, cursor, delivered, totalHint)
 
         jellyfinClient.listAudioItemsPaged(
             session = session,
             pageSize = budget.pageSize,
-            startFromIndex = startFrom
-        ) { page, start, total ->
+            startFromIndex = startFrom,
+            mode = if (incremental) JellyfinClient.ListingMode.LIGHT else JellyfinClient.ListingMode.FULL
+        ) { page, start, total, pageIds ->
             if (shouldAbortSource(rowId) || stopAll.get()) {
                 aborted = true
                 throw CancellationException("stopped by user")
@@ -548,13 +556,16 @@ class ExploreSearchService(
                 throw CancellationException("paused for mobile data policy")
             }
 
-            catalog.ingestRemoteBatch(
+            val stats = catalog.ingestRemoteBatch(
                 songs = page,
                 sourceType = CatalogSources.JELLYFIN,
                 sourceInstanceId = rowId,
                 seenAt = seenAt
             )
-            delivered += page.size
+            inserted += stats.inserted
+            updated += stats.updated
+            liveIds += pageIds
+            delivered += page.size.coerceAtLeast(pageIds.size)
             cursor = start + page.size
             totalHint = total ?: totalHint
             bumpIndexedCount(delivered)
@@ -567,7 +578,11 @@ class ExploreSearchService(
             if (n == 1 || n % budget.progressEveryPages == 0 ||
                 (totalHint != null && cursor >= totalHint!!)
             ) {
-                progress("$sourceName: $delivered$totalPart")
+                val delta = buildString {
+                    if (inserted > 0) append(" · +$inserted")
+                    if (updated > 0) append(" · $updated updated")
+                }
+                progress("$sourceName: $delivered$totalPart$delta")
                 if (totalHint != null && totalHint!! > 0) {
                     notifier.update(
                         "Syncing libraries",
@@ -603,18 +618,30 @@ class ExploreSearchService(
 
         if (paused || aborted) {
             refreshCheckpointSnapshot()
-            return -delivered.coerceAtLeast(1)
+            return RemoteScanResult(delivered = delivered.coerceAtLeast(1), aborted = true)
         }
 
-        catalog.pruneRemoteSource(
-            sourceType = CatalogSources.JELLYFIN,
-            sourceInstanceId = rowId,
-            beforeMs = seenAt,
-            keepSongKeys = keepKeys
-        )
+        var removed = 0
+        if (walkedFromStart) {
+            removed = catalog.pruneMissingExternalIds(
+                sourceType = CatalogSources.JELLYFIN,
+                sourceInstanceId = rowId,
+                liveIds = liveIds,
+                keepSongKeys = keepKeys
+            )
+        }
         checkpoints.markDone(rowId, sourceName, delivered, totalHint)
         refreshCheckpointSnapshot()
-        return delivered
+        Log.i(
+            TAG,
+            "jellyfin $sourceName done delivered=$delivered +$inserted ~$updated -$removed incremental=$incremental"
+        )
+        return RemoteScanResult(
+            delivered = delivered,
+            inserted = inserted,
+            updated = updated,
+            removed = removed
+        )
     }
 
     private suspend fun cacheAlbumArtPassive(songs: List<Song>) {
@@ -666,10 +693,10 @@ class ExploreSearchService(
         keepKeys: Set<String>,
         startAlbumOffset: Int,
         priorDelivered: Int
-    ): Int {
-        val url = baseUrl ?: return 0
-        val user = username ?: return 0
-        val pass = secret ?: return 0
+    ): RemoteScanResult {
+        val url = baseUrl ?: return RemoteScanResult()
+        val user = username ?: return RemoteScanResult()
+        val pass = secret ?: return RemoteScanResult()
         val baseSession = SubsonicClient.Session(
             baseUrl = SourceInstanceRepository.normalizeBaseUrl(url),
             username = user,
@@ -682,13 +709,18 @@ class ExploreSearchService(
             if (it is CancellationException) throw it
             Log.w(TAG, "subsonic ping failed: ${it.message}")
             _lastError.value = "$sourceName: ${it.message}"
-            return 0
+            return RemoteScanResult()
         }
 
         var delivered = priorDelivered
         var albumOffset = startAlbumOffset.coerceAtLeast(0)
         var aborted = false
         var paused = false
+        var inserted = 0
+        var updated = 0
+        val liveIds = HashSet<String>()
+        val walkedFromStart = albumOffset == 0
+        var listingReliable = true
 
         checkpoints.markRunning(instanceId, sourceName, albumOffset, delivered, null)
 
@@ -696,7 +728,8 @@ class ExploreSearchService(
             session = session,
             pageSize = minOf(budget.pageSize, 100),
             startAlbumOffset = albumOffset
-        ) { songs, offset, albumsInPage, exhausted ->
+        ) { songs, offset, albumsInPage, exhausted, albumFetchFailed ->
+            if (albumFetchFailed) listingReliable = false
             if (shouldAbortSource(instanceId) || stopAll.get()) {
                 aborted = true
                 throw CancellationException("stopped by user")
@@ -711,12 +744,15 @@ class ExploreSearchService(
             }
 
             if (songs.isNotEmpty()) {
-                catalog.ingestRemoteBatch(
+                val stats = catalog.ingestRemoteBatch(
                     songs = songs,
                     sourceType = catalogType,
                     sourceInstanceId = instanceId,
                     seenAt = seenAt
                 )
+                inserted += stats.inserted
+                updated += stats.updated
+                songs.mapNotNull { it.path }.forEach { liveIds += it }
                 delivered += songs.size
             }
             albumOffset = offset + albumsInPage
@@ -726,7 +762,11 @@ class ExploreSearchService(
 
             val n = pageCounter.incrementAndGet()
             if (n == 1 || n % budget.progressEveryPages == 0 || exhausted) {
-                progress("$sourceName: $delivered tracks (albums @$albumOffset)")
+                val delta = buildString {
+                    if (inserted > 0) append(" · +$inserted")
+                    if (updated > 0) append(" · $updated updated")
+                }
+                progress("$sourceName: $delivered tracks$delta")
                 notifier.update(
                     "Syncing libraries",
                     "$sourceName: $delivered tracks",
@@ -756,18 +796,47 @@ class ExploreSearchService(
 
         if (paused || aborted) {
             refreshCheckpointSnapshot()
-            return -delivered.coerceAtLeast(1)
+            return RemoteScanResult(delivered = delivered.coerceAtLeast(1), aborted = true)
         }
 
-        catalog.pruneRemoteSource(
-            sourceType = catalogType,
-            sourceInstanceId = instanceId,
-            beforeMs = seenAt,
-            keepSongKeys = keepKeys
-        )
+        var removed = 0
+        if (walkedFromStart && listingReliable) {
+            removed = catalog.pruneMissingExternalIds(
+                sourceType = catalogType,
+                sourceInstanceId = instanceId,
+                liveIds = liveIds,
+                keepSongKeys = keepKeys
+            )
+        }
         checkpoints.markDone(instanceId, sourceName, delivered, delivered)
         refreshCheckpointSnapshot()
-        return delivered
+        Log.i(
+            TAG,
+            "subsonic $sourceName done delivered=$delivered +$inserted ~$updated -$removed"
+        )
+        return RemoteScanResult(
+            delivered = delivered,
+            inserted = inserted,
+            updated = updated,
+            removed = removed
+        )
+    }
+
+    private fun catalogTypeOf(type: SourceType): String? = when (type) {
+        SourceType.JELLYFIN -> CatalogSources.JELLYFIN
+        SourceType.NAVIDROME -> CatalogSources.NAVIDROME
+        SourceType.SUBSONIC -> CatalogSources.SUBSONIC
+        else -> null
+    }
+
+    private data class RemoteScanResult(
+        val delivered: Int = 0,
+        val inserted: Int = 0,
+        val updated: Int = 0,
+        val removed: Int = 0,
+        val aborted: Boolean = false
+    ) {
+        val changed: Boolean get() = inserted + updated + removed > 0
     }
 
     companion object {
