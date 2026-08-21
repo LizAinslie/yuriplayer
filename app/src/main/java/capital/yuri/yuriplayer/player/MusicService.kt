@@ -664,7 +664,11 @@ class MusicService : Service() {
             _nowPlaying.value = current
             updateForegroundNotification()
             yield()
-            if (isRemoteSong(current) && !saved.playWhenReady) {
+            // Never auto-play on process start. Restore the queue paused;
+            // the user hits play. Opening the app used to resume from the
+            // last persist (playWhenReady=true) and that was awful.
+            userWantsPlay = false
+            if (isRemoteSong(current)) {
                 pendingRemoteRestore = PendingRemoteRestore(
                     positionMs = saved.positionMs,
                     wasPlayWhenReady = false
@@ -675,10 +679,9 @@ class MusicService : Service() {
                 )
             } else {
                 delay(RESTORE_PREPARE_DELAY_MS)
-                userWantsPlay = saved.playWhenReady
                 rebufferWindow(
                     saved.positionMs,
-                    autoPlay = saved.playWhenReady,
+                    autoPlay = false,
                     forceReload = true
                 )
             }

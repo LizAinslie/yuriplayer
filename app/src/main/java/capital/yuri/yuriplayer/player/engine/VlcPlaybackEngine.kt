@@ -307,18 +307,8 @@ class VlcPlaybackEngine(
     override fun playPreparedNext(): Boolean = swapToPreparedNext()
 
     override fun warmupNext() {
-        val item = nextItem ?: return
-        if (!item.isNetwork) return
-        if (prefetcher.fileIfReady(item.mediaId) != null) return
-        if (nextWarming) return
-        val sp = standby()
-        if (nextMedia == null) return
-        nextWarming = true
-        if (sp.isPlaying) return
-        if (silenceStandby(sp)) {
-            runCatching { sp.play() }
-        }
-        Log.i(TAG, "warmup next '${item.title}'")
+        // Never play the standby. Dummy aout still leaked ~2s of the next
+        // track over the speakers. Prefetch downloads the file; swap plays it.
     }
 
     private fun onPrefetchReady(item: PlaybackMedia, file: File) {
@@ -512,8 +502,6 @@ class VlcPlaybackEngine(
         nextWarming = false
         nextGeneration += 1
         val np = active()
-        // Stop dummy warmup while events are still ignored, then speaker from 0.
-        if (np.isPlaying) runCatching { np.stop() }
         enableSpeaker(np)
         eventGeneration = loadGeneration
         playWhenReady = true
