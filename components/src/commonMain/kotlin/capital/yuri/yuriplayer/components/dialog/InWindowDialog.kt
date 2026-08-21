@@ -12,6 +12,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.zIndex
@@ -60,7 +61,8 @@ fun InWindowPanel(
             shape = RoundedCornerShape(16.dp),
             tonalElevation = 6.dp,
             color = MaterialTheme.colorScheme.surface,
-            contentColor = MaterialTheme.colorScheme.onSurface
+            contentColor = MaterialTheme.colorScheme.onSurface,
+            modifier = Modifier.clip(RoundedCornerShape(16.dp))
         ) {
             content()
         }

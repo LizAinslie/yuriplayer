@@ -11,8 +11,8 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -23,6 +23,8 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
@@ -68,89 +70,97 @@ fun ImageCropDialog(
     val panel = if (wide) Modifier.size(760.dp, 520.dp) else Modifier.size(560.dp, 640.dp)
 
     InWindowPanel(onDismiss = onCancel, modifier = panel) {
-        Surface(color = MaterialTheme.colorScheme.surface) {
-            Column(Modifier.fillMaxSize().padding(16.dp)) {
-                Text(title, style = MaterialTheme.typography.titleLarge)
-                Text(
-                    "Scroll to zoom · drag to pan",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.55f),
-                    modifier = Modifier.padding(bottom = 12.dp)
-                )
-                Box(
-                    Modifier
-                        .fillMaxWidth()
-                        .weight(1f)
-                        .background(Color.Black)
-                        .onSizeChanged { stage = Size(it.width.toFloat(), it.height.toFloat()) }
-                        .pointerInput(image) {
-                            awaitPointerEventScope {
-                                while (true) {
-                                    val event = awaitPointerEvent()
-                                    if (event.type == PointerEventType.Scroll) {
-                                        val dy = event.changes.firstOrNull()?.scrollDelta?.y ?: 0f
-                                        zoom = (zoom * (1f - dy * 0.08f)).coerceIn(1f, 8f)
-                                    }
+        Column(Modifier.fillMaxSize().padding(16.dp)) {
+            Text(title, style = MaterialTheme.typography.titleLarge)
+            Text(
+                "Scroll to zoom · drag to pan",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.55f),
+                modifier = Modifier.padding(bottom = 12.dp)
+            )
+            Box(
+                Modifier
+                    .fillMaxWidth()
+                    .weight(1f)
+                    .clip(RoundedCornerShape(8.dp))
+                    .clipToBounds()
+                    .background(Color.Black)
+                    .onSizeChanged { stage = Size(it.width.toFloat(), it.height.toFloat()) }
+                    .pointerInput(image) {
+                        awaitPointerEventScope {
+                            while (true) {
+                                val event = awaitPointerEvent()
+                                if (event.type == PointerEventType.Scroll) {
+                                    val dy = event.changes.firstOrNull()?.scrollDelta?.y ?: 0f
+                                    zoom = (zoom * (1f - dy * 0.08f)).coerceIn(1f, 8f)
                                 }
                             }
                         }
-                        .pointerInput(image) {
-                            detectDragGestures { change, drag ->
-                                change.consume()
-                                pan += drag
-                            }
-                        },
-                    contentAlignment = Alignment.Center
-                ) {
-                    Canvas(Modifier.fillMaxSize()) {
-                        val layout = cropLayout(size, image.width, image.height, aspect, zoom, pan)
-                        drawImage(
-                            image = bitmap,
-                            dstOffset = IntOffset(layout.drawLeft.roundToInt(), layout.drawTop.roundToInt()),
-                            dstSize = IntSize(layout.drawW.roundToInt().coerceAtLeast(1), layout.drawH.roundToInt().coerceAtLeast(1))
-                        )
-                        val dim = Color.Black.copy(alpha = 0.5f)
-                        drawRect(dim, size = Size(size.width, layout.frameTop))
-                        drawRect(
-                            dim,
-                            topLeft = Offset(0f, layout.frameTop + layout.frameH),
-                            size = Size(size.width, size.height - layout.frameTop - layout.frameH)
-                        )
-                        drawRect(
-                            dim,
-                            topLeft = Offset(0f, layout.frameTop),
-                            size = Size(layout.frameLeft, layout.frameH)
-                        )
-                        drawRect(
-                            dim,
-                            topLeft = Offset(layout.frameLeft + layout.frameW, layout.frameTop),
-                            size = Size(size.width - layout.frameLeft - layout.frameW, layout.frameH)
-                        )
-                        val grid = Color.White.copy(alpha = 0.28f)
-                        for (i in 1..2) {
-                            val x = layout.frameLeft + layout.frameW * i / 3f
-                            val y = layout.frameTop + layout.frameH * i / 3f
-                            drawLine(grid, Offset(x, layout.frameTop), Offset(x, layout.frameTop + layout.frameH), 1f)
-                            drawLine(grid, Offset(layout.frameLeft, y), Offset(layout.frameLeft + layout.frameW, y), 1f)
-                        }
-                        drawRect(
-                            Color.White,
-                            topLeft = Offset(layout.frameLeft, layout.frameTop),
-                            size = Size(layout.frameW, layout.frameH),
-                            style = Stroke(width = 2.dp.toPx())
-                        )
                     }
-                }
-                Row(Modifier.fillMaxWidth().padding(top = 12.dp), verticalAlignment = Alignment.CenterVertically) {
-                    TextButton(onClick = onCancel) { Text("Cancel") }
-                    Spacer(Modifier.weight(1f))
-                    TextButton(
-                        onClick = {
-                            val out = cropToAspect(image, aspect, zoom, pan, stage)
-                            if (out != null) onCropped(out) else onCancel()
+                    .pointerInput(image) {
+                        detectDragGestures { change, drag ->
+                            change.consume()
+                            pan += drag
                         }
-                    ) { Text("Use photo") }
+                    },
+                contentAlignment = Alignment.Center
+            ) {
+                Canvas(Modifier.fillMaxSize().clipToBounds()) {
+                    val layout = cropLayout(size, image.width, image.height, aspect, zoom, pan)
+                    drawImage(
+                        image = bitmap,
+                        dstOffset = IntOffset(layout.drawLeft.roundToInt(), layout.drawTop.roundToInt()),
+                        dstSize = IntSize(
+                            layout.drawW.roundToInt().coerceAtLeast(1),
+                            layout.drawH.roundToInt().coerceAtLeast(1)
+                        )
+                    )
+                    val dim = Color.Black.copy(alpha = 0.5f)
+                    drawRect(dim, size = Size(size.width, layout.frameTop))
+                    drawRect(
+                        dim,
+                        topLeft = Offset(0f, layout.frameTop + layout.frameH),
+                        size = Size(size.width, size.height - layout.frameTop - layout.frameH)
+                    )
+                    drawRect(
+                        dim,
+                        topLeft = Offset(0f, layout.frameTop),
+                        size = Size(layout.frameLeft, layout.frameH)
+                    )
+                    drawRect(
+                        dim,
+                        topLeft = Offset(layout.frameLeft + layout.frameW, layout.frameTop),
+                        size = Size(size.width - layout.frameLeft - layout.frameW, layout.frameH)
+                    )
+                    val grid = Color.White.copy(alpha = 0.28f)
+                    for (i in 1..2) {
+                        val x = layout.frameLeft + layout.frameW * i / 3f
+                        val y = layout.frameTop + layout.frameH * i / 3f
+                        drawLine(grid, Offset(x, layout.frameTop), Offset(x, layout.frameTop + layout.frameH), 1f)
+                        drawLine(grid, Offset(layout.frameLeft, y), Offset(layout.frameLeft + layout.frameW, y), 1f)
+                    }
+                    drawRect(
+                        Color.White,
+                        topLeft = Offset(layout.frameLeft, layout.frameTop),
+                        size = Size(layout.frameW, layout.frameH),
+                        style = Stroke(width = 2.dp.toPx())
+                    )
                 }
+            }
+            Row(Modifier.fillMaxWidth().padding(top = 12.dp), verticalAlignment = Alignment.CenterVertically) {
+                TextButton(onClick = onCancel) { Text("Cancel") }
+                Spacer(Modifier.weight(1f))
+                TextButton(
+                    onClick = {
+                        val canvas = if (stage.width > 1f && stage.height > 1f) {
+                            stage
+                        } else {
+                            Size(760f, 400f)
+                        }
+                        val out = cropToAspect(image, aspect, zoom, pan, canvas)
+                        if (out != null) onCropped(out) else onCancel()
+                    }
+                ) { Text("Use photo") }
             }
         }
     }

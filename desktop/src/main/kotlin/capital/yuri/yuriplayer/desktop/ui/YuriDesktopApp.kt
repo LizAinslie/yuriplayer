@@ -611,8 +611,10 @@ fun YuriDesktopApp(session: DesktopSession) {
                             aspect = 3f,
                             onCancel = { cropBanner = null },
                             onCropped = { cropped ->
+                                runCatching {
+                                    profile = session.artists.applyLocalBanner(r.name, cropped)
+                                }
                                 cropBanner = null
-                                profile = session.artists.applyLocalBanner(r.name, cropped)
                             }
                         )
                     }
