@@ -84,11 +84,7 @@ suspend fun fastExpandAlbumTracks(
 
     val deduped = dedupeAlbumPageTracks(songs + extraSeedSongs)
     AlbumLog.i(name, "fast expand n=${deduped.size} raw=${bySongKey.size}")
-    return deduped.sortedWith(
-        compareBy<Song> { it.discNumber ?: 1 }
-            .thenBy { it.trackNumber ?: Int.MAX_VALUE }
-            .thenBy(String.CASE_INSENSITIVE_ORDER) { it.displayTitle }
-    )
+    return deduped.sortedWith(albumTrackOrder())
 }
 
 suspend fun expandAlbumTracksByName(
@@ -239,11 +235,7 @@ suspend fun expandAlbumTracksByName(
     )
     AlbumLog.songs(name, "deduped", deduped)
 
-    return deduped.sortedWith(
-        compareBy<Song> { it.discNumber ?: 1 }
-            .thenBy { it.trackNumber ?: Int.MAX_VALUE }
-            .thenBy(String.CASE_INSENSITIVE_ORDER) { it.displayTitle }
-    )
+    return deduped.sortedWith(albumTrackOrder())
 }
 
 /**
@@ -266,6 +258,20 @@ fun dedupeAlbumPageTracks(tracks: List<Song>): List<Song> {
             } ?: group.first()
             TrackIdentity.withRichestDisplay(preferred, group)
         }
+        .sortedWith(albumTrackOrder())
+}
+
+fun albumTrackOrder(): Comparator<Song> =
+    compareBy<Song> { it.discNumber ?: 1 }
+        .thenBy { it.trackNumber ?: filenameTrackHint(it) }
+        .thenBy(String.CASE_INSENSITIVE_ORDER) { it.displayTitle }
+
+private val FILENAME_TRACK = Regex("""(?:^|[/\\])(\d{1,3})\s*[\s.\-_)]+""")
+
+private fun filenameTrackHint(song: Song): Int {
+    val path = song.path ?: song.contentUri.toString()
+    val name = path.substringAfterLast('/').substringAfterLast('\\')
+    return FILENAME_TRACK.find(name)?.groupValues?.getOrNull(1)?.toIntOrNull() ?: Int.MAX_VALUE
 }
 
 private fun collapseNearTitleGroups(

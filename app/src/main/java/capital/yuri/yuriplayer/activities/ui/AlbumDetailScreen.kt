@@ -77,6 +77,7 @@ import capital.yuri.yuriplayer.data.MyStuffPinStore
 import capital.yuri.yuriplayer.data.Song
 import capital.yuri.yuriplayer.data.StuffPinKind
 import capital.yuri.yuriplayer.data.albumKey
+import capital.yuri.yuriplayer.data.albumTrackOrder
 import capital.yuri.yuriplayer.data.AlbumLog
 import capital.yuri.yuriplayer.data.dedupeAlbumPageTracks
 import capital.yuri.yuriplayer.data.db.CatalogDao
@@ -718,7 +719,9 @@ private fun DiscSectionHeader(discNumber: Int) {
 
 private fun groupByDisc(songs: List<Song>): Map<Int?, List<Song>> {
     val grouped = songs.groupBy { it.discNumber }
-    return grouped.toSortedMap(compareBy { it ?: 1 })
+    return grouped.toSortedMap(compareBy { it ?: 1 }).mapValues { (_, tracks) ->
+        tracks.sortedWith(albumTrackOrder())
+    }
 }
 
 private fun guessReleaseType(trackCount: Int): String = when {

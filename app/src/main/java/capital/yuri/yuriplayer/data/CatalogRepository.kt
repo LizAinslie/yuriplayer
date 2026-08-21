@@ -1030,11 +1030,7 @@ class CatalogRepository(
                     val preferred = group.minByOrNull { sourceTypeForSong(it).rank } ?: group.first()
                     TrackIdentity.withRichestDisplay(preferred, group)
                 }
-                .sortedWith(
-                    compareBy<Song> { it.discNumber ?: 1 }
-                        .thenBy { it.trackNumber ?: Int.MAX_VALUE }
-                        .thenBy(String.CASE_INSENSITIVE_ORDER) { it.displayTitle }
-                )
+                .sortedWith(albumTrackOrder())
         }
 
         private fun guessReleaseType(trackCount: Int): ReleaseType = when {
