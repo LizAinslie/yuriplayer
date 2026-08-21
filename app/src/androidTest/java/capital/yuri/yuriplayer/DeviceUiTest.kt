@@ -1,7 +1,6 @@
 package capital.yuri.yuriplayer
 
 import androidx.compose.ui.test.ExperimentalTestApi
-import androidx.compose.ui.test.assertExists
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertTextContains
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
