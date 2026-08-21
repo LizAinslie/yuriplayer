@@ -209,6 +209,17 @@ interface CatalogDao {
     )
     suspend fun getOneTrackForAlbum(albumKey: String): CatalogTrackEntity?
 
+    @Query(
+        """
+        SELECT * FROM catalog_tracks WHERE rowid IN (
+            SELECT MIN(rowid) FROM catalog_tracks
+            WHERE albumKey IN (:albumKeys)
+            GROUP BY albumKey
+        )
+        """
+    )
+    suspend fun oneTrackPerAlbum(albumKeys: List<String>): List<CatalogTrackEntity>
+
     @Query("SELECT * FROM catalog_tracks WHERE artistKey IN (:keys) ORDER BY album, trackNumber, title")
     suspend fun getTracksForArtists(keys: List<String>): List<CatalogTrackEntity>
 

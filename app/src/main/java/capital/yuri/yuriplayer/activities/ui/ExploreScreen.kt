@@ -58,6 +58,8 @@ import capital.yuri.yuriplayer.data.Song
 import capital.yuri.yuriplayer.data.source.RemotePlaylist
 import capital.yuri.yuriplayer.data.source.RemotePlaylistService
 import capital.yuri.yuriplayer.data.source.SourceOffering
+import capital.yuri.yuriplayer.ui.LoadingEstimates
+import capital.yuri.yuriplayer.ui.SongListSkeleton
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -219,6 +221,10 @@ fun ExploreScreen(
         }
 
         when {
+            query.trim().isNotEmpty() && searchBusy && hits.isEmpty() &&
+                albumHits.isEmpty() && artistHits.isEmpty() -> {
+                SongListSkeleton(LoadingEstimates.songs(null))
+            }
             query.trim().isEmpty() -> {
                 Box(
                     modifier = Modifier.fillMaxSize().padding(32.dp),

@@ -96,6 +96,8 @@ import capital.yuri.yuriplayer.data.source.ArtistEvent
 import capital.yuri.yuriplayer.data.source.ArtistImageKind
 import capital.yuri.yuriplayer.data.source.ArtistInfoService
 import capital.yuri.yuriplayer.data.source.ArtistLink
+import capital.yuri.yuriplayer.ui.AlbumRowSkeleton
+import capital.yuri.yuriplayer.ui.LoadingEstimates
 import capital.yuri.yuriplayer.data.theme.ArtColorSurface
 import capital.yuri.yuriplayer.data.theme.ThemeService
 import capital.yuri.yuriplayer.ui.formatAlbumCount
@@ -178,6 +180,10 @@ fun ArtistDetailScreen(
     artist: ArtistItem,
     albums: List<AlbumItem>,
     appearsOn: List<AlbumItem> = emptyList(),
+    albumsLoading: Boolean = false,
+    appearsOnLoading: Boolean = false,
+    expectedAlbumCount: Int = 8,
+    expectedAppearsOnCount: Int = 6,
     onBack: () -> Unit,
     onOpenAlbum: (AlbumItem) -> Unit,
     onPlaySongs: (List<Song>, Int) -> Unit,
@@ -645,7 +651,13 @@ fun ArtistDetailScreen(
                 }
 
                 item {
-                    if (filtered.isEmpty()) {
+                    if (albumsLoading && filtered.isEmpty()) {
+                        AlbumRowSkeleton(
+                            count = LoadingEstimates.albums(
+                                expectedAlbumCount.takeIf { it > 0 } ?: artist.albumCount
+                            )
+                        )
+                    } else if (filtered.isEmpty()) {
                         Text(
                             "No releases in this filter.",
                             modifier = Modifier.padding(16.dp),
@@ -671,7 +683,7 @@ fun ArtistDetailScreen(
                     }
                 }
 
-                if (sortedAppearsOn.isNotEmpty()) {
+                if (sortedAppearsOn.isNotEmpty() || appearsOnLoading) {
                     item {
                         Row(
                             modifier = Modifier
@@ -698,7 +710,11 @@ fun ArtistDetailScreen(
                         }
                     }
                     item {
-                        if (filteredAppearsOn.isEmpty()) {
+                        if (appearsOnLoading && filteredAppearsOn.isEmpty()) {
+                            AlbumRowSkeleton(
+                                count = LoadingEstimates.albums(expectedAppearsOnCount)
+                            )
+                        } else if (filteredAppearsOn.isEmpty()) {
                             Text(
                                 "No appearances in this filter.",
                                 modifier = Modifier.padding(16.dp),

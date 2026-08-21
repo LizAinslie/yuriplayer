@@ -114,6 +114,8 @@ import capital.yuri.yuriplayer.player.ColdSourceType
 import capital.yuri.yuriplayer.player.PlayerController
 import capital.yuri.yuriplayer.player.RepeatMode
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
@@ -770,48 +772,67 @@ fun YuriApp(
                             var liveArtist by remember(aKey) { mutableStateOf(d.artist) }
                             var albums by remember(aKey) { mutableStateOf<List<AlbumItem>>(emptyList()) }
                             var appearsOn by remember(aKey) { mutableStateOf<List<AlbumItem>>(emptyList()) }
+                            var albumsLoading by remember(aKey) { mutableStateOf(true) }
+                            var appearsOnLoading by remember(aKey) { mutableStateOf(true) }
                             LaunchedEffect(aKey) {
-                                val fromCatalog = withContext(Dispatchers.IO) {
-                                    catalog.artistItemForKey(aKey, artistName)
-                                }
-                                val catalogAlbums = withContext(Dispatchers.IO) {
-                                    catalog.albumItemsForArtist(aKey, artistName)
-                                }
-                                val guestAlbums = withContext(Dispatchers.IO) {
-                                    catalog.appearsOnAlbumItems(aKey, artistName)
-                                }
+                                albumsLoading = true
+                                appearsOnLoading = true
                                 val localAlbums = library.albums(taggedOnly = false).filter {
                                     artistKey(it.artist) == aKey
                                 }
-                                liveArtist = (fromCatalog ?: d.artist).let { base ->
-                                    val name = primaryArtistName(base.name)
-                                        ?: primaryArtistName(artistName)
-                                        ?: base.name
-                                    val albumN = catalogAlbums.size.coerceAtLeast(localAlbums.size)
-                                    val trackN = catalogAlbums.sumOf { it.trackCount }
-                                        .coerceAtLeast(localAlbums.sumOf { it.trackCount })
-                                        .coerceAtLeast(base.trackCount)
-                                    base.copy(
-                                        name = name,
-                                        albumCount = albumN.coerceAtLeast(base.albumCount),
-                                        trackCount = trackN
-                                    )
+                                if (localAlbums.isNotEmpty()) {
+                                    albums = localAlbums
+                                    albumsLoading = false
                                 }
-                                albums = when {
-                                    catalogAlbums.isNotEmpty() -> catalogAlbums
-                                    localAlbums.isNotEmpty() -> localAlbums
-                                    else -> emptyList()
-                                }
-                                appearsOn = guestAlbums
-                                if (settings.isNetworkMetadataEnabled()) {
-                                    albums.forEach { enrichment.enrichAlbumAsync(it) }
-                                    appearsOn.forEach { enrichment.enrichAlbumAsync(it) }
+                                coroutineScope {
+                                    val fromCatalogDef = async(Dispatchers.IO) {
+                                        catalog.artistItemForKey(aKey, artistName)
+                                    }
+                                    val catalogAlbumsDef = async(Dispatchers.IO) {
+                                        catalog.albumItemsForArtist(aKey, artistName)
+                                    }
+                                    val guestDef = async(Dispatchers.IO) {
+                                        catalog.appearsOnAlbumItems(aKey, artistName)
+                                    }
+                                    val catalogAlbums = catalogAlbumsDef.await()
+                                    val guestAlbums = guestDef.await()
+                                    val fromCatalog = fromCatalogDef.await()
+                                    liveArtist = (fromCatalog ?: d.artist).let { base ->
+                                        val name = primaryArtistName(base.name)
+                                            ?: primaryArtistName(artistName)
+                                            ?: base.name
+                                        val albumN = catalogAlbums.size.coerceAtLeast(localAlbums.size)
+                                        val trackN = catalogAlbums.sumOf { it.trackCount }
+                                            .coerceAtLeast(localAlbums.sumOf { it.trackCount })
+                                            .coerceAtLeast(base.trackCount)
+                                        base.copy(
+                                            name = name,
+                                            albumCount = albumN.coerceAtLeast(base.albumCount),
+                                            trackCount = trackN
+                                        )
+                                    }
+                                    albums = when {
+                                        catalogAlbums.isNotEmpty() -> catalogAlbums
+                                        localAlbums.isNotEmpty() -> localAlbums
+                                        else -> emptyList()
+                                    }
+                                    appearsOn = guestAlbums
+                                    albumsLoading = false
+                                    appearsOnLoading = false
+                                    if (settings.isNetworkMetadataEnabled()) {
+                                        albums.forEach { enrichment.enrichAlbumAsync(it) }
+                                        appearsOn.forEach { enrichment.enrichAlbumAsync(it) }
+                                    }
                                 }
                             }
                             ArtistDetailScreen(
                                 artist = liveArtist,
                                 albums = albums,
                                 appearsOn = appearsOn,
+                                albumsLoading = albumsLoading,
+                                appearsOnLoading = appearsOnLoading,
+                                expectedAlbumCount = liveArtist.albumCount,
+                                expectedAppearsOnCount = 6,
                                 onBack = { popDetail() },
                                 onOpenAlbum = { openAlbumResolved(it) },
                                 onPlaySongs = { songs, i ->

@@ -74,6 +74,8 @@ import capital.yuri.yuriplayer.data.StuffPinKind
 import capital.yuri.yuriplayer.data.label
 import capital.yuri.yuriplayer.data.source.SourceOffering
 import capital.yuri.yuriplayer.player.PlayerController
+import capital.yuri.yuriplayer.ui.LoadingEstimates
+import capital.yuri.yuriplayer.ui.SongListSkeleton
 import capital.yuri.yuriplayer.ui.formatAlbumCount
 import capital.yuri.yuriplayer.ui.formatTrackCount
 import org.koin.compose.koinInject
@@ -365,7 +367,9 @@ private fun SongList(
     onEditSong: (Song) -> Unit,
     onStartRadio: (Song) -> Unit = {}
 ) {
-    if (songs.isEmpty() && !loading) {
+    if (songs.isEmpty() && loading) {
+        SongListSkeleton(LoadingEstimates.songs(null))
+    } else if (songs.isEmpty()) {
         Text("Nothing here yet.", modifier = Modifier.padding(16.dp))
     } else {
         LazyColumn(modifier = Modifier.fillMaxSize()) {

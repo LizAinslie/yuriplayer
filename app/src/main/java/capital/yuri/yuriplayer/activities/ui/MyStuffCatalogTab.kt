@@ -61,6 +61,10 @@ import capital.yuri.yuriplayer.data.source.LibraryFaviconStore
 import capital.yuri.yuriplayer.data.source.RemotePlaylistService
 import capital.yuri.yuriplayer.data.source.SourceInstanceRepository
 import capital.yuri.yuriplayer.data.source.SourceLiveSearch
+import capital.yuri.yuriplayer.ui.AlbumRowSkeleton
+import capital.yuri.yuriplayer.ui.ArtistRowSkeleton
+import capital.yuri.yuriplayer.ui.LoadingEstimates
+import capital.yuri.yuriplayer.ui.SongListSkeleton
 import capital.yuri.yuriplayer.ui.TestTags
 import capital.yuri.yuriplayer.ui.formatTrackCount
 import coil3.compose.AsyncImage
@@ -108,12 +112,15 @@ fun MyStuffCatalogTab(
     var resolvedArtists by remember { mutableStateOf<List<ArtistItem>>(emptyList()) }
     var resolvedAlbums by remember { mutableStateOf<List<AlbumItem>>(emptyList()) }
     var resolvedSongs by remember { mutableStateOf<List<Song>>(emptyList()) }
+    var hubLoading by remember { mutableStateOf(true) }
 
     val artistPins = remember(entries) { entries.filter { it.kind == StuffPinKind.ARTIST } }
     val albumPins = remember(entries) { entries.filter { it.kind == StuffPinKind.ALBUM } }
     val songPins = remember(entries) { entries.filter { it.kind == StuffPinKind.SONG } }
 
     LaunchedEffect(artistPins, albumPins, songPins, allSongs) {
+        hubLoading = resolvedArtists.isEmpty() && resolvedAlbums.isEmpty() && resolvedSongs.isEmpty() &&
+            (artistPins.isNotEmpty() || albumPins.isNotEmpty() || songPins.isNotEmpty())
         resolvedArtists = withContext(Dispatchers.IO) {
             artistPins.mapNotNull { pin ->
                 catalog.artistItemForKey(pin.id, pin.title)
@@ -124,7 +131,7 @@ fun MyStuffCatalogTab(
         }
         resolvedAlbums = withContext(Dispatchers.IO) {
             albumPins.mapNotNull { pin ->
-                catalog.albumItemForKey(pin.id)
+                catalog.lightAlbumItemForKey(pin.id)
                     ?: library.albums(taggedOnly = false)
                         .firstOrNull { albumKey(it.name, it.artist) == pin.id }
             }
@@ -135,6 +142,7 @@ fun MyStuffCatalogTab(
         resolvedSongs = songPins.mapNotNull { pin ->
             byKey[pin.id] ?: allSongs.firstOrNull { it.songKey == pin.id }
         }
+        hubLoading = false
     }
 
     LaunchedEffect(sources) {
@@ -149,6 +157,10 @@ fun MyStuffCatalogTab(
             albums = resolvedAlbums,
             songs = resolvedSongs,
             playlists = playlists,
+            loading = hubLoading,
+            artistEstimate = artistPins.size,
+            albumEstimate = albumPins.size,
+            songEstimate = songPins.size,
             sources = sources.filter { it.enabled },
             favicons = favicons,
             nowPlaying = nowPlaying,
@@ -271,6 +283,10 @@ private fun CatalogHub(
     favicons: LibraryFaviconStore,
     nowPlaying: Song?,
     isPlaybackActive: Boolean,
+    loading: Boolean = false,
+    artistEstimate: Int = 0,
+    albumEstimate: Int = 0,
+    songEstimate: Int = 0,
     onShowAllArtists: () -> Unit,
     onShowAllAlbums: () -> Unit,
     onShowAllPlaylists: () -> Unit,
@@ -313,7 +329,9 @@ private fun CatalogHub(
         item {
             CatalogSectionHeader("Artists", artists.size, onShowAllArtists)
         }
-        if (artists.isEmpty()) {
+        if (loading && artists.isEmpty()) {
+            item { ArtistRowSkeleton(LoadingEstimates.artists(artistEstimate)) }
+        } else if (artists.isEmpty()) {
             item { EmptyHint("Heart artists to keep them here.") }
         } else {
             item {
@@ -330,7 +348,9 @@ private fun CatalogHub(
         item {
             CatalogSectionHeader("Albums", albums.size, onShowAllAlbums)
         }
-        if (albums.isEmpty()) {
+        if (loading && albums.isEmpty()) {
+            item { AlbumRowSkeleton(LoadingEstimates.albums(albumEstimate), cardSize = 120.dp) }
+        } else if (albums.isEmpty()) {
             item { EmptyHint("Heart albums to keep them here.") }
         } else {
             item {
@@ -372,7 +392,9 @@ private fun CatalogHub(
         item {
             CatalogSectionHeader("Songs", songs.size, onShowAllSongs)
         }
-        if (songs.isEmpty()) {
+        if (loading && songs.isEmpty()) {
+            item { SongListSkeleton(LoadingEstimates.songs(songEstimate)) }
+        } else if (songs.isEmpty()) {
             item { EmptyHint("Heart songs to keep them here.") }
         } else {
             itemsIndexed(songs.take(12), key = { _, s -> s.songKey }) { _, song ->

@@ -19,6 +19,10 @@ class CatalogRepository(
     private val dao: CatalogDao,
     private val musicRepository: MusicRepository
 ) {
+    private val lightAlbumsCache = object : LinkedHashMap<String, List<AlbumItem>>(32, 0.75f, true) {
+        override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, List<AlbumItem>>?): Boolean =
+            size > 48
+    }
 
     fun observeTracks(): Flow<List<Song>> =
         dao.observeTracks().map { rows -> rows.map { it.toSong() } }
@@ -71,7 +75,7 @@ class CatalogRepository(
             val seen = LinkedHashSet<String>()
             val out = ArrayList<AlbumItem>(rows.size)
             for (row in rows) {
-                val item = albumItemForKeyLocked(row.albumKey) ?: continue
+                val item = lightAlbumItemLocked(row.albumKey) ?: continue
                 val mergeKey = albumKey(item.name, item.artist)
                 if (!seen.add(mergeKey)) continue
                 out += item
@@ -116,7 +120,32 @@ class CatalogRepository(
 
     /** Releases this artist owns (primary). Local + remote copies merge by albumKey. */
     suspend fun albumItemsForArtist(artistKey: String, displayName: String? = null): List<AlbumItem> =
-        lightAlbumItemsForArtist(dao, artistKey, displayName)
+        withContext(Dispatchers.IO) {
+            synchronized(lightAlbumsCache) { lightAlbumsCache[artistKey] }?.let { return@withContext it }
+            val items = lightAlbumItemsForArtist(dao, artistKey, displayName)
+            synchronized(lightAlbumsCache) { lightAlbumsCache[artistKey] = items }
+            items
+        }
+
+    suspend fun lightAlbumItemForKey(albumKey: String): AlbumItem? = withContext(Dispatchers.IO) {
+        lightAlbumItemLocked(albumKey)
+    }
+
+    private suspend fun lightAlbumItemLocked(albumKey: String): AlbumItem? {
+        if (albumKey.isBlank()) return null
+        val row = dao.getAlbum(albumKey)
+        if (row != null) {
+            val seed = dao.getOneTrackForAlbum(albumKey)
+            return row.toLightAlbum(seed?.toLightSong())
+        }
+        val seed = dao.getOneTrackForAlbum(albumKey) ?: return null
+        return AlbumItem(
+            name = seed.album,
+            artist = seed.albumArtist ?: seed.artist,
+            trackCount = 1,
+            songs = listOf(seed.toLightSong())
+        )
+    }
 
     /** Guest appearances on other artists' releases. */
     suspend fun appearsOnAlbumItems(artistKey: String, displayName: String? = null): List<AlbumItem> =
