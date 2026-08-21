@@ -101,7 +101,6 @@ class VlcPlaybackEngine(
                 applyPendingSeek(mp)
                 dispatch { onIsPlayingChanged(true) }
                 dispatch { onPlaybackStateChanged(PlaybackEngine.PlaybackState.READY) }
-                logDecoded()
             }
             MediaPlayer.Event.Paused -> {
                 if (loadGeneration != eventGeneration) return
@@ -453,20 +452,6 @@ class VlcPlaybackEngine(
         val target = seek.coerceIn(0L, max)
         Log.i(TAG, "seek ${seek}ms → ${target}ms of ${len}ms")
         runCatching { mp.time = target }
-    }
-
-    private fun logDecoded() {
-        val media = currentMedia ?: return
-        val tracks = runCatching { media.tracks }.getOrNull() ?: return
-        for (t in tracks) {
-            if (t !is Media.AudioTrack) continue
-            AudioPipeline.noteDecoded(
-                codec = t.codec ?: t.originalCodec,
-                sampleRateHz = t.samplerate.takeIf { it > 0 },
-                channels = t.channels.takeIf { it > 0 },
-                bitrateBps = t.bitrate.takeIf { it > 0 }
-            )
-        }
     }
 
     private fun prepareStandby(item: PlaybackMedia) {
