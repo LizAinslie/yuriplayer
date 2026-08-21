@@ -15,7 +15,7 @@ enum class StreamQuality(
     ORIGINAL(
         id = "original",
         displayName = "Original",
-        subtitle = "Server file, no transcode — highest quality",
+        subtitle = "FLAC / source file — no transcode (stream download)",
         bitRate = null
     ),
     KBPS_320(

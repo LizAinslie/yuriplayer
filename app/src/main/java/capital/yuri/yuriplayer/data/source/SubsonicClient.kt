@@ -398,7 +398,7 @@ class SubsonicClient(
             year = year,
             genre = genreStr,
             path = "subsonic:$sid",
-            mimeType = contentType,
+            mimeType = contentType ?: suffix?.let { "audio/$it" },
             explicit = genreStr?.contains("explicit", ignoreCase = true) == true,
             musicBrainzArtistId = mbArtist?.takeIf { it.isNotBlank() }
         )

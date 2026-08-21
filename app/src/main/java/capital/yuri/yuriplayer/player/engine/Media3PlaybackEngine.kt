@@ -8,6 +8,7 @@ import android.util.Log
 import androidx.annotation.OptIn
 import androidx.media3.common.AudioAttributes
 import androidx.media3.common.C
+import androidx.media3.common.Format
 import androidx.media3.common.MediaItem
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
@@ -101,6 +102,17 @@ class Media3PlaybackEngine(
             }
             dispatch { onPlaybackStateChanged(state) }
             buffering = playbackState == Player.STATE_BUFFERING
+            if (playbackState == Player.STATE_READY) {
+                val f = player.audioFormat
+                if (f != null) {
+                    AudioPipeline.noteDecoded(
+                        codec = f.sampleMimeType,
+                        sampleRateHz = f.sampleRate.takeIf { it > 0 && it != Format.NO_VALUE },
+                        channels = f.channelCount.takeIf { it > 0 && it != Format.NO_VALUE },
+                        bitrateBps = f.bitrate.takeIf { it > 0 && it != Format.NO_VALUE }
+                    )
+                }
+            }
             if (playbackState == Player.STATE_ENDED) {
                 buffering = false
                 val live = isLive()

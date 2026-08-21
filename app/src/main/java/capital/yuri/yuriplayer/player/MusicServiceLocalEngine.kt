@@ -4,6 +4,7 @@ import android.content.Context
 import android.util.Log
 import capital.yuri.yuriplayer.data.LibrarySettings
 import capital.yuri.yuriplayer.data.Song
+import capital.yuri.yuriplayer.player.engine.AudioPipeline
 import capital.yuri.yuriplayer.player.engine.EngineSessionBridge
 import capital.yuri.yuriplayer.player.engine.PlaybackEngine
 import capital.yuri.yuriplayer.player.engine.PlaybackEngineFactory
@@ -71,11 +72,17 @@ class MusicServiceLocalEngine(
         val quality = settings.getStreamQuality()
         val current = song.toPlaybackMedia(quality = quality)
         val successor = if (current.live) null else next?.toPlaybackMedia(quality = quality)
+        AudioPipeline.notePlay(
+            title = song.displayTitle,
+            engine = engineId.id,
+            quality = quality.id,
+            uri = current.uri.toString()
+        )
         Log.i(
             TAG,
             "load engine=$engineId '${song.displayTitle}' " +
                 "uri=${current.uri} scheme=${current.uri.scheme} quality=${quality.id} " +
-                "live=${current.live} autoPlay=$autoPlay pos=$startPositionMs " +
+                "mime=${song.mimeType} live=${current.live} autoPlay=$autoPlay pos=$startPositionMs " +
                 "successor=${successor?.title}"
         )
         engine.setPlayWhenReady(autoPlay)

@@ -241,21 +241,45 @@ fun jellyfinPlayableUri(
     return Uri.parse(built)
 }
 
-/** Subsonic/OpenSubsonic: `format=raw` for original, else mp3 + maxBitRate. */
+/** Subsonic/OpenSubsonic original file vs transcode. */
 fun subsonicPlayableUri(
     uri: Uri,
     quality: StreamQuality = StreamQuality.active
 ): Uri {
     val path = uri.path.orEmpty()
-    if (!path.contains("stream", ignoreCase = true)) return uri
+    if (!path.contains("stream", ignoreCase = true) &&
+        !path.contains("download", ignoreCase = true)
+    ) {
+        return uri
+    }
     val b = uri.buildUpon().clearQuery()
+    val original = quality.bitRate == null
+    if (original) {
+        // `download` is the original file on Subsonic/OpenSubsonic/Navidrome
+        // and is not subject to per-player transcode profiles the way `stream` is.
+        uri.encodedPath?.let { encoded ->
+            if (encoded.contains("stream", ignoreCase = true)) {
+                b.encodedPath(
+                    encoded.replace("stream.view", "download.view")
+                        .replace("/stream", "/download")
+                )
+            }
+        }
+    } else if (uri.encodedPath?.contains("download", ignoreCase = true) == true) {
+        uri.encodedPath?.let { encoded ->
+            b.encodedPath(
+                encoded.replace("download.view", "stream.view")
+                    .replace("/download", "/stream")
+            )
+        }
+    }
     for (name in uri.queryParameterNames) {
         if (name.equals("format", true) || name.equals("maxBitRate", true)) continue
         uri.getQueryParameters(name).forEach { value ->
             b.appendQueryParameter(name, value)
         }
     }
-    if (quality.bitRate == null) {
+    if (original) {
         b.appendQueryParameter("format", "raw")
     } else {
         b.appendQueryParameter("format", "mp3")

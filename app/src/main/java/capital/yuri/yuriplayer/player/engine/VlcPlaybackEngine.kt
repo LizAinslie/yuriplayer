@@ -37,7 +37,8 @@ class VlcPlaybackEngine(
             "--no-video",
             "--file-caching=$FILE_CACHE_MS",
             "--network-caching=$NETWORK_CACHE_MS",
-            "--prefetch-buffer-size=$PREFETCH_BYTES"
+            "--prefetch-buffer-size=$PREFETCH_BYTES",
+            "--http-user-agent=YuriPlayer/0.1"
         )
     )
 
@@ -100,6 +101,7 @@ class VlcPlaybackEngine(
                 applyPendingSeek(mp)
                 dispatch { onIsPlayingChanged(true) }
                 dispatch { onPlaybackStateChanged(PlaybackEngine.PlaybackState.READY) }
+                logDecoded()
             }
             MediaPlayer.Event.Paused -> {
                 if (loadGeneration != eventGeneration) return
@@ -453,6 +455,20 @@ class VlcPlaybackEngine(
         runCatching { mp.time = target }
     }
 
+    private fun logDecoded() {
+        val media = currentMedia ?: return
+        val tracks = runCatching { media.tracks }.getOrNull() ?: return
+        for (t in tracks) {
+            if (t !is Media.AudioTrack) continue
+            AudioPipeline.noteDecoded(
+                codec = t.codec ?: t.originalCodec,
+                sampleRateHz = t.samplerate.takeIf { it > 0 },
+                channels = t.channels.takeIf { it > 0 },
+                bitrateBps = t.bitrate.takeIf { it > 0 }
+            )
+        }
+    }
+
     private fun prepareStandby(item: PlaybackMedia) {
         nextGeneration += 1
         val gen = nextGeneration
@@ -621,6 +637,7 @@ class VlcPlaybackEngine(
         if (item.isNetwork) {
             media.addOption(":network-caching=$NETWORK_CACHE_MS")
             media.addOption(":http-reconnect")
+            media.addOption(":http-user-agent=YuriPlayer/0.1")
         } else {
             media.addOption(":file-caching=$FILE_CACHE_MS")
         }

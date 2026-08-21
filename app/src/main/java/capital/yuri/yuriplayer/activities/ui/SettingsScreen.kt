@@ -32,6 +32,7 @@ import androidx.compose.material.icons.outlined.Gavel
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -46,6 +47,7 @@ import capital.yuri.yuriplayer.data.LibrarySettings
 import capital.yuri.yuriplayer.data.StreamQuality
 import capital.yuri.yuriplayer.data.source.SourceType
 import capital.yuri.yuriplayer.data.theme.ArtColorVariant
+import capital.yuri.yuriplayer.player.engine.AudioPipeline
 import capital.yuri.yuriplayer.player.engine.PlaybackEngineCatalog
 import capital.yuri.yuriplayer.player.engine.PlaybackEngineId
 import capital.yuri.yuriplayer.ui.TestTags
@@ -400,10 +402,20 @@ private fun StreamingQualitySettingsScreen(onBack: () -> Unit) {
 
         SettingsSectionTitle("Jellyfin & Subsonic")
         TextNote(
-            text = "Quality for playback and the next-track buffer. Original is the " +
-                "server file. Lower steps transcode so prefetch uses less data. " +
+            text = "Original uses the Subsonic/OpenSubsonic download of the source " +
+                "file (FLAC, ALAC, …) with no transcode — Navidrome and other " +
+                "OpenSubsonic servers serve the real file. Lower steps request " +
+                "an mp3 transcode so prefetch uses less data. " +
                 "Applies to the next track — the current song keeps playing as-is."
         )
+        val pipeline by AudioPipeline.last.collectAsState()
+        pipeline?.let { snap ->
+            SettingsSectionTitle("Last stream")
+            TextNote(
+                text = "${snap.title}\n${snap.engine} · ${snap.summary}\n" +
+                    "logcat: adb logcat -s YuriAudio:I"
+            )
+        }
         SettingsGroup {
             StreamQuality.entries.forEach { q ->
                 SettingsNavRow(

@@ -105,6 +105,7 @@ class StreamPrefetcher private constructor(cacheDir: File) {
                 return
             }
             val total = conn.contentLengthLong.takeIf { it > 0 } ?: -1L
+            AudioPipeline.noteHttp(conn.contentType, total.takeIf { it > 0 }, item.title)
             if (total > MAX_BYTES) {
                 Log.w(TAG, "prefetch skip '${item.title}' too large $total")
                 return
