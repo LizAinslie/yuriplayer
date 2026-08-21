@@ -30,6 +30,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -65,6 +66,9 @@ import capital.yuri.yuriplayer.components.theme.YuriTheme
 import capital.yuri.yuriplayer.components.theme.playerColorsFromPixels
 import capital.yuri.yuriplayer.core.artist.ArtistProfile
 import capital.yuri.yuriplayer.core.library.Track
+import capital.yuri.yuriplayer.core.library.albumPageIdentity
+import capital.yuri.yuriplayer.core.library.pickPreferred
+import capital.yuri.yuriplayer.core.library.sourceRank
 import capital.yuri.yuriplayer.desktop.DesktopCollection
 import capital.yuri.yuriplayer.desktop.DesktopSession
 import kotlinx.coroutines.launch
@@ -100,9 +104,11 @@ fun YuriDesktopApp(session: DesktopSession) {
         val liked by session.collection.liked.collectAsState()
         val pins by session.collection.pinned.collectAsState()
         val playlists by session.playlists.playlists.collectAsState()
+        val remotes by session.sources.remotes.collectAsState()
         val leftFrac by session.layout.leftFraction.collectAsState()
         val rightFrac by session.layout.rightFraction.collectAsState()
-        val albums = remember(tracks) { tracks.albums() }
+        var prefRev by remember { mutableIntStateOf(0) }
+        val albums = remember(tracks, prefRev) { tracks.albums(session.sourcePrefs.snapshot()) }
         var stack by remember { mutableStateOf(listOf<Route>(Route.Home)) }
         var forward by remember { mutableStateOf(listOf<Route>()) }
         var query by remember { mutableStateOf("") }
@@ -113,6 +119,7 @@ fun YuriDesktopApp(session: DesktopSession) {
         var editSong by remember { mutableStateOf<Track?>(null) }
         var editAlbum by remember { mutableStateOf<AlbumPageModel?>(null) }
         var addToPlaylist by remember { mutableStateOf<List<Track>?>(null) }
+        var sourcesFor by remember { mutableStateOf<List<Track>?>(null) }
         val route = stack.last()
         val nav = if (route is Route.Search) DesktopNav.Search else DesktopNav.Home
         val scope = rememberCoroutineScope()
@@ -163,10 +170,19 @@ fun YuriDesktopApp(session: DesktopSession) {
                 addToPlaylist = listOf(track)
             }
             item("Add to queue") { session.player.enqueue(track) }
+            item("Sources") {
+                val group = tracks.filter { t ->
+                    t.id == track.id || t.catalogKey() == track.catalogKey() ||
+                        albums.any { a -> a.tracks.any { row -> track.id in row.sourceIds && t.id in row.sourceIds } }
+                }.ifEmpty { listOf(track) }
+                sourcesFor = group
+            }
             submenu("Go to") {
                 if (!onAlbumPage) {
                     item("Album") {
-                        albums.firstOrNull { a -> a.tracks.any { it.id == track.id } }?.let(::openAlbum)
+                        albums.firstOrNull { a ->
+                            a.tracks.any { track.id in it.sourceIds || it.id == track.id }
+                        }?.let(::openAlbum)
                     }
                 }
                 item("Artist") { openArtist(track.displayArtist) }
@@ -191,7 +207,10 @@ fun YuriDesktopApp(session: DesktopSession) {
                 }
             else -> {
                 val album = albums.firstOrNull { it.id == item.id }
-                album?.tracks?.mapNotNull { row -> tracks.firstOrNull { it.id == row.id } }.orEmpty()
+                album?.tracks?.mapNotNull { row ->
+                    val group = tracks.filter { it.id in row.sourceIds }
+                    pickPreferred(group, session.sourcePrefs.get(albumPageIdentity(group.firstOrNull() ?: return@mapNotNull null)))
+                }.orEmpty()
                     .ifEmpty { tracks.filter { it.id == item.id }.takeIf { it.isNotEmpty() } ?: emptyList() }
             }
         }
@@ -482,13 +501,17 @@ fun YuriDesktopApp(session: DesktopSession) {
                 )
                 is Route.Album -> {
                     val live = albums.firstOrNull { it.id == r.album.id } ?: r.album
-                    val albumTracks = live.tracks.mapNotNull { row ->
-                        tracks.firstOrNull { it.id == row.id }
+                    fun resolveRow(row: capital.yuri.yuriplayer.components.model.TrackRowModel): Track? {
+                        val group = tracks.filter { it.id in row.sourceIds.ifEmpty { listOf(row.id) } }
+                        if (group.isEmpty()) return tracks.firstOrNull { it.id == row.id }
+                        val identity = albumPageIdentity(group.first())
+                        return pickPreferred(group, session.sourcePrefs.get(identity))
                     }
+                    val albumTracks = live.tracks.mapNotNull(::resolveRow)
                     AlbumPage(
                         album = live.copy(
                             tracks = live.tracks.map {
-                                it.copy(highlighted = it.id == current?.id)
+                                it.copy(highlighted = current?.id == it.id || current?.id in it.sourceIds)
                             }
                         ),
                         playing = playing && albumTracks.any { it.id == current?.id },
@@ -519,6 +542,9 @@ fun YuriDesktopApp(session: DesktopSession) {
                         onToggleTrackLike = session.collection::toggleLike,
                         songMenu = { row ->
                             tracks.firstOrNull { it.id == row.id }?.let { songMenu(it, onAlbumPage = true) }.orEmpty()
+                        },
+                        onSources = { row ->
+                            sourcesFor = tracks.filter { it.id in row.sourceIds.ifEmpty { listOf(row.id) } }
                         }
                     )
                 }
@@ -699,6 +725,20 @@ fun YuriDesktopApp(session: DesktopSession) {
                 library = tracks,
                 onDismiss = { addToPlaylist = null },
                 onEnsureTracks = { session.ensureTracks(it) }
+            )
+        }
+        sourcesFor?.let { group ->
+            val preferredId = group.firstOrNull()?.let { session.sourcePrefs.get(albumPageIdentity(it)) }
+                ?: group.minByOrNull { it.sourceRank() }?.id
+            SourcesPickerDialog(
+                title = group.first().displayTitle,
+                choices = sourceChoices(group, remotes, preferredId),
+                onDismiss = { sourcesFor = null },
+                onPick = { picked ->
+                    session.sourcePrefs.set(albumPageIdentity(picked), picked.id)
+                    prefRev++
+                    sourcesFor = null
+                }
             )
         }
     }

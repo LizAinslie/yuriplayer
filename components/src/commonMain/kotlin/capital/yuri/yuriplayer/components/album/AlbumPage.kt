@@ -57,6 +57,7 @@ fun AlbumPage(
     likedTrackIds: Set<String> = emptySet(),
     onToggleTrackLike: (String) -> Unit = {},
     songMenu: (TrackRowModel) -> List<out MenuEntry> = { emptyList() },
+    onSources: (TrackRowModel) -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val coverColors by rememberCoverColors(
@@ -75,12 +76,12 @@ fun AlbumPage(
             when (widthClass) {
                 WindowWidthClass.Compact -> AlbumPageCompact(
                     album, playing, onBack, onPlay, onTrack, onEdit, onEditTrack, onArtist,
-                    liked, onToggleLike, likedTrackIds, onToggleTrackLike, songMenu
+                    liked, onToggleLike, likedTrackIds, onToggleTrackLike, songMenu, onSources
                 )
                 WindowWidthClass.Medium,
                 WindowWidthClass.Expanded -> AlbumPageWide(
                     album, playing, onBack, onPlay, onTrack, onEdit, onEditTrack, onArtist,
-                    liked, onToggleLike, likedTrackIds, onToggleTrackLike, songMenu
+                    liked, onToggleLike, likedTrackIds, onToggleTrackLike, songMenu, onSources
                 )
             }
         }
@@ -101,7 +102,8 @@ private fun AlbumPageCompact(
     onToggleLike: () -> Unit,
     likedTrackIds: Set<String>,
     onToggleTrackLike: (String) -> Unit,
-    songMenu: (TrackRowModel) -> List<out MenuEntry>
+    songMenu: (TrackRowModel) -> List<out MenuEntry>,
+    onSources: (TrackRowModel) -> Unit
 ) {
     Column(Modifier.fillMaxSize()) {
         Row(verticalAlignment = Alignment.CenterVertically) {
@@ -128,7 +130,7 @@ private fun AlbumPageCompact(
             corner = 12.dp
         )
         AlbumMeta(album, playing, onPlay, onArtist, liked, onToggleLike, Modifier.padding(20.dp))
-        TrackList(album, onTrack, onEditTrack, likedTrackIds, onToggleTrackLike, songMenu)
+        TrackList(album, onTrack, onEditTrack, likedTrackIds, onToggleTrackLike, songMenu, onSources)
     }
 }
 
@@ -146,7 +148,8 @@ private fun AlbumPageWide(
     onToggleLike: () -> Unit,
     likedTrackIds: Set<String>,
     onToggleTrackLike: (String) -> Unit,
-    songMenu: (TrackRowModel) -> List<out MenuEntry>
+    songMenu: (TrackRowModel) -> List<out MenuEntry>,
+    onSources: (TrackRowModel) -> Unit
 ) {
     Row(Modifier.fillMaxSize().padding(24.dp)) {
         Column(
@@ -176,7 +179,10 @@ private fun AlbumPageWide(
             Spacer(Modifier.height(16.dp))
             AlbumMeta(album, playing, onPlay, onArtist, liked, onToggleLike)
         }
-        TrackList(album, onTrack, onEditTrack, likedTrackIds, onToggleTrackLike, songMenu, modifier = Modifier.weight(1f))
+        TrackList(
+            album, onTrack, onEditTrack, likedTrackIds, onToggleTrackLike, songMenu, onSources,
+            modifier = Modifier.weight(1f)
+        )
     }
 }
 
@@ -234,6 +240,7 @@ private fun TrackList(
     likedTrackIds: Set<String> = emptySet(),
     onToggleTrackLike: (String) -> Unit = {},
     songMenu: (TrackRowModel) -> List<out MenuEntry> = { emptyList() },
+    onSources: (TrackRowModel) -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val discs = album.tracks.groupBy { it.discNumber ?: 1 }
@@ -260,7 +267,8 @@ private fun TrackList(
                     showAlbum = false,
                     liked = track.id in likedTrackIds,
                     onToggleLike = { onToggleTrackLike(track.id) },
-                    contextItems = songMenu(track)
+                    contextItems = songMenu(track),
+                    onSources = { onSources(track) }
                 )
             }
         }

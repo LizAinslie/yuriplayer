@@ -91,6 +91,7 @@ class DesktopSession {
     val layout = DesktopLayoutStore(dirs.configDir)
     val collection = DesktopCollection(dirs.configDir)
     val playlists = DesktopPlaylistStore(dirs.configDir)
+    val sourcePrefs = DesktopSourcePrefs(dirs.configDir)
     val sources = LibrarySourceStore(dirs.configDir)
     private val index = DesktopIndexStore(dirs.cacheDir)
     private val playbackStore = DesktopPlaybackStore(dirs.configDir)

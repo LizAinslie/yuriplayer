@@ -1,6 +1,9 @@
 package capital.yuri.yuriplayer.components.model
 
 import capital.yuri.yuriplayer.core.library.Track
+import capital.yuri.yuriplayer.core.library.albumGroupKey
+import capital.yuri.yuriplayer.core.library.collapseAlbumTracks
+import capital.yuri.yuriplayer.core.library.isExplicit
 import capital.yuri.yuriplayer.core.library.matchesSearch
 
 data class CoverRef(
@@ -19,7 +22,10 @@ data class TrackRowModel(
     val trackNumber: Int? = null,
     val discNumber: Int? = null,
     val artworkUri: String? = null,
-    val highlighted: Boolean = false
+    val highlighted: Boolean = false,
+    val explicit: Boolean = false,
+    val multiSource: Boolean = false,
+    val sourceIds: List<String> = emptyList()
 )
 
 data class AlbumPageModel(
@@ -55,7 +61,10 @@ fun Track.toRow(highlighted: Boolean = false) = TrackRowModel(
     trackNumber = trackNumber,
     discNumber = discNumber,
     artworkUri = artworkUri,
-    highlighted = highlighted
+    highlighted = highlighted,
+    explicit = isExplicit(),
+    multiSource = false,
+    sourceIds = listOf(id)
 )
 
 fun Track.toCover() = CoverRef(
@@ -65,22 +74,37 @@ fun Track.toCover() = CoverRef(
     artworkUri = artworkUri
 )
 
-fun List<Track>.albums(): List<AlbumPageModel> =
-    groupBy { (it.album ?: "").trim().ifBlank { "Unknown Album" } to (it.albumArtist ?: it.artist ?: "") }
-        .map { (key, tracks) ->
-            val sorted = tracks.sortedWith(
-                compareBy<Track> { it.discNumber ?: 1 }.thenBy { it.trackNumber ?: Int.MAX_VALUE }
-            )
+fun List<Track>.albums(
+    preferredIds: Map<String, String> = emptyMap()
+): List<AlbumPageModel> =
+    groupBy { albumGroupKey(it) }
+        .mapNotNull { (_, tracks) ->
+            val collapsed = collapseAlbumTracks(tracks, preferredIds)
+            val first = collapsed.firstOrNull()?.preferred ?: return@mapNotNull null
             AlbumPageModel(
-                id = "${key.second}::${key.first}",
-                title = key.first,
-                artist = key.second.ifBlank { sorted.first().displayArtist },
-                artworkUri = sorted.firstNotNullOfOrNull { it.artworkUri },
-                year = sorted.mapNotNull { it.year }.maxOrNull(),
-                tracks = sorted.map { it.toRow() }
+                id = albumGroupKey(first),
+                title = first.displayAlbum,
+                artist = first.albumArtist?.takeIf { it.isNotBlank() } ?: first.displayArtist,
+                artworkUri = collapsed.firstNotNullOfOrNull { it.preferred.artworkUri },
+                year = collapsed.mapNotNull { it.preferred.year }.maxOrNull(),
+                tracks = collapsed.map { it.toRow() }
             )
         }
         .sortedBy { it.title.lowercase() }
+
+private fun capital.yuri.yuriplayer.core.library.CollapsedTrack.toRow() = TrackRowModel(
+    id = preferred.id,
+    title = preferred.displayTitle,
+    artist = preferred.displayArtist,
+    album = preferred.displayAlbum,
+    durationMs = preferred.durationMs,
+    trackNumber = preferred.trackNumber,
+    discNumber = preferred.discNumber,
+    artworkUri = preferred.artworkUri,
+    explicit = explicit,
+    multiSource = multiSource,
+    sourceIds = sources.map { it.id }
+)
 
 fun List<Track>.artistPage(
     name: String,

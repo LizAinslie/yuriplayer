@@ -32,7 +32,8 @@ fun TrackRow(
     onLongClick: (() -> Unit)? = null,
     liked: Boolean = false,
     onToggleLike: (() -> Unit)? = null,
-    contextItems: List<out MenuEntry> = emptyList()
+    contextItems: List<out MenuEntry> = emptyList(),
+    onSources: (() -> Unit)? = null
 ) {
     val highlight = MaterialTheme.colorScheme.primary.copy(alpha = 0.12f)
     ContextMenuAnchor(items = contextItems) { openMenu ->
@@ -64,13 +65,24 @@ fun TrackRow(
             Spacer(Modifier.width(12.dp))
         }
         Column(Modifier.weight(1f)) {
-            Text(
-                track.title,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-                fontWeight = if (track.highlighted) FontWeight.SemiBold else FontWeight.Normal,
-                color = MaterialTheme.colorScheme.onSurface
-            )
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    track.title,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    fontWeight = if (track.highlighted) FontWeight.SemiBold else FontWeight.Normal,
+                    color = MaterialTheme.colorScheme.onSurface,
+                    modifier = Modifier.weight(1f, fill = false)
+                )
+                if (track.explicit || track.multiSource) {
+                    Spacer(Modifier.width(6.dp))
+                    SongBadgeRow(
+                        explicit = track.explicit,
+                        multiSource = track.multiSource,
+                        onSources = onSources
+                    )
+                }
+            }
             val sub = if (showAlbum) "${track.artist} · ${track.album}" else track.artist
             Text(
                 sub,
