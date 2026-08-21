@@ -147,9 +147,18 @@ fun foldTagToken(value: String): String {
     return t
 }
 
+/** Title identity: "Oh, Ms. Believer" and "Oh Ms. Believer" are the same song. */
+fun foldTitleToken(value: String): String {
+    var t = foldTagToken(value)
+    t = t.replace(TITLE_DECORATIVE_PUNCT, " ")
+    return t.replace(Regex("\\s+"), " ").trim()
+}
+
 private val APOSTROPHE_LIKE = Regex(
     "[\u0027\u0060\u00B4\u2018\u2019\u201A\u201B\u2032\u02BB\u02BC\uFF07]"
 )
+
+private val TITLE_DECORATIVE_PUNCT = Regex("[,.:;!?]")
 
 fun albumKey(name: String?, artist: String?): String {
     val a = artistKey(artist) ?: foldTagToken(primaryArtistName(artist) ?: artist ?: "")
@@ -232,7 +241,7 @@ object TrackIdentity {
         var t = title.trim()
         t = FEAT_IN_PARENS.replace(t, "")
         t = FEAT_SUFFIX.replace(t, "")
-        return foldTagToken(t)
+        return foldTitleToken(t)
     }
 
     fun normalizeToken(value: String?): String {
