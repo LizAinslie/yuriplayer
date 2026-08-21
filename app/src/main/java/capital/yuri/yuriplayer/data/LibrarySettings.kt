@@ -186,11 +186,10 @@ class LibrarySettings(context: Context) {
 
     /**
      * Single backend for **all** playback (local files + remote streams).
-     * Default [PlaybackEngineId.MEDIA3]; pick [PlaybackEngineId.VLC] if FLAC
-     * or odd containers fail on Media3.
+     * Android defaults to [PlaybackEngineId.VLC]; Media3 is an advanced override.
      */
     fun getPlaybackEngineId(): PlaybackEngineId =
-        PlaybackEngineId.fromId(prefs.getString(KEY_PLAYBACK_ENGINE, PlaybackEngineId.MEDIA3.id))
+        PlaybackEngineId.fromId(prefs.getString(KEY_PLAYBACK_ENGINE, PlaybackEngineId.VLC.id))
 
     fun setPlaybackEngineId(id: PlaybackEngineId) {
         prefs.edit().putString(KEY_PLAYBACK_ENGINE, id.id).apply()

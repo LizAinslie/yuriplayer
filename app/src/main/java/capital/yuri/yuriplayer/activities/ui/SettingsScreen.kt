@@ -23,10 +23,9 @@ import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.LibraryMusic
 import androidx.compose.material.icons.filled.PlayArrow
-import androidx.compose.material.icons.filled.SettingsInputComponent
 import androidx.compose.material.icons.filled.SignalCellularAlt
 import androidx.compose.material.icons.filled.Storage
-import androidx.compose.material.icons.filled.Sync
+import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material.icons.outlined.CloudDownload
 import androidx.compose.material.icons.outlined.Gavel
 import androidx.compose.material3.MaterialTheme
@@ -159,7 +158,6 @@ private fun SettingsHubScreen(
         mutableStateOf(settings.isSyncOverMobileDataEnabled())
     }
     val scanMode = settings.getScanMode()
-    val engineDesc = PlaybackEngineCatalog.descriptor(settings.getPlaybackEngineId())
     val streamQuality = settings.getStreamQuality()
     val coverVariant = settings.getCoverColorVariant()
     val bannerVariant = settings.getBannerColorVariant()
@@ -252,13 +250,6 @@ private fun SettingsHubScreen(
         SettingsSectionTitle("Playback")
         SettingsGroup {
             SettingsNavRow(
-                title = "Playback engine",
-                subtitle = engineDesc.displayName,
-                icon = Icons.Default.SettingsInputComponent,
-                testTag = TestTags.SETTINGS_PLAYBACK_ENGINE,
-                onClick = onOpenPlaybackEngine
-            )
-            SettingsNavRow(
                 title = "Streaming quality",
                 subtitle = streamQuality.displayName + " — Jellyfin & Subsonic buffer",
                 icon = Icons.Default.HighQuality,
@@ -280,6 +271,13 @@ private fun SettingsHubScreen(
                 icon = Icons.Default.History,
                 trailing = "50",
                 onClick = {}
+            )
+            SettingsNavRow(
+                title = "Advanced playback",
+                subtitle = "Decoder and other low-level options",
+                icon = Icons.Default.Tune,
+                testTag = TestTags.SETTINGS_PLAYBACK_ENGINE,
+                onClick = onOpenPlaybackEngine
             )
         }
 
@@ -345,12 +343,13 @@ private fun PlaybackEngineSettingsScreen(onBack: () -> Unit) {
             .statusBarsPadding()
             .verticalScroll(rememberScrollState())
     ) {
-        SettingsTopBar(title = "Playback engine", onBack = onBack)
+        SettingsTopBar(title = "Advanced playback", onBack = onBack)
 
-        SettingsSectionTitle("Backend")
+        SettingsSectionTitle("Decoder")
         TextNote(
-            text = "One engine plays everything — local files and remote streams. " +
-                "Change applies the next time playback starts (force-stop the app if a track is mid-play)."
+            text = "YuriPlayer uses LibVLC by default. Only change this if a " +
+                "specific file or stream fails to play. Applies the next time " +
+                "playback starts (force-stop if a track is mid-play)."
         )
         SettingsGroup {
             PlaybackEngineCatalog.available.forEach { desc ->
@@ -377,7 +376,7 @@ private fun PlaybackEngineSettingsScreen(onBack: () -> Unit) {
         SettingsSectionTitle("Tips")
         SettingsGroup {
             TextNote(
-                text = "LibVLC is the best bet for stubborn FLAC / APE / odd containers. " +
+                text = "LibVLC is the default and the best bet for FLAC / APE / odd containers. " +
                     "Media3 is lighter and fine for most MP3/AAC and HTTP streams. " +
                     "An FFmpeg AudioTrack engine can share the bundled ffmpeg binary later."
             )
