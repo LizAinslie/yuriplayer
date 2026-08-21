@@ -2,35 +2,34 @@ package capital.yuri.yuriplayer.components.list
 
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxScope
-import androidx.compose.material3.DropdownMenu
-import androidx.compose.material3.DropdownMenuItem
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.input.pointer.PointerEventType
 import androidx.compose.ui.input.pointer.isSecondaryPressed
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.DpOffset
+import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.window.Popup
+import androidx.compose.ui.window.PopupProperties
+import capital.yuri.yuriplayer.components.menu.MenuEntry
+import capital.yuri.yuriplayer.components.menu.YuriContextMenu
+import kotlin.math.roundToInt
 
-data class ContextAction(
-    val label: String,
-    val destructive: Boolean = false,
-    val enabled: Boolean = true,
-    val onClick: () -> Unit
-)
+typealias ContextAction = MenuEntry.Item
 
 @Composable
 fun ContextMenuAnchor(
-    items: List<ContextAction>,
+    items: List<out MenuEntry>,
     modifier: Modifier = Modifier,
     onLongPressOpen: Boolean = true,
+    showPredictionCone: Boolean = false,
     content: @Composable BoxScope.(openMenu: () -> Unit) -> Unit
 ) {
     var open by remember { mutableStateOf(false) }
@@ -59,31 +58,21 @@ fun ContextMenuAnchor(
         }
     ) {
         content(if (onLongPressOpen && items.isNotEmpty()) openMenu else ({ }))
-        if (items.isNotEmpty()) {
-            DropdownMenu(
-                expanded = open,
+        if (open && items.isNotEmpty()) {
+            val px = with(density) {
+                IntOffset(offset.x.toPx().roundToInt(), offset.y.toPx().roundToInt())
+            }
+            Popup(
+                alignment = Alignment.TopStart,
+                offset = px,
                 onDismissRequest = { open = false },
-                offset = offset
+                properties = PopupProperties(focusable = true, dismissOnClickOutside = true)
             ) {
-                items.forEach { action ->
-                    DropdownMenuItem(
-                        text = {
-                            Text(
-                                action.label,
-                                color = if (action.destructive) {
-                                    MaterialTheme.colorScheme.error
-                                } else {
-                                    MaterialTheme.colorScheme.onSurface
-                                }
-                            )
-                        },
-                        enabled = action.enabled,
-                        onClick = {
-                            open = false
-                            action.onClick()
-                        }
-                    )
-                }
+                YuriContextMenu(
+                    entries = items,
+                    onDismiss = { open = false },
+                    showPredictionCone = showPredictionCone
+                )
             }
         }
     }

@@ -20,8 +20,8 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import capital.yuri.yuriplayer.components.art.CoverArt
-import capital.yuri.yuriplayer.components.list.ContextAction
 import capital.yuri.yuriplayer.components.list.LikeHeart
+import capital.yuri.yuriplayer.components.menu.MenuEntry
 import capital.yuri.yuriplayer.components.model.CoverRef
 import capital.yuri.yuriplayer.components.model.TrackRowModel
 
@@ -39,7 +39,7 @@ fun NowPlayingSidebar(
     onToggleLike: () -> Unit = {},
     likedIds: Set<String> = emptySet(),
     onToggleTrackLike: (String) -> Unit = {},
-    songMenu: (TrackRowModel) -> List<ContextAction> = { emptyList() },
+    songMenu: (TrackRowModel) -> List<out MenuEntry> = { emptyList() },
     modifier: Modifier = Modifier
 ) {
     Column(

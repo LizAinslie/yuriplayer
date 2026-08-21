@@ -50,6 +50,8 @@ import capital.yuri.yuriplayer.components.layout.LibraryRailItem
 import capital.yuri.yuriplayer.components.list.AlbumCard
 import capital.yuri.yuriplayer.components.list.ContextAction
 import capital.yuri.yuriplayer.components.list.ContextMenuAnchor
+import capital.yuri.yuriplayer.components.menu.MenuEntry
+import capital.yuri.yuriplayer.components.menu.buildContextMenu
 import capital.yuri.yuriplayer.components.model.AlbumPageModel
 import capital.yuri.yuriplayer.components.model.albums
 import capital.yuri.yuriplayer.components.model.artistPage
@@ -139,22 +141,22 @@ fun YuriDesktopApp(session: DesktopSession) {
             track: Track,
             onAlbumPage: Boolean = false,
             playlistId: String? = null
-        ): List<ContextAction> = buildList {
-            add(ContextAction("Add to playlist") { addToPlaylist = listOf(track) })
-            add(ContextAction("Add to queue") { session.player.enqueue(track) })
-            if (!onAlbumPage) {
-                add(
-                    ContextAction("Go to album") {
+        ): List<MenuEntry> = buildContextMenu {
+            item("Add to playlist") { addToPlaylist = listOf(track) }
+            item("Add to queue") { session.player.enqueue(track) }
+            submenu("Go to") {
+                if (!onAlbumPage) {
+                    item("Album") {
                         albums.firstOrNull { a -> a.tracks.any { it.id == track.id } }?.let(::openAlbum)
                     }
-                )
+                }
+                item("Artist") { openArtist(track.displayArtist) }
             }
             if (playlistId != null) {
-                add(
-                    ContextAction("Remove from this playlist", destructive = true) {
-                        session.playlists.removeTracks(playlistId, listOf(track.id))
-                    }
-                )
+                divider()
+                item("Remove from this playlist", destructive = true) {
+                    session.playlists.removeTracks(playlistId, listOf(track.id))
+                }
             }
         }
 
@@ -857,7 +859,7 @@ private data class SpotifyPin(
     val artworkUri: String?,
     val circular: Boolean = false,
     val onClick: () -> Unit,
-    val menu: List<ContextAction> = emptyList()
+    val menu: List<out MenuEntry> = emptyList()
 )
 
 private fun buildHomeShortcuts(

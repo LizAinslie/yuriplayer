@@ -29,8 +29,8 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
-import capital.yuri.yuriplayer.components.list.ContextAction
 import capital.yuri.yuriplayer.components.list.TrackRow
+import capital.yuri.yuriplayer.components.menu.MenuEntry
 import capital.yuri.yuriplayer.components.model.CoverRef
 import capital.yuri.yuriplayer.components.model.TrackRowModel
 import kotlin.math.roundToInt
@@ -52,7 +52,7 @@ fun QueuePanel(
     onMove: ((from: Int, to: Int) -> Unit)? = null,
     likedIds: Set<String> = emptySet(),
     onToggleLike: (String) -> Unit = {},
-    songMenu: (TrackRowModel) -> List<ContextAction> = { emptyList() },
+    songMenu: (TrackRowModel) -> List<out MenuEntry> = { emptyList() },
     modifier: Modifier = Modifier
 ) {
     var tab by remember { mutableStateOf(QueueTab.Queue) }

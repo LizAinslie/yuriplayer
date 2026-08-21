@@ -38,8 +38,8 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import capital.yuri.yuriplayer.components.art.CoverArt
-import capital.yuri.yuriplayer.components.list.ContextAction
 import capital.yuri.yuriplayer.components.list.TrackRow
+import capital.yuri.yuriplayer.components.menu.MenuEntry
 import capital.yuri.yuriplayer.components.model.AlbumPageModel
 import capital.yuri.yuriplayer.components.model.albums
 import capital.yuri.yuriplayer.components.model.toRow
@@ -71,7 +71,7 @@ fun DesktopExplore(
     onPlaySongs: (List<Track>, Int) -> Unit,
     likedIds: Set<String> = emptySet(),
     onToggleLike: (String) -> Unit = {},
-    songMenu: (Track) -> List<ContextAction> = { emptyList() }
+    songMenu: (Track) -> List<out MenuEntry> = { emptyList() }
 ) {
     val remotes by session.sources.remotes.collectAsState()
     val enabled = remember(remotes) { remotes.filter { it.enabled } }

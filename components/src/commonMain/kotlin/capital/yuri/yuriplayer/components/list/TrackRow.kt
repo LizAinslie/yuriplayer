@@ -18,6 +18,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import capital.yuri.yuriplayer.components.art.CoverArt
+import capital.yuri.yuriplayer.components.menu.MenuEntry
 import capital.yuri.yuriplayer.components.model.TrackRowModel
 
 @OptIn(ExperimentalFoundationApi::class)
@@ -31,7 +32,7 @@ fun TrackRow(
     onLongClick: (() -> Unit)? = null,
     liked: Boolean = false,
     onToggleLike: (() -> Unit)? = null,
-    contextItems: List<ContextAction> = emptyList()
+    contextItems: List<out MenuEntry> = emptyList()
 ) {
     val highlight = MaterialTheme.colorScheme.primary.copy(alpha = 0.12f)
     ContextMenuAnchor(items = contextItems) { openMenu ->

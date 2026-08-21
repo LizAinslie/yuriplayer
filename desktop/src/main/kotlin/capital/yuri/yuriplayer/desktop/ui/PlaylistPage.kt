@@ -45,9 +45,9 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import capital.yuri.yuriplayer.components.art.CoverArt
 import capital.yuri.yuriplayer.components.dialog.InWindowPanel
-import capital.yuri.yuriplayer.components.list.ContextAction
 import capital.yuri.yuriplayer.components.list.LikeHeart
 import capital.yuri.yuriplayer.components.list.TrackRow
+import capital.yuri.yuriplayer.components.menu.MenuEntry
 import capital.yuri.yuriplayer.components.model.toRow
 import capital.yuri.yuriplayer.core.library.Track
 import capital.yuri.yuriplayer.core.library.matchesQuery
@@ -70,7 +70,7 @@ fun PlaylistPage(
     onToggleLike: (String) -> Unit = {},
     playlistLiked: Boolean = false,
     onTogglePlaylistLike: () -> Unit = {},
-    songMenu: (Track) -> List<ContextAction> = { emptyList() }
+    songMenu: (Track) -> List<out MenuEntry> = { emptyList() }
 ) {
     var name by remember(playlist.id, playlist.updatedAtMs) { mutableStateOf(playlist.name) }
     var description by remember(playlist.id, playlist.updatedAtMs) {

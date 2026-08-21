@@ -63,8 +63,8 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import capital.yuri.yuriplayer.components.art.CoverArt
-import capital.yuri.yuriplayer.components.list.ContextAction
 import capital.yuri.yuriplayer.components.list.ContextMenuAnchor
+import capital.yuri.yuriplayer.components.menu.MenuEntry
 
 enum class DesktopNav { Home, Search }
 
@@ -96,7 +96,7 @@ fun DesktopBentoLayout(
     libraryItems: List<LibraryRailItem>,
     selectedLibraryId: String?,
     onLibraryItem: (LibraryRailItem) -> Unit,
-    libraryMenu: (LibraryRailItem) -> List<ContextAction> = { emptyList() },
+    libraryMenu: (LibraryRailItem) -> List<out MenuEntry> = { emptyList() },
     bottomBar: @Composable () -> Unit,
     sidebar: @Composable () -> Unit,
     modifier: Modifier = Modifier,
@@ -375,7 +375,7 @@ private fun LibraryRail(
     items: List<LibraryRailItem>,
     selectedId: String?,
     onItem: (LibraryRailItem) -> Unit,
-    itemMenu: (LibraryRailItem) -> List<ContextAction> = { emptyList() },
+    itemMenu: (LibraryRailItem) -> List<out MenuEntry> = { emptyList() },
     modifier: Modifier = Modifier
 ) {
     Surface(

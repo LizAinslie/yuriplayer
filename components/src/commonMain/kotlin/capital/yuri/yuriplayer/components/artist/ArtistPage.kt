@@ -61,9 +61,9 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import coil3.compose.AsyncImage
 import capital.yuri.yuriplayer.components.art.CoverArt
-import capital.yuri.yuriplayer.components.list.ContextAction
 import capital.yuri.yuriplayer.components.list.ContextMenuAnchor
 import capital.yuri.yuriplayer.components.list.LikeHeart
+import capital.yuri.yuriplayer.components.menu.MenuEntry
 import capital.yuri.yuriplayer.components.list.AlbumCard
 import capital.yuri.yuriplayer.components.list.TrackRow
 import capital.yuri.yuriplayer.components.list.formatTime
@@ -90,7 +90,7 @@ fun ArtistPage(
     onToggleLike: () -> Unit = {},
     likedTrackIds: Set<String> = emptySet(),
     onToggleTrackLike: (String) -> Unit = {},
-    songMenu: (TrackRowModel) -> List<ContextAction> = { emptyList() }
+    songMenu: (TrackRowModel) -> List<out MenuEntry> = { emptyList() }
 ) {
     val listState = rememberLazyListState()
     val mini by remember { derivedStateOf { listState.firstVisibleItemIndex > 0 } }
@@ -458,7 +458,7 @@ private fun PopularRow(
     liked: Boolean,
     onToggleLike: () -> Unit,
     onClick: () -> Unit,
-    menu: List<ContextAction> = emptyList()
+    menu: List<out MenuEntry> = emptyList()
 ) {
     ContextMenuAnchor(items = menu) { openMenu ->
         Row(

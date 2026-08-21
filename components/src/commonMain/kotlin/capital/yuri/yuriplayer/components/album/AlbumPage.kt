@@ -34,9 +34,9 @@ import androidx.compose.ui.unit.dp
 import capital.yuri.yuriplayer.components.art.CoverArt
 import capital.yuri.yuriplayer.components.layout.WindowWidthClass
 import capital.yuri.yuriplayer.components.layout.windowWidthClass
-import capital.yuri.yuriplayer.components.list.ContextAction
 import capital.yuri.yuriplayer.components.list.LikeHeart
 import capital.yuri.yuriplayer.components.list.TrackRow
+import capital.yuri.yuriplayer.components.menu.MenuEntry
 import capital.yuri.yuriplayer.components.model.AlbumPageModel
 import capital.yuri.yuriplayer.components.model.TrackRowModel
 import capital.yuri.yuriplayer.components.theme.AlbumArtBackdrop
@@ -56,7 +56,7 @@ fun AlbumPage(
     onToggleLike: () -> Unit = {},
     likedTrackIds: Set<String> = emptySet(),
     onToggleTrackLike: (String) -> Unit = {},
-    songMenu: (TrackRowModel) -> List<ContextAction> = { emptyList() },
+    songMenu: (TrackRowModel) -> List<out MenuEntry> = { emptyList() },
     modifier: Modifier = Modifier
 ) {
     val coverColors by rememberCoverColors(
@@ -101,7 +101,7 @@ private fun AlbumPageCompact(
     onToggleLike: () -> Unit,
     likedTrackIds: Set<String>,
     onToggleTrackLike: (String) -> Unit,
-    songMenu: (TrackRowModel) -> List<ContextAction>
+    songMenu: (TrackRowModel) -> List<out MenuEntry>
 ) {
     Column(Modifier.fillMaxSize()) {
         Row(verticalAlignment = Alignment.CenterVertically) {
@@ -146,7 +146,7 @@ private fun AlbumPageWide(
     onToggleLike: () -> Unit,
     likedTrackIds: Set<String>,
     onToggleTrackLike: (String) -> Unit,
-    songMenu: (TrackRowModel) -> List<ContextAction>
+    songMenu: (TrackRowModel) -> List<out MenuEntry>
 ) {
     Row(Modifier.fillMaxSize().padding(24.dp)) {
         Column(
@@ -233,7 +233,7 @@ private fun TrackList(
     onEditTrack: (Int) -> Unit = {},
     likedTrackIds: Set<String> = emptySet(),
     onToggleTrackLike: (String) -> Unit = {},
-    songMenu: (TrackRowModel) -> List<ContextAction> = { emptyList() },
+    songMenu: (TrackRowModel) -> List<out MenuEntry> = { emptyList() },
     modifier: Modifier = Modifier
 ) {
     val discs = album.tracks.groupBy { it.discNumber ?: 1 }

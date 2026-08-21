@@ -37,5 +37,8 @@ kotlin {
         jvmMain.dependencies {
             implementation(libs.ktor.client.cio)
         }
+        jvmTest.dependencies {
+            implementation(kotlin("test"))
+        }
     }
 }
