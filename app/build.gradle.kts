@@ -268,7 +268,7 @@ dependencies {
     implementation(libs.jellyfin.core)
 
     implementation(libs.coil.compose)
-    implementation(libs.coil.network.okhttp)
+    implementation(libs.coil.network.ktor3)
     implementation(libs.coil.gif)
 
     implementation(libs.aboutlibraries.core)

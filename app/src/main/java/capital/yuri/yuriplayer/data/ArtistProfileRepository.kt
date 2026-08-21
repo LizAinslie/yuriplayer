@@ -7,6 +7,7 @@ import capital.yuri.yuriplayer.data.source.ArtistLink
 import capital.yuri.yuriplayer.data.source.ArtistNameMatch
 import capital.yuri.yuriplayer.data.source.ArtistProfile
 import capital.yuri.yuriplayer.data.source.ArtistProfileProvider
+import capital.yuri.yuriplayer.data.source.DiscogsClient
 import capital.yuri.yuriplayer.data.source.DiscogsMarkup
 import capital.yuri.yuriplayer.data.source.LinkCategory
 import capital.yuri.yuriplayer.data.source.categorizeLink
@@ -14,7 +15,6 @@ import capital.yuri.yuriplayer.data.source.genresToJson
 import capital.yuri.yuriplayer.data.source.parseGenresJson
 import capital.yuri.yuriplayer.data.source.toProfile
 import capital.yuri.yuriplayer.http.url
-import io.ktor.client.HttpClient
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
@@ -27,7 +27,7 @@ class ArtistProfileRepository(
     private val providers: List<ArtistProfileProvider>,
     private val images: UserImageStore,
     private val artistInfo: ArtistInfoService? = null,
-    private val http: HttpClient? = null
+    private val discogs: DiscogsClient? = null
 ) {
 
     fun observe(artistName: String): Flow<ArtistProfile?> {
@@ -71,7 +71,7 @@ class ArtistProfileRepository(
 
         merged = ensureDiscoveryLinks(merged)
         merged = preferLocalImage(merged, key)
-        val cleanedBio = http?.let { DiscogsMarkup.resolve(merged.bio, it) } ?: merged.bio
+        val cleanedBio = discogs?.let { DiscogsMarkup.resolve(merged.bio, it) } ?: merged.bio
 
         // Final hard veto: cleared always wins over any provider image
         if (imageCleared) {
