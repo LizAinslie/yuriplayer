@@ -50,6 +50,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.RectangleShape
@@ -58,6 +59,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import coil3.compose.AsyncImage
 import capital.yuri.yuriplayer.components.art.CoverArt
 import capital.yuri.yuriplayer.components.list.AlbumCard
 import capital.yuri.yuriplayer.components.list.TrackRow
@@ -101,7 +103,10 @@ fun ArtistPage(
             }
             item {
                 Row(
-                    Modifier.fillMaxWidth().padding(horizontal = 24.dp, vertical = 16.dp),
+                    Modifier
+                        .fillMaxWidth()
+                        .background(MaterialTheme.colorScheme.background)
+                        .padding(horizontal = 24.dp, vertical = 16.dp),
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(12.dp)
                 ) {
@@ -152,7 +157,10 @@ fun ArtistPage(
             }
             item {
                 Row(
-                    Modifier.fillMaxWidth().padding(horizontal = 24.dp),
+                    Modifier
+                        .fillMaxWidth()
+                        .background(MaterialTheme.colorScheme.background)
+                        .padding(horizontal = 24.dp),
                     horizontalArrangement = Arrangement.spacedBy(32.dp)
                 ) {
                     Column(Modifier.weight(1.2f)) {
@@ -212,70 +220,75 @@ fun ArtistPage(
                 }
             }
             item {
-                Row(
-                    Modifier.fillMaxWidth().padding(start = 24.dp, end = 24.dp, top = 28.dp, bottom = 8.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Text(
-                        "Discography",
-                        style = MaterialTheme.typography.titleLarge,
-                        fontWeight = FontWeight.Bold,
-                        modifier = Modifier.weight(1f)
-                    )
-                    TextButton(onClick = {}) { Text("Show all") }
-                }
-                Row(
-                    Modifier.padding(horizontal = 24.dp),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    FilterChip(
-                        selected = disco == DiscoFilter.Popular,
-                        onClick = { disco = DiscoFilter.Popular },
-                        label = { Text("Popular releases") }
-                    )
-                    FilterChip(
-                        selected = disco == DiscoFilter.Albums,
-                        onClick = { disco = DiscoFilter.Albums },
-                        label = { Text("Albums") }
-                    )
-                    FilterChip(
-                        selected = disco == DiscoFilter.Singles,
-                        onClick = { disco = DiscoFilter.Singles },
-                        label = { Text("Singles and EPs") }
-                    )
-                }
-                Spacer(Modifier.height(12.dp))
-                LazyRow(
-                    contentPadding = PaddingValues(horizontal = 16.dp),
-                    horizontalArrangement = Arrangement.spacedBy(4.dp)
-                ) {
-                    items(releases, key = { it.id }) { album ->
-                        AlbumCard(
-                            album = album.copy(artist = "${album.year ?: ""} · ${album.releaseKind()}".trim(' ', '·')),
-                            onClick = { onOpenAlbum(album) }
+                Column(Modifier.fillMaxWidth().background(MaterialTheme.colorScheme.background)) {
+                    Row(
+                        Modifier.fillMaxWidth().padding(start = 24.dp, end = 24.dp, top = 28.dp, bottom = 8.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            "Discography",
+                            style = MaterialTheme.typography.titleLarge,
+                            fontWeight = FontWeight.Bold,
+                            modifier = Modifier.weight(1f)
                         )
+                        TextButton(onClick = {}) { Text("Show all") }
+                    }
+                    Row(
+                        Modifier.padding(horizontal = 24.dp),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        FilterChip(
+                            selected = disco == DiscoFilter.Popular,
+                            onClick = { disco = DiscoFilter.Popular },
+                            label = { Text("Popular releases") }
+                        )
+                        FilterChip(
+                            selected = disco == DiscoFilter.Albums,
+                            onClick = { disco = DiscoFilter.Albums },
+                            label = { Text("Albums") }
+                        )
+                        FilterChip(
+                            selected = disco == DiscoFilter.Singles,
+                            onClick = { disco = DiscoFilter.Singles },
+                            label = { Text("Singles and EPs") }
+                        )
+                    }
+                    Spacer(Modifier.height(12.dp))
+                    LazyRow(
+                        contentPadding = PaddingValues(horizontal = 16.dp),
+                        horizontalArrangement = Arrangement.spacedBy(4.dp)
+                    ) {
+                        items(releases, key = { it.id }) { album ->
+                            AlbumCard(
+                                album = album.copy(artist = "${album.year ?: ""} · ${album.releaseKind()}".trim(' ', '·')),
+                                onClick = { onOpenAlbum(album) }
+                            )
+                        }
                     }
                 }
             }
             if (artist.appearsOn.isNotEmpty()) {
                 item {
-                    Text(
-                        "Appears on",
-                        style = MaterialTheme.typography.titleLarge,
-                        fontWeight = FontWeight.Bold,
-                        modifier = Modifier.padding(start = 24.dp, end = 24.dp, top = 28.dp, bottom = 8.dp)
-                    )
-                    LazyRow(
-                        contentPadding = PaddingValues(horizontal = 16.dp),
-                        horizontalArrangement = Arrangement.spacedBy(4.dp)
-                    ) {
-                        items(artist.appearsOn, key = { "ao-${it.id}" }) { album ->
-                            AlbumCard(album = album, onClick = { onOpenAlbum(album) })
+                    Column(Modifier.fillMaxWidth().background(MaterialTheme.colorScheme.background)) {
+                        Text(
+                            "Appears on",
+                            style = MaterialTheme.typography.titleLarge,
+                            fontWeight = FontWeight.Bold,
+                            modifier = Modifier.padding(start = 24.dp, end = 24.dp, top = 28.dp, bottom = 8.dp)
+                        )
+                        LazyRow(
+                            contentPadding = PaddingValues(horizontal = 16.dp),
+                            horizontalArrangement = Arrangement.spacedBy(4.dp)
+                        ) {
+                            items(artist.appearsOn, key = { "ao-${it.id}" }) { album ->
+                                AlbumCard(album = album, onClick = { onOpenAlbum(album) })
+                            }
                         }
                     }
                 }
             }
             item {
+                Column(Modifier.fillMaxWidth().background(MaterialTheme.colorScheme.background)) {
                 Text(
                     "About",
                     style = MaterialTheme.typography.titleLarge,
@@ -286,15 +299,17 @@ fun ArtistPage(
                     modifier = Modifier
                         .padding(horizontal = 24.dp)
                         .fillMaxWidth()
+                        .height(280.dp)
                         .clip(RoundedCornerShape(12.dp)),
                     color = MaterialTheme.colorScheme.surfaceVariant
                 ) {
-                    Box(Modifier.fillMaxWidth().height(280.dp)) {
+                    Box(Modifier.fillMaxSize().clipToBounds()) {
                         CoverArt(
                             model = artist.artworkUri,
-                            modifier = Modifier.fillMaxSize(),
+                            modifier = Modifier.matchParentSize(),
                             corner = 0.dp,
-                            contentScale = ContentScale.Crop
+                            contentScale = ContentScale.Crop,
+                            square = false
                         )
                         Box(
                             Modifier
@@ -337,6 +352,7 @@ fun ArtistPage(
                     }
                 }
                 Spacer(Modifier.height(48.dp))
+                }
             }
         }
         if (mini) {
@@ -375,21 +391,22 @@ private fun ArtistBanner(artist: ArtistPageModel) {
         Modifier
             .fillMaxWidth()
             .aspectRatio(3f)
+            .clipToBounds()
             .clip(RectangleShape)
             .background(MaterialTheme.colorScheme.surfaceVariant)
     ) {
         if (banner != null) {
-            CoverArt(
+            AsyncImage(
                 model = banner,
-                modifier = Modifier.fillMaxSize(),
-                corner = 0.dp,
+                contentDescription = artist.name,
+                modifier = Modifier.matchParentSize(),
                 contentScale = ContentScale.Crop,
-                square = false
+                alignment = Alignment.Center
             )
         }
         Box(
             Modifier
-                .fillMaxSize()
+                .matchParentSize()
                 .background(
                     Brush.verticalGradient(
                         0f to Color.Black.copy(alpha = 0.25f),
