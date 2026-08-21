@@ -107,7 +107,7 @@ class VlcPlaybackEngine(
                 _isPlaying.value = false
                 dispatch { onIsPlayingChanged(false) }
                 // HTTP underruns pause VLC without a user pause. Kick it
-                // back if we still intend to play.
+                // back if we still intend to play. Never fight an explicit pause.
                 if (playWhenReady) {
                     mainHandler.post {
                         if (!playWhenReady) return@post
@@ -232,7 +232,11 @@ class VlcPlaybackEngine(
 
     override fun pause() {
         playWhenReady = false
-        if (active().isPlaying) active().pause()
+        buffering = false
+        runCatching { active().pause() }
+        _isPlaying.value = false
+        dispatch { onIsPlayingChanged(false) }
+        dispatch { onPlaybackStateChanged(PlaybackEngine.PlaybackState.READY) }
     }
 
     override fun stop() {

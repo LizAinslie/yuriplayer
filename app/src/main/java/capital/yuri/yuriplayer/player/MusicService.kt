@@ -617,7 +617,10 @@ class MusicService : Service() {
 
     fun togglePlayPause() {
         val hooks = engineHooks
-        if (hooks != null && hooks.isPlaying()) pause() else play()
+        val shouldPause = userWantsPlay ||
+            hooks?.isPlaying() == true ||
+            hooks?.getPlayWhenReady() == true
+        if (shouldPause) pause() else play()
     }
 
     fun skipToNext() {
@@ -821,9 +824,11 @@ class MusicService : Service() {
                 if (stallSamplePos < 0L) continue
 
                 // End-of-track freeze: HTTP streams often sit BUFFERING at EOF
-                // and never fire onEnded. Still honor a real pause (wantPlay
-                // false and not buffering). Prefer the prepared next on advance.
-                if (nearEnd && frozenFor >= NEAR_END_ADVANCE_MS && (wantPlay || buffering)) {
+                // and never fire onEnded. Never treat an explicit user pause as
+                // EOF — buffering stays true after pause on Jellyfin/VLC.
+                if (nearEnd && userWantsPlay && frozenFor >= NEAR_END_ADVANCE_MS &&
+                    (wantPlay || buffering)
+                ) {
                     Log.i(
                         TAG,
                         "near-end freeze ${frozenFor}ms pos=$pos/$duration " +
