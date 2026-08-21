@@ -27,6 +27,7 @@ import capital.yuri.yuriplayer.data.source.AudioDbArtistImageSource
 import capital.yuri.yuriplayer.data.source.BandsintownClient
 import capital.yuri.yuriplayer.data.source.DeezerArtistImageSource
 import capital.yuri.yuriplayer.data.source.DiscogsArtistImageSource
+import capital.yuri.yuriplayer.data.source.DiscogsClient
 import capital.yuri.yuriplayer.data.source.JellyfinArtistImageSource
 import capital.yuri.yuriplayer.data.source.JellyfinClient
 import capital.yuri.yuriplayer.data.source.LibraryFaviconStore
@@ -172,6 +173,7 @@ val appModule = module {
 
     single { MusicBrainzClient(get<HttpClient>()) }
     single { BandsintownClient(get<HttpClient>()) }
+    single { DiscogsClient(get<HttpClient>()) }
 
     single { JellyfinArtistImageSource(get(), get()) }
     single { SubsonicArtistImageSource(get(), get()) }
@@ -198,7 +200,7 @@ val appModule = module {
             ),
             images = get(),
             artistInfo = get(),
-            http = get()
+            discogs = get()
         )
     }
 

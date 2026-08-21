@@ -2,15 +2,14 @@ package capital.yuri.yuriplayer.data.source
 
 import android.util.Log
 import capital.yuri.yuriplayer.data.artistKey
+import capital.yuri.yuriplayer.http.url
 import io.ktor.client.HttpClient
 import io.ktor.client.request.get
 import io.ktor.client.statement.bodyAsText
 import io.ktor.http.isSuccess
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
-import org.json.JSONArray
 import org.json.JSONObject
-import java.net.URLEncoder
 
 /**
  * Wikipedia artist pages only — never albums, songs, EPs, or other works.
@@ -145,12 +144,16 @@ class WikipediaArtistImageSource(
         )
         val seen = LinkedHashSet<String>()
         for (qRaw in queries) {
-            val q = URLEncoder.encode(qRaw, "UTF-8")
-            // fulltext search gives better relevance than opensearch for "name + musician"
-            val url =
-                "https://en.wikipedia.org/w/api.php?action=query&list=search" +
-                    "&srsearch=$q&srnamespace=0&srlimit=8&format=json"
-            val body = get(url) ?: continue
+            val requestUrl = url("https://en.wikipedia.org") {
+                path("w", "api.php")
+                param("action", "query")
+                param("list", "search")
+                param("srsearch", qRaw)
+                param("srnamespace", 0)
+                param("srlimit", 8)
+                param("format", "json")
+            }
+            val body = get(requestUrl) ?: continue
             try {
                 val arr = JSONObject(body)
                     .optJSONObject("query")
@@ -177,8 +180,10 @@ class WikipediaArtistImageSource(
     }
 
     private suspend fun pageSummary(title: String): JSONObject? {
-        val path = URLEncoder.encode(title.replace(' ', '_'), "UTF-8").replace("+", "%20")
-        val body = get("https://en.wikipedia.org/api/rest_v1/page/summary/$path") ?: return null
+        val requestUrl = url("https://en.wikipedia.org") {
+            path("api", "rest_v1", "page", "summary", title.replace(' ', '_'), encodeSlash = true)
+        }
+        val body = get(requestUrl) ?: return null
         return try {
             JSONObject(body)
         } catch (_: Exception) {
@@ -202,11 +207,16 @@ class WikipediaArtistImageSource(
     }
 
     private suspend fun pageImages(title: String): List<String> {
-        val q = URLEncoder.encode(title, "UTF-8").replace("+", "%20")
-        val url =
-            "https://en.wikipedia.org/w/api.php?action=query&titles=$q" +
-                "&prop=pageimages&pithumbsize=1000&pilimit=5&format=json"
-        val body = get(url) ?: return emptyList()
+        val requestUrl = url("https://en.wikipedia.org") {
+            path("w", "api.php")
+            param("action", "query")
+            param("titles", title)
+            param("prop", "pageimages")
+            param("pithumbsize", 1000)
+            param("pilimit", 5)
+            param("format", "json")
+        }
+        val body = get(requestUrl) ?: return emptyList()
         return try {
             val pages = JSONObject(body)
                 .optJSONObject("query")

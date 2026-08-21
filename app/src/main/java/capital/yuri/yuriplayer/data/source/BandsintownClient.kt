@@ -1,6 +1,7 @@
 package capital.yuri.yuriplayer.data.source
 
 import android.util.Log
+import capital.yuri.yuriplayer.http.url
 import io.ktor.client.HttpClient
 import io.ktor.client.request.get
 import io.ktor.client.statement.bodyAsText
@@ -8,7 +9,6 @@ import io.ktor.http.isSuccess
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import org.json.JSONArray
-import java.net.URLEncoder
 
 /**
  * Bandsintown events API.
@@ -33,11 +33,13 @@ class BandsintownClient(
             Log.i(TAG, "skip events for $name — no partner app_id configured")
             return@withContext emptyList()
         }
-        val path = URLEncoder.encode(name, "UTF-8")
-        val url =
-            "https://rest.bandsintown.com/artists/$path/events?app_id=$id&date=upcoming"
+        val requestUrl = url("https://rest.bandsintown.com") {
+            path("artists", name, "events", encodeSlash = true)
+            param("app_id", id)
+            param("date", "upcoming")
+        }
         val body = try {
-            val response = http.get(url)
+            val response = http.get(requestUrl)
             if (response.status.value == 403) {
                 Log.w(
                     TAG,
@@ -91,8 +93,9 @@ class BandsintownClient(
 
         /** Deep-link fallback when API access is unavailable. */
         fun publicArtistUrl(artistName: String): String {
-            val q = URLEncoder.encode(artistName.trim(), "UTF-8")
-            return "https://www.bandsintown.com/a/$q"
+            return url("https://www.bandsintown.com") {
+                path("a", artistName.trim(), encodeSlash = true)
+            }
         }
     }
 }

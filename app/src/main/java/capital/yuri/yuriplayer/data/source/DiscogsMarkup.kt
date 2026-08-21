@@ -1,13 +1,7 @@
 package capital.yuri.yuriplayer.data.source
 
-import android.util.Log
-import io.ktor.client.HttpClient
-import io.ktor.client.request.get
-import io.ktor.client.statement.bodyAsText
-import io.ktor.http.isSuccess
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
-import org.json.JSONObject
 import java.util.concurrent.ConcurrentHashMap
 
 /**
@@ -23,7 +17,7 @@ object DiscogsMarkup {
 
     private val cache = ConcurrentHashMap<String, String>()
 
-    suspend fun resolve(raw: String?, http: HttpClient): String? {
+    suspend fun resolve(raw: String?, discogs: DiscogsClient): String? {
         if (raw.isNullOrBlank()) return raw
         var t: String = raw
         t = URL.replace(t) { it.groupValues[2].ifBlank { it.groupValues[1] } }
@@ -32,16 +26,16 @@ object DiscogsMarkup {
         t = PIPED.replace(t) { it.groupValues[3] }
         val ids = BARE.findAll(t).map { it.groupValues[1].lowercase() to it.groupValues[2] }.distinct().toList()
         for ((kind, id) in ids) {
-            val name = resolveEntity(http, kind, id) ?: continue
+            val name = resolveEntity(discogs, kind, id) ?: continue
             t = t.replace("[$kind$id]", name, ignoreCase = true)
         }
         return t.replace(Regex("""\n{3,}"""), "\n\n").trim()
     }
 
-    private suspend fun resolveEntity(http: HttpClient, kind: String, id: String): String? {
+    private suspend fun resolveEntity(discogs: DiscogsClient, kind: String, id: String): String? {
         val cacheKey = "$kind:$id"
         cache[cacheKey]?.let { return it }
-        val path = when (kind.lowercase()) {
+        val resource = when (kind.lowercase()) {
             "a" -> "artists"
             "l" -> "labels"
             "r" -> "releases"
@@ -49,19 +43,12 @@ object DiscogsMarkup {
             else -> return null
         }
         return withContext(Dispatchers.IO) {
-            try {
-                val response = http.get("https://api.discogs.com/$path/$id")
-                if (!response.status.isSuccess()) return@withContext null
-                val json = JSONObject(response.bodyAsText())
-                val name = json.optString("name").takeIf { it.isNotBlank() }
-                    ?: json.optString("title").takeIf { it.isNotBlank() }
-                    ?: return@withContext null
-                cache[cacheKey] = name
-                name
-            } catch (e: Exception) {
-                Log.w("DiscogsMarkup", "resolve $kind/$id failed", e)
-                null
-            }
+            val json = discogs.entity(resource, id) ?: return@withContext null
+            val name = json.optString("name").takeIf { it.isNotBlank() }
+                ?: json.optString("title").takeIf { it.isNotBlank() }
+                ?: return@withContext null
+            cache[cacheKey] = name
+            name
         }
     }
 }

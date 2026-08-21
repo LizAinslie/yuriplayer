@@ -10,13 +10,18 @@ import capital.yuri.yuriplayer.data.LibrarySettings
 import capital.yuri.yuriplayer.di.appModule
 import capital.yuri.yuriplayer.network.httpModule
 import capital.yuri.yuriplayer.player.MusicService
+import coil3.ImageLoader
+import coil3.PlatformContext
+import coil3.SingletonImageLoader
+import coil3.network.ktor3.KtorNetworkFetcherFactory
+import io.ktor.client.HttpClient
 import org.koin.android.ext.android.get
 import org.koin.android.ext.koin.androidContext
 import org.koin.android.ext.koin.androidLogger
 import org.koin.core.context.startKoin
 import org.koin.core.logger.Level
 
-class YuriPlayerApp : Application() {
+class YuriPlayerApp : Application(), SingletonImageLoader.Factory {
     override fun onCreate() {
         super.onCreate()
 
@@ -43,6 +48,13 @@ class YuriPlayerApp : Application() {
             runCatching { get<LibraryIndex>().bootstrap() }
         }, LIBRARY_BOOTSTRAP_DELAY_MS)
     }
+
+    override fun newImageLoader(context: PlatformContext): ImageLoader =
+        ImageLoader.Builder(context)
+            .components {
+                add(KtorNetworkFetcherFactory { get<HttpClient>() })
+            }
+            .build()
 
     companion object {
         private const val LIBRARY_BOOTSTRAP_DELAY_MS = 1_200L
