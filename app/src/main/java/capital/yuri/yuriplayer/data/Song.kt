@@ -160,6 +160,30 @@ private val APOSTROPHE_LIKE = Regex(
 
 private val TITLE_DECORATIVE_PUNCT = Regex("[,.:;!?]")
 
+/** Banded Levenshtein; returns [max] + 1 when the titles are farther than [max]. */
+fun editDistanceAtMost(a: String, b: String, max: Int): Int {
+    if (a == b) return 0
+    if (kotlin.math.abs(a.length - b.length) > max) return max + 1
+    val m = b.length
+    var prev = IntArray(m + 1) { it }
+    var cur = IntArray(m + 1)
+    for (i in 1..a.length) {
+        cur[0] = i
+        var rowMin = i
+        val ca = a[i - 1]
+        for (j in 1..m) {
+            val cost = if (ca == b[j - 1]) 0 else 1
+            cur[j] = minOf(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + cost)
+            if (cur[j] < rowMin) rowMin = cur[j]
+        }
+        if (rowMin > max) return max + 1
+        val tmp = prev
+        prev = cur
+        cur = tmp
+    }
+    return prev[m]
+}
+
 fun albumKey(name: String?, artist: String?): String {
     val a = artistKey(artist) ?: foldTagToken(primaryArtistName(artist) ?: artist ?: "")
     val n = foldTagToken(name ?: "")
@@ -274,6 +298,19 @@ object TrackIdentity {
         val na = normalizeToken(a)
         val nb = normalizeToken(b)
         return na.isNotEmpty() && na == nb
+    }
+
+    /**
+     * Same release with a one-letter server typo
+     * ("…Fray" vs "…Frat"). Short titles stay exact so Trench/Breach don't merge.
+     */
+    fun albumsNearlyMatch(a: String?, b: String?): Boolean {
+        if (albumsMatch(a, b)) return true
+        val na = normalizeToken(a)
+        val nb = normalizeToken(b)
+        if (na.length < 16 || nb.length < 16) return false
+        if (kotlin.math.abs(na.length - nb.length) > 2) return false
+        return editDistanceAtMost(na, nb, 2) <= 2
     }
 
     fun albumArtistsMatch(a: String?, b: String?): Boolean {

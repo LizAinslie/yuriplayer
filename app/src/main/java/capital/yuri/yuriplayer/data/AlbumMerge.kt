@@ -57,9 +57,9 @@ fun mergeAlbumSources(
     }
 
     return AlbumItem(
-        name = fromCatalog?.name
+        name = seed.name
             ?: fromLocal?.name
-            ?: seed.name
+            ?: fromCatalog?.name
             ?: songs.firstOrNull()?.album,
         artist = fromCatalog?.artist
             ?: fromLocal?.artist
@@ -97,6 +97,14 @@ fun findLocalAlbum(
             (artist.isNullOrBlank() || TrackIdentity.albumArtistsMatch(it.artist, artist))
     }?.let {
         AlbumLog.i(name, "findLocalAlbum fuzzy n=${it.songs.size} artist='${it.artist}'")
+        return it
+    }
+
+    library.albums(taggedOnly = false).firstOrNull {
+        TrackIdentity.albumsNearlyMatch(it.name, name) &&
+            (artist.isNullOrBlank() || TrackIdentity.albumArtistsMatch(it.artist, artist))
+    }?.let {
+        AlbumLog.i(name, "findLocalAlbum typo n=${it.songs.size} local='${it.name}'")
         return it
     }
 

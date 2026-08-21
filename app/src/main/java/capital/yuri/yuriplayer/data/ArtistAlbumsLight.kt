@@ -90,19 +90,7 @@ suspend fun lightAlbumItemsForArtist(
         }
     }
 
-    val out = (fromTracks + fromRows)
-        .groupBy { albumKey(it.name, it.artist) }
-        .map { (key, group) ->
-            val pick = group.maxByOrNull { it.trackCount } ?: group.first()
-            if (group.size > 1) {
-                AlbumLog.d(
-                    pick.name,
-                    "light merge cards=${group.size} key='$key' counts=${group.map { it.trackCount }} " +
-                        "seeds=${group.map { it.songs.firstOrNull()?.displayTitle }}"
-                )
-            }
-            pick
-        }
+    val out = clusterNearDuplicateAlbums(fromTracks + fromRows)
         .sortedWith(
             compareByDescending<AlbumItem> { it.songs.firstOrNull()?.year ?: Int.MIN_VALUE }
                 .thenBy(String.CASE_INSENSITIVE_ORDER) { it.displayName }
@@ -165,10 +153,51 @@ suspend fun lightAppearsOnForArtist(
         }
         .groupBy { albumKey(it.name, it.artist) }
         .map { (_, group) -> group.maxByOrNull { it.trackCount } ?: group.first() }
+        .let { clusterNearDuplicateAlbums(it) }
         .sortedWith(
             compareByDescending<AlbumItem> { it.songs.firstOrNull()?.year ?: Int.MIN_VALUE }
                 .thenBy(String.CASE_INSENSITIVE_ORDER) { it.displayName }
         )
+}
+
+private fun clusterNearDuplicateAlbums(items: List<AlbumItem>): List<AlbumItem> {
+    val exact = items.groupBy { albumKey(it.name, it.artist) }.map { (key, group) ->
+        val pick = group.maxByOrNull { it.trackCount } ?: group.first()
+        if (group.size > 1) {
+            AlbumLog.d(
+                pick.name,
+                "light merge cards=${group.size} key='$key' counts=${group.map { it.trackCount }} " +
+                    "seeds=${group.map { it.songs.firstOrNull()?.displayTitle }}"
+            )
+        }
+        pick
+    }
+    val used = BooleanArray(exact.size)
+    val out = ArrayList<AlbumItem>(exact.size)
+    for (i in exact.indices) {
+        if (used[i]) continue
+        val a = exact[i]
+        val members = mutableListOf(a)
+        used[i] = true
+        val artistA = artistKey(a.artist)
+        for (j in i + 1 until exact.size) {
+            if (used[j]) continue
+            val b = exact[j]
+            if (artistKey(b.artist) != artistA) continue
+            if (!TrackIdentity.albumsNearlyMatch(a.name, b.name)) continue
+            used[j] = true
+            members += b
+        }
+        val pick = members.maxByOrNull { it.trackCount } ?: a
+        if (members.size > 1) {
+            AlbumLog.i(
+                pick.name,
+                "near-duplicate albums ${members.joinToString { "'${it.name}'×${it.trackCount}" }}"
+            )
+        }
+        out += pick.copy(trackCount = members.maxOf { it.trackCount })
+    }
+    return out
 }
 
 internal fun CatalogTrackEntity.toLightSong(): Song = Song(

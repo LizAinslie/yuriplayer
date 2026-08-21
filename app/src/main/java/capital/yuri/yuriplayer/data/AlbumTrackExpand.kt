@@ -93,6 +93,20 @@ suspend fun expandAlbumTracksByName(
         }
         AlbumLog.step(name, "after keys", bySongKey.size)
 
+        if (name.length >= 16) {
+            val needle = name.take(28)
+            val hits = dao.searchTracks(needle, limit = 400)
+            var added = 0
+            hits.forEach { t ->
+                if (TrackIdentity.albumsNearlyMatch(t.album, name)) {
+                    val before = bySongKey.size
+                    put(t)
+                    if (bySongKey.size > before) added++
+                }
+            }
+            AlbumLog.step(name, "near-name search", bySongKey.size, "hits=${hits.size} added=$added")
+        }
+
         if (bySongKey.size < 3) {
             val needle = name.take(48)
             if (needle.length >= 2) {
@@ -127,6 +141,7 @@ suspend fun expandAlbumTracksByName(
     fun albumOk(t: CatalogTrackEntity): Boolean {
         if (name.isEmpty()) return true
         if (TrackIdentity.albumsMatch(t.album, name)) return true
+        if (TrackIdentity.albumsNearlyMatch(t.album, name)) return true
         if (!seedKey.isNullOrBlank() && t.albumKey == seedKey) return true
         return false
     }
