@@ -210,10 +210,11 @@ class JellyfinClient(
         val stream = streamUrl(session, id, fmt)
 
         val art = when {
-            albumId != null && !albumPrimaryImageTag.isNullOrBlank() ->
-                Uri.parse(primaryImageUrl(session, albumId.toString()))
+            // Track/single Primary first so Drum Show doesn't inherit Vessel.
             imageTags?.containsKey(ImageType.PRIMARY) == true ->
                 Uri.parse(primaryImageUrl(session, id))
+            albumId != null && !albumPrimaryImageTag.isNullOrBlank() ->
+                Uri.parse(primaryImageUrl(session, albumId.toString()))
             albumId != null ->
                 Uri.parse(primaryImageUrl(session, albumId.toString()))
             else -> null

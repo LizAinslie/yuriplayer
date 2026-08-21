@@ -66,6 +66,10 @@ class MusicService : Service() {
     private var lastHistoryKey: String? = null
     private var windowGeneration: Int = 0
     private var endedForWindow: Int = -1
+    /** Engine posts onAutoAdvanced after playPreparedNext; the queue already moved. */
+    private var consumeAutoAdvanced: Boolean = false
+    private var lastAdvanceElapsed: Long = 0L
+    private var ignoreWatchdogUntilElapsed: Long = 0L
 
     private var stallSamplePos = -1L
     private var stallSampleAtElapsed = 0L
@@ -234,6 +238,10 @@ class MusicService : Service() {
         try {
             windowGeneration += 1
             endedForWindow = -1
+            consumeAutoAdvanced = false
+            lastAdvanceElapsed = SystemClock.elapsedRealtime()
+            ignoreWatchdogUntilElapsed = lastAdvanceElapsed + WATCHDOG_GRACE_MS
+            stallSamplePos = -1L
             if (autoPlay) {
                 userWantsPlay = true
                 acquireSleepLocks()
@@ -318,12 +326,30 @@ class MusicService : Service() {
         hooks.setNext(queueManager.peekNext())
     }
 
-    private fun onEngineAutoAdvanced() {
-        if (advancing) return
-        val gen = windowGeneration
-        if (endedForWindow == gen) return
-        endedForWindow = gen
+    /**
+     * Claim the current engine window so a second EndReached / AUTO /
+     * watchdog tick cannot advance the queue twice. Increments
+     * [windowGeneration] so the *new* track is not treated as already ended.
+     */
+    private fun claimEndOfWindow(fromUser: Boolean): Boolean {
+        val now = SystemClock.elapsedRealtime()
+        if (!fromUser && now - lastAdvanceElapsed < ADVANCE_DEBOUNCE_MS) return false
+        if (!fromUser && endedForWindow == windowGeneration) return false
+        lastAdvanceElapsed = now
+        endedForWindow = windowGeneration
         windowGeneration += 1
+        stallSamplePos = -1L
+        ignoreWatchdogUntilElapsed = now + WATCHDOG_GRACE_MS
+        return true
+    }
+
+    private fun onEngineAutoAdvanced() {
+        if (consumeAutoAdvanced) {
+            consumeAutoAdvanced = false
+            return
+        }
+        if (advancing) return
+        if (!claimEndOfWindow(fromUser = false)) return
         advancing = true
         try {
             applyAdvanceKeepEngine(queueManager.advance(userInitiated = false))
@@ -339,18 +365,19 @@ class MusicService : Service() {
     private fun advanceUsingPreparedNext(userInitiated: Boolean): Boolean {
         val hooks = engineHooks ?: return false
         if (!hooks.hasPreparedNext()) return false
-        if (!hooks.playPreparedNext()) return false
-        windowGeneration += 1
-        endedForWindow = windowGeneration
+        consumeAutoAdvanced = true
+        if (!hooks.playPreparedNext()) {
+            consumeAutoAdvanced = false
+            return false
+        }
+        claimEndOfWindow(fromUser = userInitiated)
         applyAdvanceKeepEngine(queueManager.advance(userInitiated = userInitiated))
         return true
     }
 
     private fun onEngineEnded() {
         if (advancing) return
-        val gen = windowGeneration
-        if (endedForWindow == gen) return
-        endedForWindow = gen
+        if (endedForWindow == windowGeneration) return
 
         if (inUserSeekGuard()) {
             val target = stickySeekTargetMs.takeIf { it >= 0L }
@@ -361,6 +388,7 @@ class MusicService : Service() {
         }
 
         if (isRepeatOne()) {
+            if (!claimEndOfWindow(fromUser = false)) return
             hardRestartCurrent(autoPlay = true)
             return
         }
@@ -371,6 +399,7 @@ class MusicService : Service() {
                 Log.i(TAG, "onEnded → playPreparedNext")
                 return
             }
+            if (!claimEndOfWindow(fromUser = false)) return
             applyAdvance(queueManager.advance(userInitiated = false))
         } finally {
             advancing = false
@@ -530,12 +559,17 @@ class MusicService : Service() {
     fun skipToPrevious(forceTrackChange: Boolean = false) {
         userSeekGuardUntilElapsed = 0L
         clearStickySeek()
-        applyAdvance(
-            queueManager.skipPrevious(
-                currentPositionMs = engineHooks?.getPositionMs() ?: 0L,
-                forceTrackChange = forceTrackChange
+        advancing = true
+        try {
+            applyAdvance(
+                queueManager.skipPrevious(
+                    currentPositionMs = engineHooks?.getPositionMs() ?: 0L,
+                    forceTrackChange = forceTrackChange
+                )
             )
-        )
+        } finally {
+            advancing = false
+        }
     }
 
     fun seekTo(positionMs: Long) {
@@ -656,6 +690,10 @@ class MusicService : Service() {
                 }
                 val hooks = engineHooks ?: continue
                 if (!hooks.active || recoveringAudio || advancing || inUserSeekGuard()) {
+                    stallSamplePos = -1L
+                    continue
+                }
+                if (SystemClock.elapsedRealtime() < ignoreWatchdogUntilElapsed) {
                     stallSamplePos = -1L
                     continue
                 }
@@ -1004,6 +1042,8 @@ class MusicService : Service() {
         private const val WARMUP_NEXT_MS = 4_000L
         private const val ENDED_SILENCE_MS = 1_500L
         private const val UNEXPECTED_PAUSE_MS = 1_200L
+        private const val ADVANCE_DEBOUNCE_MS = 600L
+        private const val WATCHDOG_GRACE_MS = 2_000L
         private const val STICKY_SEEK_MS = 1_200L
         private const val USER_SEEK_GUARD_MS = 1_000L
         private const val SEEK_CONFIRM_MS = 600L

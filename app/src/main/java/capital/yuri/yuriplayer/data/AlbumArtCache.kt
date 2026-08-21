@@ -60,7 +60,8 @@ class AlbumArtCache(
             return "preferred:$preferred"
         }
         val path = song.path
-        if (path != null) {
+        // Virtual library paths (jellyfin:uuid) are not filesystem folders.
+        if (path != null && looksLikeFsPath(path)) {
             val parent = File(path).parentFile
             if (parent != null) {
                 for (name in COVER_NAMES) {
@@ -71,6 +72,12 @@ class AlbumArtCache(
                 }
             }
         }
+        // Remote tracks: the item image URL is the real cover. Keying by
+        // album name alone reused Vessel art for later TOP singles.
+        val artUri = song.albumArtUri?.toString()?.takeIf { it.isNotBlank() }
+        if (artUri != null) {
+            return "uri:$artUri"
+        }
         val enriched = enrichedCoverFile(aKey)
         if (enriched.isFile && enriched.length() > 0) {
             return "enriched:${enriched.absolutePath}:${enriched.length()}:${enriched.lastModified()}"
@@ -79,6 +86,18 @@ class AlbumArtCache(
         val artist = (song.albumArtist ?: song.artist)?.trim()?.lowercase().orEmpty()
         if (album.isNotEmpty()) return "album:$album|$artist"
         return "song:${song.path ?: song.contentUri}"
+    }
+
+    private fun looksLikeFsPath(path: String): Boolean {
+        if (path.contains("://")) return false
+        if (path.startsWith("jellyfin:") ||
+            path.startsWith("subsonic:") ||
+            path.startsWith("navidrome:") ||
+            path.startsWith("webdav:")
+        ) {
+            return false
+        }
+        return path.startsWith("/")
     }
 
     fun enrichedCoverFile(albumKey: String): File {

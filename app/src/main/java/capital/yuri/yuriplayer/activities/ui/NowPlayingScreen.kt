@@ -423,6 +423,7 @@ fun NowPlayingScreen(
                         },
                         playingSongId = song?.id,
                         playingSongKey = song?.path ?: song?.contentUri?.toString(),
+                        playingArtKey = song?.let { themeStore.artKey(it) },
                         horizontalInset = 20.dp,
                         modifier = Modifier.fillMaxWidth()
                     )

@@ -52,6 +52,19 @@ class PlayerThemeStore(
         _peekPrev.value = null
     }
 
+    fun artKey(song: Song): String = artCache.artKey(song)
+
+    /** True when [theme] is this song's own cover, not a neighbor reused by id. */
+    fun themeIsFor(theme: Theme?, song: Song): Boolean {
+        if (theme == null) return false
+        val sameSong = theme.songId == song.id ||
+            (song.path != null && theme.path == song.path)
+        if (!sameSong) return false
+        return theme.artKey == artCache.artKey(song)
+    }
+
+    fun isShowing(song: Song): Boolean = themeIsFor(_current.value, song)
+
     /**
      * @param forceRefresh re-decode art and palette (e.g. after MusicBrainz cover lands).
      */
