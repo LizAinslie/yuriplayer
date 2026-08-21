@@ -652,9 +652,89 @@ class CatalogRepository(
                 changed += row.copy(albumKey = newAlbum, artistKey = newArtist)
             }
         }
+        val byKey = HashMap<String, CatalogTrackEntity>(tracks.size)
+        tracks.forEach { byKey[it.songKey] = it }
+        changed.forEach { byKey[it.songKey] = it }
+        coalesceSplitAlbums(byKey.values.toList()).forEach { row ->
+            val prev = byKey[row.songKey]
+            if (prev == null || prev != row) {
+                byKey[row.songKey] = row
+                val idx = changed.indexOfFirst { it.songKey == row.songKey }
+                if (idx >= 0) changed[idx] = row else changed += row
+            }
+        }
         if (changed.isEmpty()) return
         changed.chunked(400).forEach { dao.upsertTracks(it) }
         Log.i(TAG, "normalized identity on ${changed.size} tracks")
+    }
+
+    /**
+     * Same remote library + same album title + unique disc/track slots =
+     * one release (Navidrome VA / split-artist albums). Do not merge when
+     * two albums share a title and collide on track numbers (Greatest Hits).
+     */
+    private fun coalesceSplitAlbums(tracks: List<CatalogTrackEntity>): List<CatalogTrackEntity> {
+        val out = ArrayList<CatalogTrackEntity>()
+        val groups = tracks
+            .filter { !it.album.isNullOrBlank() && it.sourceType != CatalogSources.LOCAL }
+            .groupBy { Triple(it.sourceType, it.sourceInstanceId, foldTagToken(it.album.orEmpty())) }
+        for ((_, group) in groups) {
+            if (group.size < 2) continue
+            val keys = group.mapNotNull { it.albumKey }.toHashSet()
+            if (keys.size <= 1) continue
+            if (hasCollidingTrackSlots(group)) continue
+            val canonicalArtist = pickCanonicalAlbumArtist(group) ?: continue
+            val canonicalKey = albumKey(group.first().album, canonicalArtist)
+            val canonicalArtistKey = artistKey(canonicalArtist)
+            for (row in group) {
+                val stamp = row.albumArtist.isNullOrBlank() ||
+                    row.albumArtist.equals(row.artist, ignoreCase = true)
+                val next = row.copy(
+                    albumArtist = if (stamp) canonicalArtist else row.albumArtist,
+                    albumKey = canonicalKey,
+                    artistKey = canonicalArtistKey
+                )
+                if (next != row) out += next
+            }
+        }
+        return out
+    }
+
+    private fun hasCollidingTrackSlots(group: List<CatalogTrackEntity>): Boolean {
+        data class Slot(val disc: Int, val track: Int)
+        val titles = HashMap<Slot, String>()
+        for (t in group) {
+            val tn = t.trackNumber ?: continue
+            val slot = Slot(t.discNumber ?: 1, tn)
+            val title = TrackIdentity.normalizeTitle(t.title)
+            if (title.isEmpty()) continue
+            val existing = titles[slot]
+            if (existing != null && existing != title) return true
+            titles[slot] = title
+        }
+        return false
+    }
+
+    private fun pickCanonicalAlbumArtist(group: List<CatalogTrackEntity>): String? {
+        val tagged = group.mapNotNull { row ->
+            val aa = row.albumArtist?.trim()?.takeIf { it.isNotEmpty() } ?: return@mapNotNull null
+            val ta = row.artist?.trim().orEmpty()
+            if (aa.equals(ta, ignoreCase = true)) null else primaryArtistName(aa) ?: aa
+        }
+        val pool = if (tagged.isNotEmpty()) {
+            tagged
+        } else {
+            group.mapNotNull {
+                primaryArtistName(it.albumArtist) ?: it.albumArtist?.trim()?.takeIf { n -> n.isNotEmpty() }
+                    ?: primaryArtistName(it.artist) ?: it.artist?.trim()?.takeIf { n -> n.isNotEmpty() }
+            }
+        }
+        if (pool.isEmpty()) return null
+        return pool.groupingBy { it }.eachCount()
+            .entries
+            .sortedWith(compareByDescending<Map.Entry<String, Int>> { it.value }.thenBy { it.key.lowercase() })
+            .first()
+            .key
     }
 
     private suspend fun primaryTracksForArtistLocked(artistKey: String, hintName: String? = null): List<Song> {

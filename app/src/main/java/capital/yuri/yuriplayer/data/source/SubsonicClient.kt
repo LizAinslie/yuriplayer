@@ -108,7 +108,12 @@ class SubsonicClient(
             val album = json.decodeFromString<SubsonicResponse>(body)
                 .subsonicResponse.album ?: return@runCatching emptyList()
             album.song.orEmpty().mapNotNull {
-                it.toSong(session, albumCoverArt = album.coverArt ?: album.id)
+                it.toSong(
+                    session,
+                    albumCoverArt = album.coverArt ?: album.id,
+                    albumNameFallback = album.name,
+                    albumArtistFallback = album.resolvedAlbumArtist()
+                )
             }
         }.onFailure { Log.w(TAG, "listSongsForAlbum($albumId) failed: ${it.message}") }
 
@@ -286,7 +291,18 @@ class SubsonicClient(
         return response.bodyAsText()
     }
 
-    private fun SubsonicChild.toSong(session: Session, albumCoverArt: String? = null): Song? {
+    private fun SubsonicAlbumDetail.resolvedAlbumArtist(): String? =
+        albumArtist?.takeIf { it.isNotBlank() }
+            ?: displayArtist?.takeIf { it.isNotBlank() }
+            ?: artist?.takeIf { it.isNotBlank() }
+            ?: artists?.firstOrNull()?.name?.takeIf { it.isNotBlank() }
+
+    private fun SubsonicChild.toSong(
+        session: Session,
+        albumCoverArt: String? = null,
+        albumNameFallback: String? = null,
+        albumArtistFallback: String? = null
+    ): Song? {
         val sid = id ?: return null
         if (isDir == true) return null
         val stream = streamUrl(session, sid)
@@ -297,14 +313,13 @@ class SubsonicClient(
         val genreStr = genre?.takeIf { it.isNotBlank() }
         val structuredArtists = artists.orEmpty().mapNotNull { it.name?.takeIf { n -> n.isNotBlank() } }
         val albumArtistName = albumArtist?.takeIf { it.isNotBlank() }
-            ?: artists?.firstOrNull()?.name
-            ?: artist?.takeIf { it.isNotBlank() }
+            ?: albumArtistFallback?.takeIf { it.isNotBlank() }
         val extras = structuredArtists.filter { name ->
             albumArtistName == null || !name.equals(albumArtistName, ignoreCase = true)
         }
         val trackArtistName = when {
             extras.isNotEmpty() && !albumArtistName.isNullOrBlank() ->
-                "$albumArtistName feat. ${extras.joinToString("; ")}"
+                extras.joinToString("; ")
             structuredArtists.isNotEmpty() -> structuredArtists.joinToString("; ")
             else -> artist?.takeIf { it.isNotBlank() }
         }
@@ -315,8 +330,8 @@ class SubsonicClient(
             id = sid.hashCode().toLong(),
             title = title,
             artist = trackArtistName,
-            albumArtist = albumArtistName,
-            album = album?.takeIf { it.isNotBlank() },
+            albumArtist = albumArtistName ?: trackArtistName,
+            album = album?.takeIf { it.isNotBlank() } ?: albumNameFallback?.takeIf { it.isNotBlank() },
             durationMs = duration?.times(1000L)?.takeIf { it > 0 },
             contentUri = Uri.parse(stream),
             albumArtUri = art,
@@ -419,6 +434,9 @@ class SubsonicClient(
         val name: String? = null,
         val coverArt: String? = null,
         val artist: String? = null,
+        val albumArtist: String? = null,
+        val displayArtist: String? = null,
+        val artists: List<SubsonicArtistRef>? = null,
         val song: List<SubsonicChild>? = null
     )
 
