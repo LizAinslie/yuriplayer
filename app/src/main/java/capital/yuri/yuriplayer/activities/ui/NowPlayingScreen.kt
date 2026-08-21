@@ -194,8 +194,8 @@ fun NowPlayingScreen(
 
     val dismissThreshold = with(density) { 140.dp.toPx() }
 
-    val canSwipePrev = peekPrevSong != null
-    val buttonGoesToPrevTrack = positionMs <= PREV_RESTART_MS && canSwipePrev
+    val canSwipePrev = peekPrevSong != null && positionMs < PREV_RESTART_MS
+    val buttonGoesToPrevTrack = canSwipePrev
     val isRadio = snapshot.isRadio
     val radioSettingsSession = remember(snapshot.radioSession, snapshot.coldSource) {
         radioSessionForSettings(snapshot)
@@ -215,16 +215,17 @@ fun NowPlayingScreen(
     )
 
     fun requestSkipNext() {
-        // Advance the queue now. Cover slide follows playing-song identity —
-        // waiting on skipToken is what left titles/art stuck on the old track.
+        skipDirection = -1
         onNext()
     }
 
     fun requestSkipPrev() {
         if (!buttonGoesToPrevTrack) {
+            skipDirection = 0
             onPrev()
             return
         }
+        skipDirection = 1
         onForcePrev()
     }
 
@@ -411,6 +412,7 @@ fun NowPlayingScreen(
                         prevSong = if (canSwipePrev) peekPrevSong else null,
                         onSwipeNext = onNext,
                         onSwipePrev = onForcePrev,
+                        onRestartCurrent = onPrev,
                         onPromoteNext = { themeStore.promoteNext() },
                         onPromotePrev = { themeStore.promotePrev() },
                         onDismiss = onCollapse,

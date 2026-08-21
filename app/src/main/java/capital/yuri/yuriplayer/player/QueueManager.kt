@@ -797,7 +797,7 @@ class QueueManager {
         if (!canGoPrev) {
             return AdvanceResult(song = current, seekToStart = true)
         }
-        if (!forceTrackChange && currentPositionMs > PREV_RESTART_MS) {
+        if (!forceTrackChange && currentPositionMs >= PREV_RESTART_MS) {
             return AdvanceResult(song = current, seekToStart = true)
         }
 

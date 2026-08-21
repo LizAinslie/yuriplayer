@@ -299,7 +299,20 @@ class MusicService : Service() {
                 updateForegroundNotification()
                 persistState()
             }
-            result.seekToStart -> hardRestartCurrent(autoPlay = autoPlay)
+            result.seekToStart -> {
+                val hooks = engineHooks
+                if (hooks != null && hooks.active) {
+                    hooks.seekTo(0L)
+                    if (autoPlay) {
+                        userWantsPlay = true
+                        if (!hooks.isPlaying()) hooks.play()
+                    }
+                    updateForegroundNotification()
+                    persistState()
+                } else {
+                    hardRestartCurrent(autoPlay = autoPlay)
+                }
+            }
             result.reload -> hardRestartCurrent(autoPlay = autoPlay)
             result.song != null -> {
                 val target = result.song

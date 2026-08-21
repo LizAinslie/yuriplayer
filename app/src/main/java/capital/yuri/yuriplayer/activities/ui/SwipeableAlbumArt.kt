@@ -66,6 +66,7 @@ fun SwipeableAlbumArt(
     prevSong: Song?,
     onSwipeNext: () -> Unit,
     onSwipePrev: () -> Unit,
+    onRestartCurrent: () -> Unit = onSwipePrev,
     onPromoteNext: () -> Unit,
     onPromotePrev: () -> Unit,
     onDismiss: () -> Unit,
@@ -98,7 +99,14 @@ fun SwipeableAlbumArt(
     val nextBmp = rememberHqArt(nextSong)
     val prevBmp = rememberHqArt(if (allowPrevTrackChange) prevSong else null)
 
-    // Only use prev cover when we will actually change tracks.
+    // Last painted current cover. Kept across song identity changes so we can
+    // slide the outgoing art out while the new cover enters from the side.
+    var heldOutgoingBmp by remember { mutableStateOf<Bitmap?>(null) }
+    var slideOutBmp by remember { mutableStateOf<Bitmap?>(null) }
+    var slideInBmp by remember { mutableStateOf<Bitmap?>(null) }
+    var lastSongKey by remember { mutableStateOf(currentSong?.songKey) }
+
+    // Only use prev cover when we will actually change tracks (Spotify 3s rule).
     val effectivePrev = if (allowPrevTrackChange) prevSong else null
 
     suspend fun animateSkipTo(targetX: Float) {
@@ -130,7 +138,7 @@ fun SwipeableAlbumArt(
         onHorizontalFraction(0f)
         offsetX.animateTo(0f, spring(stiffness = Spring.StiffnessMedium))
         offsetY.snapTo(0f)
-        onSwipePrev()
+        onRestartCurrent()
     }
 
     fun settle() {
@@ -203,51 +211,46 @@ fun SwipeableAlbumArt(
         onSkipConsumed()
     }
 
-    val latestNext = rememberUpdatedState(nextSong)
-    val latestPrev = rememberUpdatedState(effectivePrev)
     val latestPromoteNext = rememberUpdatedState(onPromoteNext)
     val latestPromotePrev = rememberUpdatedState(onPromotePrev)
+    val latestSkipDir = rememberUpdatedState(skipDirection)
     val playingSongKey = currentSong?.songKey
-    var seenPlayingKey by remember { mutableStateOf(playingSongKey) }
 
     LaunchedEffect(playingSongKey) {
-        val previous = seenPlayingKey
-        seenPlayingKey = playingSongKey
-        if (previous == null || playingSongKey == null || previous == playingSongKey) {
+        val previousKey = lastSongKey
+        lastSongKey = playingSongKey
+        if (previousKey == null || playingSongKey == null || previousKey == playingSongKey) {
+            if (animatingSkip == 0) heldOutgoingBmp = currentBmp
             return@LaunchedEffect
         }
         if (suppressSongAnim) {
             suppressSongAnim = false
+            heldOutgoingBmp = currentBmp
             return@LaunchedEffect
         }
-        if (animatingSkip != 0) return@LaunchedEffect
-
-        val nxt = latestNext.value
-        val prv = latestPrev.value
-        val matchesNext = nxt != null && nxt.songKey == playingSongKey
-        val matchesPrev = prv != null && prv.songKey == playingSongKey
-
-        when {
-            matchesPrev -> {
-                animatingSkip = 1
-                animateSkipTo(screenWidthPx)
-                latestPromotePrev.value()
-                onHorizontalFraction(0f)
-                offsetX.snapTo(0f)
-                offsetY.snapTo(0f)
-                animatingSkip = 0
-            }
-            matchesNext -> {
-                animatingSkip = -1
-                animateSkipTo(-screenWidthPx)
-                latestPromoteNext.value()
-                onHorizontalFraction(0f)
-                offsetX.snapTo(0f)
-                offsetY.snapTo(0f)
-                animatingSkip = 0
-            }
-            else -> Unit
+        if (animatingSkip != 0) {
+            heldOutgoingBmp = currentBmp
+            return@LaunchedEffect
         }
+
+        val dir = if (latestSkipDir.value > 0) 1 else -1
+        slideOutBmp = heldOutgoingBmp ?: currentBmp
+        slideInBmp = currentBmp
+        animatingSkip = dir
+        animateSkipTo(if (dir > 0) screenWidthPx else -screenWidthPx)
+        if (dir > 0) latestPromotePrev.value() else latestPromoteNext.value()
+        onHorizontalFraction(0f)
+        offsetX.snapTo(0f)
+        offsetY.snapTo(0f)
+        slideOutBmp = null
+        slideInBmp = null
+        animatingSkip = 0
+        heldOutgoingBmp = currentBmp
+        onSkipConsumed()
+    }
+
+    LaunchedEffect(currentBmp, playingSongKey) {
+        if (animatingSkip == 0) heldOutgoingBmp = currentBmp
     }
 
     BoxWithConstraints(
@@ -286,10 +289,15 @@ fun SwipeableAlbumArt(
             }
     ) {
         val hFrac = offsetX.value
+        val showNext = hFrac < 0f && (animatingSkip < 0 || (animatingSkip == 0 && nextSong != null))
+        val showPrev = hFrac > 0f && (animatingSkip > 0 || (animatingSkip == 0 && effectivePrev != null))
+        val incomingNextBmp = if (animatingSkip < 0) slideInBmp else nextBmp
+        val incomingPrevBmp = if (animatingSkip > 0) slideInBmp else prevBmp
+        val outgoingBmp = if (animatingSkip != 0) slideOutBmp else currentBmp
 
-        if (hFrac < 0f && nextSong != null) {
+        if (showNext) {
             ArtCard(
-                bitmap = nextBmp,
+                bitmap = incomingNextBmp,
                 modifier = Modifier
                     .fillMaxWidth()
                     .padding(horizontal = horizontalInset)
@@ -302,9 +310,9 @@ fun SwipeableAlbumArt(
             )
         }
         // Never paint previous cover while Previous only seeks to start.
-        if (hFrac > 0f && effectivePrev != null) {
+        if (showPrev) {
             ArtCard(
-                bitmap = prevBmp,
+                bitmap = incomingPrevBmp,
                 modifier = Modifier
                     .fillMaxWidth()
                     .padding(horizontal = horizontalInset)
@@ -318,7 +326,7 @@ fun SwipeableAlbumArt(
         }
 
         ArtCard(
-            bitmap = currentBmp,
+            bitmap = outgoingBmp,
             modifier = Modifier
                 .fillMaxWidth()
                 .padding(horizontal = horizontalInset)
