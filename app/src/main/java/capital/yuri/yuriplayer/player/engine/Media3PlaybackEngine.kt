@@ -102,11 +102,15 @@ class Media3PlaybackEngine(
             buffering = playbackState == Player.STATE_BUFFERING
             if (playbackState == Player.STATE_ENDED) {
                 buffering = false
+                val live = isLive()
+                if (live) {
+                    if (player.playWhenReady) {
+                        player.seekTo(0L)
+                        player.play()
+                    }
+                    return
+                }
                 if (player.hasNextMediaItem()) {
-                    // Some HTTP streams never AUTO-transition; kick the
-                    // already-queued next item. Queue advance comes from
-                    // the AUTO onMediaItemTransition — don't fire
-                    // onAutoAdvanced here or we skip two tracks.
                     player.seekToNextMediaItem()
                     player.playWhenReady = true
                 } else {
@@ -162,12 +166,20 @@ class Media3PlaybackEngine(
             return
         }
         applyHeaders(items)
-        val mediaItems = items.map { it.toMediaItem() }
-        val idx = startIndex.coerceIn(0, mediaItems.lastIndex)
+        val playable = if (items.getOrNull(startIndex)?.live == true) {
+            listOf(items[startIndex.coerceIn(0, items.lastIndex)])
+        } else {
+            items
+        }
+        val mediaItems = playable.map { it.toMediaItem() }
+        val idx = if (playable.size == 1) 0 else startIndex.coerceIn(0, mediaItems.lastIndex)
         player.setMediaItems(mediaItems, idx, startPositionMs.coerceAtLeast(0L))
         player.prepare()
-        _currentUri.value = items.getOrNull(idx)?.uri
-        Log.i(TAG, "setWindow size=${items.size} start=$idx network=${items[idx].isNetwork}")
+        _currentUri.value = playable.getOrNull(idx)?.uri
+        Log.i(
+            TAG,
+            "setWindow size=${playable.size} start=$idx network=${playable[idx].isNetwork} live=${playable[idx].live}"
+        )
     }
 
     private fun applyHeaders(items: List<PlaybackMedia>) {
@@ -234,7 +246,14 @@ class Media3PlaybackEngine(
 
     override fun isBuffering(): Boolean = buffering
 
+    override fun isLive(): Boolean {
+        val idx = player.currentMediaItemIndex
+        if (idx < 0 || idx >= player.mediaItemCount) return false
+        return player.getMediaItemAt(idx).mediaId.endsWith("-live")
+    }
+
     override fun setNext(item: PlaybackMedia?) {
+        if (isLive()) return
         if (player.mediaItemCount <= 0) {
             if (item != null) {
                 applyHeaders(listOf(item))
@@ -290,8 +309,8 @@ class Media3PlaybackEngine(
         listeners -= listener
     }
 
-    private fun PlaybackMedia.toMediaItem(): MediaItem =
-        MediaItem.Builder()
+    private fun PlaybackMedia.toMediaItem(): MediaItem {
+        val b = MediaItem.Builder()
             .setUri(uri)
             .setMediaId(mediaId)
             .setMediaMetadata(
@@ -301,9 +320,15 @@ class Media3PlaybackEngine(
                     .setAlbumTitle(album)
                     .setAlbumArtist(albumArtist)
                     .setArtworkUri(artworkUri)
+                    .setIsBrowsable(false)
+                    .setIsPlayable(true)
                     .build()
             )
-            .build()
+        if (live) {
+            b.setLiveConfiguration(MediaItem.LiveConfiguration.Builder().build())
+        }
+        return b.build()
+    }
 
     private inline fun dispatch(crossinline block: PlaybackEngine.Listener.() -> Unit) {
         val copy = listeners.toList()

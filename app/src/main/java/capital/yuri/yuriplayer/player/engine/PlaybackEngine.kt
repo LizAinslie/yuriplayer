@@ -6,20 +6,35 @@ import capital.yuri.yuriplayer.data.StreamQuality
 import kotlinx.coroutines.flow.StateFlow
 
 /**
- * Platform-agnostic playback backend.
+ * Audio backend. Queue, radio, podcasts, and now-playing identity live in the
+ * host ([capital.yuri.yuriplayer.player.MusicService] / [capital.yuri.yuriplayer.player.QueueManager]).
+ * This type only makes a [PlaybackMedia] URI produce sound — finite track,
+ * live radio, or an episode are the same to the engine.
  *
- * Android ships [Media3PlaybackEngine] (ExoPlayer). Desktop / iOS can bind a
- * different implementation; Settings can list [PlaybackEngineDescriptor]s so
- * users pick among several backends on one platform when available.
- *
- * [MusicService] (or a desktop host) owns lifecycle, notifications, and queue
- * policy — this interface is only "make this URI make sound".
+ * Android ships [Media3PlaybackEngine] (ExoPlayer) and [VlcPlaybackEngine].
  */
 interface PlaybackEngine {
     val isPlaying: StateFlow<Boolean>
     val currentUri: StateFlow<Uri?>
 
+    /**
+     * Replace what the speakers are doing. [items] is **audio**, not a library
+     * queue: index 0 is playing (or paused), index 1 is an optional successor
+     * buffer for gapless. Live sources should be a single item.
+     */
     fun setWindow(items: List<PlaybackMedia>, startIndex: Int = 0, startPositionMs: Long = 0L)
+
+    /** Play [current]; optionally pre-buffer [successor] for an instant handoff. */
+    fun load(
+        current: PlaybackMedia,
+        successor: PlaybackMedia? = null,
+        startPositionMs: Long = 0L
+    ) {
+        val next = successor?.takeUnless { current.live || it.live }
+        setWindow(if (next != null) listOf(current, next) else listOf(current), 0, startPositionMs)
+        setNext(next)
+    }
+
     fun play()
     fun pause()
     fun stop()
@@ -39,9 +54,12 @@ interface PlaybackEngine {
     /** True while the backend is filling buffers (HTTP underrun, demux, …). */
     fun isBuffering(): Boolean = false
 
+    /** Current source is an endless stream (live radio / ICY). */
+    fun isLive(): Boolean = false
+
     /**
-     * Pre-buffer [item] as the upcoming track without touching what's playing.
-     * Pass null to drop a previously prepared next.
+     * Pre-buffer [item] as the upcoming audio without touching what's playing.
+     * No-op for live sources. Pass null to drop a previously prepared next.
      */
     fun setNext(item: PlaybackMedia?) {}
 
@@ -50,13 +68,13 @@ interface PlaybackEngine {
 
     /**
      * Switch to the pre-buffered next item with no reload.
-     * @return false if nothing was prepared (caller should load a new window).
+     * @return false if nothing was prepared (caller should load a new source).
      */
     fun playPreparedNext(): Boolean = false
 
     /**
-     * Start filling the next item's buffers now (call when the current track
-     * is near the end). No-op if nothing is queued.
+     * Start filling the next item's buffers now (near end of a finite track).
+     * No-op for live / if nothing is queued.
      */
     fun warmupNext() {}
 
@@ -68,10 +86,11 @@ interface PlaybackEngine {
     interface Listener {
         fun onIsPlayingChanged(playing: Boolean) {}
         fun onMediaTransition(reason: TransitionReason) {}
+        /** Current finite source reached EOF and there was no successor buffer. */
         fun onEnded() {}
         /**
-         * Engine already started the pre-buffered next item (gapless / dual-player swap).
-         * Host should advance queue state and call [setNext] — do **not** reload current.
+         * Engine already started the pre-buffered successor (gapless swap).
+         * Host should sync its own state — do **not** reload current audio.
          */
         fun onAutoAdvanced() {}
         fun onError(message: String, recoverable: Boolean) {}
@@ -82,7 +101,10 @@ interface PlaybackEngine {
     enum class PlaybackState { IDLE, BUFFERING, READY, ENDED }
 }
 
-/** One playable item resolved for a backend (URI + optional HTTP headers). */
+/**
+ * One audio source. Metadata is display-only (session / logs); the engine
+ * keys on [uri] + [mediaId]. [live] means infinite — no duration, no EOF skip.
+ */
 data class PlaybackMedia(
     val mediaId: String,
     val uri: Uri,
@@ -93,7 +115,8 @@ data class PlaybackMedia(
     val artworkUri: Uri? = null,
     /** Extra request headers (e.g. X-Emby-Token for Jellyfin). */
     val headers: Map<String, String> = emptyMap(),
-    val isNetwork: Boolean = false
+    val isNetwork: Boolean = false,
+    val live: Boolean = false
 )
 
 /** Describes a backend the user can choose in Settings. */
@@ -113,6 +136,7 @@ fun Song.toPlaybackMedia(
     val uri = resolvePlayableUri(this, quality)
     val network = isNetworkUri(uri) || isVirtualLibraryPath(path)
     val headers = extractStreamHeaders(this)
+    val live = isLiveAudio()
     val id = buildString {
         append(this@toPlaybackMedia.id)
         if (mediaIdSuffix != null) {
@@ -123,6 +147,7 @@ fun Song.toPlaybackMedia(
             append("-q")
             append(quality.id)
         }
+        if (live) append("-live")
     }
     return PlaybackMedia(
         mediaId = id,
@@ -133,8 +158,21 @@ fun Song.toPlaybackMedia(
         albumArtist = displayAlbumArtist,
         artworkUri = albumArtUri,
         headers = headers,
-        isNetwork = network
+        isNetwork = network,
+        live = live
     )
+}
+
+/** Icecast / HLS radio / explicit live query. Finite podcasts and tracks are not live. */
+fun Song.isLiveAudio(): Boolean {
+    val p = path.orEmpty()
+    if (p.startsWith("live:", true) ||
+        p.startsWith("icecast:", true) ||
+        p.startsWith("shoutcast:", true)
+    ) {
+        return true
+    }
+    return contentUri.getBooleanQueryParameter("live", false)
 }
 
 fun resolvePlayableUri(

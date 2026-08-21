@@ -95,6 +95,8 @@ internal class MusicServiceEngineHooks(
 
     fun isBuffering(): Boolean = active && host.isBuffering()
 
+    fun isLive(): Boolean = active && host.isLive()
+
     fun sessionToken() = host.sessionBridge.sessionToken()
 
     fun updateMetadata(song: Song?) {

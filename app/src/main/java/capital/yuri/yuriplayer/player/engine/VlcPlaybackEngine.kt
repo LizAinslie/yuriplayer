@@ -129,19 +129,30 @@ class VlcPlaybackEngine(
                 _isPlaying.value = false
                 dispatch { onIsPlayingChanged(false) }
                 dispatch { onPlaybackStateChanged(PlaybackEngine.PlaybackState.IDLE) }
+                if (!playWhenReady) return
+                if (currentIsLive()) {
+                    Log.i(TAG, "live stopped → reconnect")
+                    runCatching { mp.play() }
+                    return
+                }
                 // HTTP cancel/EOF often Stopped without EndReached. If we still
                 // intend to play, treat this as the end of the track.
-                if (playWhenReady) {
-                    if (swapToPreparedNext()) {
-                        dispatch { onAutoAdvanced() }
-                    } else {
-                        eventGeneration = -1
-                        dispatch { onEnded() }
-                    }
+                if (swapToPreparedNext()) {
+                    dispatch { onAutoAdvanced() }
+                } else {
+                    eventGeneration = -1
+                    dispatch { onEnded() }
                 }
             }
             MediaPlayer.Event.EndReached -> {
                 if (loadGeneration != eventGeneration) return
+                if (currentIsLive()) {
+                    if (playWhenReady) {
+                        Log.i(TAG, "live EOF → reconnect")
+                        runCatching { mp.play() }
+                    }
+                    return
+                }
                 if (swapToPreparedNext()) {
                     dispatch { onAutoAdvanced() }
                     return
@@ -272,7 +283,10 @@ class VlcPlaybackEngine(
         return (active().position * len).toLong().coerceAtLeast(0L)
     }
 
-    override fun getDurationMs(): Long = active().length.coerceAtLeast(0L)
+    override fun getDurationMs(): Long {
+        if (currentIsLive()) return 0L
+        return active().length.coerceAtLeast(0L)
+    }
 
     override fun getCurrentIndex(): Int = index
 
@@ -288,7 +302,16 @@ class VlcPlaybackEngine(
 
     override fun isBuffering(): Boolean = buffering
 
+    override fun isLive(): Boolean = currentIsLive()
+
+    private fun currentIsLive(): Boolean = window.getOrNull(index)?.live == true
+
     override fun setNext(item: PlaybackMedia?) {
+        if (currentIsLive()) {
+            prefetcher.cancel()
+            clearNext()
+            return
+        }
         if (item == null) {
             prefetcher.cancel()
             clearNext()

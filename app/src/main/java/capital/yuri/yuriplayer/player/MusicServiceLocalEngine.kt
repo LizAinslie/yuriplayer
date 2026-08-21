@@ -63,28 +63,32 @@ class MusicServiceLocalEngine(
         Log.i(TAG, "active engine=$engineId")
     }
 
-    /** Load current and pre-buffer [next] so the following track can start immediately. */
+    /**
+     * Play this audio source. [next] is an optional successor buffer — ignored
+     * for live streams. Queue / radio / podcast identity stays in the host.
+     */
     fun playWindow(song: Song, next: Song?, startPositionMs: Long, autoPlay: Boolean) {
         val quality = settings.getStreamQuality()
-        val item = song.toPlaybackMedia(quality = quality)
-        val nextItem = next?.toPlaybackMedia(quality = quality)
+        val current = song.toPlaybackMedia(quality = quality)
+        val successor = if (current.live) null else next?.toPlaybackMedia(quality = quality)
         Log.i(
             TAG,
-            "playWindow engine=$engineId '${song.displayTitle}' " +
-                "uri=${item.uri} scheme=${item.uri.scheme} quality=${quality.id} " +
-                "autoPlay=$autoPlay pos=$startPositionMs peek=${next?.displayTitle}"
+            "load engine=$engineId '${song.displayTitle}' " +
+                "uri=${current.uri} scheme=${current.uri.scheme} quality=${quality.id} " +
+                "live=${current.live} autoPlay=$autoPlay pos=$startPositionMs " +
+                "successor=${successor?.title}"
         )
         engine.setPlayWhenReady(autoPlay)
-        val window = if (nextItem != null) listOf(item, nextItem) else listOf(item)
-        engine.setWindow(window, 0, startPositionMs)
-        // Media3 already queued [current, next]. VLC plays index 0 and this
-        // prepares the standby player (no-ops if that next is already attached).
-        engine.setNext(nextItem)
+        engine.load(current, successor, startPositionMs)
         if (autoPlay) engine.play()
         sessionBridge.updateMetadata(song)
     }
 
     fun setNext(song: Song?) {
+        if (engine.isLive()) {
+            engine.setNext(null)
+            return
+        }
         engine.setNext(song?.toPlaybackMedia(quality = settings.getStreamQuality()))
     }
 
@@ -103,6 +107,7 @@ class MusicServiceLocalEngine(
     fun getDurationMs(): Long = engine.getDurationMs()
     fun getPlayWhenReady(): Boolean = engine.getPlayWhenReady()
     fun isBuffering(): Boolean = engine.isBuffering()
+    fun isLive(): Boolean = engine.isLive()
 
     fun release() {
         engine.removeListener(listener)

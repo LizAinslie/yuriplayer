@@ -743,18 +743,23 @@ class MusicService : Service() {
                 val engineDur = hooks.getDurationMs().takeIf { it > 0 } ?: 0L
                 val metaDur = _nowPlaying.value?.durationMs?.takeIf { it > 0 } ?: 0L
                 val duration = if (engineDur > 0L) engineDur else metaDur
-                val remaining = if (duration > 0L) (duration - pos).coerceAtLeast(0L) else Long.MAX_VALUE
+                val live = hooks.isLive()
+                val remaining = if (live || duration <= 0L) Long.MAX_VALUE else (duration - pos).coerceAtLeast(0L)
                 val now = SystemClock.elapsedRealtime()
                 val remote = isRemoteSong(_nowPlaying.value)
                 val wantPlay = hooks.getPlayWhenReady()
                 val playing = hooks.isPlaying()
                 val buffering = hooks.isBuffering()
-                val nearEnd = duration > 0L && remaining <= NEAR_END_MS
+                val nearEnd = !live && duration > 0L && remaining <= NEAR_END_MS
 
-                // Fill the standby HTTP cache in the last seconds so swap
-                // doesn't open a dead connection. Local FDs need no warmup.
-                if (wantPlay && remaining in 1L..WARMUP_NEXT_MS && !isRepeatOne()) {
+                // Finite tracks only — live radio has no successor to warm.
+                if (!live && wantPlay && remaining in 1L..WARMUP_NEXT_MS && !isRepeatOne()) {
                     hooks.warmupNext()
+                }
+
+                if (live) {
+                    stallSamplePos = -1L
+                    continue
                 }
 
                 if (pos != stallSamplePos) {
