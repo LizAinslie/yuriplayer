@@ -86,12 +86,21 @@ private fun ProvidersList(
     onAdd: (SourceKind) -> Unit
 ) {
     val remotes by session.sources.remotes.collectAsState()
+    val scanMessage by session.scanMessage.collectAsState()
     val scope = rememberCoroutineScope()
     var listStatus by remember { mutableStateOf<String?>(null) }
     var testingId by remember { mutableStateOf<String?>(null) }
 
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState())) {
         SettingsNote("Local library and remote servers YuriPlayer can play from.")
+        if (scanMessage.isNotBlank()) {
+            Text(
+                scanMessage,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.primary,
+                modifier = Modifier.padding(vertical = 4.dp)
+            )
+        }
         Spacer(Modifier.height(8.dp))
 
         SettingsSectionTitle("On this device")

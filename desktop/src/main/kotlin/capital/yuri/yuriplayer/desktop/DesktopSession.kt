@@ -119,7 +119,7 @@ class DesktopSession {
 
     fun addFolder(path: String) {
         sources.addFolder(path)
-        rescan()
+        indexFolder(path)
     }
 
     fun removeFolder(path: String) {
@@ -185,9 +185,10 @@ class DesktopSession {
             }
             result
                 .onSuccess { signed ->
-                    sources.upsertRemote(signed.copy(enabled = enabled, name = seed.name))
-                    rescan()
-                    withContext(Dispatchers.Swing) { onDone(true, "Saved") }
+                    val saved = signed.copy(enabled = enabled, name = seed.name)
+                    sources.upsertRemote(saved)
+                    if (enabled) indexRemote(saved)
+                    withContext(Dispatchers.Swing) { onDone(true, "Saved — indexing ${saved.name}") }
                 }
                 .onFailure {
                     withContext(Dispatchers.Swing) {
@@ -223,11 +224,57 @@ class DesktopSession {
 
     fun setRemoteEnabled(id: String, enabled: Boolean) {
         sources.setRemoteEnabled(id, enabled)
+        if (enabled) {
+            sources.remotes.value.firstOrNull { it.id == id }?.let { indexRemote(it) }
+        }
     }
 
     fun removeRemote(id: String) {
         sources.removeRemote(id)
         rescan()
+    }
+
+    fun indexFolder(path: String) {
+        val root = File(path)
+        if (!root.isDirectory) return
+        scope.launch(Dispatchers.IO) {
+            _scanMessage.value = "Indexing ${root.name}…"
+            val added = LocalLibraryScanner.scan(listOf(root))
+            mergeTracks(added)
+            _scanMessage.value = "${root.name}: ${added.size} tracks · ${_tracks.value.size} total"
+        }
+    }
+
+    fun indexRemote(account: RemoteAccount) {
+        if (!account.enabled || account.kind == SourceKind.LOCAL) return
+        scope.launch(Dispatchers.IO) {
+            _scanMessage.value = "Indexing ${account.name}…"
+            val result = when (account.kind) {
+                SourceKind.JELLYFIN -> {
+                    val authed = if (account.accessToken.isNullOrBlank()) {
+                        jellyfin.authenticate(account).getOrElse {
+                            _scanMessage.value = "${account.name}: ${it.message}"
+                            return@launch
+                        }.also { sources.upsertRemote(it) }
+                    } else account
+                    jellyfin.listTracks(authed)
+                }
+                SourceKind.SUBSONIC -> subsonic.listTracks(account)
+                SourceKind.LOCAL -> return@launch
+            }
+            result
+                .onSuccess { incoming ->
+                    mergeTracks(incoming)
+                    _scanMessage.value =
+                        "${account.name}: ${incoming.size} tracks · ${_tracks.value.size} total"
+                }
+                .onFailure { _scanMessage.value = "${account.name}: ${it.message}" }
+        }
+    }
+
+    private fun mergeTracks(incoming: List<Track>) {
+        if (incoming.isEmpty()) return
+        _tracks.value = (_tracks.value + incoming).distinctBy { it.id }
     }
 
     fun rescan() {

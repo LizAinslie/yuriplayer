@@ -33,6 +33,8 @@ class LibraryScanService : Service() {
     private val scanDispatcher = Dispatchers.IO.limitedParallelism(1)
     private val scope = CoroutineScope(SupervisorJob() + scanDispatcher)
     private var work: Job? = null
+    @Volatile private var queuedForce = false
+    @Volatile private var queuedSourceId: Long? = null
 
     override fun onBind(intent: Intent?): IBinder? = null
 
@@ -58,8 +60,16 @@ class LibraryScanService : Service() {
         }
 
         // Already scanning — do not cancel unless this is an explicit full force-rescan.
+        // A newly added source always queues so its first index still runs.
         if (action == ACTION_REMOTE && work?.isActive == true) {
-            if (!force || sourceId != null) {
+            if (sourceId != null) {
+                queuedForce = true
+                queuedSourceId = sourceId
+                Log.i(TAG, "queue initial index sourceId=$sourceId")
+                startAsForeground("Syncing libraries", explore.scanProgress.value ?: "Working…")
+                return START_NOT_STICKY
+            }
+            if (!force) {
                 Log.i(TAG, "remote scan already active — ignore duplicate start")
                 startAsForeground("Syncing libraries", explore.scanProgress.value ?: "Working…")
                 return START_NOT_STICKY
@@ -98,8 +108,17 @@ class LibraryScanService : Service() {
                 Log.e(TAG, "scan service failed", e)
                 notifier.finish("Scan failed", e.message ?: "Unknown error")
             } finally {
-                stopForegroundCompat()
-                stopSelf(startId)
+                val nextId = queuedSourceId
+                val nextForce = queuedForce
+                queuedSourceId = null
+                queuedForce = false
+                if (nextId != null) {
+                    Log.i(TAG, "start queued index sourceId=$nextId")
+                    startRemote(applicationContext, nextForce, nextId)
+                } else {
+                    stopForegroundCompat()
+                    stopSelf(startId)
+                }
             }
         }
         return START_NOT_STICKY

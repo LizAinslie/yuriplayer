@@ -40,6 +40,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
+import capital.yuri.yuriplayer.data.ExploreSearchService
 import capital.yuri.yuriplayer.data.db.SourceInstanceEntity
 import capital.yuri.yuriplayer.data.SyncInterval
 import capital.yuri.yuriplayer.data.source.JellyfinClient
@@ -181,6 +182,7 @@ fun ProviderEditorScreen(
     val sourcesRepo: SourceInstanceRepository = koinInject()
     val jellyfin: JellyfinClient = koinInject()
     val subsonic: SubsonicClient = koinInject()
+    val explore: ExploreSearchService = koinInject()
     val scope = rememberCoroutineScope()
 
     var loaded by remember { mutableStateOf<SourceInstanceEntity?>(null) }
@@ -403,12 +405,13 @@ fun ProviderEditorScreen(
                                 }
                             }
                             if (existingId == null) {
-                                when (type) {
+                                val newId = when (type) {
                                     SourceType.JELLYFIN ->
                                         sourcesRepo.addJellyfin(display, normalized, username, password)
                                     else ->
                                         sourcesRepo.addSubsonic(display, normalized, username, password)
                                 }
+                                explore.requestRemoteScan(force = true, sourceId = newId)
                             } else {
                                 val base = loaded ?: sourcesRepo.get(existingId) ?: return@withContext
                                 val interval = if (partialOverride == "default") {
