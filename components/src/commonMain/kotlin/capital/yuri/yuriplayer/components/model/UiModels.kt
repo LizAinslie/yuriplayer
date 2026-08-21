@@ -111,7 +111,7 @@ fun List<Track>.artistPage(
     return ArtistPageModel(
         name = name,
         artworkUri = ofArtist.firstNotNullOfOrNull { it.artworkUri } ?: discography.firstOrNull()?.artworkUri,
-        bannerUri = discography.firstOrNull()?.artworkUri ?: ofArtist.firstNotNullOfOrNull { it.artworkUri },
+        bannerUri = null,
         stats = "${discography.size} albums · ${ofArtist.size} tracks",
         about = null,
         popular = popular,

@@ -30,13 +30,14 @@ fun CoverArt(
     size: Dp? = null,
     corner: Dp = 8.dp,
     contentDescription: String? = null,
-    contentScale: ContentScale = ContentScale.Fit
+    contentScale: ContentScale = ContentScale.Fit,
+    square: Boolean = true
 ) {
     val shape = RoundedCornerShape(corner)
-    val frame = if (size != null) {
-        modifier.size(size)
-    } else {
-        modifier.aspectRatio(1f)
+    val frame = when {
+        size != null -> modifier.size(size)
+        square -> modifier.aspectRatio(1f)
+        else -> modifier
     }
     Box(
         modifier = frame

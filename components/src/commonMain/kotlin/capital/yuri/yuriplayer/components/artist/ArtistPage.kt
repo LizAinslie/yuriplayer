@@ -52,6 +52,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.RectangleShape
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -369,24 +370,30 @@ fun ArtistPage(
 
 @Composable
 private fun ArtistBanner(artist: ArtistPageModel) {
+    val banner = artist.bannerUri?.takeIf { it.isNotBlank() }
     Box(
         Modifier
             .fillMaxWidth()
-            .height(340.dp)
+            .aspectRatio(3f)
+            .clip(RectangleShape)
+            .background(MaterialTheme.colorScheme.surfaceVariant)
     ) {
-        CoverArt(
-            model = artist.bannerUri ?: artist.artworkUri,
-            modifier = Modifier.fillMaxSize(),
-            corner = 0.dp,
-            contentScale = ContentScale.Crop
-        )
+        if (banner != null) {
+            CoverArt(
+                model = banner,
+                modifier = Modifier.fillMaxSize(),
+                corner = 0.dp,
+                contentScale = ContentScale.Crop,
+                square = false
+            )
+        }
         Box(
             Modifier
                 .fillMaxSize()
                 .background(
                     Brush.verticalGradient(
-                        0f to Color.Black.copy(alpha = 0.15f),
-                        0.55f to Color.Transparent,
+                        0f to Color.Black.copy(alpha = 0.25f),
+                        0.45f to Color.Transparent,
                         1f to MaterialTheme.colorScheme.background
                     )
                 )
@@ -394,7 +401,7 @@ private fun ArtistBanner(artist: ArtistPageModel) {
         Column(
             Modifier
                 .align(Alignment.BottomStart)
-                .padding(horizontal = 28.dp, vertical = 20.dp)
+                .padding(horizontal = 28.dp, vertical = 16.dp)
         ) {
             Text(
                 artist.name,

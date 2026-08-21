@@ -32,14 +32,24 @@ class ArtistInfoClient(
 
     suspend fun resolve(name: String, force: Boolean = false): ArtistProfile = withContext(Dispatchers.IO) {
         val cached = store.load(name)
+        val bannerLooksWrong = cached?.bannerUri.let { uri ->
+            uri.isNullOrBlank() ||
+                uri.contains("wikipedia", true) ||
+                uri.contains("wikimedia", true)
+        }
         val fresh = cached != null &&
             !force &&
+            !bannerLooksWrong &&
             (System.currentTimeMillis() - cached.updatedAtMs) < CACHE_TTL_MS &&
             (!cached.bio.isNullOrBlank() || !cached.bannerUri.isNullOrBlank() || cached.bannerCleared)
         if (fresh && cached != null) return@withContext cached
 
         val remote = fetchRemote(name)
-        val merged = merge(name, cached, remote)
+        var merged = merge(name, cached, remote)
+        if (!merged.bannerCleared) {
+            val wide = pickWideBanner(name, merged.bannerUri)
+            if (wide != null) merged = merged.copy(bannerUri = wide)
+        }
         store.save(merged)
         merged
     }
@@ -52,8 +62,9 @@ class ArtistInfoClient(
             val mb = async { musicBrainzImages(name) }
             val wd = async { wikidataImages(name) }
             val lib = async { runCatching { libraryImages(name) }.getOrDefault(emptyList()) }
-            (adb.await() + wiki.await() + deezer.await() + mb.await() + wd.await() + lib.await())
+            (adb.await() + lib.await() + wiki.await() + deezer.await() + mb.await() + wd.await())
                 .distinctBy { it.url }
+                .sortedByDescending { it.headerScore() }
         }
     }
 
@@ -135,8 +146,10 @@ class ArtistInfoClient(
             imageUri = a.imageUri ?: b.imageUri,
             bannerUri = when {
                 a.bannerCleared -> null
-                !a.bannerUri.isNullOrBlank() -> a.bannerUri
-                else -> b.bannerUri
+                a.bannerUri.isWideHeaderUrl() -> a.bannerUri
+                b.bannerUri.isWideHeaderUrl() -> b.bannerUri
+                !a.bannerUri.isNullOrBlank() && !a.bannerUri.isPortraitSource() -> a.bannerUri
+                else -> b.bannerUri?.takeUnless { it.isPortraitSource() }
             },
             genres = (a.genres + b.genres).map { it.trim() }.filter { it.isNotEmpty() }.distinctBy { it.lowercase() },
             source = listOf(a.source, b.source).filter { it.isNotBlank() }.distinct().joinToString(","),
@@ -162,8 +175,8 @@ class ArtistInfoClient(
             ?: summary.obj("thumbnail")?.str("source")
         val banner = summary.obj("originalimage")?.let { img ->
             val w = img.int("width") ?: 0
-            val h = img.int("height") ?: 0
-            if (w >= h && w >= 800) img.str("source") else null
+            val h = img.int("height") ?: 1
+            if (h > 0 && w.toFloat() / h >= 2.4f) img.str("source") else null
         }
         return ArtistProfile(
             artistKey = artistKey(name) ?: name.lowercase(),
@@ -214,7 +227,7 @@ class ArtistInfoClient(
     private suspend fun audioDbProfile(name: String): ArtistProfile? {
         val a = audioDbArtist(name) ?: return null
         val bio = a.str("strBiographyEN")?.takeIf { it.isNotBlank() && it != "null" }
-        val banner = listOf("strArtistFanart", "strArtistFanart2", "strArtistBanner")
+        val banner = listOf("strArtistBanner", "strArtistFanart", "strArtistFanart2", "strArtistFanart3", "strArtistWideThumb")
             .firstNotNullOfOrNull { field -> a.str(field)?.takeIf { it.isNotBlank() && it != "null" } }
         val thumb = a.str("strArtistThumb")?.takeIf { it.isNotBlank() && it != "null" }
         val genres = buildList {
@@ -236,16 +249,20 @@ class ArtistInfoClient(
         val a = audioDbArtist(name) ?: return emptyList()
         val display = a.str("strArtist") ?: name
         val fields = listOf(
+            "strArtistBanner" to "AudioDB banner",
             "strArtistFanart" to "AudioDB fanart",
             "strArtistFanart2" to "AudioDB fanart 2",
             "strArtistFanart3" to "AudioDB fanart 3",
-            "strArtistBanner" to "AudioDB banner",
-            "strArtistWideThumb" to "AudioDB wide",
-            "strArtistThumb" to "AudioDB thumb"
+            "strArtistWideThumb" to "AudioDB wide"
         )
         return fields.mapNotNull { (field, label) ->
             val u = a.str(field)?.takeIf { it.isNotBlank() && it != "null" } ?: return@mapNotNull null
-            ArtistImageCandidate(u, "theaudiodb", "$label · $display")
+            val banner = label.contains("banner", true)
+            ArtistImageCandidate(
+                u, "theaudiodb", "$label · $display",
+                width = if (banner) 1500 else 1280,
+                height = if (banner) 500 else 720
+            )
         }
     }
 
@@ -424,6 +441,42 @@ class ArtistInfoClient(
             json.parseToJsonElement(body).jsonObject["entities"]?.jsonObject
                 ?.get(qid)?.jsonObject?.obj("claims")
         }.getOrNull()
+    }
+
+    private suspend fun pickWideBanner(name: String, current: String?): String? {
+        if (current.isWideHeaderUrl() && !current.isPortraitSource()) return current
+        val cands = runCatching { bannerCandidates(name) }.getOrDefault(emptyList())
+        return cands.firstOrNull { it.headerScore() >= 50 }?.url
+            ?: current?.takeUnless { it.isPortraitSource() }
+    }
+
+    private fun ArtistImageCandidate.headerScore(): Int {
+        val w = width ?: 0
+        val h = height ?: 0
+        val ratio = if (h > 0) w.toFloat() / h else 0f
+        val label = label.lowercase()
+        var score = 0
+        if (ratio >= 2.4f) score += 80
+        else if (ratio >= 1.7f) score += 50
+        else if (ratio in 0.01f..0.99f) score -= 40
+        if (label.contains("banner")) score += 40
+        if (label.contains("fanart") || label.contains("backdrop") || label.contains("wide")) score += 25
+        if (sourceId == "theaudiodb" || sourceId == "jellyfin") score += 10
+        if (sourceId == "wikipedia" || sourceId == "wikidata" || sourceId == "deezer") score -= 20
+        return score
+    }
+
+    private fun String?.isWideHeaderUrl(): Boolean {
+        val u = this ?: return false
+        if (u.startsWith("file:")) return true
+        return u.contains("banner", true) || u.contains("fanart", true) || u.contains("Backdrop", true)
+    }
+
+    private fun String?.isPortraitSource(): Boolean {
+        val u = this ?: return false
+        return u.contains("wikipedia", true) ||
+            u.contains("wikimedia", true) ||
+            u.contains("deezer.com", true)
     }
 
     private fun kotlinx.serialization.json.JsonArray?.orEmpty() =

@@ -408,7 +408,7 @@ fun YuriDesktopApp(session: DesktopSession) {
                             bannerUri = when {
                                 profile?.bannerCleared == true -> ""
                                 !profile?.bannerUri.isNullOrBlank() -> profile!!.bannerUri
-                                else -> base.bannerUri
+                                else -> null
                             },
                             genres = profile?.genres.orEmpty()
                         )

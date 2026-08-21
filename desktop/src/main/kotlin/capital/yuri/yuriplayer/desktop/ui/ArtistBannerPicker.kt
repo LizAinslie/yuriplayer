@@ -94,7 +94,7 @@ fun ArtistBannerPicker(
                                     model = c.url,
                                     modifier = Modifier
                                         .fillMaxWidth()
-                                        .aspectRatio(16f / 9f)
+                                        .aspectRatio(3f)
                                         .clip(RoundedCornerShape(8.dp))
                                         .border(
                                             1.dp,
