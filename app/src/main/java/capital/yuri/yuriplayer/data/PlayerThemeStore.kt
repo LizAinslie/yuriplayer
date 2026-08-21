@@ -24,6 +24,7 @@ class PlayerThemeStore(
         val artKey: String,
         val songId: Long,
         val path: String?,
+        val songKey: String,
         val colors: PlayerColors,
         val bitmap: Bitmap?,
         val colorRev: Long = 0L
@@ -54,13 +55,10 @@ class PlayerThemeStore(
 
     fun artKey(song: Song): String = artCache.artKey(song)
 
-    /** True when [theme] is this song's own cover, not a neighbor reused by id. */
+    /** True when [theme] is this exact song, never a neighbor with a colliding id. */
     fun themeIsFor(theme: Theme?, song: Song): Boolean {
         if (theme == null) return false
-        val sameSong = theme.songId == song.id ||
-            (song.path != null && theme.path == song.path)
-        if (!sameSong) return false
-        return theme.artKey == artCache.artKey(song)
+        return theme.songKey == song.songKey
     }
 
     fun isShowing(song: Song): Boolean = themeIsFor(_current.value, song)
@@ -100,18 +98,17 @@ class PlayerThemeStore(
         val key = artCache.artKey(song)
         val rev = settings.colorPrefsRevision.value
         val existing = _current.value
-        if (!forceRefresh && existing != null && existing.artKey == key && existing.colorRev == rev) {
-            if (existing.songId != song.id || existing.path != song.path) {
-                _current.value = existing.copy(songId = song.id, path = song.path)
-            }
+        if (!forceRefresh && existing != null && existing.songKey == song.songKey &&
+            existing.artKey == key && existing.colorRev == rev
+        ) {
             return
         }
         if (!forceRefresh) {
-            val fromNext = _peekNext.value?.takeIf { it.artKey == key && it.colorRev == rev }
-            val fromPrev = _peekPrev.value?.takeIf { it.artKey == key && it.colorRev == rev }
+            val fromNext = _peekNext.value?.takeIf { it.songKey == song.songKey }
+            val fromPrev = _peekPrev.value?.takeIf { it.songKey == song.songKey }
             val warm = fromNext ?: fromPrev
             if (warm != null) {
-                _current.value = warm.copy(songId = song.id, path = song.path)
+                _current.value = warm
                 return
             }
         }
@@ -128,6 +125,7 @@ class PlayerThemeStore(
             artKey = resolved.key,
             songId = song.id,
             path = song.path,
+            songKey = song.songKey,
             colors = resolved.colors,
             bitmap = resolved.bitmap,
             colorRev = rev
@@ -153,16 +151,16 @@ class PlayerThemeStore(
         val key = artCache.artKey(song)
         val rev = settings.colorPrefsRevision.value
         val cur = _current.value
-        if (cur != null && cur.artKey == key && cur.colorRev == rev) {
-            return Theme(key, song.id, song.path, cur.colors, cur.bitmap, rev)
+        if (cur != null && cur.songKey == song.songKey && cur.artKey == key && cur.colorRev == rev) {
+            return Theme(key, song.id, song.path, song.songKey, cur.colors, cur.bitmap, rev)
         }
         val nextT = _peekNext.value
-        if (nextT != null && nextT.artKey == key && nextT.colorRev == rev) {
-            return Theme(key, song.id, song.path, nextT.colors, nextT.bitmap, rev)
+        if (nextT != null && nextT.songKey == song.songKey && nextT.artKey == key && nextT.colorRev == rev) {
+            return Theme(key, song.id, song.path, song.songKey, nextT.colors, nextT.bitmap, rev)
         }
         val prevT = _peekPrev.value
-        if (prevT != null && prevT.artKey == key && prevT.colorRev == rev) {
-            return Theme(key, song.id, song.path, prevT.colors, prevT.bitmap, rev)
+        if (prevT != null && prevT.songKey == song.songKey && prevT.artKey == key && prevT.colorRev == rev) {
+            return Theme(key, song.id, song.path, song.songKey, prevT.colors, prevT.bitmap, rev)
         }
         val resolved = themeService.themeFromSong(
             context = context,
@@ -172,7 +170,7 @@ class PlayerThemeStore(
             surface = ArtColorSurface.COVER,
             loadBitmap = true
         )
-        return Theme(key, song.id, song.path, resolved.colors, resolved.bitmap, rev)
+        return Theme(key, song.id, song.path, song.songKey, resolved.colors, resolved.bitmap, rev)
     }
 
     fun colorsOrFallback(base: ColorScheme): PlayerColors =

@@ -413,34 +413,23 @@ fun YuriApp(
     var positionMs by remember { mutableLongStateOf(0L) }
     var durationMs by remember { mutableLongStateOf(0L) }
     val snapshot by player.snapshot.collectAsState()
-    var currentSong by remember { mutableStateOf(snapshot.currentSong) }
-    var peekNext by remember { mutableStateOf<Song?>(null) }
-    var peekPrev by remember { mutableStateOf<Song?>(null) }
+    val viewState by player.viewState.collectAsState()
+    val currentSong = viewState.song ?: snapshot.currentSong
+    val peekNext = viewState.next
+    val peekPrev = viewState.previous
 
     val connected by player.isConnected.collectAsState()
 
-    // Snapshot is the source of truth — any queue publish recomposes titles/art.
-    LaunchedEffect(snapshot) {
-        currentSong = snapshot.currentSong
-        peekNext = player.peekNext()
-        peekPrev = player.peekPrevious()
+    LaunchedEffect(viewState.song?.songKey, viewState.playing) {
+        playing = viewState.playing
     }
-
     LaunchedEffect(connected) {
         if (!connected) return@LaunchedEffect
         while (isActive) {
             playing = player.isPlayingNow()
             positionMs = player.getPositionMs()
             durationMs = player.getDurationMs()
-            // Re-read .value every tick so a missed StateFlow emission still lands.
-            val fromQueue = player.getQueueSnapshot().currentSong
-            val live = fromQueue ?: player.getCurrentSong()
-            if (live != null && (currentSong == null || !live.isSameAs(currentSong))) {
-                currentSong = live
-            }
-            peekNext = player.peekNext()
-            peekPrev = player.peekPrevious()
-            delay(250)
+            delay(200)
         }
     }
 

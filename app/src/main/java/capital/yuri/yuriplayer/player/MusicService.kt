@@ -99,6 +99,9 @@ class MusicService : Service() {
     private val _isPlaying = MutableStateFlow(false)
     val isPlaying: StateFlow<Boolean> = _isPlaying.asStateFlow()
 
+    private val _viewState = MutableStateFlow(PlayerViewState())
+    val viewState: StateFlow<PlayerViewState> = _viewState.asStateFlow()
+
     val queueSnapshot: StateFlow<QueueSnapshot> get() = queueManager.snapshot
     val historyEntries: StateFlow<List<HistoryEntry>> get() = historyStore.entries
 
@@ -720,6 +723,7 @@ class MusicService : Service() {
         stallWatchJob = serviceScope.launch {
             while (isActive) {
                 delay(STALL_POLL_MS)
+                publishViewState()
                 if (pendingRemoteRestore != null) {
                     stallSamplePos = -1L
                     continue
@@ -912,7 +916,23 @@ class MusicService : Service() {
         }
     }
 
+    private fun publishViewState() {
+        val song = queueManager.currentSong()
+        _nowPlaying.value = song
+        val engineDur = engineHooks?.getDurationMs()?.takeIf { it > 0L } ?: 0L
+        val metaDur = song?.durationMs?.takeIf { it > 0L } ?: 0L
+        _viewState.value = PlayerViewState(
+            song = song,
+            next = queueManager.peekNext(),
+            previous = queueManager.peekPrevious(),
+            playing = _isPlaying.value,
+            positionMs = getPositionMs(),
+            durationMs = if (engineDur > 0L) engineDur else metaDur
+        )
+    }
+
     private fun updateForegroundNotification() {
+        publishViewState()
         startForeground(NOTIFICATION_ID, buildMediaNotification(_nowPlaying.value, _isPlaying.value))
         engineHooks?.updateMetadata(_nowPlaying.value)
     }
@@ -998,7 +1018,7 @@ class MusicService : Service() {
     }
 
     fun isPlaying(): Boolean = engineHooks?.isPlaying() == true
-    fun getCurrentSong(): Song? = _nowPlaying.value ?: queueManager.currentSong()
+    fun getCurrentSong(): Song? = queueManager.currentSong()
 
     fun getPositionMs(): Long {
         pendingRemoteRestore?.let { return it.positionMs }

@@ -33,12 +33,16 @@ class PlayerController(
     private var pendingAction: (() -> Unit)? = null
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private var serviceNowPlayingJob: Job? = null
+    private var serviceViewJob: Job? = null
 
     private val _isConnected = MutableStateFlow(false)
     val isConnected: StateFlow<Boolean> = _isConnected.asStateFlow()
 
     private val _nowPlaying = MutableStateFlow<Song?>(queueManager.currentSong())
     val nowPlaying: StateFlow<Song?> = _nowPlaying.asStateFlow()
+
+    private val _viewState = MutableStateFlow(PlayerViewState(song = queueManager.currentSong()))
+    val viewState: StateFlow<PlayerViewState> = _viewState.asStateFlow()
 
     val historyEntries: StateFlow<List<HistoryEntry>> get() = historyStore.entries
 
@@ -49,12 +53,24 @@ class PlayerController(
             bound = true
             _isConnected.value = true
             _nowPlaying.value = service?.getCurrentSong() ?: queueManager.currentSong()
+            _viewState.value = service?.viewState?.value ?: PlayerViewState(
+                song = queueManager.currentSong(),
+                next = queueManager.peekNext(),
+                previous = queueManager.peekPrevious()
+            )
             serviceNowPlayingJob?.cancel()
+            serviceViewJob?.cancel()
             val svc = service
             if (svc != null) {
                 serviceNowPlayingJob = scope.launch {
                     svc.nowPlaying.collect { song ->
                         _nowPlaying.value = song ?: queueManager.currentSong()
+                    }
+                }
+                serviceViewJob = scope.launch {
+                    svc.viewState.collect { state ->
+                        _viewState.value = state
+                        _nowPlaying.value = state.song
                     }
                 }
             }
@@ -70,6 +86,8 @@ class PlayerController(
         override fun onServiceDisconnected(name: ComponentName?) {
             serviceNowPlayingJob?.cancel()
             serviceNowPlayingJob = null
+            serviceViewJob?.cancel()
+            serviceViewJob = null
             service = null
             bound = false
             _isConnected.value = false
@@ -79,8 +97,13 @@ class PlayerController(
     init {
         scope.launch {
             queueManager.snapshot.collect { snap ->
-                if (serviceNowPlayingJob == null) {
+                if (serviceViewJob == null) {
                     _nowPlaying.value = snap.currentSong
+                    _viewState.value = PlayerViewState(
+                        song = snap.currentSong,
+                        next = queueManager.peekNext(),
+                        previous = queueManager.peekPrevious()
+                    )
                 }
             }
         }
@@ -102,6 +125,8 @@ class PlayerController(
         }
         serviceNowPlayingJob?.cancel()
         serviceNowPlayingJob = null
+        serviceViewJob?.cancel()
+        serviceViewJob = null
         bound = false
         service = null
         _isConnected.value = false

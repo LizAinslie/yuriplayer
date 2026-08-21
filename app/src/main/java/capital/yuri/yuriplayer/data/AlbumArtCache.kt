@@ -82,10 +82,7 @@ class AlbumArtCache(
         if (enriched.isFile && enriched.length() > 0) {
             return "enriched:${enriched.absolutePath}:${enriched.length()}:${enriched.lastModified()}"
         }
-        val album = song.album?.trim()?.lowercase().orEmpty()
-        val artist = (song.albumArtist ?: song.artist)?.trim()?.lowercase().orEmpty()
-        if (album.isNotEmpty()) return "album:$album|$artist"
-        return "song:${song.path ?: song.contentUri}"
+        return "song:${song.songKey}"
     }
 
     private fun looksLikeFsPath(path: String): Boolean {

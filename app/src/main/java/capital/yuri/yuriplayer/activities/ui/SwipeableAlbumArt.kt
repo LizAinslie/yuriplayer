@@ -39,11 +39,14 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
-import capital.yuri.yuriplayer.data.PlayerThemeStore
+import capital.yuri.yuriplayer.data.AlbumArtCache
+import capital.yuri.yuriplayer.data.Song
 import kotlinx.coroutines.launch
+import org.koin.compose.koinInject
 import kotlin.math.abs
 import kotlin.math.roundToInt
 
@@ -58,9 +61,9 @@ private val SkipSpec = tween<Float>(durationMillis = 280, easing = FastOutSlowIn
  */
 @Composable
 fun SwipeableAlbumArt(
-    current: PlayerThemeStore.Theme?,
-    next: PlayerThemeStore.Theme?,
-    prev: PlayerThemeStore.Theme?,
+    currentSong: Song?,
+    nextSong: Song?,
+    prevSong: Song?,
     onSwipeNext: () -> Unit,
     onSwipePrev: () -> Unit,
     onPromoteNext: () -> Unit,
@@ -75,10 +78,6 @@ fun SwipeableAlbumArt(
     /** False when the queue already advanced (auto-next) — only play the art. */
     commitSkip: Boolean = true,
     onSkipConsumed: () -> Unit = {},
-    /** Playing track identity — when this changes (end-of-track, skip), slide art. */
-    playingSongId: Long? = null,
-    playingSongKey: String? = null,
-    playingArtKey: String? = null,
     modifier: Modifier = Modifier,
     horizontalInset: androidx.compose.ui.unit.Dp = 20.dp
 ) {
@@ -95,8 +94,12 @@ fun SwipeableAlbumArt(
         LocalConfiguration.current.screenWidthDp.dp.toPx()
     }
 
+    val currentBmp = rememberHqArt(currentSong)
+    val nextBmp = rememberHqArt(nextSong)
+    val prevBmp = rememberHqArt(if (allowPrevTrackChange) prevSong else null)
+
     // Only use prev cover when we will actually change tracks.
-    val effectivePrev = if (allowPrevTrackChange) prev else null
+    val effectivePrev = if (allowPrevTrackChange) prevSong else null
 
     suspend fun animateSkipTo(targetX: Float) {
         offsetX.animateTo(targetX, SkipSpec) {
@@ -144,7 +147,7 @@ fun SwipeableAlbumArt(
                     onDismissFraction(0f)
                     onHorizontalFraction(0f)
                 }
-                x < -trackThreshold && next != null -> {
+                x < -trackThreshold && nextSong != null -> {
                     animatingSkip = -1
                     animateSkipTo(-screenWidthPx)
                     finishNext(commit = true)
@@ -179,7 +182,7 @@ fun SwipeableAlbumArt(
             return@LaunchedEffect
         }
         when {
-            skipDirection < 0 && next != null -> {
+            skipDirection < 0 && nextSong != null -> {
                 animatingSkip = -1
                 animateSkipTo(-screenWidthPx)
                 finishNext(commit = commitSkip)
@@ -200,13 +203,14 @@ fun SwipeableAlbumArt(
         onSkipConsumed()
     }
 
-    val latestNext = rememberUpdatedState(next)
+    val latestNext = rememberUpdatedState(nextSong)
     val latestPrev = rememberUpdatedState(effectivePrev)
     val latestPromoteNext = rememberUpdatedState(onPromoteNext)
     val latestPromotePrev = rememberUpdatedState(onPromotePrev)
+    val playingSongKey = currentSong?.songKey
     var seenPlayingKey by remember { mutableStateOf(playingSongKey) }
 
-    LaunchedEffect(playingSongId, playingSongKey) {
+    LaunchedEffect(playingSongKey) {
         val previous = seenPlayingKey
         seenPlayingKey = playingSongKey
         if (previous == null || playingSongKey == null || previous == playingSongKey) {
@@ -220,10 +224,8 @@ fun SwipeableAlbumArt(
 
         val nxt = latestNext.value
         val prv = latestPrev.value
-        val id = playingSongId
-        val path = playingSongKey
-        val matchesNext = nxt != null && themeMatches(nxt, id, path, playingArtKey)
-        val matchesPrev = prv != null && themeMatches(prv, id, path, playingArtKey)
+        val matchesNext = nxt != null && nxt.songKey == playingSongKey
+        val matchesPrev = prv != null && prv.songKey == playingSongKey
 
         when {
             matchesPrev -> {
@@ -251,7 +253,7 @@ fun SwipeableAlbumArt(
     BoxWithConstraints(
         modifier = modifier
             .fillMaxWidth()
-            .pointerInput(next, effectivePrev, allowPrevTrackChange, animatingSkip) {
+            .pointerInput(nextSong, effectivePrev, allowPrevTrackChange, animatingSkip) {
                 if (animatingSkip != 0) return@pointerInput
                 detectDragGestures(
                     onDragEnd = { settle() },
@@ -285,9 +287,9 @@ fun SwipeableAlbumArt(
     ) {
         val hFrac = offsetX.value
 
-        if (hFrac < 0f && next != null) {
+        if (hFrac < 0f && nextSong != null) {
             ArtCard(
-                bitmap = next.bitmap,
+                bitmap = nextBmp,
                 modifier = Modifier
                     .fillMaxWidth()
                     .padding(horizontal = horizontalInset)
@@ -302,7 +304,7 @@ fun SwipeableAlbumArt(
         // Never paint previous cover while Previous only seeks to start.
         if (hFrac > 0f && effectivePrev != null) {
             ArtCard(
-                bitmap = effectivePrev.bitmap,
+                bitmap = prevBmp,
                 modifier = Modifier
                     .fillMaxWidth()
                     .padding(horizontal = horizontalInset)
@@ -316,7 +318,7 @@ fun SwipeableAlbumArt(
         }
 
         ArtCard(
-            bitmap = current?.bitmap,
+            bitmap = currentBmp,
             modifier = Modifier
                 .fillMaxWidth()
                 .padding(horizontal = horizontalInset)
@@ -335,16 +337,18 @@ fun SwipeableAlbumArt(
     }
 }
 
-private fun themeMatches(
-    theme: PlayerThemeStore.Theme,
-    songId: Long?,
-    songKey: String?,
-    artKey: String?
-): Boolean {
-    if (!artKey.isNullOrBlank() && theme.artKey != artKey) return false
-    if (songId != null && theme.songId == songId) return true
-    if (!songKey.isNullOrBlank() && theme.path == songKey) return true
-    return false
+@Composable
+private fun rememberHqArt(song: Song?): Bitmap? {
+    val context = LocalContext.current
+    val artCache: AlbumArtCache = koinInject()
+    val key = song?.let { "${it.songKey}\u0000${artCache.artKey(it)}" }
+    var bitmap by remember(key) {
+        mutableStateOf(if (song != null) artCache.peek(song, AlbumArtCache.HQ_DECODE_SIZE) else null)
+    }
+    LaunchedEffect(key) {
+        bitmap = if (song != null) artCache.get(context, song, AlbumArtCache.HQ_DECODE_SIZE) else null
+    }
+    return bitmap
 }
 
 @Composable

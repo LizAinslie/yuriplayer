@@ -406,9 +406,9 @@ fun NowPlayingScreen(
                     }
 
                     SwipeableAlbumArt(
-                        current = theme,
-                        next = nextTheme,
-                        prev = if (canSwipePrev) prevTheme else null,
+                        currentSong = song,
+                        nextSong = peekNextSong,
+                        prevSong = if (canSwipePrev) peekPrevSong else null,
                         onSwipeNext = onNext,
                         onSwipePrev = onForcePrev,
                         onPromoteNext = { themeStore.promoteNext() },
@@ -422,9 +422,6 @@ fun NowPlayingScreen(
                         onSkipConsumed = {
                             skipDirection = 0
                         },
-                        playingSongId = song?.id,
-                        playingSongKey = song?.path ?: song?.contentUri?.toString(),
-                        playingArtKey = song?.let { themeStore.artKey(it) },
                         horizontalInset = 20.dp,
                         modifier = Modifier.fillMaxWidth()
                     )
