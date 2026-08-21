@@ -29,4 +29,30 @@ class TrackCatalogKeyTest {
         assertEquals(local.catalogKey(), remote.catalogKey())
         assertTrue(local.catalogKey() in remote.playlistKeys())
     }
+
+    @Test
+    fun navidromeSearchAndScanShareLooseKey() {
+        val search = Track(
+            id = "subsonic:abc",
+            uri = "https://navi/stream/abc",
+            title = "BIRDBRAIN",
+            artist = "Jamie Paige feat. OK Glass",
+            album = "BIRDBRAIN",
+            trackNumber = 1,
+            sourceId = "navi-1"
+        )
+        val scanned = Track(
+            id = "subsonic:abc",
+            uri = "https://navi/stream/abc",
+            title = "BIRDBRAIN",
+            artist = "Jamie Paige",
+            albumArtist = "Jamie Paige",
+            album = "BIRDBRAIN",
+            trackNumber = 1,
+            sourceId = "navi-1"
+        )
+        assertEquals(search.looseKey(), scanned.looseKey())
+        assertTrue(search.looseKey() in scanned.indexKeys())
+        assertTrue("abc" in scanned.indexKeys())
+    }
 }

@@ -32,6 +32,9 @@ class DesktopIndexStore(cacheDir: String) {
                 tmp.copyTo(tracksFile, overwrite = true)
                 tmp.delete()
             }
+            PlaylistLog.index("saved ${tracks.size} tracks → ${tracksFile.absolutePath}")
+        }.onFailure {
+            PlaylistLog.index("save FAILED: ${it.message}")
         }
     }
 

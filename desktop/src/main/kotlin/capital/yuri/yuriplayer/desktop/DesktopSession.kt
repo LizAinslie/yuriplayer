@@ -370,26 +370,45 @@ class DesktopSession {
 
     private fun mergeTracks(incoming: List<Track>) {
         if (incoming.isEmpty()) return
+        val before = _tracks.value.size
         _tracks.value = (_tracks.value + incoming).distinctBy { it.id }
+        PlaylistLog.index("merge +${incoming.size} $before→${_tracks.value.size}")
     }
 
     fun ensureTracks(incoming: List<Track>) {
         if (incoming.isEmpty()) return
+        PlaylistLog.index("ensure ${incoming.map { "${it.displayTitle}/${it.id}" }}")
         mergeTracks(incoming)
         persistIndex()
         playlists.remember(incoming)
     }
 
+    private fun playlistRefs(): Set<String> =
+        playlists.playlists.value.flatMap { pl ->
+            pl.trackIds + pl.snapshots.flatMap { it.indexKeys() }
+        }.toHashSet()
+
     private fun replaceSourceTracks(sourceId: String, incoming: List<Track>) {
-        val referenced = playlists.playlists.value.flatMap { it.trackIds }.toHashSet()
+        val referenced = playlistRefs()
         val existing = _tracks.value
+        val incomingIds = incoming.map { it.id }.toHashSet()
         val orphans = existing.filter { t ->
             (t.sourceId ?: LOCAL_SCAN_ID) == sourceId &&
-                incoming.none { n -> n.id == t.id } &&
-                (t.id in referenced || t.catalogKey() in referenced)
+                t.id !in incomingIds &&
+                t.indexKeys().any { it in referenced }
         }
         val rest = existing.filterNot { (it.sourceId ?: LOCAL_SCAN_ID) == sourceId }
+        val dropped = existing.count {
+            (it.sourceId ?: LOCAL_SCAN_ID) == sourceId &&
+                it.id !in incomingIds &&
+                it.indexKeys().none { k -> k in referenced }
+        }
+        PlaylistLog.index(
+            "replace source=$sourceId incoming=${incoming.size} orphans=${orphans.size} dropped=$dropped refs=${referenced.size}"
+        )
         _tracks.value = (rest + incoming + orphans).distinctBy { it.id }
+        val snaps = playlists.playlists.value.flatMap { it.snapshots }
+        if (snaps.isNotEmpty()) mergeTracks(snaps)
     }
 
     private fun persistIndex() {

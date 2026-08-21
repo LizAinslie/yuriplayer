@@ -180,10 +180,9 @@ fun AddToPlaylistDialog(
             }
             Button(
                 onClick = {
-                    val toAdd = selected - initiallyIn
                     val toRemove = initiallyIn - selected
-                    if (toAdd.isNotEmpty()) onEnsureTracks(tracks)
-                    toAdd.forEach { store.addTracks(it, tracks) }
+                    onEnsureTracks(tracks)
+                    selected.forEach { store.addTracks(it, tracks) }
                     toRemove.forEach { store.removeTracks(it, tracks) }
                     onDismiss()
                 },

@@ -1,6 +1,8 @@
 package capital.yuri.yuriplayer.desktop
 
 import capital.yuri.yuriplayer.core.library.Track
+import capital.yuri.yuriplayer.core.library.foldSearch
+import capital.yuri.yuriplayer.core.library.normalizeTitle
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -70,13 +72,14 @@ class DesktopPlaylistStore(configDir: String) {
             val seen = existing.toHashSet()
             val snaps = pl.snapshots.toMutableList()
             for (t in tracks) {
-                val already = t.playlistKeys().any { it in seen }
+                PlaylistLog.add(pl.name, t)
+                val already = t.indexKeys().any { it in seen }
                 if (!already) {
                     existing += t.id
-                    seen += t.playlistKeys()
+                    seen += t.indexKeys()
                 }
                 val i = snaps.indexOfFirst { s ->
-                    s.id == t.id || s.catalogKey() == t.catalogKey() || t.id in s.playlistKeys()
+                    s.indexKeys().intersect(t.indexKeys()).isNotEmpty()
                 }
                 if (i < 0) snaps += t else snaps[i] = t
             }
@@ -90,8 +93,10 @@ class DesktopPlaylistStore(configDir: String) {
         val next = _playlists.value.map { pl ->
             var snaps = pl.snapshots
             for (t in tracks) {
-                if (pl.trackIds.none { it in t.playlistKeys() }) continue
-                val i = snaps.indexOfFirst { s -> s.id == t.id || s.catalogKey() == t.catalogKey() }
+                val hit = pl.trackIds.any { it in t.indexKeys() } ||
+                    pl.snapshots.any { s -> s.indexKeys().intersect(t.indexKeys()).isNotEmpty() }
+                if (!hit) continue
+                val i = snaps.indexOfFirst { s -> s.indexKeys().intersect(t.indexKeys()).isNotEmpty() }
                 snaps = if (i < 0) snaps + t else snaps.toMutableList().also { it[i] = t }
                 changed = true
             }
@@ -104,11 +109,14 @@ class DesktopPlaylistStore(configDir: String) {
     }
 
     fun playlistsContaining(trackId: String): Set<String> =
-        _playlists.value.filter { trackId in it.trackIds }.map { it.id }.toSet()
+        playlistsContaining(Track(id = trackId, uri = ""))
 
     fun playlistsContaining(track: Track): Set<String> {
-        val keys = track.playlistKeys()
-        return _playlists.value.filter { pl -> pl.trackIds.any { it in keys } }.map { it.id }.toSet()
+        val keys = track.indexKeys()
+        return _playlists.value.filter { pl ->
+            pl.trackIds.any { it in keys } ||
+                pl.snapshots.any { s -> s.indexKeys().any { it in keys } }
+        }.map { it.id }.toSet()
     }
 
     fun removeTracks(id: String, tracks: List<Track>) {
@@ -254,27 +262,46 @@ data class DesktopPlaylist(
     }
 
     fun tracks(library: List<Track>): List<Track> {
-        val byKey = HashMap<String, Track>()
-        fun index(t: Track) {
-            byKey.putIfAbsent(t.id, t)
-            byKey.putIfAbsent(t.catalogKey(), t)
+        val index = HashMap<String, Track>()
+        fun put(t: Track) {
+            for (k in t.indexKeys()) index.putIfAbsent(k, t)
         }
-        for (t in library) index(t)
-        for (t in snapshots) index(t)
+        for (t in library) put(t)
+        for (t in snapshots) put(t)
         val seen = HashSet<String>()
         val out = ArrayList<Track>()
-        fun add(t: Track) {
-            if (t.playlistKeys().any { it in seen }) return
-            seen += t.playlistKeys()
+        fun take(t: Track) {
+            if (t.indexKeys().any { it in seen }) return
+            seen += t.indexKeys()
             out += t
         }
-        for (key in trackIds) {
-            byKey[key]?.let(::add)
-        }
         for (snap in snapshots) {
-            add(byKey[snap.id] ?: byKey[snap.catalogKey()] ?: snap)
+            val live = snap.indexKeys().firstNotNullOfOrNull { index[it] }
+            take(live ?: snap)
+        }
+        val missed = ArrayList<String>()
+        for (key in trackIds) {
+            val hit = index[key] ?: matchLoose(key, library)
+            if (hit != null) take(hit) else missed += key
+        }
+        if (out.size < trackIds.size.coerceAtLeast(snapshots.size) || missed.isNotEmpty()) {
+            PlaylistLog.resolve(name, trackIds, snapshots, out, missed)
         }
         return out
+    }
+
+    private fun matchLoose(key: String, library: List<Track>): Track? {
+        if (!key.startsWith("k:") && !key.startsWith("p:")) return null
+        val parts = key.drop(2).split('|')
+        val title = parts.getOrNull(0).orEmpty()
+        if (title.isEmpty()) return null
+        val album = if (key.startsWith("k:")) parts.getOrNull(2).orEmpty() else parts.getOrNull(1).orEmpty()
+        return library.firstOrNull { t ->
+            val nt = normalizeTitle(t.title ?: t.displayTitle)
+            val ft = foldSearch(t.title ?: t.displayTitle)
+            (nt == title || ft == title) &&
+                (album.isEmpty() || foldSearch(t.album ?: "") == album)
+        }
     }
 }
 

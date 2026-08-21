@@ -50,5 +50,29 @@ data class Track(
         return "k:$t|$a|$al|$n"
     }
 
-    fun playlistKeys(): Set<String> = setOf(id, catalogKey())
+    /**
+     * Artist-agnostic key so Navidrome search (`feat. X` on artist) matches
+     * a scanned row (album artist only).
+     */
+    fun looseKey(): String {
+        val t = normalizeTitle(title ?: displayTitle)
+        val al = foldSearch(album ?: "")
+        val n = trackNumber ?: 0
+        return "p:$t|$al|$n"
+    }
+
+    fun rawSourceId(): String? = when {
+        id.startsWith("subsonic:") -> id.removePrefix("subsonic:")
+        id.startsWith("jellyfin:") -> id.removePrefix("jellyfin:")
+        else -> null
+    }
+
+    fun indexKeys(): Set<String> = buildSet {
+        add(id)
+        add(catalogKey())
+        add(looseKey())
+        rawSourceId()?.let { add(it) }
+    }
+
+    fun playlistKeys(): Set<String> = indexKeys()
 }
