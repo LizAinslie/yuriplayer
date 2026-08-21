@@ -10,7 +10,6 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.aspectRatio
@@ -19,8 +18,6 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.lazy.grid.GridCells
-import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -89,7 +86,7 @@ fun MyStuffPinsHost(
         pins.map { HostPinCell.Filled(it) } + List(emptyCount) { HostPinCell.Empty }
     }
 
-    Column(modifier = Modifier.fillMaxSize()) {
+    Column(modifier = Modifier.fillMaxWidth()) {
         Row(
             modifier = Modifier
                 .fillMaxWidth()
@@ -117,32 +114,33 @@ fun MyStuffPinsHost(
             }
         }
 
-        LazyVerticalGrid(
-            columns = GridCells.Fixed(2),
-            modifier = Modifier.fillMaxSize(),
-            contentPadding = PaddingValues(start = 20.dp, end = 20.dp, bottom = 8.dp, top = 4.dp),
-            horizontalArrangement = Arrangement.spacedBy(12.dp),
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(start = 20.dp, end = 20.dp, bottom = 8.dp, top = 4.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
-            items(
-                cells.size,
-                key = { i ->
-                    when (val c = cells[i]) {
-                        is HostPinCell.Filled -> c.pin.key
-                        is HostPinCell.Empty -> "empty-$i"
+            cells.chunked(2).forEach { pair ->
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    pair.forEach { cell ->
+                        Box(Modifier.weight(1f)) {
+                            when (cell) {
+                                is HostPinCell.Filled -> HostPinCard(
+                                    pin = cell.pin,
+                                    library = library,
+                                    playlists = playlists,
+                                    allSongs = allSongs,
+                                    onClick = { onOpenPin(cell.pin) },
+                                    onLongClick = { pinForSheet = cell.pin }
+                                )
+                                is HostPinCell.Empty -> HostEmptyPin(onClick = onAddPinSlot)
+                            }
+                        }
                     }
-                }
-            ) { i ->
-                when (val cell = cells[i]) {
-                    is HostPinCell.Filled -> HostPinCard(
-                        pin = cell.pin,
-                        library = library,
-                        playlists = playlists,
-                        allSongs = allSongs,
-                        onClick = { onOpenPin(cell.pin) },
-                        onLongClick = { pinForSheet = cell.pin }
-                    )
-                    is HostPinCell.Empty -> HostEmptyPin(onClick = onAddPinSlot)
+                    if (pair.size == 1) Spacer(Modifier.weight(1f))
                 }
             }
         }

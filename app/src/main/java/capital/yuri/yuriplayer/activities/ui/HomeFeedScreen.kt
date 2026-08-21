@@ -4,7 +4,6 @@ import android.widget.Toast
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.RowScope
@@ -12,7 +11,6 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -102,34 +100,32 @@ fun HomeFeedScreen(
 
     LazyColumn(Modifier.fillMaxSize().testTag(TestTags.MYSTUFF_PINS)) {
         item {
-            Box(Modifier.heightIn(max = 380.dp)) {
-                MyStuffPinsHost(
-                    pins = pins,
-                    library = library,
-                    playlists = playlists,
-                    allSongs = allSongs,
-                    onOpenPin = { pin ->
-                        scope.launch {
-                            openPin(
-                                pin, library, playlists, allSongs, catalog,
-                                onOpenAlbum, onOpenArtist, onOpenPlaylist, onOpenSongAlbum, context
-                            )
-                        }
-                    },
-                    onUnpin = { pinStore.unpin(it) },
-                    onAddPinSlot = { showAddPin = true },
-                    onPlayAll = {
-                        scope.launch {
-                            val songs = resolveCollectionSongs(entries, library, playlistsRepo)
-                            if (songs.isEmpty()) {
-                                Toast.makeText(context, "Nothing in My Stuff yet", Toast.LENGTH_SHORT).show()
-                            } else {
-                                player.startPlaylistRadio(songs, "My Stuff")
-                            }
+            MyStuffPinsHost(
+                pins = pins,
+                library = library,
+                playlists = playlists,
+                allSongs = allSongs,
+                onOpenPin = { pin ->
+                    scope.launch {
+                        openPin(
+                            pin, library, playlists, allSongs, catalog,
+                            onOpenAlbum, onOpenArtist, onOpenPlaylist, onOpenSongAlbum, context
+                        )
+                    }
+                },
+                onUnpin = { pinStore.unpin(it) },
+                onAddPinSlot = { showAddPin = true },
+                onPlayAll = {
+                    scope.launch {
+                        val songs = resolveCollectionSongs(entries, library, playlistsRepo)
+                        if (songs.isEmpty()) {
+                            Toast.makeText(context, "Nothing in My Stuff yet", Toast.LENGTH_SHORT).show()
+                        } else {
+                            player.startPlaylistRadio(songs, "My Stuff")
                         }
                     }
-                )
-            }
+                }
+            )
         }
         if (HomeRowId.RECENTS in rows && historyEntries.isNotEmpty()) {
             item {
