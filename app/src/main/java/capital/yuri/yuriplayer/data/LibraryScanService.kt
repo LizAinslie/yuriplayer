@@ -57,11 +57,13 @@ class LibraryScanService : Service() {
             }
         }
 
-        // Already scanning remote — do not cancel / restart (this was the Explore re-entry bug)
-        if (action == ACTION_REMOTE && work?.isActive == true && !force) {
-            Log.i(TAG, "remote scan already active — ignore duplicate start")
-            startAsForeground("Syncing libraries", explore.scanProgress.value ?: "Working…")
-            return START_NOT_STICKY
+        // Already scanning — do not cancel unless this is an explicit full force-rescan.
+        if (action == ACTION_REMOTE && work?.isActive == true) {
+            if (!force || sourceId != null) {
+                Log.i(TAG, "remote scan already active — ignore duplicate start")
+                startAsForeground("Syncing libraries", explore.scanProgress.value ?: "Working…")
+                return START_NOT_STICKY
+            }
         }
 
         val title = when (action) {
@@ -84,7 +86,7 @@ class LibraryScanService : Service() {
                     }
                     else -> {
                         notifier.update("Syncing libraries", "Connecting…")
-                        explore.runRemoteScanBlocking(force)
+                        explore.runRemoteScanBlocking(force, sourceId)
                         val count = explore.indexedCount.value
                         notifier.finish(
                             "Sync complete",
@@ -142,10 +144,11 @@ class LibraryScanService : Service() {
         const val EXTRA_FORCE = "force"
         const val EXTRA_SOURCE_ID = "source_id"
 
-        fun startRemote(context: Context, force: Boolean = false) {
+        fun startRemote(context: Context, force: Boolean = false, sourceId: Long? = null) {
             val i = Intent(context, LibraryScanService::class.java).apply {
                 action = ACTION_REMOTE
                 putExtra(EXTRA_FORCE, force)
+                if (sourceId != null) putExtra(EXTRA_SOURCE_ID, sourceId)
             }
             start(context, i)
         }

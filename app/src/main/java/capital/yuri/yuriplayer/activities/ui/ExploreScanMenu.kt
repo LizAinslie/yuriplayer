@@ -27,6 +27,7 @@ import capital.yuri.yuriplayer.data.LibraryIndex
 import capital.yuri.yuriplayer.data.LibrarySettings
 import capital.yuri.yuriplayer.data.MetadataEnrichmentService
 import capital.yuri.yuriplayer.data.SourceScanStatus
+import capital.yuri.yuriplayer.data.source.SourceInstanceRepository
 import org.koin.compose.koinInject
 
 /**
@@ -43,11 +44,14 @@ fun ExploreScanMenu() {
     val library: LibraryIndex = koinInject()
     val settings: LibrarySettings = koinInject()
     val enrichment: MetadataEnrichmentService = koinInject()
+    val sourcesRepo: SourceInstanceRepository = koinInject()
     val context = LocalContext.current
 
     val scanning by explore.isScanning.collectAsState()
     val checkpoints by explore.sourceCheckpoints.collectAsState()
     val libLoading by library.isLoading.collectAsState()
+    val instances by sourcesRepo.observeAll().collectAsState(initial = emptyList())
+    val remotes = instances.filter { it.enabled }
 
     var expanded by remember { mutableStateOf(false) }
 
@@ -123,62 +127,68 @@ fun ExploreScanMenu() {
                 )
             }
 
-            if (checkpoints.isNotEmpty()) {
+            if (checkpoints.isNotEmpty() || remotes.isNotEmpty()) {
                 HorizontalDivider()
-                checkpoints.forEach { cp ->
-                    val statusLabel = when (cp.status) {
+                remotes.forEach { row ->
+                    val cp = checkpoints.firstOrNull { it.sourceInstanceId == row.id }
+                    val status = cp?.status ?: SourceScanStatus.IDLE
+                    val statusLabel = when (status) {
                         SourceScanStatus.RUNNING -> "running"
-                        SourceScanStatus.PAUSED -> "paused @ ${cp.delivered}"
-                        SourceScanStatus.STOPPED -> "stopped @ ${cp.delivered}"
-                        SourceScanStatus.DONE -> "done (${cp.delivered})"
+                        SourceScanStatus.PAUSED -> "paused @ ${cp?.delivered ?: 0}"
+                        SourceScanStatus.STOPPED -> "stopped @ ${cp?.delivered ?: 0}"
+                        SourceScanStatus.DONE -> "done (${cp?.delivered ?: 0})"
                         SourceScanStatus.IDLE -> "idle"
                     }
                     DropdownMenuItem(
-                        text = { Text("${cp.sourceName} · $statusLabel") },
-                        onClick = { /* label row */ },
+                        text = { Text("${row.name} · $statusLabel") },
+                        onClick = { },
                         enabled = false
                     )
-                    when (cp.status) {
+                    when (status) {
                         SourceScanStatus.RUNNING -> {
                             DropdownMenuItem(
-                                text = { Text("  Pause ${cp.sourceName}") },
+                                text = { Text("  Pause ${row.name}") },
                                 onClick = {
                                     expanded = false
-                                    explore.pauseScan(cp.sourceInstanceId)
+                                    explore.pauseScan(row.id)
                                 }
                             )
                             DropdownMenuItem(
-                                text = { Text("  Stop ${cp.sourceName}") },
+                                text = { Text("  Stop ${row.name}") },
                                 onClick = {
                                     expanded = false
-                                    explore.stopScan(cp.sourceInstanceId)
+                                    explore.stopScan(row.id)
                                 }
                             )
                         }
                         SourceScanStatus.PAUSED, SourceScanStatus.STOPPED -> {
                             DropdownMenuItem(
-                                text = { Text("  Resume ${cp.sourceName}") },
+                                text = { Text("  Resume ${row.name} only") },
                                 onClick = {
                                     expanded = false
-                                    explore.requestRemoteScan(force = false)
+                                    explore.requestRemoteScan(force = false, sourceId = row.id)
                                     Toast.makeText(
                                         context,
-                                        "Resuming ${cp.sourceName}…",
+                                        "Resuming ${row.name}…",
                                         Toast.LENGTH_SHORT
                                     ).show()
                                 }
                             )
                         }
-                        SourceScanStatus.DONE -> {
+                        else -> {
                             DropdownMenuItem(
-                                text = { Text("  Re-scan ${cp.sourceName}") },
+                                text = { Text("  Scan ${row.name} only") },
                                 onClick = {
                                     expanded = false
-                                    explore.requestRemoteScan(force = true)
+                                    explore.requestRemoteScan(force = true, sourceId = row.id)
+                                    Toast.makeText(
+                                        context,
+                                        "Scanning ${row.name}…",
+                                        Toast.LENGTH_SHORT
+                                    ).show()
                                 }
                             )
                         }
-                        else -> Unit
                     }
                 }
             }

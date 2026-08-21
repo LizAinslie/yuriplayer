@@ -216,7 +216,7 @@ class VlcPlaybackEngine(
     override fun play() {
         playWhenReady = true
         if (window.isEmpty()) return
-        if (active().media == null) {
+        if (currentMedia == null) {
             loadAt(index, pendingSeekMs.coerceAtLeast(0L), autoPlay = true)
             return
         }
@@ -240,7 +240,7 @@ class VlcPlaybackEngine(
             this.index = idx
             loadAt(idx, positionMs, autoPlay = playWhenReady)
             setNext(window.getOrNull(idx + 1))
-        } else if (active().media != null) {
+        } else if (currentMedia != null) {
             val length = active().length
             if (length > 0) {
                 active().time = positionMs.coerceIn(0L, length)
@@ -295,14 +295,14 @@ class VlcPlaybackEngine(
             return
         }
         prefetcher.start(item) { file -> onPrefetchReady(item, file) }
-        if (nextItem?.uri == item.uri && (standby().media != null || nextPreparing)) {
+        if (nextItem?.uri == item.uri && (nextMedia != null || nextPreparing)) {
             return
         }
         val local = prefetcher.fileIfReady(item.mediaId)
         prepareStandby(if (local != null) item.copy(uri = Uri.fromFile(local), isNetwork = false) else item)
     }
 
-    override fun hasPreparedNext(): Boolean = nextItem != null && standby().media != null
+    override fun hasPreparedNext(): Boolean = nextItem != null && nextMedia != null
 
     override fun playPreparedNext(): Boolean = swapToPreparedNext()
 
@@ -312,7 +312,7 @@ class VlcPlaybackEngine(
         if (prefetcher.fileIfReady(item.mediaId) != null) return
         if (nextWarming) return
         val sp = standby()
-        if (sp.media == null) return
+        if (nextMedia == null) return
         nextWarming = true
         if (sp.isPlaying) return
         if (silenceStandby(sp)) {
@@ -342,8 +342,6 @@ class VlcPlaybackEngine(
                 mp.release()
             }
         }
-        runCatching { currentMedia?.release() }
-        runCatching { nextMedia?.release() }
         currentMedia = null
         nextMedia = null
         prefetcher.release()
@@ -410,6 +408,11 @@ class VlcPlaybackEngine(
             return
         }
         applyStreamOptions(media, item)
+        if (gen != loadGeneration) {
+            media.release()
+            input.close()
+            return
+        }
         bindMedia(active(), media, isNext = false)
         dispatch { onMediaTransition(PlaybackEngine.TransitionReason.PLAYLIST) }
         Log.i(
@@ -468,6 +471,11 @@ class VlcPlaybackEngine(
             return
         }
         applyStreamOptions(media, item)
+        if (gen != nextGeneration) {
+            media.release()
+            input.close()
+            return
+        }
         val sp = standby()
         runCatching { sp.stop() }
         bindMedia(sp, media, isNext = true)
@@ -479,8 +487,7 @@ class VlcPlaybackEngine(
 
     private fun swapToPreparedNext(): Boolean {
         val nxt = nextItem ?: return false
-        val sp = standby()
-        if (sp.media == null) return false
+        if (nextMedia == null) return false
 
         val old = active()
         eventGeneration = -1
@@ -604,14 +611,16 @@ class VlcPlaybackEngine(
     private fun bindMedia(mp: MediaPlayer, media: Media, isNext: Boolean) {
         unbindMedia(mp, isNext)
         mp.media = media
+        // Drop the constructor retain. MediaPlayer.retain()'d it; keeping the
+        // Java field without this is what finalized Media with native refs.
+        runCatching { media.release() }
         if (isNext) nextMedia = media else currentMedia = media
     }
 
     private fun unbindMedia(mp: MediaPlayer, isNext: Boolean) {
+        // Setter only — never read mp.media (getter retain()s and we never release).
         runCatching { mp.media = null }
-        val held = if (isNext) nextMedia else currentMedia
         if (isNext) nextMedia = null else currentMedia = null
-        if (held != null) runCatching { held.release() }
     }
 
     private fun closeDescriptors() {

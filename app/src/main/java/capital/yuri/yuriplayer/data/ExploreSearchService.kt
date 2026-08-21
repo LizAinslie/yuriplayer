@@ -148,13 +148,13 @@ class ExploreSearchService(
         }
     }
 
-    fun requestRemoteScan(force: Boolean = false) {
+    fun requestRemoteScan(force: Boolean = false, sourceId: Long? = null) {
         if (!force && _isScanning.value) {
             Log.i(TAG, "requestRemoteScan ignored — already scanning")
             return
         }
         val age = System.currentTimeMillis() - cacheAtMs
-        if (!force && _indexedCount.value > 0 && age < CACHE_TTL_MS) {
+        if (!force && sourceId == null && _indexedCount.value > 0 && age < CACHE_TTL_MS) {
             val hasPaused = checkpoints.all().any {
                 it.status == SourceScanStatus.PAUSED || it.status == SourceScanStatus.STOPPED
             }
@@ -173,8 +173,8 @@ class ExploreSearchService(
         }
 
         if (force) clearControlFlags()
-        Log.i(TAG, "requestRemoteScan force=$force indexed=${_indexedCount.value}")
-        LibraryScanService.startRemote(context.applicationContext, force)
+        Log.i(TAG, "requestRemoteScan force=$force sourceId=$sourceId indexed=${_indexedCount.value}")
+        LibraryScanService.startRemote(context.applicationContext, force, sourceId)
     }
 
     fun pauseScan(sourceId: Long? = null) {
@@ -189,8 +189,8 @@ class ExploreSearchService(
         requestRemoteScan(force = true)
     }
 
-    suspend fun runRemoteScanBlocking(force: Boolean) {
-        runRemoteScan(force)
+    suspend fun runRemoteScanBlocking(force: Boolean, sourceId: Long? = null) {
+        runRemoteScan(force, sourceId)
     }
 
     suspend fun search(query: String, forceRescan: Boolean = false): List<Hit> =
@@ -298,7 +298,7 @@ class ExploreSearchService(
         }
     }
 
-    private suspend fun runRemoteScan(force: Boolean) {
+    private suspend fun runRemoteScan(force: Boolean, onlySourceId: Long? = null) {
         if (!mutex.tryLock()) {
             Log.i(TAG, "scan already running — skip")
             return
@@ -314,9 +314,10 @@ class ExploreSearchService(
             _lastError.value = null
             pageCounter.set(0)
             notifier.update("Syncing libraries", "Connecting…")
-            Log.i(TAG, "remote scan start force=$force")
+            Log.i(TAG, "remote scan start force=$force sourceId=$onlySourceId")
 
             val rows = instances.getAll().filter { it.enabled }
+                .filter { onlySourceId == null || it.id == onlySourceId }
             _sourceCount.value = rows.size
             if (rows.isEmpty()) {
                 _scanProgress.value = null
