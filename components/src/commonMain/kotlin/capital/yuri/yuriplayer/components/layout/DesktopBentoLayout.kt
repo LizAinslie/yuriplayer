@@ -63,6 +63,8 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import capital.yuri.yuriplayer.components.art.CoverArt
+import capital.yuri.yuriplayer.components.list.ContextAction
+import capital.yuri.yuriplayer.components.list.ContextMenuAnchor
 
 enum class DesktopNav { Home, Search }
 
@@ -94,6 +96,7 @@ fun DesktopBentoLayout(
     libraryItems: List<LibraryRailItem>,
     selectedLibraryId: String?,
     onLibraryItem: (LibraryRailItem) -> Unit,
+    libraryMenu: (LibraryRailItem) -> List<ContextAction> = { emptyList() },
     bottomBar: @Composable () -> Unit,
     sidebar: @Composable () -> Unit,
     modifier: Modifier = Modifier,
@@ -171,6 +174,7 @@ fun DesktopBentoLayout(
                     items = libraryItems,
                     selectedId = selectedLibraryId,
                     onItem = onLibraryItem,
+                    itemMenu = libraryMenu,
                     modifier = Modifier.width(with(density) { leftPx.toDp() }).fillMaxHeight()
                 )
                 ResizeHandle(
@@ -371,6 +375,7 @@ private fun LibraryRail(
     items: List<LibraryRailItem>,
     selectedId: String?,
     onItem: (LibraryRailItem) -> Unit,
+    itemMenu: (LibraryRailItem) -> List<ContextAction> = { emptyList() },
     modifier: Modifier = Modifier
 ) {
     Surface(
@@ -428,6 +433,7 @@ private fun LibraryRail(
             LazyColumn(Modifier.weight(1f)) {
                 items(items, key = { it.id }) { item ->
                     val selected = item.id == selectedId
+                    ContextMenuAnchor(items = itemMenu(item)) { openMenu ->
                     Row(
                         Modifier
                             .fillMaxWidth()
@@ -471,6 +477,7 @@ private fun LibraryRail(
                                 tint = MaterialTheme.colorScheme.primary
                             )
                         }
+                    }
                     }
                 }
             }

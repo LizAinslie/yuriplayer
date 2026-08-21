@@ -67,6 +67,9 @@ class DesktopPlaylistStore(configDir: String) {
         update(id) { it.copy(trackIds = (it.trackIds + trackIds).distinct()) }
     }
 
+    fun playlistsContaining(trackId: String): Set<String> =
+        _playlists.value.filter { trackId in it.trackIds }.map { it.id }.toSet()
+
     fun removeTracks(id: String, trackIds: List<String>) {
         val drop = trackIds.toHashSet()
         update(id) { it.copy(trackIds = it.trackIds.filterNot { id -> id in drop }) }

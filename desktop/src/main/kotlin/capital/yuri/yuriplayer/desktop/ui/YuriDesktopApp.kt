@@ -48,6 +48,8 @@ import capital.yuri.yuriplayer.components.layout.DesktopNav
 import capital.yuri.yuriplayer.components.layout.LibraryFilter
 import capital.yuri.yuriplayer.components.layout.LibraryRailItem
 import capital.yuri.yuriplayer.components.list.AlbumCard
+import capital.yuri.yuriplayer.components.list.ContextAction
+import capital.yuri.yuriplayer.components.list.ContextMenuAnchor
 import capital.yuri.yuriplayer.components.model.AlbumPageModel
 import capital.yuri.yuriplayer.components.model.albums
 import capital.yuri.yuriplayer.components.model.artistPage
@@ -107,6 +109,7 @@ fun YuriDesktopApp(session: DesktopSession) {
         var showSidebar by remember { mutableStateOf(true) }
         var editSong by remember { mutableStateOf<Track?>(null) }
         var editAlbum by remember { mutableStateOf<AlbumPageModel?>(null) }
+        var addToPlaylist by remember { mutableStateOf<List<Track>?>(null) }
         val route = stack.last()
         val nav = if (route is Route.Search) DesktopNav.Search else DesktopNav.Home
         val scope = rememberCoroutineScope()
@@ -131,6 +134,46 @@ fun YuriDesktopApp(session: DesktopSession) {
 
         fun openAlbum(album: AlbumPageModel) = push(Route.Album(album))
         fun openArtist(name: String) = push(Route.Artist(name))
+
+        fun songMenu(
+            track: Track,
+            onAlbumPage: Boolean = false,
+            playlistId: String? = null
+        ): List<ContextAction> = buildList {
+            add(ContextAction("Add to playlist") { addToPlaylist = listOf(track) })
+            add(ContextAction("Add to queue") { session.player.enqueue(track) })
+            if (!onAlbumPage) {
+                add(
+                    ContextAction("Go to album") {
+                        albums.firstOrNull { a -> a.tracks.any { it.id == track.id } }?.let(::openAlbum)
+                    }
+                )
+            }
+            if (playlistId != null) {
+                add(
+                    ContextAction("Remove from this playlist", destructive = true) {
+                        session.playlists.removeTracks(playlistId, listOf(track.id))
+                    }
+                )
+            }
+        }
+
+        fun pinTracks(item: LibraryRailItem): List<Track> = when {
+            item.id == "liked" -> tracks.filter { it.id in liked }
+            item.id.startsWith("playlist:") -> {
+                val id = item.id.removePrefix("playlist:")
+                playlists.firstOrNull { it.id == id }?.tracks(tracks).orEmpty()
+            }
+            item.id.startsWith("artist:") || item.circular ->
+                tracks.filter {
+                    it.displayArtist.equals(item.title, true) || it.albumArtist.equals(item.title, true)
+                }
+            else -> {
+                val album = albums.firstOrNull { it.id == item.id }
+                album?.tracks?.mapNotNull { row -> tracks.firstOrNull { it.id == row.id } }.orEmpty()
+                    .ifEmpty { tracks.filter { it.id == item.id }.takeIf { it.isNotEmpty() } ?: emptyList() }
+            }
+        }
 
         val recency = remember(history) {
             history.mapIndexed { i, t -> t.id to i }.toMap()
@@ -273,6 +316,36 @@ fun YuriDesktopApp(session: DesktopSession) {
                     else -> albums.firstOrNull { it.id == item.id }?.let { openAlbum(it) }
                 }
             },
+            libraryMenu = { item ->
+                if (item.id == "new-playlist") {
+                    emptyList()
+                } else {
+                    val playable = pinTracks(item)
+                    buildList {
+                        if (playable.isNotEmpty()) {
+                            add(ContextAction("Play") { session.player.play(playable, 0) })
+                            add(ContextAction("Add to queue") { session.player.enqueueAll(playable) })
+                        }
+                        if (playable.size == 1) {
+                            add(ContextAction("Add to playlist") { addToPlaylist = playable })
+                        }
+                        if (item.pinned) {
+                            val kind = when {
+                                item.id.startsWith("playlist:") -> DesktopCollection.Kind.PLAYLIST
+                                item.circular || item.id.startsWith("artist:") -> DesktopCollection.Kind.ARTIST
+                                albums.any { it.id == item.id } -> DesktopCollection.Kind.ALBUM
+                                else -> DesktopCollection.Kind.SONG
+                            }
+                            val rawId = item.id.removePrefix("playlist:").removePrefix("artist:")
+                            add(
+                                ContextAction("Unpin", destructive = true) {
+                                    session.collection.unpin(kind, rawId)
+                                }
+                            )
+                        }
+                    }
+                }
+            },
             showSidebar = showSidebar,
             leftFraction = leftFrac,
             rightFraction = rightFrac,
@@ -342,7 +415,10 @@ fun YuriDesktopApp(session: DesktopSession) {
                         liked = current?.id in liked,
                         onToggleLike = { current?.id?.let(session.collection::toggleLike) },
                         likedIds = liked,
-                        onToggleTrackLike = session.collection::toggleLike
+                        onToggleTrackLike = session.collection::toggleLike,
+                        songMenu = { row ->
+                            tracks.firstOrNull { it.id == row.id }?.let { songMenu(it) }.orEmpty()
+                        }
                     )
                 }
             }
@@ -359,7 +435,10 @@ fun YuriDesktopApp(session: DesktopSession) {
                     onOpenAlbum = ::openAlbum,
                     onOpenPlaylist = { push(Route.Playlist(it.id)) },
                     onOpenArtist = ::openArtist,
-                    onPlayTracks = { list, i -> session.player.play(list, i) }
+                    onPlayTracks = { list, i -> session.player.play(list, i) },
+                    onEnqueue = { session.player.enqueueAll(it) },
+                    onUnpin = { kind, id -> session.collection.unpin(kind, id) },
+                    onAddToPlaylist = { addToPlaylist = it }
                 )
                 Route.Search -> DesktopExplore(
                     session = session,
@@ -372,7 +451,8 @@ fun YuriDesktopApp(session: DesktopSession) {
                     onOpenArtist = ::openArtist,
                     onPlaySongs = { list, i -> session.player.play(list, i) },
                     likedIds = liked,
-                    onToggleLike = session.collection::toggleLike
+                    onToggleLike = session.collection::toggleLike,
+                    songMenu = { songMenu(it) }
                 )
                 is Route.Album -> {
                     val live = albums.firstOrNull { it.id == r.album.id } ?: r.album
@@ -410,7 +490,10 @@ fun YuriDesktopApp(session: DesktopSession) {
                             )
                         },
                         likedTrackIds = liked,
-                        onToggleTrackLike = session.collection::toggleLike
+                        onToggleTrackLike = session.collection::toggleLike,
+                        songMenu = { row ->
+                            tracks.firstOrNull { it.id == row.id }?.let { songMenu(it, onAlbumPage = true) }.orEmpty()
+                        }
                     )
                 }
                 is Route.Artist -> {
@@ -478,7 +561,10 @@ fun YuriDesktopApp(session: DesktopSession) {
                             )
                         },
                         likedTrackIds = liked,
-                        onToggleTrackLike = session.collection::toggleLike
+                        onToggleTrackLike = session.collection::toggleLike,
+                        songMenu = { row ->
+                            tracks.firstOrNull { it.id == row.id }?.let { songMenu(it) }.orEmpty()
+                        }
                     )
                     if (pickBanner) {
                         ArtistBannerPicker(
@@ -522,7 +608,8 @@ fun YuriDesktopApp(session: DesktopSession) {
                                         "Playlist"
                                     )
                                 )
-                            }
+                            },
+                            songMenu = { songMenu(it, playlistId = pl.id) }
                         )
                     }
                 }
@@ -568,6 +655,14 @@ fun YuriDesktopApp(session: DesktopSession) {
                 onSaved = { session.replaceTracks(it) }
             )
         }
+        addToPlaylist?.let { songs ->
+            AddToPlaylistDialog(
+                tracks = songs,
+                store = session.playlists,
+                library = tracks,
+                onDismiss = { addToPlaylist = null }
+            )
+        }
     }
 }
 
@@ -583,7 +678,10 @@ private fun HomeFeed(
     onOpenAlbum: (AlbumPageModel) -> Unit,
     onOpenPlaylist: (capital.yuri.yuriplayer.desktop.DesktopPlaylist) -> Unit,
     onOpenArtist: (String) -> Unit,
-    onPlayTracks: (List<Track>, Int) -> Unit
+    onPlayTracks: (List<Track>, Int) -> Unit,
+    onEnqueue: (List<Track>) -> Unit = {},
+    onUnpin: (DesktopCollection.Kind, String) -> Unit = { _, _ -> },
+    onAddToPlaylist: (List<Track>) -> Unit = {}
 ) {
     val recentAlbums = remember(recents, albums) {
         recents.mapNotNull { t ->
@@ -594,7 +692,8 @@ private fun HomeFeed(
     val shortcuts = remember(pins, liked, likedTracks, albums, playlists, tracks) {
         buildHomeShortcuts(
             pins, liked, likedTracks, albums, playlists, tracks,
-            onOpenAlbum, onOpenPlaylist, onOpenArtist, onPlayTracks
+            onOpenAlbum, onOpenPlaylist, onOpenArtist, onPlayTracks,
+            onEnqueue, onUnpin, onAddToPlaylist
         )
     }
     val greeting = remember {
@@ -757,7 +856,8 @@ private data class SpotifyPin(
     val title: String,
     val artworkUri: String?,
     val circular: Boolean = false,
-    val onClick: () -> Unit
+    val onClick: () -> Unit,
+    val menu: List<ContextAction> = emptyList()
 )
 
 private fun buildHomeShortcuts(
@@ -770,7 +870,10 @@ private fun buildHomeShortcuts(
     onOpenAlbum: (AlbumPageModel) -> Unit,
     onOpenPlaylist: (capital.yuri.yuriplayer.desktop.DesktopPlaylist) -> Unit,
     onOpenArtist: (String) -> Unit,
-    onPlayTracks: (List<Track>, Int) -> Unit
+    onPlayTracks: (List<Track>, Int) -> Unit,
+    onEnqueue: (List<Track>) -> Unit,
+    onUnpin: (DesktopCollection.Kind, String) -> Unit,
+    onAddToPlaylist: (List<Track>) -> Unit
 ): List<SpotifyPin> {
     val out = ArrayList<SpotifyPin>(8)
     fun add(pin: SpotifyPin) {
@@ -778,13 +881,34 @@ private fun buildHomeShortcuts(
         if (out.any { it.id == pin.id }) return
         out += pin
     }
+    fun menu(
+        kind: DesktopCollection.Kind?,
+        id: String,
+        playable: List<Track>,
+        play: () -> Unit
+    ) = buildList {
+        if (playable.isNotEmpty() || kind == null) {
+            add(ContextAction("Play", onClick = play))
+        }
+        if (playable.isNotEmpty()) {
+            add(ContextAction("Add to queue") { onEnqueue(playable) })
+        }
+        if (playable.size == 1) {
+            add(ContextAction("Add to playlist") { onAddToPlaylist(playable) })
+        }
+        if (kind != null) {
+            add(ContextAction("Unpin", destructive = true) { onUnpin(kind, id) })
+        }
+    }
     if (liked.isNotEmpty()) {
         add(
             SpotifyPin(
                 id = "liked",
                 title = "Liked Songs",
-                artworkUri = likedTracks.firstOrNull()?.artworkUri
-            ) { onPlayTracks(likedTracks, 0) }
+                artworkUri = likedTracks.firstOrNull()?.artworkUri,
+                onClick = { onPlayTracks(likedTracks, 0) },
+                menu = menu(null, "liked", likedTracks) { onPlayTracks(likedTracks, 0) }
+            )
         )
     }
     for (pin in pins) {
@@ -792,34 +916,58 @@ private fun buildHomeShortcuts(
             DesktopCollection.Kind.ALBUM -> {
                 val album = albums.firstOrNull { it.id == pin.id }
                     ?: albums.firstOrNull { it.title.equals(pin.title, true) }
+                val playable = album?.tracks?.mapNotNull { row -> tracks.firstOrNull { it.id == row.id } }.orEmpty()
                 add(
-                    SpotifyPin(pin.id, pin.title, album?.artworkUri) {
-                        album?.let(onOpenAlbum)
-                    }
+                    SpotifyPin(
+                        pin.id, pin.title, album?.artworkUri,
+                        onClick = { album?.let(onOpenAlbum) },
+                        menu = menu(DesktopCollection.Kind.ALBUM, pin.id, playable) {
+                            if (playable.isNotEmpty()) onPlayTracks(playable, 0)
+                            else album?.let(onOpenAlbum)
+                        }
+                    )
                 )
             }
-            DesktopCollection.Kind.ARTIST -> add(
-                SpotifyPin(
-                    pin.id,
-                    pin.title,
-                    tracks.firstOrNull { it.displayArtist.equals(pin.title, true) }?.artworkUri,
-                    circular = true
-                ) { onOpenArtist(pin.title) }
-            )
+            DesktopCollection.Kind.ARTIST -> {
+                val playable = tracks.filter {
+                    it.displayArtist.equals(pin.title, true) || it.albumArtist.equals(pin.title, true)
+                }
+                add(
+                    SpotifyPin(
+                        pin.id,
+                        pin.title,
+                        tracks.firstOrNull { it.displayArtist.equals(pin.title, true) }?.artworkUri,
+                        circular = true,
+                        onClick = { onOpenArtist(pin.title) },
+                        menu = menu(DesktopCollection.Kind.ARTIST, pin.id, playable) { onOpenArtist(pin.title) }
+                    )
+                )
+            }
             DesktopCollection.Kind.SONG -> {
                 val t = tracks.firstOrNull { it.id == pin.id }
+                val playable = listOfNotNull(t)
                 add(
-                    SpotifyPin(pin.id, pin.title, t?.artworkUri) {
-                        t?.let { onPlayTracks(listOf(it), 0) }
-                    }
+                    SpotifyPin(
+                        pin.id, pin.title, t?.artworkUri,
+                        onClick = { t?.let { onPlayTracks(listOf(it), 0) } },
+                        menu = menu(DesktopCollection.Kind.SONG, pin.id, playable) {
+                            t?.let { onPlayTracks(listOf(it), 0) }
+                        }
+                    )
                 )
             }
             DesktopCollection.Kind.PLAYLIST -> {
                 val pl = playlists.firstOrNull { it.id == pin.id }
+                val playable = pl?.tracks(tracks).orEmpty()
                 add(
-                    SpotifyPin(pin.id, pin.title, pl?.artworkUri(tracks)) {
-                        pl?.let(onOpenPlaylist)
-                    }
+                    SpotifyPin(
+                        pin.id, pin.title, pl?.artworkUri(tracks),
+                        onClick = { pl?.let(onOpenPlaylist) },
+                        menu = menu(DesktopCollection.Kind.PLAYLIST, pin.id, playable) {
+                            if (playable.isNotEmpty()) onPlayTracks(playable, 0)
+                            else pl?.let(onOpenPlaylist)
+                        }
+                    )
                 )
             }
         }
@@ -829,11 +977,13 @@ private fun buildHomeShortcuts(
 
 @Composable
 private fun SpotifyPinCard(pin: SpotifyPin, modifier: Modifier = Modifier) {
-    Surface(
-        modifier = modifier
-            .height(72.dp)
-            .clip(RoundedCornerShape(6.dp))
-            .clickable(onClick = pin.onClick),
+    ContextMenuAnchor(items = pin.menu, modifier = modifier) {
+        Surface(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(72.dp)
+                .clip(RoundedCornerShape(6.dp))
+                .clickable(onClick = pin.onClick),
         color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.55f),
         shape = RoundedCornerShape(6.dp),
         tonalElevation = 2.dp
@@ -858,6 +1008,7 @@ private fun SpotifyPinCard(pin: SpotifyPin, modifier: Modifier = Modifier) {
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurface
             )
+        }
         }
     }
 }

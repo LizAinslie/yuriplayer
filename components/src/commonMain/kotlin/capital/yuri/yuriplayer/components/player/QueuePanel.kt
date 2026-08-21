@@ -29,6 +29,7 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import capital.yuri.yuriplayer.components.list.ContextAction
 import capital.yuri.yuriplayer.components.list.TrackRow
 import capital.yuri.yuriplayer.components.model.CoverRef
 import capital.yuri.yuriplayer.components.model.TrackRowModel
@@ -51,6 +52,7 @@ fun QueuePanel(
     onMove: ((from: Int, to: Int) -> Unit)? = null,
     likedIds: Set<String> = emptySet(),
     onToggleLike: (String) -> Unit = {},
+    songMenu: (TrackRowModel) -> List<ContextAction> = { emptyList() },
     modifier: Modifier = Modifier
 ) {
     var tab by remember { mutableStateOf(QueueTab.Queue) }
@@ -135,7 +137,8 @@ fun QueuePanel(
                                     showCover = true,
                                     showAlbum = false,
                                     liked = row.id in likedIds,
-                                    onToggleLike = { onToggleLike(row.id) }
+                                    onToggleLike = { onToggleLike(row.id) },
+                                    contextItems = songMenu(row)
                                 )
                             }
                         }
@@ -166,7 +169,8 @@ fun QueuePanel(
                                 showCover = true,
                                 showAlbum = true,
                                 liked = row.id in likedIds,
-                                onToggleLike = { onToggleLike(row.id) }
+                                onToggleLike = { onToggleLike(row.id) },
+                                contextItems = songMenu(row)
                             )
                         }
                     }

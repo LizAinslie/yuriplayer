@@ -155,6 +155,27 @@ class PlayerSession(
         warmSuccessor()
     }
 
+    fun enqueue(track: Track) {
+        if (_queue.value.isEmpty() && _current.value == null) {
+            play(listOf(track), 0)
+            return
+        }
+        _queue.value = _queue.value + track
+        linear = linear + track
+        warmSuccessor()
+    }
+
+    fun enqueueAll(tracks: List<Track>) {
+        if (tracks.isEmpty()) return
+        if (_queue.value.isEmpty() && _current.value == null) {
+            play(tracks, 0)
+            return
+        }
+        _queue.value = _queue.value + tracks
+        linear = linear + tracks
+        warmSuccessor()
+    }
+
     fun moveQueueItem(from: Int, to: Int) {
         val q = _queue.value.toMutableList()
         if (from !in q.indices || to !in q.indices || from == to) return

@@ -30,17 +30,27 @@ fun TrackRow(
     showAlbum: Boolean = true,
     onLongClick: (() -> Unit)? = null,
     liked: Boolean = false,
-    onToggleLike: (() -> Unit)? = null
+    onToggleLike: (() -> Unit)? = null,
+    contextItems: List<ContextAction> = emptyList()
 ) {
     val highlight = MaterialTheme.colorScheme.primary.copy(alpha = 0.12f)
-    Row(
-        modifier = modifier
-            .fillMaxWidth()
-            .background(if (track.highlighted) highlight else MaterialTheme.colorScheme.surface.copy(alpha = 0f))
-            .combinedClickable(onClick = onClick, onLongClick = onLongClick)
-            .padding(horizontal = 16.dp, vertical = 8.dp),
-        verticalAlignment = Alignment.CenterVertically
-    ) {
+    ContextMenuAnchor(items = contextItems) { openMenu ->
+        Row(
+            modifier = modifier
+                .fillMaxWidth()
+                .background(if (track.highlighted) highlight else MaterialTheme.colorScheme.surface.copy(alpha = 0f))
+                .combinedClickable(
+                    onClick = onClick,
+                    onLongClick = {
+                        when {
+                            contextItems.isNotEmpty() -> openMenu()
+                            onLongClick != null -> onLongClick()
+                        }
+                    }
+                )
+                .padding(horizontal = 16.dp, vertical = 8.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
         if (track.trackNumber != null && !showCover) {
             Text(
                 track.trackNumber.toString(),
@@ -78,6 +88,7 @@ fun TrackRow(
                 style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f)
             )
+        }
         }
     }
 }

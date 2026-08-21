@@ -60,6 +60,16 @@ class PlayerSessionTest {
         assertEquals("4", session.current.value?.id)
         assertEquals(list.map { it.id }, session.queue.value.map { it.id })
     }
+
+    @Test
+    fun enqueueAppendsWithoutChangingCurrent() {
+        val engine = FakeEngine()
+        val session = PlayerSession(engine)
+        session.play(tracks(2), 0)
+        session.enqueue(Track(id = "9", uri = "file://9", title = "t9"))
+        assertEquals("1", session.current.value?.id)
+        assertEquals(listOf("1", "2", "9"), session.queue.value.map { it.id })
+    }
 }
 
 private class FakeEngine : PlaybackEngine {

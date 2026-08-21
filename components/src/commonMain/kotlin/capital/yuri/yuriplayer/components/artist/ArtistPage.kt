@@ -61,6 +61,8 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import coil3.compose.AsyncImage
 import capital.yuri.yuriplayer.components.art.CoverArt
+import capital.yuri.yuriplayer.components.list.ContextAction
+import capital.yuri.yuriplayer.components.list.ContextMenuAnchor
 import capital.yuri.yuriplayer.components.list.LikeHeart
 import capital.yuri.yuriplayer.components.list.AlbumCard
 import capital.yuri.yuriplayer.components.list.TrackRow
@@ -87,7 +89,8 @@ fun ArtistPage(
     liked: Boolean = false,
     onToggleLike: () -> Unit = {},
     likedTrackIds: Set<String> = emptySet(),
-    onToggleTrackLike: (String) -> Unit = {}
+    onToggleTrackLike: (String) -> Unit = {},
+    songMenu: (TrackRowModel) -> List<ContextAction> = { emptyList() }
 ) {
     val listState = rememberLazyListState()
     val mini by remember { derivedStateOf { listState.firstVisibleItemIndex > 0 } }
@@ -182,7 +185,8 @@ fun ArtistPage(
                                 track = track,
                                 liked = track.id in likedTrackIds,
                                 onToggleLike = { onToggleTrackLike(track.id) },
-                                onClick = { onTrack(i) }
+                                onClick = { onTrack(i) },
+                                menu = songMenu(track)
                             )
                         }
                     }
@@ -453,37 +457,40 @@ private fun PopularRow(
     track: TrackRowModel,
     liked: Boolean,
     onToggleLike: () -> Unit,
-    onClick: () -> Unit
+    onClick: () -> Unit,
+    menu: List<ContextAction> = emptyList()
 ) {
-    Row(
-        Modifier
-            .fillMaxWidth()
-            .clip(RoundedCornerShape(4.dp))
-            .clickable(onClick = onClick)
-            .padding(vertical = 6.dp, horizontal = 4.dp),
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        Text(
-            index.toString(),
-            modifier = Modifier.width(28.dp),
-            style = MaterialTheme.typography.bodyMedium,
-            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.55f)
-        )
-        CoverArt(model = track.artworkUri, size = 40.dp, corner = 4.dp)
-        Spacer(Modifier.width(12.dp))
-        Text(
-            track.title,
-            modifier = Modifier.weight(1f),
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-            fontWeight = FontWeight.Medium
-        )
-        LikeHeart(liked = liked, onToggle = onToggleLike)
-        Text(
-            formatTime(track.durationMs ?: 0L),
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.55f)
-        )
+    ContextMenuAnchor(items = menu) { openMenu ->
+        Row(
+            Modifier
+                .fillMaxWidth()
+                .clip(RoundedCornerShape(4.dp))
+                .clickable(onClick = onClick)
+                .padding(vertical = 6.dp, horizontal = 4.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text(
+                index.toString(),
+                modifier = Modifier.width(28.dp),
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.55f)
+            )
+            CoverArt(model = track.artworkUri, size = 40.dp, corner = 4.dp)
+            Spacer(Modifier.width(12.dp))
+            Text(
+                track.title,
+                modifier = Modifier.weight(1f),
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                fontWeight = FontWeight.Medium
+            )
+            LikeHeart(liked = liked, onToggle = onToggleLike)
+            Text(
+                formatTime(track.durationMs ?: 0L),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.55f)
+            )
+        }
     }
 }
 

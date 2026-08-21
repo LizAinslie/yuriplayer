@@ -45,6 +45,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import capital.yuri.yuriplayer.components.art.CoverArt
 import capital.yuri.yuriplayer.components.dialog.InWindowPanel
+import capital.yuri.yuriplayer.components.list.ContextAction
 import capital.yuri.yuriplayer.components.list.LikeHeart
 import capital.yuri.yuriplayer.components.list.TrackRow
 import capital.yuri.yuriplayer.components.model.toRow
@@ -68,7 +69,8 @@ fun PlaylistPage(
     likedIds: Set<String> = emptySet(),
     onToggleLike: (String) -> Unit = {},
     playlistLiked: Boolean = false,
-    onTogglePlaylistLike: () -> Unit = {}
+    onTogglePlaylistLike: () -> Unit = {},
+    songMenu: (Track) -> List<ContextAction> = { emptyList() }
 ) {
     var name by remember(playlist.id, playlist.updatedAtMs) { mutableStateOf(playlist.name) }
     var description by remember(playlist.id, playlist.updatedAtMs) {
@@ -179,7 +181,8 @@ fun PlaylistPage(
                     showCover = true,
                     showAlbum = true,
                     liked = track.id in likedIds,
-                    onToggleLike = { onToggleLike(track.id) }
+                    onToggleLike = { onToggleLike(track.id) },
+                    contextItems = songMenu(track)
                 )
                 Row(Modifier.fillMaxWidth().padding(horizontal = 8.dp), horizontalArrangement = Arrangement.End) {
                     TextButton(onClick = {
