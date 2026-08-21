@@ -44,10 +44,20 @@ suspend fun lightAlbumItemsForArtist(
 
     val fromTracks = songs.values
         .groupBy { albumKey(it.album, it.effectiveAlbumArtist) }
-        .map { (_, tracks) ->
+        .map { (key, tracks) ->
             val sorted = CatalogRepository.dedupeLogicalTracks(tracks)
+            val albumName = sorted.firstOrNull()?.album
+            AlbumLog.d(
+                albumName,
+                "light group key='$key' raw=${tracks.size} deduped=${sorted.size} " +
+                    "titles=${sorted.joinToString { it.displayTitle }}"
+            )
+            if (sorted.size == 1 && tracks.size > 1) {
+                AlbumLog.w(albumName, "light DEDUPE ${tracks.size} → 1 '${sorted.first().displayTitle}'")
+                AlbumLog.songs(albumName, "light.raw", tracks)
+            }
             AlbumItem(
-                name = sorted.firstOrNull()?.album,
+                name = albumName,
                 artist = primaryArtistName(sorted.firstOrNull()?.effectiveAlbumArtist)
                     ?: sorted.firstOrNull()?.effectiveAlbumArtist,
                 trackCount = sorted.size,
@@ -80,13 +90,29 @@ suspend fun lightAlbumItemsForArtist(
         }
     }
 
-    (fromTracks + fromRows)
+    val out = (fromTracks + fromRows)
         .groupBy { albumKey(it.name, it.artist) }
-        .map { (_, group) -> group.maxByOrNull { it.trackCount } ?: group.first() }
+        .map { (key, group) ->
+            val pick = group.maxByOrNull { it.trackCount } ?: group.first()
+            if (group.size > 1) {
+                AlbumLog.d(
+                    pick.name,
+                    "light merge cards=${group.size} key='$key' counts=${group.map { it.trackCount }} " +
+                        "seeds=${group.map { it.songs.firstOrNull()?.displayTitle }}"
+                )
+            }
+            pick
+        }
         .sortedWith(
             compareByDescending<AlbumItem> { it.songs.firstOrNull()?.year ?: Int.MIN_VALUE }
                 .thenBy(String.CASE_INSENSITIVE_ORDER) { it.displayName }
         )
+    AlbumLog.i(
+        displayName,
+        "light discography n=${out.size} " +
+            out.joinToString { "${it.displayName}×${it.trackCount}" }
+    )
+    return out
 }
 
 suspend fun lightAppearsOnForArtist(

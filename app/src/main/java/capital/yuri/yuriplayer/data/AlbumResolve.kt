@@ -21,6 +21,9 @@ suspend fun resolveAlbumItem(
     if (albumName.isNullOrBlank()) return@withContext null
 
     val key = albumKey(albumName, artistName)
+    AlbumLog.i(albumName, "resolve artist='$artistName' key='$key' seed=${seedSongs.size}")
+    AlbumLog.songs(albumName, "resolve.seed", seedSongs)
+
     val expanded = expandAlbumTracksByName(
         dao = dao,
         albumName = albumName,
@@ -28,11 +31,16 @@ suspend fun resolveAlbumItem(
         seedKey = key,
         extraSeedSongs = seedSongs
     )
+    AlbumLog.songs(albumName, "resolve.expanded", expanded)
 
     val localSongs = library?.let { findLocalAlbum(it, albumName, artistName)?.songs }.orEmpty()
+    AlbumLog.songs(albumName, "resolve.local", localSongs)
 
-    // Absolute union — never lose seed or local tracks
     val songs = dedupeAlbumPageTracks(expanded + seedSongs + localSongs)
+    AlbumLog.i(albumName, "resolve done n=${songs.size} expanded=${expanded.size} seed=${seedSongs.size} local=${localSongs.size}")
+    if (songs.size < seedSongs.size && seedSongs.size > 1) {
+        AlbumLog.w(albumName, "RESOLVE SHRANK seed=${seedSongs.size} → ${songs.size}")
+    }
     if (songs.isEmpty()) return@withContext null
 
     AlbumItem(

@@ -131,8 +131,10 @@ class CatalogRepository(
     private suspend fun albumItemForKeyLocked(albumKey: String): AlbumItem? {
         if (albumKey.isBlank()) return null
         val row = dao.getAlbum(albumKey)
+        AlbumLog.d(row?.name, "albumItemForKey '$albumKey' row=${row != null} count=${row?.trackCount}")
         val tracks = expandAlbumTracksLocked(albumKey)
         if (row == null && tracks.isEmpty()) return null
+        AlbumLog.i(row?.name ?: tracks.firstOrNull()?.album, "albumItemForKey '$albumKey' tracks=${tracks.size}")
         return AlbumItem(
             name = row?.name ?: tracks.firstOrNull()?.album,
             artist = row?.artist ?: tracks.firstOrNull()?.effectiveAlbumArtist,

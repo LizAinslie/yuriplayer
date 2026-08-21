@@ -9,6 +9,16 @@ fun mergeAlbumSources(
     fromCatalog: AlbumItem?,
     fromLocal: AlbumItem?
 ): AlbumItem {
+    val album = seed.name ?: fromCatalog?.name ?: fromLocal?.name
+    AlbumLog.i(
+        album,
+        "merge seed=${seed.songs.size} catalog=${fromCatalog?.songs?.size ?: 0} local=${fromLocal?.songs?.size ?: 0} " +
+            "seedName='${seed.name}' catName='${fromCatalog?.name}' localName='${fromLocal?.name}'"
+    )
+    AlbumLog.songs(album, "merge.seed", seed.songs)
+    AlbumLog.songs(album, "merge.catalog", fromCatalog?.songs.orEmpty())
+    AlbumLog.songs(album, "merge.local", fromLocal?.songs.orEmpty())
+
     val merged = dedupeAlbumPageTracks(
         buildList {
             addAll(fromCatalog?.songs.orEmpty())
@@ -16,7 +26,10 @@ fun mergeAlbumSources(
             addAll(seed.songs)
         }
     )
-    if (merged.isEmpty()) return seed
+    if (merged.isEmpty()) {
+        AlbumLog.w(album, "merge empty → keep seed")
+        return seed
+    }
 
     // Absolute never-shrink against every input
     val richest = listOfNotNull(
@@ -34,6 +47,13 @@ fun mergeAlbumSources(
         dedupeAlbumPageTracks(fromLocal!!.songs + merged)
     } else {
         merged
+    }
+
+    if (songs.size < richest) {
+        AlbumLog.w(album, "merge SHRANK richest=$richest → ${songs.size}")
+        AlbumLog.songs(album, "merge.out", songs)
+    } else {
+        AlbumLog.i(album, "merge out n=${songs.size} richest=$richest")
     }
 
     return AlbumItem(
@@ -67,12 +87,18 @@ fun findLocalAlbum(
 
     library.albums(taggedOnly = false).firstOrNull {
         albumKey(it.name, it.artist) == key
-    }?.let { return it }
+    }?.let {
+        AlbumLog.i(name, "findLocalAlbum exact key='$key' n=${it.songs.size}")
+        return it
+    }
 
     library.albums(taggedOnly = false).firstOrNull {
         TrackIdentity.albumsMatch(it.name, name) &&
             (artist.isNullOrBlank() || TrackIdentity.albumArtistsMatch(it.artist, artist))
-    }?.let { return it }
+    }?.let {
+        AlbumLog.i(name, "findLocalAlbum fuzzy n=${it.songs.size} artist='${it.artist}'")
+        return it
+    }
 
     val nameFolded = TrackIdentity.normalizeToken(name)
     val artistFolded = TrackIdentity.normalizeToken(artist)
@@ -86,6 +112,8 @@ fun findLocalAlbum(
         aa == artistFolded || aa.contains(artistFolded) || artistFolded.contains(aa)
     }
     if (matches.isEmpty()) return null
+    AlbumLog.i(name, "findLocalAlbum matches=${matches.size} key='$key'")
+    AlbumLog.songs(name, "findLocal", matches)
     val deduped = dedupeAlbumPageTracks(matches)
     return AlbumItem(
         name = name,

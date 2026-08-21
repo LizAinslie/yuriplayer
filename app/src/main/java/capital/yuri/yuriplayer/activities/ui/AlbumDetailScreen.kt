@@ -75,6 +75,7 @@ import capital.yuri.yuriplayer.data.MyStuffPinStore
 import capital.yuri.yuriplayer.data.Song
 import capital.yuri.yuriplayer.data.StuffPinKind
 import capital.yuri.yuriplayer.data.albumKey
+import capital.yuri.yuriplayer.data.AlbumLog
 import capital.yuri.yuriplayer.data.dedupeAlbumPageTracks
 import capital.yuri.yuriplayer.data.db.CatalogDao
 import capital.yuri.yuriplayer.data.findLocalAlbum
@@ -180,6 +181,11 @@ fun AlbumDetailScreen(
 
     var liveAlbum by remember(stableKey) { mutableStateOf(album) }
     LaunchedEffect(stableKey) {
+        AlbumLog.i(
+            album.name,
+            "PAGE open stableKey='$stableKey' albumKey='$albumKeyStr' seed=${album.songs.size} artist='${album.artist}'"
+        )
+        AlbumLog.songs(album.name, "page.seed", album.songs)
         val resolved = withContext(Dispatchers.IO) {
             resolveAlbumItem(
                 dao = catalogDao,
@@ -189,26 +195,42 @@ fun AlbumDetailScreen(
                 library = library
             )
         }
+        AlbumLog.i(album.name, "PAGE resolved n=${resolved?.songs?.size ?: 0}")
         val fromCatalog = withContext(Dispatchers.IO) {
             catalog.albumItemForKey(stableKey)
                 ?: catalog.albumItemForKey(albumKeyStr)
         }
+        AlbumLog.i(album.name, "PAGE catalog n=${fromCatalog?.songs?.size ?: 0} name='${fromCatalog?.name}'")
         val fromLocal = findLocalAlbum(
             library,
             album.name,
             primaryArtistName(album.artist) ?: album.artist
         )
+        AlbumLog.i(album.name, "PAGE local n=${fromLocal?.songs?.size ?: 0}")
         val merged = mergeAlbumSources(
             seed = resolved ?: album,
             fromCatalog = fromCatalog,
             fromLocal = fromLocal
         )
         val union = dedupeAlbumPageTracks(liveAlbum.songs + merged.songs + album.songs)
-        val next = merged.copy(
+        var next = merged.copy(
             artist = primaryArtistName(merged.artist) ?: merged.artist,
             songs = union,
             trackCount = union.size.coerceAtLeast(merged.trackCount)
         )
+        val before = maxOf(liveAlbum.songs.size, album.songs.size)
+        if (next.songs.size < before && before > 1) {
+            AlbumLog.w(
+                album.name,
+                "PAGE WOULD SHRINK $before → ${next.songs.size} titles=${next.songs.joinToString { it.displayTitle }} — keeping $before"
+            )
+            AlbumLog.songs(album.name, "page.wouldKeep", liveAlbum.songs + album.songs)
+            AlbumLog.songs(album.name, "page.wouldDropTo", next.songs)
+            val kept = dedupeAlbumPageTracks(liveAlbum.songs + album.songs + next.songs)
+            next = next.copy(songs = kept, trackCount = kept.size.coerceAtLeast(before))
+        }
+        AlbumLog.i(album.name, "PAGE apply n=${next.songs.size} artist='${next.artist}'")
+        AlbumLog.songs(album.name, "page.apply", next.songs)
         liveAlbum = next
         onExpanded(next)
     }
