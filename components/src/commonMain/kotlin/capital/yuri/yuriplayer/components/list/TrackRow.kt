@@ -1,7 +1,8 @@
 package capital.yuri.yuriplayer.components.list
 
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -19,20 +20,22 @@ import androidx.compose.ui.unit.dp
 import capital.yuri.yuriplayer.components.art.CoverArt
 import capital.yuri.yuriplayer.components.model.TrackRowModel
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 fun TrackRow(
     track: TrackRowModel,
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
     showCover: Boolean = true,
-    showAlbum: Boolean = true
+    showAlbum: Boolean = true,
+    onLongClick: (() -> Unit)? = null
 ) {
     val highlight = MaterialTheme.colorScheme.primary.copy(alpha = 0.12f)
     Row(
         modifier = modifier
             .fillMaxWidth()
             .background(if (track.highlighted) highlight else MaterialTheme.colorScheme.surface.copy(alpha = 0f))
-            .clickable(onClick = onClick)
+            .combinedClickable(onClick = onClick, onLongClick = onLongClick)
             .padding(horizontal = 16.dp, vertical = 8.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {

@@ -30,6 +30,8 @@ fun NowPlayingSidebar(
     onQueueTrack: (TrackRowModel) -> Unit,
     onHistoryTrack: (TrackRowModel) -> Unit,
     onClearQueue: () -> Unit = {},
+    onClearHistory: () -> Unit = {},
+    onMoveUpcoming: ((from: Int, to: Int) -> Unit)? = null,
     modifier: Modifier = Modifier
 ) {
     Column(
@@ -83,13 +85,15 @@ fun NowPlayingSidebar(
         )
         QueuePanel(
             nowPlaying = track,
-            upcoming = queue.filter { !it.highlighted },
+            upcoming = queue.dropWhile { it.id != track?.id }.drop(1),
             history = history,
             onPlay = { row ->
                 if (history.any { it.id == row.id } && queue.none { it.id == row.id }) onHistoryTrack(row)
                 else onQueueTrack(row)
             },
             onClearQueue = onClearQueue,
+            onClearHistory = onClearHistory,
+            onMove = onMoveUpcoming,
             modifier = Modifier.weight(1f)
         )
     }

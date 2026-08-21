@@ -154,6 +154,42 @@ class PlayerSession(
         play(if (context.isNotEmpty()) context else listOf(track), i)
     }
 
+    fun addNext(track: Track) {
+        val q = _queue.value.toMutableList()
+        val i = (_index.value + 1).coerceIn(0, q.size)
+        q.add(i, track)
+        _queue.value = q
+        warmSuccessor()
+    }
+
+    fun moveQueueItem(from: Int, to: Int) {
+        val q = _queue.value.toMutableList()
+        if (from !in q.indices || to !in q.indices || from == to) return
+        val item = q.removeAt(from)
+        q.add(to, item)
+        val currentId = _current.value?.id
+        _queue.value = q
+        if (currentId != null) {
+            _index.value = q.indexOfFirst { it.id == currentId }.coerceAtLeast(0)
+        }
+        warmSuccessor()
+    }
+
+    fun clearQueueKeepCurrent() {
+        val cur = _current.value ?: run {
+            _queue.value = emptyList()
+            _index.value = 0
+            return
+        }
+        _queue.value = listOf(cur)
+        _index.value = 0
+        warmSuccessor()
+    }
+
+    fun clearHistory() {
+        _history.value = emptyList()
+    }
+
     fun positionMs(): Long = engine.getPositionMs()
     fun durationMs(): Long = engine.getDurationMs()
 

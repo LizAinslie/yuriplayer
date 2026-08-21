@@ -16,6 +16,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material3.Icon
@@ -44,6 +45,8 @@ fun AlbumPage(
     onBack: () -> Unit,
     onPlay: () -> Unit,
     onTrack: (Int) -> Unit,
+    onEdit: () -> Unit = {},
+    onEditTrack: (Int) -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val coverColors by rememberCoverColors(
@@ -61,11 +64,11 @@ fun AlbumPage(
             val widthClass = windowWidthClass(maxWidth)
             when (widthClass) {
                 WindowWidthClass.Compact -> AlbumPageCompact(
-                    album, playing, onBack, onPlay, onTrack
+                    album, playing, onBack, onPlay, onTrack, onEdit, onEditTrack
                 )
                 WindowWidthClass.Medium,
                 WindowWidthClass.Expanded -> AlbumPageWide(
-                    album, playing, onBack, onPlay, onTrack
+                    album, playing, onBack, onPlay, onTrack, onEdit, onEditTrack
                 )
             }
         }
@@ -78,7 +81,9 @@ private fun AlbumPageCompact(
     playing: Boolean,
     onBack: () -> Unit,
     onPlay: () -> Unit,
-    onTrack: (Int) -> Unit
+    onTrack: (Int) -> Unit,
+    onEdit: () -> Unit,
+    onEditTrack: (Int) -> Unit
 ) {
     Column(Modifier.fillMaxSize()) {
         Row(verticalAlignment = Alignment.CenterVertically) {
@@ -90,6 +95,10 @@ private fun AlbumPageCompact(
                 )
             }
             Text("Album", style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.onBackground)
+            Spacer(Modifier.weight(1f))
+            IconButton(onClick = onEdit) {
+                Icon(Icons.Default.Edit, contentDescription = "Edit album")
+            }
         }
         CoverArt(
             model = album.artworkUri,
@@ -100,7 +109,7 @@ private fun AlbumPageCompact(
             corner = 12.dp
         )
         AlbumMeta(album, playing, onPlay, Modifier.padding(20.dp))
-        TrackList(album, onTrack)
+        TrackList(album, onTrack, onEditTrack)
     }
 }
 
@@ -110,7 +119,9 @@ private fun AlbumPageWide(
     playing: Boolean,
     onBack: () -> Unit,
     onPlay: () -> Unit,
-    onTrack: (Int) -> Unit
+    onTrack: (Int) -> Unit,
+    onEdit: () -> Unit,
+    onEditTrack: (Int) -> Unit
 ) {
     Row(Modifier.fillMaxSize().padding(24.dp)) {
         Column(
@@ -118,12 +129,18 @@ private fun AlbumPageWide(
                 .widthIn(min = 240.dp, max = 360.dp)
                 .padding(end = 28.dp)
         ) {
-            IconButton(onClick = onBack) {
-                Icon(
-                    Icons.AutoMirrored.Filled.ArrowBack,
-                    contentDescription = "Back",
-                    tint = MaterialTheme.colorScheme.onBackground
-                )
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                IconButton(onClick = onBack) {
+                    Icon(
+                        Icons.AutoMirrored.Filled.ArrowBack,
+                        contentDescription = "Back",
+                        tint = MaterialTheme.colorScheme.onBackground
+                    )
+                }
+                Spacer(Modifier.weight(1f))
+                IconButton(onClick = onEdit) {
+                    Icon(Icons.Default.Edit, contentDescription = "Edit album")
+                }
             }
             CoverArt(
                 model = album.artworkUri,
@@ -133,7 +150,7 @@ private fun AlbumPageWide(
             Spacer(Modifier.height(16.dp))
             AlbumMeta(album, playing, onPlay)
         }
-        TrackList(album, onTrack, modifier = Modifier.weight(1f))
+        TrackList(album, onTrack, onEditTrack, modifier = Modifier.weight(1f))
     }
 }
 
@@ -180,6 +197,7 @@ private fun AlbumMeta(
 private fun TrackList(
     album: AlbumPageModel,
     onTrack: (Int) -> Unit,
+    onEditTrack: (Int) -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val discs = album.tracks.groupBy { it.discNumber ?: 1 }
@@ -201,6 +219,7 @@ private fun TrackList(
                 TrackRow(
                     track = track,
                     onClick = { onTrack(global.coerceAtLeast(0)) },
+                    onLongClick = { onEditTrack(global.coerceAtLeast(0)) },
                     showCover = false,
                     showAlbum = false
                 )

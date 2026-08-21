@@ -58,6 +58,7 @@ class DesktopSession {
     val theme = DesktopThemeStore(dirs.configDir)
     val layout = DesktopLayoutStore(dirs.configDir)
     val collection = DesktopCollection(dirs.configDir)
+    val playlists = DesktopPlaylistStore(dirs.configDir)
     val sources = LibrarySourceStore(dirs.configDir)
     val jellyfin = JellyfinCatalog(http, sources.deviceId)
     val subsonic = SubsonicCatalog(http)
@@ -107,6 +108,12 @@ class DesktopSession {
         val list = _tracks.value
         val i = list.indexOfFirst { it.id == track.id }.coerceAtLeast(0)
         player.play(if (list.isNotEmpty()) list else listOf(track), i)
+    }
+
+    fun replaceTracks(updated: List<Track>) {
+        if (updated.isEmpty()) return
+        val byId = updated.associateBy { it.id }
+        _tracks.value = _tracks.value.map { byId[it.id] ?: it }
     }
 
     fun addFolder(path: String) {

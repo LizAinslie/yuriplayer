@@ -20,7 +20,7 @@ class DesktopCollection(configDir: String) {
 
     data class Pin(val kind: Kind, val id: String, val title: String, val subtitle: String)
 
-    enum class Kind { ALBUM, ARTIST, SONG }
+    enum class Kind { ALBUM, ARTIST, SONG, PLAYLIST }
 
     init {
         load()

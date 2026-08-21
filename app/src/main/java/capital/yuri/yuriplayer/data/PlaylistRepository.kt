@@ -10,6 +10,7 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.mapLatest
 import kotlinx.coroutines.withContext
 import java.util.UUID
 
@@ -72,7 +73,24 @@ class PlaylistRepository(
             entities.map { e -> e.toPlaylist(countMap[e.id] ?: 0, emptyList()) }
         }.flowOn(Dispatchers.Default)
 
-    fun observePlaylistsResolved(): Flow<List<Playlist>> = observePlaylists()
+    fun observePlaylistsResolved(): Flow<List<Playlist>> =
+        combine(dao.observeAll(), dao.observeTrackCounts(), dao.observeAllTracks()) { entities, counts, allTracks ->
+            Triple(entities, counts, allTracks)
+        }.mapLatest { (entities, counts, allTracks) ->
+            val countMap = counts.associate { it.playlistId to it.trackCount }
+            val byPl = allTracks.groupBy { it.playlistId }
+            val seedKeys = byPl.values.flatMap { tracks ->
+                tracks.sortedBy { it.position }.take(4).map { it.songKey }
+            }.distinct()
+            val songs = catalog.getSongsByKeys(seedKeys).associateBy { it.songKey }
+            entities.map { e ->
+                val seed = byPl[e.id].orEmpty()
+                    .sortedBy { it.position }
+                    .take(4)
+                    .mapNotNull { songs[it.songKey] }
+                e.toPlaylist(countMap[e.id] ?: 0, seed)
+            }
+        }.flowOn(Dispatchers.IO)
 
     fun observePlaylist(id: String): Flow<Playlist?> =
         combine(dao.observe(id), dao.observeTracks(id)) { entity, tracks ->

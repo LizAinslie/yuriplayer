@@ -62,6 +62,7 @@ private sealed class Route {
     data object Home : Route()
     data object Search : Route()
     data class Album(val album: AlbumPageModel) : Route()
+    data class Playlist(val id: String) : Route()
 }
 
 @Composable
@@ -86,6 +87,7 @@ fun YuriDesktopApp(session: DesktopSession) {
         val volume by session.player.volume.collectAsState()
         val liked by session.collection.liked.collectAsState()
         val pins by session.collection.pinned.collectAsState()
+        val playlists by session.playlists.playlists.collectAsState()
         val leftFrac by session.layout.leftFraction.collectAsState()
         val rightFrac by session.layout.rightFraction.collectAsState()
         val albums = remember(tracks) { tracks.albums() }
@@ -95,6 +97,8 @@ fun YuriDesktopApp(session: DesktopSession) {
         var libraryFilter by remember { mutableStateOf(LibraryFilter.Recents) }
         var showSettings by remember { mutableStateOf(false) }
         var showSidebar by remember { mutableStateOf(true) }
+        var editSong by remember { mutableStateOf<Track?>(null) }
+        var editAlbum by remember { mutableStateOf<AlbumPageModel?>(null) }
         val route = stack.last()
         val nav = if (route is Route.Search) DesktopNav.Search else DesktopNav.Home
 
@@ -124,7 +128,7 @@ fun YuriDesktopApp(session: DesktopSession) {
         fun albumRecency(album: AlbumPageModel): Int =
             album.tracks.minOfOrNull { recency[it.id] ?: Int.MAX_VALUE } ?: Int.MAX_VALUE
 
-        val libraryItems = remember(albums, tracks, libraryFilter, pins, history, liked) {
+        val libraryItems = remember(albums, tracks, libraryFilter, pins, history, liked, playlists) {
             val pinItems = pins.map { pin ->
                 when (pin.kind) {
                     DesktopCollection.Kind.ALBUM -> {
@@ -146,6 +150,13 @@ fun YuriDesktopApp(session: DesktopSession) {
                             t?.artworkUri, pinned = true
                         )
                     }
+                    DesktopCollection.Kind.PLAYLIST -> {
+                        val pl = playlists.firstOrNull { it.id == pin.id }
+                        LibraryRailItem(
+                            "playlist:${pin.id}", pin.title, pin.subtitle,
+                            pl?.artworkUri(tracks), pinned = true
+                        )
+                    }
                 }
             }
             val rest = when (libraryFilter) {
@@ -165,12 +176,22 @@ fun YuriDesktopApp(session: DesktopSession) {
                 LibraryFilter.Albums -> albums
                     .sortedBy { albumRecency(it) }
                     .map { LibraryRailItem(it.id, it.title, it.artist, it.artworkUri) }
-                LibraryFilter.Playlists, LibraryFilter.Recents -> albums
+                LibraryFilter.Playlists -> listOf(
+                    LibraryRailItem("new-playlist", "New playlist", "Create", null)
+                ) + playlists.sortedByDescending { it.updatedAtMs }.map { pl ->
+                    LibraryRailItem(
+                        "playlist:${pl.id}",
+                        pl.name,
+                        "${pl.trackIds.size} songs",
+                        pl.artworkUri(tracks)
+                    )
+                }
+                LibraryFilter.Recents -> albums
                     .sortedBy { albumRecency(it) }
                     .map {
                         LibraryRailItem(
                             it.id, it.title,
-                            if (albumRecency(it) < Int.MAX_VALUE) "Album · ${it.artist}" else "Album · ${it.artist}",
+                            "Album · ${it.artist}",
                             it.artworkUri
                         )
                     }
@@ -204,11 +225,19 @@ fun YuriDesktopApp(session: DesktopSession) {
             libraryItems = libraryItems,
             selectedLibraryId = selectedLibraryId,
             onLibraryItem = { item ->
-                if (item.id.startsWith("artist:")) {
-                    query = item.title
-                    push(Route.Search)
-                } else {
-                    albums.firstOrNull { it.id == item.id }?.let { openAlbum(it) }
+                when {
+                    item.id == "new-playlist" -> {
+                        val created = session.playlists.create("New playlist")
+                        push(Route.Playlist(created.id))
+                    }
+                    item.id.startsWith("playlist:") -> {
+                        push(Route.Playlist(item.id.removePrefix("playlist:")))
+                    }
+                    item.id.startsWith("artist:") -> {
+                        query = item.title
+                        push(Route.Search)
+                    }
+                    else -> albums.firstOrNull { it.id == item.id }?.let { openAlbum(it) }
                 }
             },
             showSidebar = showSidebar,
@@ -268,6 +297,14 @@ fun YuriDesktopApp(session: DesktopSession) {
                         onHistoryTrack = { row ->
                             val t = history.firstOrNull { it.id == row.id } ?: return@NowPlayingSidebar
                             session.player.playTrack(t, tracks.ifEmpty { listOf(t) })
+                        },
+                        onClearQueue = session.player::clearQueueKeepCurrent,
+                        onClearHistory = session.player::clearHistory,
+                        onMoveUpcoming = { from, to ->
+                            val cur = current ?: return@NowPlayingSidebar
+                            val base = queue.indexOfFirst { it.id == cur.id }
+                            if (base < 0) return@NowPlayingSidebar
+                            session.player.moveQueueItem(base + 1 + from, base + 1 + to)
                         }
                     )
                 }
@@ -276,9 +313,12 @@ fun YuriDesktopApp(session: DesktopSession) {
             when (val r = route) {
                 Route.Home -> HomeFeed(
                     albums = albums,
+                    playlists = playlists,
+                    tracks = tracks,
                     recents = history,
                     status = engineMessage ?: status,
                     onOpenAlbum = ::openAlbum,
+                    onOpenPlaylist = { push(Route.Playlist(it.id)) },
                     onPlayRecent = { t -> session.player.playTrack(t, tracks.ifEmpty { listOf(t) }) }
                 )
                 Route.Search -> LibraryGrid(
@@ -305,8 +345,29 @@ fun YuriDesktopApp(session: DesktopSession) {
                         },
                         onTrack = { i ->
                             if (i in albumTracks.indices) session.player.play(albumTracks, i)
+                        },
+                        onEdit = { editAlbum = live },
+                        onEditTrack = { i ->
+                            albumTracks.getOrNull(i)?.let { editSong = it }
                         }
                     )
+                }
+                is Route.Playlist -> {
+                    val pl = playlists.firstOrNull { it.id == r.id }
+                    if (pl == null) {
+                        Text("Playlist gone.", modifier = Modifier.padding(24.dp))
+                    } else {
+                        PlaylistPage(
+                            playlist = pl,
+                            tracks = pl.tracks(tracks),
+                            library = tracks,
+                            currentId = current?.id,
+                            store = session.playlists,
+                            onBack = ::goBack,
+                            onPlay = { list, i -> session.player.play(list, i) },
+                            onEditTrack = { editSong = it }
+                        )
+                    }
                 }
             }
         }
@@ -316,15 +377,34 @@ fun YuriDesktopApp(session: DesktopSession) {
                 onDismiss = { showSettings = false }
             )
         }
+        editSong?.let { song ->
+            EditSongDialog(
+                track = song,
+                onDismiss = { editSong = null },
+                onSaved = { session.replaceTracks(listOf(it)) }
+            )
+        }
+        editAlbum?.let { album ->
+            val albumTracks = tracks.filter { t -> album.tracks.any { it.id == t.id } }
+            EditAlbumDialog(
+                album = album,
+                tracks = albumTracks,
+                onDismiss = { editAlbum = null },
+                onSaved = { session.replaceTracks(it) }
+            )
+        }
     }
 }
 
 @Composable
 private fun HomeFeed(
     albums: List<AlbumPageModel>,
+    playlists: List<capital.yuri.yuriplayer.desktop.DesktopPlaylist>,
+    tracks: List<Track>,
     recents: List<Track>,
     status: String,
     onOpenAlbum: (AlbumPageModel) -> Unit,
+    onOpenPlaylist: (capital.yuri.yuriplayer.desktop.DesktopPlaylist) -> Unit,
     onPlayRecent: (Track) -> Unit
 ) {
     val recentAlbums = remember(recents, albums) {
@@ -393,6 +473,24 @@ private fun HomeFeed(
                             tracks = emptyList()
                         ),
                         onClick = { onPlayRecent(track) }
+                    )
+                }
+            }
+            Spacer(Modifier.height(24.dp))
+        }
+        if (playlists.isNotEmpty()) {
+            SectionHeader("Playlists")
+            LazyRow(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                items(playlists.take(12), key = { it.id }) { pl ->
+                    AlbumCard(
+                        album = AlbumPageModel(
+                            id = pl.id,
+                            title = pl.name,
+                            artist = pl.description ?: "Playlist",
+                            artworkUri = pl.artworkUri(tracks),
+                            tracks = emptyList()
+                        ),
+                        onClick = { onOpenPlaylist(pl) }
                     )
                 }
             }

@@ -281,6 +281,11 @@ private fun LibraryRail(
                     label = { Text("Recents") }
                 )
                 FilterChip(
+                    selected = filter == LibraryFilter.Playlists,
+                    onClick = { onFilter(LibraryFilter.Playlists) },
+                    label = { Text("Playlists") }
+                )
+                FilterChip(
                     selected = filter == LibraryFilter.Albums,
                     onClick = { onFilter(LibraryFilter.Albums) },
                     label = { Text("Albums") }

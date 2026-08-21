@@ -34,6 +34,7 @@ dependencies {
     implementation(libs.coil.compose)
     implementation(libs.coil.network.ktor3)
     implementation(libs.ktor.client.cio)
+    implementation(libs.jaudiotagger)
 }
 
 val libvlcRoot = layout.buildDirectory.dir("libvlc")

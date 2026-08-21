@@ -164,7 +164,7 @@ fun HomeFeedScreen(
                             title = pl.name,
                             subtitle = "Playlist",
                             onClick = { onOpenPlaylist(pl) },
-                            art = { AlbumArt(song = null, size = 112.dp, corner = 8.dp) }
+                            art = { PlaylistCoverArt(pl, size = 112.dp) }
                         )
                     }
                 }
