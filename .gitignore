@@ -14,6 +14,7 @@ build/
 .externalNativeBuild
 .cxx
 local.properties
+.kotlin/
 
 # Signing (never commit secrets or keystores)
 keystore.properties
