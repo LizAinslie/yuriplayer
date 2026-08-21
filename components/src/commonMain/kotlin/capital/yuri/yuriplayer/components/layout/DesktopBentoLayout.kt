@@ -23,6 +23,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -56,6 +57,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.input.pointer.PointerIcon
 import androidx.compose.ui.input.pointer.pointerHoverIcon
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -353,30 +355,38 @@ private fun LibraryRail(
                     fontWeight = FontWeight.Bold
                 )
             }
-            Row(
-                Modifier.padding(top = 12.dp, bottom = 8.dp),
+            LazyRow(
+                modifier = Modifier.fillMaxWidth().padding(top = 12.dp, bottom = 8.dp),
                 horizontalArrangement = Arrangement.spacedBy(6.dp)
             ) {
-                FilterChip(
-                    selected = filter == LibraryFilter.Recents,
-                    onClick = { onFilter(LibraryFilter.Recents) },
-                    label = { Text("Recents") }
-                )
-                FilterChip(
-                    selected = filter == LibraryFilter.Playlists,
-                    onClick = { onFilter(LibraryFilter.Playlists) },
-                    label = { Text("Playlists") }
-                )
-                FilterChip(
-                    selected = filter == LibraryFilter.Albums,
-                    onClick = { onFilter(LibraryFilter.Albums) },
-                    label = { Text("Albums") }
-                )
-                FilterChip(
-                    selected = filter == LibraryFilter.Artists,
-                    onClick = { onFilter(LibraryFilter.Artists) },
-                    label = { Text("Artists") }
-                )
+                item {
+                    FilterChip(
+                        selected = filter == LibraryFilter.Recents,
+                        onClick = { onFilter(LibraryFilter.Recents) },
+                        label = { Text("Recents", maxLines = 1) }
+                    )
+                }
+                item {
+                    FilterChip(
+                        selected = filter == LibraryFilter.Playlists,
+                        onClick = { onFilter(LibraryFilter.Playlists) },
+                        label = { Text("Playlists", maxLines = 1) }
+                    )
+                }
+                item {
+                    FilterChip(
+                        selected = filter == LibraryFilter.Albums,
+                        onClick = { onFilter(LibraryFilter.Albums) },
+                        label = { Text("Albums", maxLines = 1) }
+                    )
+                }
+                item {
+                    FilterChip(
+                        selected = filter == LibraryFilter.Artists,
+                        onClick = { onFilter(LibraryFilter.Artists) },
+                        label = { Text("Artists", maxLines = 1) }
+                    )
+                }
             }
             LazyColumn(Modifier.weight(1f)) {
                 items(items, key = { it.id }) { item ->
@@ -396,7 +406,8 @@ private fun LibraryRail(
                         CoverArt(
                             model = item.artworkUri,
                             size = 48.dp,
-                            corner = if (item.circular) 24.dp else 8.dp
+                            corner = if (item.circular) 24.dp else 8.dp,
+                            contentScale = if (item.circular) ContentScale.Crop else ContentScale.Fit
                         )
                         Spacer(Modifier.width(12.dp))
                         Column(Modifier.weight(1f)) {

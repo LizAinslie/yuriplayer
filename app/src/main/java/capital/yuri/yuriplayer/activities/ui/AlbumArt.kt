@@ -3,6 +3,7 @@ package capital.yuri.yuriplayer.activities.ui
 import android.graphics.Bitmap
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.size
@@ -89,7 +90,11 @@ fun AlbumArt(
     }
 
     val shape = RoundedCornerShape(corner)
-    val boxMod = if (size != null) modifier.size(size).clip(shape) else modifier.clip(shape)
+    val boxMod = if (size != null) {
+        modifier.size(size).clip(shape)
+    } else {
+        modifier.aspectRatio(1f).clip(shape)
+    }
 
     Box(
         modifier = boxMod.background(MaterialTheme.colorScheme.primaryContainer),
@@ -100,7 +105,8 @@ fun AlbumArt(
             Image(
                 bitmap = bmp.asImageBitmap(),
                 contentDescription = song?.displayAlbum,
-                contentScale = ContentScale.Crop,
+                contentScale = ContentScale.Fit,
+                alignment = Alignment.Center,
                 filterQuality = if (decodeSize >= AlbumArtCache.HERO_DECODE_SIZE) {
                     FilterQuality.High
                 } else {

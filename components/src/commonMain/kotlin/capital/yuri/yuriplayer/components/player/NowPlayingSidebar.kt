@@ -4,6 +4,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -80,7 +81,7 @@ fun NowPlayingSidebar(
             modifier = Modifier
                 .fillMaxWidth()
                 .padding(vertical = 8.dp)
-                .height(220.dp),
+                .aspectRatio(1f),
             corner = 16.dp
         )
         QueuePanel(

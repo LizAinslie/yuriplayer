@@ -384,7 +384,8 @@ private fun ArtCard(bitmap: Bitmap?, modifier: Modifier = Modifier) {
             Image(
                 bitmap = bitmap.asImageBitmap(),
                 contentDescription = null,
-                contentScale = ContentScale.Crop,
+                contentScale = ContentScale.Fit,
+                alignment = Alignment.Center,
                 filterQuality = FilterQuality.High,
                 modifier = Modifier.fillMaxSize()
             )

@@ -2,6 +2,7 @@ package capital.yuri.yuriplayer.components.art
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -19,8 +20,8 @@ import androidx.compose.ui.unit.dp
 import coil3.compose.AsyncImage
 
 /**
- * Shared cover. Coil 3 owns memory + disk cache (configured per platform
- * against [capital.yuri.yuriplayer.core.platform.AppDirectories.cacheDir]).
+ * Shared cover. The frame is always 1:1. Non-square art keeps its ratio and
+ * is centered in that square (contain), sitting on [surfaceVariant].
  */
 @Composable
 fun CoverArt(
@@ -28,12 +29,17 @@ fun CoverArt(
     modifier: Modifier = Modifier,
     size: Dp? = null,
     corner: Dp = 8.dp,
-    contentDescription: String? = null
+    contentDescription: String? = null,
+    contentScale: ContentScale = ContentScale.Fit
 ) {
     val shape = RoundedCornerShape(corner)
-    val sized = if (size != null) modifier.size(size) else modifier
+    val frame = if (size != null) {
+        modifier.size(size)
+    } else {
+        modifier.aspectRatio(1f)
+    }
     Box(
-        modifier = sized
+        modifier = frame
             .clip(shape)
             .background(MaterialTheme.colorScheme.surfaceVariant),
         contentAlignment = Alignment.Center
@@ -49,7 +55,8 @@ fun CoverArt(
                 model = model,
                 contentDescription = contentDescription,
                 modifier = Modifier.fillMaxSize(),
-                contentScale = ContentScale.Crop
+                contentScale = contentScale,
+                alignment = Alignment.Center
             )
         }
     }
