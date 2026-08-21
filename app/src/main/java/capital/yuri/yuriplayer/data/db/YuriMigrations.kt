@@ -14,6 +14,16 @@ import androidx.sqlite.execSQL
  */
 object YuriMigrations {
 
+    val MIGRATION_4_5 = object : Migration(4, 5) {
+        override fun migrate(db: SupportSQLiteDatabase) = sql4to5 { db.execSQL(it) }
+        override fun migrate(connection: SQLiteConnection) = sql4to5 { connection.execSQL(it) }
+    }
+
+    val MIGRATION_5_6 = object : Migration(5, 6) {
+        override fun migrate(db: SupportSQLiteDatabase) = sql5to6 { db.execSQL(it) }
+        override fun migrate(connection: SQLiteConnection) = sql5to6 { connection.execSQL(it) }
+    }
+
     val MIGRATION_6_7 = object : Migration(6, 7) {
         override fun migrate(db: SupportSQLiteDatabase) = sql6to7 { db.execSQL(it) }
         override fun migrate(connection: SQLiteConnection) = sql6to7 { connection.execSQL(it) }
@@ -34,7 +44,22 @@ object YuriMigrations {
         override fun migrate(connection: SQLiteConnection) = sql9to10 { connection.execSQL(it) }
     }
 
-    val ALL: Array<Migration> = arrayOf(MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9, MIGRATION_9_10)
+    val ALL: Array<Migration> = arrayOf(
+        MIGRATION_4_5,
+        MIGRATION_5_6,
+        MIGRATION_6_7,
+        MIGRATION_7_8,
+        MIGRATION_8_9,
+        MIGRATION_9_10
+    )
+
+    private fun sql4to5(exec: (String) -> Unit) {
+        exec("ALTER TABLE artist_profiles ADD COLUMN genresJson TEXT")
+    }
+
+    private fun sql5to6(exec: (String) -> Unit) {
+        exec("ALTER TABLE album_metadata ADD COLUMN genresJson TEXT")
+    }
 
     private fun sql6to7(exec: (String) -> Unit) {
         exec(
