@@ -112,7 +112,7 @@ suspend fun lightAlbumItemsForArtist(
         "light discography n=${out.size} " +
             out.joinToString { "${it.displayName}×${it.trackCount}" }
     )
-    return out
+    return@withContext out
 }
 
 suspend fun lightAppearsOnForArtist(
