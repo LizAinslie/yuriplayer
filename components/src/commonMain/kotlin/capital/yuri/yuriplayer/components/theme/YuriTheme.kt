@@ -1,32 +1,21 @@
 package capital.yuri.yuriplayer.components.theme
 
-import androidx.compose.foundation.background
-import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Surface
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.ui.Modifier
 
 @Composable
-fun YuriTheme(
-    playerColors: PlayerColors? = null,
-    content: @Composable () -> Unit
-) {
-    val scheme = if (playerColors != null) {
-        playerColorScheme(playerColors, YuriDarkColorScheme, useArtBackground = false)
-    } else {
-        YuriDarkColorScheme
-    }
-    CompositionLocalProvider(LocalPlayerColors provides playerColors) {
-        MaterialTheme(colorScheme = scheme) {
-            Box(
-                Modifier
-                    .fillMaxSize()
-                    .background(scheme.background)
-            ) {
-                content()
-            }
+fun YuriTheme(content: @Composable () -> Unit) {
+    val scheme = YuriDarkColorScheme
+    MaterialTheme(colorScheme = scheme) {
+        Surface(
+            modifier = Modifier.fillMaxSize(),
+            color = scheme.background,
+            contentColor = scheme.onBackground
+        ) {
+            content()
         }
     }
 }
@@ -37,10 +26,18 @@ fun PlayerChromeTheme(
     useArtBackground: Boolean,
     content: @Composable () -> Unit
 ) {
+    val base = MaterialTheme.colorScheme
     val scheme = if (colors != null) {
-        playerColorScheme(colors, MaterialTheme.colorScheme, useArtBackground)
+        playerColorScheme(colors, base, useArtBackground)
     } else {
-        MaterialTheme.colorScheme
+        base
     }
-    MaterialTheme(colorScheme = scheme, content = content)
+    MaterialTheme(colorScheme = scheme) {
+        Surface(
+            modifier = Modifier.fillMaxSize(),
+            color = scheme.background,
+            contentColor = scheme.onBackground,
+            content = content
+        )
+    }
 }

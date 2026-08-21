@@ -74,7 +74,8 @@ private fun NowPlayingPane(track: CoverRef?) {
             style = MaterialTheme.typography.titleLarge,
             fontWeight = FontWeight.Bold,
             maxLines = 2,
-            overflow = TextOverflow.Ellipsis
+            overflow = TextOverflow.Ellipsis,
+            color = MaterialTheme.colorScheme.onBackground
         )
         Text(
             track?.subtitle ?: " ",

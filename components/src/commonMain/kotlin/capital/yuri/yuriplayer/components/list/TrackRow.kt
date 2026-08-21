@@ -52,7 +52,8 @@ fun TrackRow(
                 track.title,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
-                fontWeight = if (track.highlighted) FontWeight.SemiBold else FontWeight.Normal
+                fontWeight = if (track.highlighted) FontWeight.SemiBold else FontWeight.Normal,
+                color = MaterialTheme.colorScheme.onSurface
             )
             val sub = if (showAlbum) "${track.artist} · ${track.album}" else track.artist
             Text(

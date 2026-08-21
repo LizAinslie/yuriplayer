@@ -46,7 +46,7 @@ fun YuriDesktopApp(session: DesktopSession) {
     val playerColors = remember(coverPixels) {
         coverPixels?.let { playerColorsFromPixels(it) }
     }
-    YuriTheme(playerColors = playerColors) {
+    YuriTheme {
         val tracks by session.tracks.collectAsState()
         val current by session.player.current.collectAsState()
         val playing by session.player.isPlaying.collectAsState()
@@ -55,6 +55,7 @@ fun YuriDesktopApp(session: DesktopSession) {
         val status by session.scanMessage.collectAsState()
         val position by session.positionMs.collectAsState()
         val duration by session.durationMs.collectAsState()
+        val engineMessage by session.engineMessage.collectAsState()
         val albums = remember(tracks) { tracks.albums() }
         var route by remember { mutableStateOf<Route>(Route.Library) }
 
@@ -63,18 +64,16 @@ fun YuriDesktopApp(session: DesktopSession) {
             AdaptiveShell(
                 widthClass = widthClass,
                 bottomBar = {
-                    PlayerChromeTheme(playerColors, useArtBackground = false) {
-                        BottomPlayerBar(
-                            track = current?.toCover(),
-                            playing = playing,
-                            positionMs = position,
-                            durationMs = duration,
-                            onPrev = session.player::previous,
-                            onToggle = session.player::togglePlay,
-                            onNext = session.player::next,
-                            onSeek = session.player::seekTo
-                        )
-                    }
+                    BottomPlayerBar(
+                        track = current?.toCover(),
+                        playing = playing,
+                        positionMs = position,
+                        durationMs = duration,
+                        onPrev = session.player::previous,
+                        onToggle = session.player::togglePlay,
+                        onNext = session.player::next,
+                        onSeek = session.player::seekTo
+                    )
                 },
                 sidebar = {
                     PlayerChromeTheme(playerColors, useArtBackground = true) {
@@ -99,7 +98,7 @@ fun YuriDesktopApp(session: DesktopSession) {
                 when (val r = route) {
                     Route.Library -> LibraryGrid(
                         albums = albums,
-                        status = status,
+                        status = engineMessage ?: status,
                         roots = session.dirs.defaultMusicRoots,
                         onOpen = { route = Route.Album(it) }
                     )
@@ -138,7 +137,7 @@ private fun LibraryGrid(
     onOpen: (AlbumPageModel) -> Unit
 ) {
     Column(Modifier.fillMaxSize().padding(horizontal = 20.dp, vertical = 12.dp)) {
-        Text("Library", style = MaterialTheme.typography.headlineSmall)
+        Text("Library", style = MaterialTheme.typography.headlineSmall, color = MaterialTheme.colorScheme.onBackground)
         Text(
             status,
             style = MaterialTheme.typography.bodySmall,

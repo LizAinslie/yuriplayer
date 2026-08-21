@@ -27,6 +27,9 @@ class DesktopSession {
     val player = PlayerSession(engine)
     private val media: OsMediaControls = createOsMediaControls()
 
+    private val _engineMessage = MutableStateFlow(engine.nativeError)
+    val engineMessage: StateFlow<String?> = _engineMessage.asStateFlow()
+
     private val _tracks = MutableStateFlow<List<Track>>(emptyList())
     val tracks: StateFlow<List<Track>> = _tracks.asStateFlow()
 
@@ -47,6 +50,11 @@ class DesktopSession {
     private var ticker: Job? = null
 
     init {
+        engine.addListener(object : capital.yuri.yuriplayer.core.player.PlaybackEngine.Listener {
+            override fun onError(message: String, recoverable: Boolean) {
+                _engineMessage.value = message
+            }
+        })
         media.attach(object : OsMediaControls.Callbacks {
             override fun onPlay() {
                 if (!player.isPlaying.value) player.togglePlay()

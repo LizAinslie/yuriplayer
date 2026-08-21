@@ -66,9 +66,13 @@ private fun AlbumPageCompact(
     Column(Modifier.fillMaxSize()) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             IconButton(onClick = onBack) {
-                Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
+                Icon(
+                    Icons.AutoMirrored.Filled.ArrowBack,
+                    contentDescription = "Back",
+                    tint = MaterialTheme.colorScheme.onBackground
+                )
             }
-            Text("Album", style = MaterialTheme.typography.titleMedium)
+            Text("Album", style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.onBackground)
         }
         CoverArt(
             model = album.artworkUri,
@@ -98,7 +102,11 @@ private fun AlbumPageWide(
                 .padding(end = 28.dp)
         ) {
             IconButton(onClick = onBack) {
-                Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
+                Icon(
+                    Icons.AutoMirrored.Filled.ArrowBack,
+                    contentDescription = "Back",
+                    tint = MaterialTheme.colorScheme.onBackground
+                )
             }
             CoverArt(
                 model = album.artworkUri,
@@ -120,7 +128,12 @@ private fun AlbumMeta(
     modifier: Modifier = Modifier
 ) {
     Column(modifier) {
-        Text(album.title, style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
+        Text(
+            album.title,
+            style = MaterialTheme.typography.headlineSmall,
+            fontWeight = FontWeight.Bold,
+            color = MaterialTheme.colorScheme.onBackground
+        )
         Text(
             album.artist,
             style = MaterialTheme.typography.bodyLarge,
@@ -139,7 +152,8 @@ private fun AlbumMeta(
         IconButton(onClick = onPlay, modifier = Modifier.padding(top = 8.dp)) {
             Icon(
                 if (playing) Icons.Default.Pause else Icons.Default.PlayArrow,
-                contentDescription = if (playing) "Pause" else "Play"
+                contentDescription = if (playing) "Pause" else "Play",
+                tint = MaterialTheme.colorScheme.primary
             )
         }
     }
