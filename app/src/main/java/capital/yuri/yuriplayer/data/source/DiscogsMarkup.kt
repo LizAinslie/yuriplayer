@@ -25,7 +25,7 @@ object DiscogsMarkup {
 
     suspend fun resolve(raw: String?, http: HttpClient): String? {
         if (raw.isNullOrBlank()) return raw
-        var t = raw
+        var t: String = raw
         t = URL.replace(t) { it.groupValues[2].ifBlank { it.groupValues[1] } }
         t = STYLE.replace(t, "")
         t = NAMED.replace(t) { it.groupValues[2] }

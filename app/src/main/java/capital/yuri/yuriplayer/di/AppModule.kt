@@ -173,7 +173,7 @@ val appModule = module {
     single { SubsonicArtistImageSource(get(), get()) }
     single<List<ArtistInfoSource>> {
         listOf(
-            MusicBrainzArtistProfileProvider(androidContext(), get()),
+            MusicBrainzArtistProfileProvider(androidContext(), get(), get()),
             WikipediaArtistImageSource(get()),
             WikidataArtistImageSource(get()),
             DeezerArtistImageSource(get()),
