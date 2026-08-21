@@ -1,5 +1,6 @@
 package capital.yuri.yuriplayer.activities.ui
 
+import MarqueeText
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn

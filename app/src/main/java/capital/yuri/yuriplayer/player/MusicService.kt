@@ -598,7 +598,6 @@ class MusicService : Service() {
     fun peekPrevious(): Song? = queueManager.peekPrevious()
 
     fun clearHistory() = historyStore.clear()
-    fun getHistory(): List<HistoryEntry> = historyStore.entries
     fun getHistoryMax(): Int = historyStore.maxEntries
     fun setHistoryMax(n: Int) {
         historyStore.maxEntries = n
