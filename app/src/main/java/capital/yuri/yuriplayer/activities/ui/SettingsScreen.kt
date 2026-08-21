@@ -58,6 +58,7 @@ private sealed class SettingsPage {
     data object PlaybackEngine : SettingsPage()
     data object StreamingQuality : SettingsPage()
     data object Appearance : SettingsPage()
+    data object Sync : SettingsPage()
     data class Organize(
         val rootKey: String,
         val rootLabel: String
@@ -97,6 +98,7 @@ fun SettingsScreen(onBack: () -> Unit) {
             onOpenPlaybackEngine = { push(SettingsPage.PlaybackEngine) },
             onOpenStreamingQuality = { push(SettingsPage.StreamingQuality) },
             onOpenAppearance = { push(SettingsPage.Appearance) },
+            onOpenSync = { push(SettingsPage.Sync) },
             onOpenLicenses = { push(SettingsPage.OpenSourceLicenses) },
             onOpenVersion = { push(SettingsPage.VersionInfo) }
         )
@@ -115,6 +117,7 @@ fun SettingsScreen(onBack: () -> Unit) {
         SettingsPage.PlaybackEngine -> PlaybackEngineSettingsScreen(onBack = { pop() })
         SettingsPage.StreamingQuality -> StreamingQualitySettingsScreen(onBack = { pop() })
         SettingsPage.Appearance -> AppearanceSettingsScreen(onBack = { pop() })
+        SettingsPage.Sync -> SyncSettingsScreen(onBack = { pop() })
         is SettingsPage.Organize -> OrganizeLayoutScreen(
             rootKey = p.rootKey,
             rootLabel = p.rootLabel,
@@ -138,6 +141,7 @@ private fun SettingsHubScreen(
     onOpenPlaybackEngine: () -> Unit,
     onOpenStreamingQuality: () -> Unit,
     onOpenAppearance: () -> Unit,
+    onOpenSync: () -> Unit,
     onOpenLicenses: () -> Unit,
     onOpenVersion: () -> Unit
 ) {
@@ -202,6 +206,24 @@ private fun SettingsHubScreen(
                     syncOverMobile = enabled
                     settings.setSyncOverMobileDataEnabled(enabled)
                 }
+            )
+            SettingsNavRow(
+                title = "Background sync",
+                subtitle = buildString {
+                    if (settings.isProfileSyncEnabled()) {
+                        append("Playlists ${settings.getProfileSyncInterval().displayName.lowercase()}")
+                    } else {
+                        append("Playlists off")
+                    }
+                    append(" · ")
+                    if (settings.isPartialSyncEnabled()) {
+                        append("libraries ${settings.getPartialSyncInterval().displayName.lowercase()}")
+                    } else {
+                        append("libraries off")
+                    }
+                },
+                icon = Icons.Default.Sync,
+                onClick = onOpenSync
             )
             SettingsNavRow(
                 title = "Offline, cache, and download",

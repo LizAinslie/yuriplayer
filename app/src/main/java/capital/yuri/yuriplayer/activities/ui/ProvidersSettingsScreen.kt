@@ -36,10 +36,13 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import capital.yuri.yuriplayer.data.db.SourceInstanceEntity
+import capital.yuri.yuriplayer.data.SyncInterval
 import capital.yuri.yuriplayer.data.source.JellyfinClient
 import capital.yuri.yuriplayer.data.source.SourceInstanceRepository
 import capital.yuri.yuriplayer.data.source.SourceType
 import capital.yuri.yuriplayer.data.source.SubsonicClient
+import capital.yuri.yuriplayer.data.source.syncExtras
+import capital.yuri.yuriplayer.data.source.withPartialInterval
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -187,6 +190,7 @@ fun ProviderEditorScreen(
     var status by remember { mutableStateOf<String?>(null) }
     var testing by remember { mutableStateOf(false) }
     var confirmDelete by remember { mutableStateOf(false) }
+    var partialOverride by remember { mutableStateOf("default") }
 
     LaunchedEffect(existingId) {
         if (existingId != null) {
@@ -199,6 +203,7 @@ fun ProviderEditorScreen(
                 password = row.secret.orEmpty()
                 enabled = row.enabled
                 type = SourceType.from(row.type)
+                partialOverride = row.syncExtras().partialIntervalId ?: "default"
             }
         } else {
             type = createType ?: SourceType.SUBSONIC
@@ -287,6 +292,28 @@ fun ProviderEditorScreen(
             )
         }
 
+        if (existingId != null) {
+            SettingsSectionTitle("Sync")
+            SettingsNote("Override the default incremental scan interval from Settings → Background sync.")
+            SettingsGroup {
+                val options = buildList {
+                    add("default" to "Use default")
+                    SyncInterval.entries.forEach { add(it.id to it.displayName) }
+                }
+                val trailing = when (partialOverride) {
+                    "default" -> "Default"
+                    else -> SyncInterval.fromId(partialOverride).displayName
+                }
+                SettingsChoiceRow(
+                    title = "Library scan interval",
+                    subtitle = "Off skips background incremental scans for this server",
+                    trailing = trailing,
+                    options = options,
+                    onSelect = { partialOverride = it }
+                )
+            }
+        }
+
         if (status != null) {
             Text(
                 status!!,
@@ -348,6 +375,11 @@ fun ProviderEditorScreen(
                                 }
                             } else {
                                 val base = loaded ?: sourcesRepo.get(existingId) ?: return@withContext
+                                val interval = if (partialOverride == "default") {
+                                    null
+                                } else {
+                                    SyncInterval.fromId(partialOverride)
+                                }
                                 sourcesRepo.upsert(
                                     base.copy(
                                         name = display,
@@ -356,7 +388,7 @@ fun ProviderEditorScreen(
                                         secret = password,
                                         enabled = enabled,
                                         type = type.name
-                                    )
+                                    ).withPartialInterval(interval)
                                 )
                             }
                         }

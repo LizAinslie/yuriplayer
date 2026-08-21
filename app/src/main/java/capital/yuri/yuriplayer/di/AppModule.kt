@@ -9,6 +9,7 @@ import capital.yuri.yuriplayer.data.LibraryCache
 import capital.yuri.yuriplayer.data.LibraryIndex
 import capital.yuri.yuriplayer.data.LibraryScanNotifier
 import capital.yuri.yuriplayer.data.LibrarySettings
+import capital.yuri.yuriplayer.data.LibrarySyncScheduler
 import capital.yuri.yuriplayer.data.MetadataEditService
 import capital.yuri.yuriplayer.data.MetadataEnrichmentService
 import capital.yuri.yuriplayer.data.MusicRepository
@@ -165,6 +166,17 @@ val appModule = module {
     single { PlaylistRepository(get(), get(), get()) }
     single { LibraryFaviconStore(androidContext(), get()) }
     single { RemotePlaylistService(get(), get(), get(), get()) }
+
+    single(createdAtStart = true) {
+        LibrarySyncScheduler(
+            context = androidContext(),
+            settings = get(),
+            sources = get(),
+            catalog = get(),
+            checkpoints = get(),
+            playlists = get()
+        ).also { it.start() }
+    }
 
     // Secret covers are session-only — reset on background / lock / cold start
     single(createdAtStart = true) {

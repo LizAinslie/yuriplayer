@@ -131,6 +131,57 @@ class LibrarySettings(context: Context) {
         prefs.edit().putBoolean(KEY_SYNC_OVER_MOBILE_DATA, enabled).apply()
     }
 
+    // ── background remote sync ────────────────────────────────────────────
+
+    fun isProfileSyncEnabled(): Boolean =
+        prefs.getBoolean(KEY_PROFILE_SYNC, true)
+
+    fun setProfileSyncEnabled(enabled: Boolean) {
+        prefs.edit().putBoolean(KEY_PROFILE_SYNC, enabled).apply()
+    }
+
+    fun getProfileSyncInterval(): SyncInterval =
+        SyncInterval.fromId(
+            prefs.getString(KEY_PROFILE_SYNC_INTERVAL, SyncInterval.DEFAULT_PROFILE.id)
+        ).takeIf { it.isActive } ?: SyncInterval.DEFAULT_PROFILE
+
+    fun setProfileSyncInterval(interval: SyncInterval) {
+        val next = interval.takeIf { it.isActive } ?: SyncInterval.DEFAULT_PROFILE
+        prefs.edit().putString(KEY_PROFILE_SYNC_INTERVAL, next.id).apply()
+    }
+
+    fun isPartialSyncEnabled(): Boolean =
+        prefs.getBoolean(KEY_PARTIAL_SYNC, true)
+
+    fun setPartialSyncEnabled(enabled: Boolean) {
+        prefs.edit().putBoolean(KEY_PARTIAL_SYNC, enabled).apply()
+    }
+
+    fun getPartialSyncInterval(): SyncInterval =
+        SyncInterval.fromId(
+            prefs.getString(KEY_PARTIAL_SYNC_INTERVAL, SyncInterval.DEFAULT_PARTIAL.id)
+        ).takeIf { it.isActive } ?: SyncInterval.DEFAULT_PARTIAL
+
+    fun setPartialSyncInterval(interval: SyncInterval) {
+        val next = interval.takeIf { it.isActive } ?: SyncInterval.DEFAULT_PARTIAL
+        prefs.edit().putString(KEY_PARTIAL_SYNC_INTERVAL, next.id).apply()
+    }
+
+    fun lastProfileSyncAt(): Long = prefs.getLong(KEY_LAST_PROFILE_SYNC, 0L)
+
+    fun markProfileSynced(atMs: Long = System.currentTimeMillis()) {
+        prefs.edit().putLong(KEY_LAST_PROFILE_SYNC, atMs).apply()
+    }
+
+    fun lastPartialSyncAt(sourceInstanceId: Long): Long =
+        prefs.getLong(partialKey(sourceInstanceId), 0L)
+
+    fun markPartialSynced(sourceInstanceId: Long, atMs: Long = System.currentTimeMillis()) {
+        prefs.edit().putLong(partialKey(sourceInstanceId), atMs).apply()
+    }
+
+    private fun partialKey(sourceInstanceId: Long) = "$KEY_LAST_PARTIAL_SYNC.$sourceInstanceId"
+
     // ── playback engine ───────────────────────────────────────────────────
 
     /**
@@ -224,6 +275,12 @@ class LibrarySettings(context: Context) {
         private const val KEY_AUTO_PLAY_RECOMMENDED = "auto_play_recommended"
         private const val KEY_NETWORK_META = "network_metadata_enabled"
         private const val KEY_SYNC_OVER_MOBILE_DATA = "sync_over_mobile_data"
+        private const val KEY_PROFILE_SYNC = "profile_sync_enabled"
+        private const val KEY_PROFILE_SYNC_INTERVAL = "profile_sync_interval"
+        private const val KEY_PARTIAL_SYNC = "partial_sync_enabled"
+        private const val KEY_PARTIAL_SYNC_INTERVAL = "partial_sync_interval"
+        private const val KEY_LAST_PROFILE_SYNC = "last_profile_sync_at"
+        private const val KEY_LAST_PARTIAL_SYNC = "last_partial_sync_at"
         private const val KEY_PLAYBACK_ENGINE = "playback_engine_id"
         private const val KEY_STREAM_QUALITY = "stream_quality"
         private const val KEY_COVER_COLOR_VARIANT = "cover_color_variant"
