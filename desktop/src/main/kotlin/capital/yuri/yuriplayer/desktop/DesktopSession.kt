@@ -1,5 +1,6 @@
 package capital.yuri.yuriplayer.desktop
 
+import capital.yuri.yuriplayer.core.artist.ArtistImageCandidate
 import capital.yuri.yuriplayer.core.artist.ArtistInfoClient
 import capital.yuri.yuriplayer.core.artist.ArtistProfileStore
 import capital.yuri.yuriplayer.core.library.CoverPixels
@@ -91,12 +92,12 @@ class DesktopSession {
     val playlists = DesktopPlaylistStore(dirs.configDir)
     val sources = LibrarySourceStore(dirs.configDir)
     private val index = DesktopIndexStore(dirs.cacheDir)
+    val jellyfin = JellyfinCatalog(http, sources.deviceId)
+    val subsonic = SubsonicCatalog(http)
     val artists = ArtistInfoClient(
         http,
         ArtistProfileStore(dirs.configDir, dirs.cacheDir)
-    )
-    val jellyfin = JellyfinCatalog(http, sources.deviceId)
-    val subsonic = SubsonicCatalog(http)
+    ) { name -> libraryArtistImages(name) }
 
     private var ticker: Job? = null
     private var scanJob: Job? = null
@@ -736,6 +737,19 @@ class DesktopSession {
     }
 
     fun extraScan(path: String) = addFolder(path)
+
+    private suspend fun libraryArtistImages(name: String): List<ArtistImageCandidate> {
+        val out = ArrayList<ArtistImageCandidate>()
+        for (remote in sources.remotes.value.filter { it.enabled }) {
+            val result = when (remote.kind) {
+                SourceKind.JELLYFIN -> jellyfin.searchArtistImages(remote, name)
+                SourceKind.SUBSONIC -> subsonic.searchArtistImages(remote, name)
+                SourceKind.LOCAL -> continue
+            }
+            result.onSuccess { out += it }
+        }
+        return out
+    }
 
     suspend fun searchRemotes(query: String, sourceIds: Set<String>?): List<Track> {
         val q = query.trim()

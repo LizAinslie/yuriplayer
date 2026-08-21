@@ -3,6 +3,8 @@ package capital.yuri.yuriplayer.components.artist
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
@@ -27,6 +29,7 @@ import androidx.compose.material.icons.filled.MoreHoriz
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Shuffle
+import androidx.compose.material3.AssistChip
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.FilterChip
@@ -64,6 +67,7 @@ import capital.yuri.yuriplayer.components.model.TrackRowModel
 
 private enum class DiscoFilter { Popular, Albums, Singles }
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun ArtistPage(
     artist: ArtistPageModel,
@@ -303,6 +307,17 @@ fun ArtistPage(
                         Column(
                             Modifier.align(Alignment.BottomStart).padding(16.dp)
                         ) {
+                            if (artist.genres.isNotEmpty()) {
+                                FlowRow(
+                                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                    verticalArrangement = Arrangement.spacedBy(4.dp),
+                                    modifier = Modifier.padding(bottom = 10.dp)
+                                ) {
+                                    artist.genres.take(8).forEach { g ->
+                                        AssistChip(onClick = {}, label = { Text(g) })
+                                    }
+                                }
+                            }
                             Text(
                                 artist.stats,
                                 color = Color.White.copy(alpha = 0.8f),

@@ -48,6 +48,7 @@ import capital.yuri.yuriplayer.components.art.CoverArt
 import capital.yuri.yuriplayer.components.list.TrackRow
 import capital.yuri.yuriplayer.components.model.toRow
 import capital.yuri.yuriplayer.core.library.Track
+import capital.yuri.yuriplayer.core.library.matchesQuery
 import capital.yuri.yuriplayer.desktop.DesktopCover
 import capital.yuri.yuriplayer.desktop.DesktopPlaylist
 import capital.yuri.yuriplayer.desktop.DesktopPlaylistStore
@@ -223,9 +224,7 @@ private fun AddSongsDialog(
     val hits = remember(query, library) {
         val q = query.trim()
         if (q.isEmpty()) library.take(40)
-        else library.filter {
-            it.displayTitle.contains(q, true) || it.displayArtist.contains(q, true)
-        }.take(40)
+        else library.filter { it.matchesQuery(q) }.take(40)
     }
     DialogWindow(onCloseRequest = onDismiss, title = "Add songs") {
         Surface(Modifier.size(520.dp, 560.dp)) {
@@ -355,5 +354,41 @@ private fun AddCoverChip(label: String, onClick: () -> Unit) {
     ) {
         Icon(Icons.Default.Add, contentDescription = null)
         Text(label, style = MaterialTheme.typography.labelMedium)
+    }
+}
+
+@Composable
+fun NewPlaylistDialog(
+    onDismiss: () -> Unit,
+    onCreate: (name: String, description: String?) -> Unit
+) {
+    var name by remember { mutableStateOf("") }
+    var description by remember { mutableStateOf("") }
+    DialogWindow(onCloseRequest = onDismiss, title = "New playlist") {
+        Surface(Modifier.size(420.dp, 280.dp)) {
+            Column(Modifier.padding(20.dp)) {
+                Text("New playlist", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
+                OutlinedTextField(
+                    value = name,
+                    onValueChange = { name = it },
+                    label = { Text("Name") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth().padding(top = 12.dp)
+                )
+                OutlinedTextField(
+                    value = description,
+                    onValueChange = { description = it },
+                    label = { Text("Description") },
+                    modifier = Modifier.fillMaxWidth().padding(top = 8.dp)
+                )
+                Row(Modifier.fillMaxWidth().padding(top = 16.dp), horizontalArrangement = Arrangement.End) {
+                    TextButton(onClick = onDismiss) { Text("Cancel") }
+                    TextButton(
+                        onClick = { onCreate(name, description.takeIf { it.isNotBlank() }) },
+                        enabled = name.isNotBlank()
+                    ) { Text("Create") }
+                }
+            }
+        }
     }
 }

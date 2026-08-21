@@ -20,6 +20,7 @@ data class ArtistProfile(
     val bio: String? = null,
     val imageUri: String? = null,
     val bannerUri: String? = null,
+    val genres: List<String> = emptyList(),
     val source: String = "local",
     val updatedAtMs: Long = 0L,
     val bannerCleared: Boolean = false

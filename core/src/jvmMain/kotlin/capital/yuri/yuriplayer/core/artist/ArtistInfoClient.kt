@@ -20,11 +20,13 @@ import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 
 /**
- * Wikipedia + TheAudioDB — same sources mobile uses for bios and banners.
+ * Same public sources as mobile: Wikipedia, TheAudioDB, Deezer, MusicBrainz, Wikidata,
+ * plus library servers (Jellyfin / Navidrome) supplied by the host.
  */
 class ArtistInfoClient(
     private val http: HttpClient,
-    private val store: ArtistProfileStore
+    private val store: ArtistProfileStore,
+    private val libraryImages: suspend (String) -> List<ArtistImageCandidate> = { emptyList() }
 ) {
     private val json = Json { ignoreUnknownKeys = true; isLenient = true }
 
@@ -46,7 +48,12 @@ class ArtistInfoClient(
         coroutineScope {
             val wiki = async { wikipediaImages(name) }
             val adb = async { audioDbImages(name) }
-            (adb.await() + wiki.await()).distinctBy { it.url }
+            val deezer = async { deezerImages(name) }
+            val mb = async { musicBrainzImages(name) }
+            val wd = async { wikidataImages(name) }
+            val lib = async { runCatching { libraryImages(name) }.getOrDefault(emptyList()) }
+            (adb.await() + wiki.await() + deezer.await() + mb.await() + wd.await() + lib.await())
+                .distinctBy { it.url }
         }
     }
 
@@ -100,9 +107,18 @@ class ArtistInfoClient(
 
     private suspend fun fetchRemote(name: String): ArtistProfile {
         return coroutineScope {
-            val wiki = async { wikipediaProfile(name) }
-            val adb = async { audioDbProfile(name) }
-            merge(name, wiki.await(), adb.await())
+            val parts = listOf(
+                async { wikipediaProfile(name) },
+                async { audioDbProfile(name) },
+                async { musicBrainzProfile(name) },
+                async { wikidataProfile(name) }
+            ).map { runCatching { it.await() }.getOrNull() }
+            parts.fold(null as ArtistProfile?) { acc, p -> merge(name, acc, p) }
+                ?: ArtistProfile(
+                    artistKey = artistKey(name) ?: name.lowercase(),
+                    displayName = name.trim(),
+                    updatedAtMs = System.currentTimeMillis()
+                )
         }
     }
 
@@ -122,6 +138,7 @@ class ArtistInfoClient(
                 !a.bannerUri.isNullOrBlank() -> a.bannerUri
                 else -> b.bannerUri
             },
+            genres = (a.genres + b.genres).map { it.trim() }.filter { it.isNotEmpty() }.distinctBy { it.lowercase() },
             source = listOf(a.source, b.source).filter { it.isNotBlank() }.distinct().joinToString(","),
             bannerCleared = a.bannerCleared,
             updatedAtMs = System.currentTimeMillis()
@@ -200,12 +217,17 @@ class ArtistInfoClient(
         val banner = listOf("strArtistFanart", "strArtistFanart2", "strArtistBanner")
             .firstNotNullOfOrNull { field -> a.str(field)?.takeIf { it.isNotBlank() && it != "null" } }
         val thumb = a.str("strArtistThumb")?.takeIf { it.isNotBlank() && it != "null" }
+        val genres = buildList {
+            a.str("strGenre")?.takeIf { it != "null" }?.let { add(it) }
+            a.str("strStyle")?.takeIf { it != "null" }?.let { add(it) }
+        }.flatMap { it.split(',', '/', '|') }.map { it.trim() }.filter { it.isNotEmpty() }.distinctBy { it.lowercase() }
         return ArtistProfile(
             artistKey = artistKey(name) ?: name.lowercase(),
             displayName = a.str("strArtist")?.ifBlank { name } ?: name,
             bio = bio,
             imageUri = thumb,
             bannerUri = banner,
+            genres = genres,
             source = "theaudiodb"
         )
     }
@@ -236,6 +258,176 @@ class ArtistInfoClient(
         val root = runCatching { json.parseToJsonElement(body).jsonObject }.getOrNull() ?: return null
         return root["artists"]?.jsonArray?.firstOrNull()?.jsonObject
     }
+
+    private suspend fun deezerImages(name: String): List<ArtistImageCandidate> {
+        val requestUrl = url("https://api.deezer.com") {
+            path("search", "artist")
+            param("q", name.trim())
+            param("limit", 8)
+        }
+        val body = getText(requestUrl) ?: return emptyList()
+        val data = runCatching { json.parseToJsonElement(body).jsonObject["data"]?.jsonArray }.getOrNull()
+            ?: return emptyList()
+        val out = ArrayList<ArtistImageCandidate>()
+        for (el in data) {
+            val a = el.jsonObject
+            val artistName = a.str("name") ?: continue
+            val pic = listOf("picture_xl", "picture_big", "picture_medium")
+                .firstNotNullOfOrNull { a.str(it) }
+                ?.takeIf { !it.contains("artist-default") } ?: continue
+            out += ArtistImageCandidate(pic, "deezer", "Deezer · $artistName", 1000, 1000)
+        }
+        return out
+    }
+
+    private suspend fun musicBrainzProfile(name: String): ArtistProfile? {
+        val searchUrl = url("https://musicbrainz.org") {
+            path("ws", "2", "artist")
+            param("query", "artist:\"${name.trim()}\"")
+            param("fmt", "json")
+            param("limit", 3)
+        }
+        val body = getText(searchUrl) ?: return null
+        val artists = runCatching { json.parseToJsonElement(body).jsonObject["artists"]?.jsonArray }.getOrNull()
+            ?: return null
+        val first = artists.firstOrNull()?.jsonObject ?: return null
+        val mbid = first.str("id") ?: return null
+        val display = first.str("name") ?: name
+        val genres = first["tags"]?.jsonArray.orEmpty().mapNotNull {
+            it.jsonObject.str("name")
+        }.take(8)
+        val detailUrl = url("https://musicbrainz.org") {
+            path("ws", "2", "artist", mbid)
+            param("inc", "url-rels+tags+genres")
+            param("fmt", "json")
+        }
+        val detailBody = getText(detailUrl)
+        val detail = detailBody?.let { runCatching { json.parseToJsonElement(it).jsonObject }.getOrNull() }
+        val moreGenres = detail?.get("genres")?.jsonArray.orEmpty().mapNotNull { it.jsonObject.str("name") }
+        val relations = detail?.get("relations")?.jsonArray
+        var wikiImage: String? = null
+        relations?.forEach { rel ->
+            val obj = rel.jsonObject
+            val type = obj.str("type").orEmpty()
+            val urlStr = obj.obj("url")?.str("resource") ?: return@forEach
+            if (type.contains("wikidata", true)) {
+                val qid = Regex("Q\\d+").find(urlStr)?.value
+                if (qid != null) wikiImage = wikidataP18(qid).firstOrNull()
+            }
+        }
+        return ArtistProfile(
+            artistKey = artistKey(name) ?: name.lowercase(),
+            displayName = display,
+            imageUri = wikiImage,
+            genres = (genres + moreGenres).distinctBy { it.lowercase() },
+            source = "musicbrainz"
+        )
+    }
+
+    private suspend fun musicBrainzImages(name: String): List<ArtistImageCandidate> {
+        val p = musicBrainzProfile(name) ?: return emptyList()
+        val url = p.imageUri ?: return emptyList()
+        return listOf(ArtistImageCandidate(url, "musicbrainz", "MusicBrainz · ${p.displayName}"))
+    }
+
+    private suspend fun wikidataProfile(name: String): ArtistProfile? {
+        val qid = wikidataSearch(name) ?: return null
+        val genres = wikidataGenres(qid)
+        val images = wikidataP18(qid)
+        return ArtistProfile(
+            artistKey = artistKey(name) ?: name.lowercase(),
+            displayName = name.trim(),
+            imageUri = images.firstOrNull(),
+            genres = genres,
+            source = "wikidata"
+        )
+    }
+
+    private suspend fun wikidataImages(name: String): List<ArtistImageCandidate> {
+        val qid = wikidataSearch(name) ?: return emptyList()
+        return wikidataP18(qid).mapIndexed { i, u ->
+            ArtistImageCandidate(u, "wikidata", "Wikidata P18${if (i > 0) " #${i + 1}" else ""} · $name")
+        }
+    }
+
+    private suspend fun wikidataSearch(name: String): String? {
+        val requestUrl = url("https://www.wikidata.org") {
+            path("w", "api.php")
+            param("action", "wbsearchentities")
+            param("search", name.trim())
+            param("language", "en")
+            param("type", "item")
+            param("limit", 8)
+            param("format", "json")
+        }
+        val body = getText(requestUrl) ?: return null
+        val search = runCatching { json.parseToJsonElement(body).jsonObject["search"]?.jsonArray }.getOrNull()
+            ?: return null
+        val hints = listOf("musician", "singer", "rapper", "band", "duo", "group", "artist", "dj")
+        val works = listOf("album", "song", "single", "ep", "soundtrack")
+        for (el in search) {
+            val o = el.jsonObject
+            val id = o.str("id") ?: continue
+            if (!id.startsWith("Q")) continue
+            val desc = o.str("description").orEmpty().lowercase()
+            if (works.any { desc.contains(it) } && hints.none { desc.contains(it) }) continue
+            return id
+        }
+        return search.firstOrNull()?.jsonObject?.str("id")
+    }
+
+    private suspend fun wikidataP18(qid: String): List<String> {
+        val claims = wikidataClaims(qid) ?: return emptyList()
+        val p18 = claims["P18"]?.jsonArray ?: return emptyList()
+        return p18.mapNotNull { claim ->
+            val file = claim.jsonObject.obj("mainsnak")?.obj("datavalue")?.str("value") ?: return@mapNotNull null
+            url("https://commons.wikimedia.org") {
+                path("wiki", "Special:FilePath", file.replace(' ', '_'), encodeSlash = true)
+                param("width", 1200)
+            }
+        }
+    }
+
+    private suspend fun wikidataGenres(qid: String): List<String> {
+        val claims = wikidataClaims(qid) ?: return emptyList()
+        val p136 = claims["P136"]?.jsonArray ?: return emptyList()
+        val ids = p136.mapNotNull { claim ->
+            claim.jsonObject.obj("mainsnak")?.obj("datavalue")?.obj("value")?.str("id")
+        }.take(10)
+        if (ids.isEmpty()) return emptyList()
+        val requestUrl = url("https://www.wikidata.org") {
+            path("w", "api.php")
+            param("action", "wbgetentities")
+            param("ids", ids.joinToString("|"))
+            param("props", "labels")
+            param("languages", "en")
+            param("format", "json")
+        }
+        val body = getText(requestUrl) ?: return emptyList()
+        val entities = runCatching { json.parseToJsonElement(body).jsonObject["entities"]?.jsonObject }.getOrNull()
+            ?: return emptyList()
+        return ids.mapNotNull { id ->
+            entities[id]?.jsonObject?.obj("labels")?.obj("en")?.str("value")
+        }
+    }
+
+    private suspend fun wikidataClaims(qid: String): JsonObject? {
+        val requestUrl = url("https://www.wikidata.org") {
+            path("w", "api.php")
+            param("action", "wbgetentities")
+            param("ids", qid)
+            param("props", "claims")
+            param("format", "json")
+        }
+        val body = getText(requestUrl) ?: return null
+        return runCatching {
+            json.parseToJsonElement(body).jsonObject["entities"]?.jsonObject
+                ?.get(qid)?.jsonObject?.obj("claims")
+        }.getOrNull()
+    }
+
+    private fun kotlinx.serialization.json.JsonArray?.orEmpty() =
+        this ?: kotlinx.serialization.json.JsonArray(emptyList())
 
     private fun isWork(description: String?, extract: String): Boolean {
         val d = (description.orEmpty() + " " + extract.take(280)).lowercase()

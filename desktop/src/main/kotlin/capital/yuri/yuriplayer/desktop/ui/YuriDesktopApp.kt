@@ -101,8 +101,9 @@ fun YuriDesktopApp(session: DesktopSession) {
         var stack by remember { mutableStateOf(listOf<Route>(Route.Home)) }
         var forward by remember { mutableStateOf(listOf<Route>()) }
         var query by remember { mutableStateOf("") }
-        var libraryFilter by remember { mutableStateOf(LibraryFilter.Recents) }
+        var libraryFilter by remember { mutableStateOf(LibraryFilter.Playlists) }
         var showSettings by remember { mutableStateOf(false) }
+        var showNewPlaylist by remember { mutableStateOf(false) }
         var showSidebar by remember { mutableStateOf(true) }
         var editSong by remember { mutableStateOf<Track?>(null) }
         var editAlbum by remember { mutableStateOf<AlbumPageModel?>(null) }
@@ -138,10 +139,13 @@ fun YuriDesktopApp(session: DesktopSession) {
             album.tracks.minOfOrNull { recency[it.id] ?: Int.MAX_VALUE } ?: Int.MAX_VALUE
 
         val libraryItems = remember(albums, tracks, libraryFilter, pins, history, liked, playlists) {
+            val likedAlbums = albums.filter { album -> album.tracks.any { it.id in liked } }
+            val likedArtists = tracks.filter { it.id in liked }.map { it.displayArtist }.distinct()
             val pinItems = pins.map { pin ->
                 when (pin.kind) {
                     DesktopCollection.Kind.ALBUM -> {
                         val album = albums.firstOrNull { it.id == pin.id }
+                            ?: albums.firstOrNull { it.title.equals(pin.title, true) }
                         LibraryRailItem(
                             pin.id, pin.title, pin.subtitle,
                             album?.artworkUri, pinned = true
@@ -149,7 +153,7 @@ fun YuriDesktopApp(session: DesktopSession) {
                     }
                     DesktopCollection.Kind.ARTIST -> LibraryRailItem(
                         pin.id, pin.title, pin.subtitle,
-                        tracks.firstOrNull { it.displayArtist == pin.title }?.artworkUri,
+                        tracks.firstOrNull { it.displayArtist.equals(pin.title, true) }?.artworkUri,
                         circular = true, pinned = true
                     )
                     DesktopCollection.Kind.SONG -> {
@@ -168,23 +172,41 @@ fun YuriDesktopApp(session: DesktopSession) {
                     }
                 }
             }
+            val likedRow = if (liked.isNotEmpty()) {
+                listOf(
+                    LibraryRailItem(
+                        "liked",
+                        "Liked Songs",
+                        "${liked.size} songs",
+                        tracks.firstOrNull { it.id in liked }?.artworkUri
+                    )
+                )
+            } else emptyList()
             val rest = when (libraryFilter) {
-                LibraryFilter.Artists -> tracks
-                    .map { it.displayArtist }
-                    .distinct()
-                    .map { name ->
-                        val cover = tracks.firstOrNull { it.displayArtist == name }?.artworkUri
-                        val rec = tracks.filter { it.displayArtist == name }
-                            .minOfOrNull { recency[it.id] ?: Int.MAX_VALUE } ?: Int.MAX_VALUE
-                        Triple(rec, name, cover)
+                LibraryFilter.Artists -> {
+                    val names = (
+                        pins.filter { it.kind == DesktopCollection.Kind.ARTIST }.map { it.title } +
+                            likedArtists
+                        ).distinct()
+                    names.map { name ->
+                        LibraryRailItem(
+                            "artist:$name",
+                            name,
+                            "Artist",
+                            tracks.firstOrNull { it.displayArtist.equals(name, true) }?.artworkUri,
+                            circular = true
+                        )
                     }
-                    .sortedBy { it.first }
-                    .map { (_, name, cover) ->
-                        LibraryRailItem("artist:$name", name, "Artist", cover, circular = true)
-                    }
-                LibraryFilter.Albums -> albums
-                    .sortedBy { albumRecency(it) }
-                    .map { LibraryRailItem(it.id, it.title, it.artist, it.artworkUri) }
+                }
+                LibraryFilter.Albums -> {
+                    val pinnedAlbums = pins.filter { it.kind == DesktopCollection.Kind.ALBUM }
+                        .mapNotNull { pin ->
+                            albums.firstOrNull { it.id == pin.id }
+                                ?: albums.firstOrNull { it.title.equals(pin.title, true) }
+                        }
+                    (pinnedAlbums + likedAlbums).distinctBy { it.id }
+                        .map { LibraryRailItem(it.id, it.title, it.artist, it.artworkUri) }
+                }
                 LibraryFilter.Playlists -> listOf(
                     LibraryRailItem("new-playlist", "New playlist", "Create", null)
                 ) + playlists.sortedByDescending { it.updatedAtMs }.map { pl ->
@@ -195,18 +217,24 @@ fun YuriDesktopApp(session: DesktopSession) {
                         pl.artworkUri(tracks)
                     )
                 }
-                LibraryFilter.Recents -> albums
-                    .sortedBy { albumRecency(it) }
-                    .map {
-                        LibraryRailItem(
-                            it.id, it.title,
-                            "Album · ${it.artist}",
-                            it.artworkUri
-                        )
-                    }
+                LibraryFilter.Recents -> {
+                    val stuffAlbumIds = (
+                        pins.filter { it.kind == DesktopCollection.Kind.ALBUM }.map { it.id } +
+                            likedAlbums.map { it.id }
+                        ).toSet()
+                    val stuffPlaylistIds = playlists.map { it.id }.toSet()
+                    buildList {
+                        history.forEach { t ->
+                            val album = albums.firstOrNull { a -> a.tracks.any { it.id == t.id } }
+                            if (album != null && (album.id in stuffAlbumIds || album.tracks.any { it.id in liked })) {
+                                add(LibraryRailItem(album.id, album.title, "Album · ${album.artist}", album.artworkUri))
+                            }
+                        }
+                    }.distinctBy { it.id }
+                }
             }
             val pinIds = pinItems.map { it.id }.toSet()
-            pinItems + rest.filter { it.id !in pinIds }
+            likedRow + pinItems + rest.filter { it.id !in pinIds && it.id !in likedRow.map { r -> r.id }.toSet() }
         }
         val selectedLibraryId = (route as? Route.Album)?.album?.id
 
@@ -230,9 +258,10 @@ fun YuriDesktopApp(session: DesktopSession) {
             selectedLibraryId = selectedLibraryId,
             onLibraryItem = { item ->
                 when {
-                    item.id == "new-playlist" -> {
-                        val created = session.playlists.create("New playlist")
-                        push(Route.Playlist(created.id))
+                    item.id == "new-playlist" -> showNewPlaylist = true
+                    item.id == "liked" -> {
+                        val likedTracks = tracks.filter { it.id in liked }
+                        if (likedTracks.isNotEmpty()) session.player.play(likedTracks, 0)
                     }
                     item.id.startsWith("playlist:") -> {
                         push(Route.Playlist(item.id.removePrefix("playlist:")))
@@ -380,7 +409,8 @@ fun YuriDesktopApp(session: DesktopSession) {
                                 profile?.bannerCleared == true -> ""
                                 !profile?.bannerUri.isNullOrBlank() -> profile!!.bannerUri
                                 else -> base.bannerUri
-                            }
+                            },
+                            genres = profile?.genres.orEmpty()
                         )
                     }
                     val artistTracks = remember(r.name, tracks) {
@@ -457,6 +487,24 @@ fun YuriDesktopApp(session: DesktopSession) {
             DesktopSettingsDialog(
                 session = session,
                 onDismiss = { showSettings = false }
+            )
+        }
+        if (showNewPlaylist) {
+            NewPlaylistDialog(
+                onDismiss = { showNewPlaylist = false },
+                onCreate = { name, description ->
+                    val created = session.playlists.create(name, description)
+                    session.collection.pin(
+                        DesktopCollection.Pin(
+                            DesktopCollection.Kind.PLAYLIST,
+                            created.id,
+                            created.name,
+                            "Playlist"
+                        )
+                    )
+                    showNewPlaylist = false
+                    push(Route.Playlist(created.id))
+                }
             )
         }
         editSong?.let { song ->

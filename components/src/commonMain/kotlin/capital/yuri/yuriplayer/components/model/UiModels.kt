@@ -42,7 +42,8 @@ data class ArtistPageModel(
     val likedCount: Int,
     val likedReleaseCount: Int,
     val discography: List<AlbumPageModel>,
-    val appearsOn: List<AlbumPageModel>
+    val appearsOn: List<AlbumPageModel>,
+    val genres: List<String> = emptyList()
 )
 
 fun Track.toRow(highlighted: Boolean = false) = TrackRowModel(

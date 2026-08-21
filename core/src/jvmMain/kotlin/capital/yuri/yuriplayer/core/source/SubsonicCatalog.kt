@@ -163,6 +163,30 @@ class SubsonicCatalog(
             }
         }
 
+    suspend fun searchArtistImages(account: RemoteAccount, query: String): Result<List<capital.yuri.yuriplayer.core.artist.ArtistImageCandidate>> =
+        runCatching {
+            val session = sessionOf(account)
+            val body = apiGet(session, "search3") {
+                param("query", query)
+                param("songCount", 0)
+                param("albumCount", 0)
+                param("artistCount", 12)
+            }
+            val artists = json.decodeFromString<SubsonicResponse>(body)
+                .subsonicResponse.searchResult3?.artist.orEmpty()
+            artists.mapNotNull { a ->
+                val cover = a.coverArt ?: return@mapNotNull null
+                val name = a.name ?: return@mapNotNull null
+                capital.yuri.yuriplayer.core.artist.ArtistImageCandidate(
+                    url = coverUrl(session, cover, 1200) ?: return@mapNotNull null,
+                    sourceId = "navidrome",
+                    label = "Navidrome · ${account.name} · $name",
+                    width = 1200,
+                    height = 1200
+                )
+            }
+        }
+
     fun streamUrl(session: Session, id: String): String =
         restUrl(session, "stream") {
             param("id", id)
@@ -238,7 +262,15 @@ class SubsonicCatalog(
 
     @Serializable
     private data class SubsonicSearchResult(
-        val song: List<SubsonicChild> = emptyList()
+        val song: List<SubsonicChild> = emptyList(),
+        val artist: List<SubsonicArtistRef> = emptyList()
+    )
+
+    @Serializable
+    private data class SubsonicArtistRef(
+        val id: String? = null,
+        val name: String? = null,
+        val coverArt: String? = null
     )
 
     @Serializable

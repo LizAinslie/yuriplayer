@@ -142,6 +142,63 @@ class JellyfinCatalog(
             page.items.mapNotNull { toTrack(account.copy(baseUrl = root), it) }
         }
 
+    suspend fun searchArtistImages(account: RemoteAccount, query: String): Result<List<capital.yuri.yuriplayer.core.artist.ArtistImageCandidate>> =
+        runCatching {
+            val token = account.accessToken ?: error("Not signed in")
+            val userId = account.userId ?: error("Not signed in")
+            val root = normalizeBaseUrl(account.baseUrl)
+            val requestUrl = url(root) {
+                path("Users", userId, "Items")
+                param("SearchTerm", query)
+                param("IncludeItemTypes", "MusicArtist")
+                param("Recursive", "true")
+                param("EnableImages", "true")
+                param("EnableImageTypes", "Primary,Backdrop")
+                param("ImageTypeLimit", "2")
+                param("Limit", 8)
+            }
+            val response = http.get(requestUrl) {
+                header("X-Emby-Authorization", authHeader(token))
+                header("X-Emby-Token", token)
+            }
+            if (!response.status.isSuccess()) error("Search HTTP ${response.status.value}")
+            val page = json.decodeFromString<ItemsResponse>(response.bodyAsText())
+            val out = ArrayList<capital.yuri.yuriplayer.core.artist.ArtistImageCandidate>()
+            for (item in page.items) {
+                val id = item.id ?: continue
+                val name = item.name ?: continue
+                if (item.imageTags?.containsKey("Primary") == true) {
+                    out += capital.yuri.yuriplayer.core.artist.ArtistImageCandidate(
+                        url = url(root) {
+                            path("Items", id, "Images", "Primary")
+                            param("maxWidth", 800)
+                            param("quality", 90)
+                            param("api_key", token)
+                        },
+                        sourceId = "jellyfin",
+                        label = "Jellyfin · ${account.name} · $name",
+                        width = 800,
+                        height = 800
+                    )
+                }
+                if (!item.backdropTags.isNullOrEmpty() || item.imageTags?.containsKey("Backdrop") == true) {
+                    out += capital.yuri.yuriplayer.core.artist.ArtistImageCandidate(
+                        url = url(root) {
+                            path("Items", id, "Images", "Backdrop")
+                            param("maxWidth", 1920)
+                            param("quality", 90)
+                            param("api_key", token)
+                        },
+                        sourceId = "jellyfin",
+                        label = "Jellyfin backdrop · ${account.name} · $name",
+                        width = 1920,
+                        height = 1080
+                    )
+                }
+            }
+            out
+        }
+
     private fun toTrack(account: RemoteAccount, item: JfItem): Track? {
         val id = item.id ?: return null
         val token = account.accessToken ?: return null
@@ -223,6 +280,7 @@ class JellyfinCatalog(
         @SerialName("ProductionYear") val year: Int? = null,
         @SerialName("AlbumId") val albumId: String? = null,
         @SerialName("ImageTags") val imageTags: Map<String, String>? = null,
+        @SerialName("BackdropImageTags") val backdropTags: List<String>? = null,
         @SerialName("Container") val container: String? = null
     )
 }
