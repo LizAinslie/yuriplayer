@@ -1,6 +1,9 @@
 package capital.yuri.yuriplayer.player.engine
 
+import android.content.Context
+import android.net.Uri
 import android.os.Handler
+import android.os.HandlerThread
 import android.util.Log
 import java.io.File
 import java.io.FileOutputStream
@@ -9,15 +12,15 @@ import java.net.URL
 import java.security.MessageDigest
 
 /**
- * Downloads the next HTTP track (Jellyfin original / static stream) to disk
- * while the current song plays, so swap can start from a local file.
+ * Downloads remote tracks to disk while they stream so skip-back / repeat
+ * hit a local file. Playback itself uses the HTTP URI until a file is complete
+ * (stream-until-buffered) — we never swap a playing decoder onto a partial file.
  */
-class StreamPrefetcher(
-    cacheDir: File,
-    private val ioHandler: Handler,
-    private val mainHandler: Handler
-) {
+class StreamPrefetcher private constructor(cacheDir: File) {
     private val dir = File(cacheDir, "stream_prefetch").also { it.mkdirs() }
+    private val ioThread = HandlerThread("stream-prefetch").apply { start() }
+    private val ioHandler = Handler(ioThread.looper)
+
     private val ready = object : LinkedHashMap<String, File>(MAX_FILES + 1, 0.75f, true) {
         override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, File>?): Boolean {
             val drop = size > MAX_FILES
@@ -26,52 +29,65 @@ class StreamPrefetcher(
         }
     }
 
-    @Volatile private var generation = 0
-    private var downloadingId: String? = null
+    private val generations = HashMap<String, Int>()
+    private val inFlight = HashSet<String>()
 
     fun fileIfReady(mediaId: String): File? {
         val f = synchronized(ready) { ready[mediaId] }
         return f?.takeIf { it.isFile && it.length() >= MIN_BYTES }
     }
 
-    fun start(item: PlaybackMedia, onReady: (File) -> Unit) {
-        if (!item.isNetwork) return
-        val scheme = item.uri.scheme?.lowercase()
-        if (scheme != "http" && scheme != "https") return
-        fileIfReady(item.mediaId)?.let {
-            Log.i(TAG, "prefetch hit '${item.title}' ${it.length()}B")
-            mainHandler.post { onReady(it) }
-            return
-        }
-        if (downloadingId == item.mediaId) return
-        generation += 1
-        val gen = generation
-        downloadingId = item.mediaId
-        ioHandler.post { download(item, gen, onReady) }
+    fun cached(item: PlaybackMedia): PlaybackMedia {
+        val f = fileIfReady(item.mediaId) ?: return item
+        return item.copy(uri = Uri.fromFile(f), isNetwork = false)
     }
 
-    fun cancel() {
-        generation += 1
-        downloadingId = null
+    fun start(item: PlaybackMedia) {
+        if (!item.isNetwork || item.live) return
+        val scheme = item.uri.scheme?.lowercase()
+        if (scheme != "http" && scheme != "https") return
+        if (fileIfReady(item.mediaId) != null) return
+        val gen = synchronized(generations) {
+            if (item.mediaId in inFlight) return
+            if (inFlight.size >= MAX_IN_FLIGHT) return
+            val g = (generations[item.mediaId] ?: 0) + 1
+            generations[item.mediaId] = g
+            inFlight += item.mediaId
+            g
+        }
+        ioHandler.post { download(item, gen) }
+    }
+
+    /** Drop in-flight jobs whose mediaId is not in [keep]. Cached files stay. */
+    fun retain(keep: Set<String>) {
+        synchronized(generations) {
+            val drop = inFlight.filter { it !in keep }
+            drop.forEach { id ->
+                generations[id] = (generations[id] ?: 0) + 1
+                inFlight.remove(id)
+            }
+        }
     }
 
     fun release() {
-        cancel()
+        synchronized(generations) {
+            inFlight.forEach { id -> generations[id] = (generations[id] ?: 0) + 1 }
+            inFlight.clear()
+        }
+        ioThread.quitSafely()
         synchronized(ready) {
-            ready.values.forEach { it.delete() }
             ready.clear()
         }
-        dir.listFiles()?.forEach { it.delete() }
     }
 
-    private fun download(item: PlaybackMedia, gen: Int, onReady: (File) -> Unit) {
+    private fun download(item: PlaybackMedia, gen: Int) {
         val dest = File(dir, keyName(item.mediaId) + ".bin")
         val tmp = File(dir, keyName(item.mediaId) + ".part")
         var conn: HttpURLConnection? = null
         try {
+            if (!stillCurrent(item.mediaId, gen)) return
             if (dest.isFile && dest.length() >= MIN_BYTES) {
                 synchronized(ready) { ready[item.mediaId] = dest }
-                if (gen == generation) mainHandler.post { onReady(dest) }
                 return
             }
             tmp.delete()
@@ -79,7 +95,7 @@ class StreamPrefetcher(
             conn = (URL(item.uri.toString()).openConnection() as HttpURLConnection).apply {
                 instanceFollowRedirects = true
                 connectTimeout = 15_000
-                readTimeout = 30_000
+                readTimeout = 60_000
                 setRequestProperty("User-Agent", "YuriPlayer/0.1")
                 item.headers.forEach { (k, v) -> setRequestProperty(k, v) }
             }
@@ -97,7 +113,7 @@ class StreamPrefetcher(
                 conn.inputStream.use { input ->
                     val buf = ByteArray(64 * 1024)
                     var written = 0L
-                    while (gen == generation) {
+                    while (stillCurrent(item.mediaId, gen)) {
                         val n = input.read(buf)
                         if (n < 0) break
                         out.write(buf, 0, n)
@@ -110,7 +126,7 @@ class StreamPrefetcher(
                     }
                 }
             }
-            if (gen != generation) {
+            if (!stillCurrent(item.mediaId, gen)) {
                 tmp.delete()
                 return
             }
@@ -125,26 +141,41 @@ class StreamPrefetcher(
             }
             synchronized(ready) { ready[item.mediaId] = dest }
             Log.i(TAG, "prefetch ready '${item.title}' ${dest.length()}B of $total")
-            mainHandler.post { onReady(dest) }
         } catch (e: Exception) {
             Log.w(TAG, "prefetch failed '${item.title}': ${e.message}")
             tmp.delete()
         } finally {
             runCatching { conn?.disconnect() }
-            if (gen == generation && downloadingId == item.mediaId) downloadingId = null
+            synchronized(generations) {
+                if (generations[item.mediaId] == gen) inFlight.remove(item.mediaId)
+            }
         }
     }
 
+    private fun stillCurrent(mediaId: String, gen: Int): Boolean =
+        synchronized(generations) { generations[mediaId] == gen }
+
     private fun keyName(mediaId: String): String {
         val md = MessageDigest.getInstance("SHA-1")
-        val hex = md.digest(mediaId.toByteArray()).joinToString("") { "%02x".format(it) }
-        return hex.take(24)
+        return md.digest(mediaId.toByteArray()).joinToString("") { "%02x".format(it) }.take(24)
     }
 
     companion object {
         private const val TAG = "StreamPrefetch"
-        private const val MIN_BYTES = 64 * 1024L
-        private const val MAX_BYTES = 80L * 1024L * 1024L
-        private const val MAX_FILES = 3
+        private const val MIN_BYTES = 256 * 1024L
+        private const val MAX_BYTES = 256L * 1024L * 1024L
+        private const val MAX_FILES = 8
+        private const val MAX_IN_FLIGHT = 2
+
+        @Volatile private var instance: StreamPrefetcher? = null
+
+        fun get(context: Context): StreamPrefetcher {
+            instance?.let { return it }
+            return synchronized(this) {
+                instance ?: StreamPrefetcher(context.applicationContext.cacheDir).also {
+                    instance = it
+                }
+            }
+        }
     }
 }

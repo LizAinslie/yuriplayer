@@ -65,11 +65,7 @@ class VlcPlaybackEngine(
     private var currentMedia: Media? = null
     private var nextMedia: Media? = null
 
-    private val prefetcher = StreamPrefetcher(
-        cacheDir = appContext.cacheDir,
-        ioHandler = ioHandler,
-        mainHandler = mainHandler
-    )
+    private val prefetcher = StreamPrefetcher.get(appContext)
 
     private var nextItem: PlaybackMedia? = null
     @Volatile private var nextReady: Boolean = false
@@ -308,22 +304,22 @@ class VlcPlaybackEngine(
 
     override fun setNext(item: PlaybackMedia?) {
         if (currentIsLive()) {
-            prefetcher.cancel()
+            prefetcher.retain(currentKeepIds())
             clearNext()
             return
         }
         if (item == null) {
-            prefetcher.cancel()
+            prefetcher.retain(currentKeepIds())
             clearNext()
             return
         }
-        prefetcher.start(item) { file -> onPrefetchReady(item, file) }
+        prefetcher.retain(currentKeepIds() + item.mediaId)
+        prefetcher.start(item)
         if (nextItem?.mediaId == item.mediaId && (nextReady || nextPreparing)) {
             return
         }
         clearNext()
-        val local = prefetcher.fileIfReady(item.mediaId)
-        prepareStandby(if (local != null) item.copy(uri = Uri.fromFile(local), isNetwork = false) else item)
+        prepareStandby(prefetcher.cached(item))
     }
 
     override fun hasPreparedNext(): Boolean =
@@ -334,19 +330,10 @@ class VlcPlaybackEngine(
 
     override fun playPreparedNext(): Boolean = swapToPreparedNext()
 
-    override fun warmupNext() {
-        // Never play the standby. Dummy aout still leaked ~2s of the next
-        // track over the speakers. Prefetch downloads the file; swap plays it.
-    }
+    override fun warmupNext() = Unit
 
-    private fun onPrefetchReady(item: PlaybackMedia, file: File) {
-        if (nextItem?.mediaId != item.mediaId) return
-        if (nextItem?.uri?.scheme == "file") return
-        val local = item.copy(uri = Uri.fromFile(file), isNetwork = false)
-        Log.i(TAG, "standby ← disk '${item.title}' ${file.length()}B")
-        nextWarming = false
-        prepareStandby(local)
-    }
+    private fun currentKeepIds(): Set<String> =
+        listOfNotNull(window.getOrNull(index)?.mediaId, nextItem?.mediaId).toSet()
 
     override fun release() {
         listeners.clear()
@@ -362,7 +349,7 @@ class VlcPlaybackEngine(
         }
         currentMedia = null
         nextMedia = null
-        prefetcher.release()
+        prefetcher.retain(emptySet())
         closeDescriptors()
         closeNextDescriptors()
         runCatching { libVLC.release() }
@@ -386,19 +373,30 @@ class VlcPlaybackEngine(
         eventGeneration = gen
         pendingSeekMs = if (startPositionMs > 0L) startPositionMs else -1L
         if (autoPlay) playWhenReady = true
+        // Stop the current decoder immediately so skip-ahead cannot keep
+        // playing the old song under the new artwork.
+        runCatching { active().stop() }
+        _isPlaying.value = false
+        buffering = true
         dispatch { onPlaybackStateChanged(PlaybackEngine.PlaybackState.BUFFERING) }
 
+        if (item.isNetwork) {
+            prefetcher.retain(setOf(item.mediaId) + listOfNotNull(window.getOrNull(idx + 1)?.mediaId))
+            prefetcher.start(item)
+        }
+
         ioHandler.post {
-            val opened = runCatching { openInput(item) }
+            val playable = prefetcher.cached(item)
+            val opened = runCatching { openInput(playable) }
             mainHandler.post {
                 if (gen != loadGeneration) {
                     opened.getOrNull()?.close()
                     return@post
                 }
                 opened.fold(
-                    onSuccess = { input -> attachAndMaybePlay(item, input, gen) },
+                    onSuccess = { input -> attachAndMaybePlay(playable, input, gen) },
                     onFailure = { e ->
-                        Log.e(TAG, "open failed ${item.uri}", e)
+                        Log.e(TAG, "open failed ${playable.uri}", e)
                         dispatch { onError(e.message ?: "VLC open failed", recoverable = true) }
                     }
                 )
@@ -676,7 +674,7 @@ class VlcPlaybackEngine(
     companion object {
         private const val TAG = "VlcEngine"
         private const val FILE_CACHE_MS = 800
-        private const val NETWORK_CACHE_MS = 3_000
+        private const val NETWORK_CACHE_MS = 6_000
         private const val PREFETCH_BYTES = 16 * 1024 * 1024
 
         val DESCRIPTOR = PlaybackEngineDescriptor(

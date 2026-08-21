@@ -38,6 +38,7 @@ class Media3PlaybackEngine(
     private val appContext = context.applicationContext
     private val mainHandler = Handler(Looper.getMainLooper())
     private val listeners = linkedSetOf<PlaybackEngine.Listener>()
+    private val prefetcher = StreamPrefetcher.get(appContext)
 
     private val httpFactory = DefaultHttpDataSource.Factory()
         .setAllowCrossProtocolRedirects(true)
@@ -166,10 +167,11 @@ class Media3PlaybackEngine(
             return
         }
         applyHeaders(items)
+        items.filter { it.isNetwork && !it.live }.forEach { prefetcher.start(it) }
         val playable = if (items.getOrNull(startIndex)?.live == true) {
             listOf(items[startIndex.coerceIn(0, items.lastIndex)])
         } else {
-            items
+            items.map { prefetcher.cached(it) }
         }
         val mediaItems = playable.map { it.toMediaItem() }
         val idx = if (playable.size == 1) 0 else startIndex.coerceIn(0, mediaItems.lastIndex)
@@ -275,15 +277,17 @@ class Media3PlaybackEngine(
             }
             return
         }
+        if (item.isNetwork) prefetcher.start(item)
+        val playable = prefetcher.cached(item)
         // Same upcoming item is already in the window — keep its buffer.
-        if (queuedId == item.mediaId && player.mediaItemCount == 2) return
+        if (queuedId == playable.mediaId && player.mediaItemCount == 2) return
         while (player.mediaItemCount > 1) {
             player.removeMediaItem(player.mediaItemCount - 1)
         }
-        applyHeaders(listOf(item))
-        player.addMediaItem(item.toMediaItem())
+        applyHeaders(listOf(playable))
+        player.addMediaItem(playable.toMediaItem())
         if (player.playbackState == Player.STATE_IDLE) player.prepare()
-        Log.i(TAG, "setNext '${item.title}' network=${item.isNetwork}")
+        Log.i(TAG, "setNext '${playable.title}' network=${playable.isNetwork}")
     }
 
     override fun hasPreparedNext(): Boolean = player.hasNextMediaItem()
