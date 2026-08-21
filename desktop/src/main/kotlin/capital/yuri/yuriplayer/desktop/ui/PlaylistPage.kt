@@ -191,7 +191,7 @@ fun PlaylistPage(
                     TextButton(onClick = {
                         if (index < tracks.lastIndex) store.moveTrack(playlist.id, index, index + 1)
                     }, enabled = index < tracks.lastIndex) { Text("Down") }
-                    IconButton(onClick = { store.removeTracks(playlist.id, listOf(track.id)) }) {
+                    IconButton(onClick = { store.removeTracks(playlist.id, listOf(track)) }) {
                         Icon(Icons.Default.Delete, contentDescription = "Remove")
                     }
                 }
@@ -202,10 +202,10 @@ fun PlaylistPage(
     if (showAdd) {
         AddSongsDialog(
             library = library,
-            existing = playlist.trackIds.toSet(),
+            existing = (playlist.trackIds + playlist.tracks(library).flatMap { it.playlistKeys() }).toSet(),
             onDismiss = { showAdd = false },
-            onAdd = { ids ->
-                store.addTracks(playlist.id, ids)
+            onAdd = { added ->
+                store.addTracks(playlist.id, added)
                 showAdd = false
             }
         )
@@ -233,7 +233,7 @@ private fun AddSongsDialog(
     library: List<Track>,
     existing: Set<String>,
     onDismiss: () -> Unit,
-    onAdd: (List<String>) -> Unit
+    onAdd: (List<Track>) -> Unit
 ) {
     var query by remember { mutableStateOf("") }
     val hits = remember(query, library) {
@@ -253,10 +253,10 @@ private fun AddSongsDialog(
                 )
                 LazyColumn(Modifier.weight(1f).padding(top = 8.dp)) {
                     itemsIndexed(hits, key = { _, t -> t.id }) { _, track ->
-                        val inPl = track.id in existing
+                        val inPl = track.playlistKeys().any { it in existing }
                         TrackRow(
                             track = track.toRow(),
-                            onClick = { if (!inPl) onAdd(listOf(track.id)) },
+                            onClick = { if (!inPl) onAdd(listOf(track)) },
                             showCover = true,
                             showAlbum = true
                         )

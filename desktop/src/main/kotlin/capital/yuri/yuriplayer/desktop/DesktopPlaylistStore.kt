@@ -63,16 +63,33 @@ class DesktopPlaylistStore(configDir: String) {
         update(id) { it.copy(trackIds = trackIds.distinct()) }
     }
 
-    fun addTracks(id: String, trackIds: List<String>) {
-        update(id) { it.copy(trackIds = (it.trackIds + trackIds).distinct()) }
+    fun addTracks(id: String, tracks: List<Track>) {
+        if (tracks.isEmpty()) return
+        update(id) { pl ->
+            val existing = pl.trackIds.toMutableList()
+            val seen = existing.toHashSet()
+            for (t in tracks) {
+                val already = t.playlistKeys().any { it in seen }
+                if (!already) {
+                    existing += t.catalogKey()
+                    seen += t.playlistKeys()
+                }
+            }
+            pl.copy(trackIds = existing)
+        }
     }
 
     fun playlistsContaining(trackId: String): Set<String> =
         _playlists.value.filter { trackId in it.trackIds }.map { it.id }.toSet()
 
-    fun removeTracks(id: String, trackIds: List<String>) {
-        val drop = trackIds.toHashSet()
-        update(id) { it.copy(trackIds = it.trackIds.filterNot { id -> id in drop }) }
+    fun playlistsContaining(track: Track): Set<String> {
+        val keys = track.playlistKeys()
+        return _playlists.value.filter { pl -> pl.trackIds.any { it in keys } }.map { it.id }.toSet()
+    }
+
+    fun removeTracks(id: String, tracks: List<Track>) {
+        val drop = tracks.flatMap { it.playlistKeys() }.toHashSet()
+        update(id) { it.copy(trackIds = it.trackIds.filterNot { key -> key in drop }) }
     }
 
     fun moveTrack(id: String, from: Int, to: Int) {
@@ -203,12 +220,19 @@ data class DesktopPlaylist(
     fun artworkUri(library: List<Track>): String? {
         val active = covers.firstOrNull { it.id == activeCoverId } ?: covers.firstOrNull { !it.isSecret }
         if (active != null) return File(active.path).toURI().toString()
-        return trackIds.firstNotNullOfOrNull { id -> library.firstOrNull { it.id == id }?.artworkUri }
+        return trackIds.firstNotNullOfOrNull { id ->
+            library.firstOrNull { it.id == id || it.catalogKey() == id }?.artworkUri
+        }
     }
 
     fun tracks(library: List<Track>): List<Track> {
-        val byId = library.associateBy { it.id }
-        return trackIds.mapNotNull { byId[it] }
+        if (trackIds.isEmpty() || library.isEmpty()) return emptyList()
+        val byKey = HashMap<String, Track>(library.size * 2)
+        for (t in library) {
+            byKey.putIfAbsent(t.id, t)
+            byKey.putIfAbsent(t.catalogKey(), t)
+        }
+        return trackIds.mapNotNull { byKey[it] }
     }
 }
 

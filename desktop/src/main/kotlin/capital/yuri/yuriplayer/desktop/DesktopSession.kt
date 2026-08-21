@@ -323,11 +323,22 @@ class DesktopSession {
         _tracks.value = (_tracks.value + incoming).distinctBy { it.id }
     }
 
+    fun ensureTracks(incoming: List<Track>) {
+        if (incoming.isEmpty()) return
+        mergeTracks(incoming)
+        persistIndex()
+    }
+
     private fun replaceSourceTracks(sourceId: String, incoming: List<Track>) {
-        val rest = _tracks.value.filterNot {
-            (it.sourceId ?: LOCAL_SCAN_ID) == sourceId
+        val referenced = playlists.playlists.value.flatMap { it.trackIds }.toHashSet()
+        val existing = _tracks.value
+        val orphans = existing.filter { t ->
+            (t.sourceId ?: LOCAL_SCAN_ID) == sourceId &&
+                incoming.none { n -> n.id == t.id } &&
+                (t.id in referenced || t.catalogKey() in referenced)
         }
-        _tracks.value = (rest + incoming).distinctBy { it.id }
+        val rest = existing.filterNot { (it.sourceId ?: LOCAL_SCAN_ID) == sourceId }
+        _tracks.value = (rest + incoming + orphans).distinctBy { it.id }
     }
 
     private fun persistIndex() {

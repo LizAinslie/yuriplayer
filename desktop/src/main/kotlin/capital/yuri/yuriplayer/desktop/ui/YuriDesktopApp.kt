@@ -139,15 +139,17 @@ fun YuriDesktopApp(session: DesktopSession) {
         fun openArtist(name: String) = push(Route.Artist(name))
 
         fun playlistAddAlternate(songs: List<Track>): ContextMenuScope.() -> Unit = {
-            val ids = songs.map { it.id }
             val candidates = playlists
-                .filter { pl -> ids.any { it !in pl.trackIds } }
+                .filter { pl -> songs.any { t -> pl.trackIds.none { it in t.playlistKeys() } } }
                 .sortedBy { it.name.lowercase() }
             if (candidates.isEmpty()) {
                 item("Already in every playlist", enabled = false) {}
             } else {
                 candidates.forEach { pl ->
-                    item(pl.name) { session.playlists.addTracks(pl.id, ids) }
+                    item(pl.name) {
+                        session.ensureTracks(songs)
+                        session.playlists.addTracks(pl.id, songs)
+                    }
                 }
             }
         }
@@ -172,7 +174,7 @@ fun YuriDesktopApp(session: DesktopSession) {
             if (playlistId != null) {
                 divider()
                 item("Remove from this playlist", destructive = true) {
-                    session.playlists.removeTracks(playlistId, listOf(track.id))
+                    session.playlists.removeTracks(playlistId, listOf(track))
                 }
             }
         }
@@ -697,7 +699,8 @@ fun YuriDesktopApp(session: DesktopSession) {
                 tracks = songs,
                 store = session.playlists,
                 library = tracks,
-                onDismiss = { addToPlaylist = null }
+                onDismiss = { addToPlaylist = null },
+                onEnsureTracks = { session.ensureTracks(it) }
             )
         }
     }

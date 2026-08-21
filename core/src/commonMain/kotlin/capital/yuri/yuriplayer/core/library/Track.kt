@@ -36,4 +36,19 @@ data class Track(
 
     val displayAlbum: String
         get() = album?.takeIf { it.isNotBlank() } ?: "Unknown Album"
+
+    /**
+     * Cross-source identity (local + Jellyfin + Subsonic of the same recording).
+     * Playlists store this so a Navidrome search hit resolves to the library row.
+     */
+    fun catalogKey(): String {
+        val t = foldSearch(title ?: displayTitle)
+        if (t.isEmpty()) return id
+        val a = foldSearch(albumArtist ?: artist ?: "")
+        val al = foldSearch(album ?: "")
+        val n = trackNumber ?: 0
+        return "k:$t|$a|$al|$n"
+    }
+
+    fun playlistKeys(): Set<String> = setOf(id, catalogKey())
 }

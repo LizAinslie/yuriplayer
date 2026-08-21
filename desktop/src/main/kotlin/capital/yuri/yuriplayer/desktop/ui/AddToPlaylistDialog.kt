@@ -46,21 +46,23 @@ fun AddToPlaylistDialog(
     tracks: List<Track>,
     store: DesktopPlaylistStore,
     library: List<Track>,
-    onDismiss: () -> Unit
+    onDismiss: () -> Unit,
+    onEnsureTracks: (List<Track>) -> Unit = {}
 ) {
     val playlists by store.playlists.collectAsState()
-    val ids = remember(tracks) { tracks.map { it.id } }
     var initiallyIn by remember { mutableStateOf(emptySet<String>()) }
     var selected by remember { mutableStateOf(emptySet<String>()) }
     var query by remember { mutableStateOf("") }
     var creating by remember { mutableStateOf(false) }
     var newName by remember { mutableStateOf("") }
 
-    LaunchedEffect(ids) {
-        val containing = if (ids.size == 1) {
-            store.playlistsContaining(ids.first())
+    LaunchedEffect(tracks.map { it.id }) {
+        val containing = if (tracks.size == 1) {
+            store.playlistsContaining(tracks.first())
         } else {
-            playlists.filter { pl -> ids.all { it in pl.trackIds } }.map { it.id }.toSet()
+            playlists.filter { pl ->
+                tracks.all { t -> pl.trackIds.any { it in t.playlistKeys() } }
+            }.map { it.id }.toSet()
         }
         initiallyIn = containing
         selected = containing
@@ -97,7 +99,9 @@ fun AddToPlaylistDialog(
                     TextButton(onClick = { creating = false; newName = "" }) { Text("Cancel") }
                     Button(
                         onClick = {
-                            val pl = store.create(newName, trackIds = ids)
+                            val pl = store.create(newName, trackIds = emptyList())
+                            store.addTracks(pl.id, tracks)
+                            onEnsureTracks(tracks)
                             selected = selected + pl.id
                             initiallyIn = initiallyIn + pl.id
                             creating = false
@@ -165,7 +169,7 @@ fun AddToPlaylistDialog(
                             Column(Modifier.weight(1f)) {
                                 Text(pl.name, maxLines = 1, overflow = TextOverflow.Ellipsis)
                                 Text(
-                                    "${pl.trackIds.size} songs",
+                                    "${pl.tracks(library).size.coerceAtLeast(pl.trackIds.size)} songs",
                                     style = MaterialTheme.typography.bodySmall,
                                     color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.55f)
                                 )
@@ -178,8 +182,9 @@ fun AddToPlaylistDialog(
                 onClick = {
                     val toAdd = selected - initiallyIn
                     val toRemove = initiallyIn - selected
-                    toAdd.forEach { store.addTracks(it, ids) }
-                    toRemove.forEach { store.removeTracks(it, ids) }
+                    if (toAdd.isNotEmpty()) onEnsureTracks(tracks)
+                    toAdd.forEach { store.addTracks(it, tracks) }
+                    toRemove.forEach { store.removeTracks(it, tracks) }
                     onDismiss()
                 },
                 modifier = Modifier.fillMaxWidth().padding(top = 12.dp)
