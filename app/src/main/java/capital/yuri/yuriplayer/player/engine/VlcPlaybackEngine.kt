@@ -304,16 +304,13 @@ class VlcPlaybackEngine(
 
     override fun setNext(item: PlaybackMedia?) {
         if (currentIsLive()) {
-            prefetcher.retain(currentKeepIds())
             clearNext()
             return
         }
         if (item == null) {
-            prefetcher.retain(currentKeepIds())
             clearNext()
             return
         }
-        prefetcher.retain(currentKeepIds() + item.mediaId)
         prefetcher.start(item)
         if (nextItem?.mediaId == item.mediaId && (nextReady || nextPreparing)) {
             return
@@ -331,9 +328,6 @@ class VlcPlaybackEngine(
     override fun playPreparedNext(): Boolean = swapToPreparedNext()
 
     override fun warmupNext() = Unit
-
-    private fun currentKeepIds(): Set<String> =
-        listOfNotNull(window.getOrNull(index)?.mediaId, nextItem?.mediaId).toSet()
 
     override fun release() {
         listeners.clear()
@@ -381,7 +375,6 @@ class VlcPlaybackEngine(
         dispatch { onPlaybackStateChanged(PlaybackEngine.PlaybackState.BUFFERING) }
 
         if (item.isNetwork) {
-            prefetcher.retain(setOf(item.mediaId) + listOfNotNull(window.getOrNull(idx + 1)?.mediaId))
             prefetcher.start(item)
         }
 

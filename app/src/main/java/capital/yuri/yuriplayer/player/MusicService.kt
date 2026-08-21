@@ -19,6 +19,7 @@ import androidx.core.app.NotificationCompat
 import capital.yuri.yuriplayer.activities.MainActivity
 import capital.yuri.yuriplayer.data.LibrarySettings
 import capital.yuri.yuriplayer.data.Song
+import capital.yuri.yuriplayer.player.engine.StreamPrefetcher
 import capital.yuri.yuriplayer.player.engine.isNetworkUri
 import capital.yuri.yuriplayer.player.engine.isVirtualLibraryPath
 import capital.yuri.yuriplayer.player.engine.toPlaybackMedia
@@ -279,6 +280,7 @@ class MusicService : Service() {
         maybeRecordHistory(current)
         updateForegroundNotification()
         persistState()
+        syncPreparedNext()
     }
 
     private fun maybeRecordHistory(song: Song) {
@@ -353,11 +355,33 @@ class MusicService : Service() {
         if (!hooks.active) return
         if (isRepeatOne()) {
             hooks.setNext(null)
+            StreamPrefetcher.get(this).retain(currentPrefetchIds())
             return
         }
-        val next = queueManager.peekNext()
-        Log.i(TAG, "syncPreparedNext '${next?.displayTitle}'")
+        val upcoming = queueManager.upcoming(WARM_AHEAD)
+        val next = upcoming.firstOrNull()
+        Log.i(TAG, "syncPreparedNext '${next?.displayTitle}' warm=${upcoming.size}")
         hooks.setNext(next)
+        warmUpcoming(upcoming)
+    }
+
+    private fun currentPrefetchIds(): Set<String> {
+        val quality = librarySettings.getStreamQuality()
+        return setOfNotNull(queueManager.currentSong()?.toPlaybackMedia(quality = quality)?.mediaId)
+    }
+
+    private fun warmUpcoming(upcoming: List<Song>) {
+        val quality = librarySettings.getStreamQuality()
+        val prefetch = StreamPrefetcher.get(this)
+        val current = queueManager.currentSong()?.toPlaybackMedia(quality = quality)
+        val nextMedia = upcoming.map { it.toPlaybackMedia(quality = quality) }
+        val keep = buildSet {
+            current?.mediaId?.let { add(it) }
+            nextMedia.forEach { add(it.mediaId) }
+        }
+        prefetch.retain(keep)
+        current?.let { prefetch.start(it) }
+        nextMedia.forEach { prefetch.start(it) }
     }
 
     /**
@@ -1150,6 +1174,7 @@ class MusicService : Service() {
         private const val STICKY_SEEK_MS = 1_200L
         private const val USER_SEEK_GUARD_MS = 1_000L
         private const val SEEK_CONFIRM_MS = 600L
+        private const val WARM_AHEAD = 2
         private const val RESTORE_PREPARE_DELAY_MS = 40L
         private const val STARTUP_IGNORE_SESSION_PLAY_MS = 2_500L
     }

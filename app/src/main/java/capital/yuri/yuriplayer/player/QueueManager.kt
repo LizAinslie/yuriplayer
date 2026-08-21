@@ -128,6 +128,50 @@ class QueueManager {
 
     fun peekPrevious(): Song? = playedStack.lastOrNull()
 
+    /** Next [limit] songs after current, hot then cold then radio. */
+    fun upcoming(limit: Int = 2): List<Song> {
+        if (limit <= 0 || repeatMode == RepeatMode.ONE) return emptyList()
+        val out = ArrayList<Song>(limit)
+        fun take(song: Song?) {
+            if (song == null || out.size >= limit) return
+            if (out.any { it.songKey == song.songKey }) return
+            out += song
+        }
+        if (floatingCurrent != null) {
+            hotQueue.forEach { take(it) }
+            if (out.size >= limit) return out
+            coldQueue.forEach { take(it) }
+            if (out.size >= limit) return out
+            radioUpcoming.forEach { take(it) }
+            return out
+        }
+        when (lane) {
+            QueueLane.HOT -> {
+                if (indexInLane in hotQueue.indices) {
+                    for (i in (indexInLane + 1) until hotQueue.size) {
+                        take(hotQueue[i])
+                        if (out.size >= limit) return out
+                    }
+                }
+                coldQueue.forEach { take(it) }
+                if (out.size >= limit) return out
+                radioUpcoming.forEach { take(it) }
+            }
+            QueueLane.COLD -> {
+                hotQueue.forEach { take(it) }
+                if (out.size >= limit) return out
+                if (indexInLane in coldQueue.indices) {
+                    for (i in (indexInLane + 1) until coldQueue.size) {
+                        take(coldQueue[i])
+                        if (out.size >= limit) return out
+                    }
+                }
+                radioUpcoming.forEach { take(it) }
+            }
+        }
+        return out
+    }
+
     private fun publish() {
         _snapshot.value = QueueSnapshot(
             hotQueue = hotQueue.toList(),

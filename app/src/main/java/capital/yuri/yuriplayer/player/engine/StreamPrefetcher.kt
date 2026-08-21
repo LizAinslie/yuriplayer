@@ -165,7 +165,7 @@ class StreamPrefetcher private constructor(cacheDir: File) {
         private const val MIN_BYTES = 256 * 1024L
         private const val MAX_BYTES = 256L * 1024L * 1024L
         private const val MAX_FILES = 8
-        private const val MAX_IN_FLIGHT = 2
+        private const val MAX_IN_FLIGHT = 3
 
         @Volatile private var instance: StreamPrefetcher? = null
 
