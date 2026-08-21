@@ -27,10 +27,12 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import capital.yuri.yuriplayer.data.MetadataEditService
 import capital.yuri.yuriplayer.data.source.SourceOffering
 import capital.yuri.yuriplayer.data.source.SourceType
 import capital.yuri.yuriplayer.data.source.displayLabel
 import capital.yuri.yuriplayer.data.source.supportsEmbeddedTagWrites
+import org.koin.compose.koinInject
 
 /**
  * View / prefer sources for a track. Always usable (even with a single source).
@@ -45,6 +47,7 @@ fun SourcesPickerSheet(
     onDismiss: () -> Unit,
     onPick: (SourceOffering) -> Unit
 ) {
+    val edit: MetadataEditService = koinInject()
     ModalBottomSheet(
         onDismissRequest = onDismiss,
         sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
@@ -85,7 +88,8 @@ fun SourcesPickerSheet(
                         preferred.sourceType == off.sourceType &&
                         preferred.sourceId == off.sourceId &&
                         preferred.song.songKey == off.song.songKey
-                    val writable = off.sourceType.supportsEmbeddedTagWrites()
+                    val typeWritable = off.sourceType.supportsEmbeddedTagWrites()
+                    val writable = typeWritable && edit.isWritableSong(off.song)
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
@@ -95,7 +99,7 @@ fun SourcesPickerSheet(
                     ) {
                         Icon(
                             imageVector = when {
-                                !writable -> Icons.Default.Lock
+                                !typeWritable -> Icons.Default.Lock
                                 off.sourceType == SourceType.LOCAL -> Icons.Default.SdStorage
                                 else -> Icons.Default.Cloud
                             },
@@ -111,8 +115,7 @@ fun SourcesPickerSheet(
                                 fontWeight = if (isPreferred) FontWeight.SemiBold else FontWeight.Normal
                             )
                             Text(
-                                if (writable) "Writable · tags can be edited"
-                                else "Read-only · server catalog",
+                                "${off.sourceType.displayName()} · ${if (writable) "Writable" else "Read-only"}",
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.55f)
                             )

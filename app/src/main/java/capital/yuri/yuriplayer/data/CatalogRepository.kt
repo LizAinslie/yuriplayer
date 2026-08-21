@@ -8,6 +8,7 @@ import capital.yuri.yuriplayer.data.db.CatalogCreditEntity
 import capital.yuri.yuriplayer.data.db.CatalogDao
 import capital.yuri.yuriplayer.data.db.CatalogSources
 import capital.yuri.yuriplayer.data.db.CatalogTrackEntity
+import capital.yuri.yuriplayer.data.source.SourceInstanceRepository
 import capital.yuri.yuriplayer.data.source.SourceOffering
 import capital.yuri.yuriplayer.data.source.SourceType
 import kotlinx.coroutines.Dispatchers
@@ -17,7 +18,8 @@ import kotlinx.coroutines.withContext
 
 class CatalogRepository(
     private val dao: CatalogDao,
-    private val musicRepository: MusicRepository
+    private val musicRepository: MusicRepository,
+    private val sourceInstances: SourceInstanceRepository
 ) {
     private val lightAlbumsCache = object : LinkedHashMap<String, List<AlbumItem>>(32, 0.75f, true) {
         override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, List<AlbumItem>>?): Boolean =
@@ -304,15 +306,9 @@ class CatalogRepository(
                 }
             }
 
+            val names = sourceInstanceNames()
             val fromDb = candidates.values
-                .map { row ->
-                    SourceOffering(
-                        sourceType = SourceType.from(row.sourceType),
-                        sourceId = row.sourceInstanceId,
-                        sourceName = friendlySourceName(row.sourceType),
-                        song = row.toSong()
-                    )
-                }
+                .map { offeringFor(it, names) }
                 .distinctBy { "${it.sourceType.name}:${it.sourceId}:${it.song.songKey}" }
                 .sortedBy { it.sourceType.rank }
                 .take(limit)
@@ -323,7 +319,11 @@ class CatalogRepository(
                 SourceOffering(
                     sourceType = sourceTypeForSong(song),
                     sourceId = null,
-                    sourceName = friendlySourceName(sourceTypeForSong(song).name),
+                    sourceName = if (sourceTypeForSong(song) == SourceType.LOCAL) {
+                        "On this device"
+                    } else {
+                        sourceTypeForSong(song).displayName()
+                    },
                     song = song
                 )
             )
@@ -690,14 +690,8 @@ class CatalogRepository(
             val jelly = dao.getTracksBySourceLimited(CatalogSources.JELLYFIN, per)
             val sub = dao.getTracksBySourceLimited(CatalogSources.SUBSONIC, per)
             val navi = dao.getTracksBySourceLimited(CatalogSources.NAVIDROME, per)
-            (jelly + sub + navi).asSequence().take(limit).map { row ->
-                SourceOffering(
-                    sourceType = SourceType.from(row.sourceType),
-                    sourceId = row.sourceInstanceId,
-                    sourceName = friendlySourceName(row.sourceType),
-                    song = row.toSong()
-                )
-            }.toList()
+            val names = sourceInstanceNames()
+            (jelly + sub + navi).asSequence().take(limit).map { offeringFor(it, names) }.toList()
         }
 
     suspend fun importToMyStuff(song: Song, sourceType: String, sourceInstanceId: Long?, externalId: String?) =
@@ -984,6 +978,24 @@ class CatalogRepository(
         if (incoming.albumArtUri != null && albumArtUri != incoming.albumArtUri) return false
         if (incoming.mimeType != null && mimeType != incoming.mimeType) return false
         return true
+    }
+
+    private suspend fun sourceInstanceNames(): Map<Long, String> =
+        sourceInstances.getAll().associate { it.id to it.name }
+
+    private fun offeringFor(
+        row: CatalogTrackEntity,
+        names: Map<Long, String>
+    ): SourceOffering {
+        val type = SourceType.from(row.sourceType)
+        val label = names[row.sourceInstanceId]?.takeIf { it.isNotBlank() }
+            ?: if (type == SourceType.LOCAL) "On this device" else type.displayName()
+        return SourceOffering(
+            sourceType = type,
+            sourceId = row.sourceInstanceId,
+            sourceName = label,
+            song = row.toSong()
+        )
     }
 
     private fun CatalogTrackEntity.toSong(): Song = Song(

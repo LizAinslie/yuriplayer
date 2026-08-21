@@ -44,5 +44,6 @@ fun SourceOffering.isStreamingReadOnly(): Boolean =
 
 fun SourceOffering.displayLabel(): String = when {
     sourceName.isNotBlank() -> sourceName
-    else -> sourceType.name.lowercase().replaceFirstChar { it.titlecase() }
+    sourceType == SourceType.LOCAL -> "On this device"
+    else -> sourceType.displayName()
 }

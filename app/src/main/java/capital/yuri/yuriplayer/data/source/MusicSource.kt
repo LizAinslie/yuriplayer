@@ -16,6 +16,15 @@ enum class SourceType(val rank: Int) {
     WEBDAV(30),
     OTHER(100);
 
+    fun displayName(): String = when (this) {
+        LOCAL -> "Local"
+        JELLYFIN -> "Jellyfin"
+        SUBSONIC -> "Subsonic"
+        NAVIDROME -> "Navidrome"
+        WEBDAV -> "WebDAV"
+        OTHER -> "Other"
+    }
+
     companion object {
         fun from(raw: String?): SourceType =
             entries.firstOrNull { it.name.equals(raw, ignoreCase = true) } ?: OTHER

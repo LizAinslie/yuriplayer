@@ -97,7 +97,7 @@ val appModule = module {
     single { get<YuriDatabase>().sources() }
     single { get<YuriDatabase>().scrobblers() }
 
-    single { CatalogRepository(get(), get()) }
+    single { CatalogRepository(get(), get(), get()) }
     single {
         LibraryIndex(
             context = androidContext(),
