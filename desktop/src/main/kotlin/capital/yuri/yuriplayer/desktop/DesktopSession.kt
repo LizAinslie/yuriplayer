@@ -45,7 +45,10 @@ data class DesktopScanSource(
     val name: String,
     val status: DesktopScanStatus,
     val detail: String = "",
-    val count: Int = 0
+    val count: Int = 0,
+    val startIndex: Int = 0,
+    val delivered: Int = 0,
+    val totalHint: Int? = null
 )
 
 class DesktopSession {
@@ -85,6 +88,7 @@ class DesktopSession {
     val collection = DesktopCollection(dirs.configDir)
     val playlists = DesktopPlaylistStore(dirs.configDir)
     val sources = LibrarySourceStore(dirs.configDir)
+    private val index = DesktopIndexStore(dirs.cacheDir)
     val jellyfin = JellyfinCatalog(http, sources.deviceId)
     val subsonic = SubsonicCatalog(http)
 
@@ -137,7 +141,34 @@ class DesktopSession {
         scope.launch {
             sources.remotes.collect { refreshScanSources() }
         }
-        rescan()
+        hydrateIndex()
+    }
+
+    private fun hydrateIndex() {
+        val cached = index.loadTracks()
+        if (cached.isNotEmpty()) _tracks.value = cached
+        val cps = index.loadCheckpoints()
+        if (cps.isNotEmpty()) {
+            _scanSources.value = cps.map { row ->
+                DesktopScanSource(
+                    id = row.id,
+                    name = row.name,
+                    status = runCatching { DesktopScanStatus.valueOf(row.status) }
+                        .getOrDefault(DesktopScanStatus.IDLE),
+                    detail = row.detail,
+                    count = row.count,
+                    startIndex = row.startIndex,
+                    delivered = row.delivered,
+                    totalHint = row.totalHint
+                )
+            }
+        }
+        _scanMessage.value = when {
+            cached.isEmpty() -> "Indexing…"
+            else -> "${cached.size} tracks"
+        }
+        // Same as mobile: warm index → partial; empty → first full walk.
+        requestScan(force = cached.isEmpty())
     }
 
     fun playTrack(track: Track) {
@@ -266,7 +297,9 @@ class DesktopSession {
 
     fun removeRemote(id: String) {
         sources.removeRemote(id)
-        rescan()
+        replaceSourceTracks(id, emptyList())
+        persistIndex()
+        refreshScanSources()
     }
 
     fun indexFolder(path: String) {
@@ -283,6 +316,35 @@ class DesktopSession {
         _tracks.value = (_tracks.value + incoming).distinctBy { it.id }
     }
 
+    private fun replaceSourceTracks(sourceId: String, incoming: List<Track>) {
+        val rest = _tracks.value.filterNot {
+            (it.sourceId ?: LOCAL_SCAN_ID) == sourceId
+        }
+        _tracks.value = (rest + incoming).distinctBy { it.id }
+    }
+
+    private fun persistIndex() {
+        index.saveTracks(_tracks.value)
+        persistCheckpoints()
+    }
+
+    private fun persistCheckpoints() {
+        index.saveCheckpoints(
+            _scanSources.value.map {
+                DesktopIndexStore.StoredCheckpoint(
+                    id = it.id,
+                    name = it.name,
+                    status = it.status.name,
+                    startIndex = it.startIndex,
+                    delivered = it.delivered,
+                    totalHint = it.totalHint,
+                    count = it.count,
+                    detail = it.detail
+                )
+            }
+        )
+    }
+
     fun rescan() = requestScan(force = true)
 
     fun requestScan(force: Boolean = false, sourceId: String? = null) {
@@ -291,6 +353,14 @@ class DesktopSession {
             stoppedIds.clear()
             sourceJob?.cancel()
             scanJob?.cancel()
+            _scanSources.value = _scanSources.value.map {
+                it.copy(startIndex = 0, delivered = 0)
+            }
+        }
+        if (force && sourceId != null) {
+            _scanSources.value = _scanSources.value.map {
+                if (it.id == sourceId) it.copy(startIndex = 0, delivered = 0) else it
+            }
         }
         stopAll.set(false)
         pauseAll.set(false)
@@ -314,6 +384,7 @@ class DesktopSession {
             sourceJob?.cancel()
             markRunning(DesktopScanStatus.PAUSED, "Paused")
             _scanMessage.value = "Paused"
+            persistIndex()
         } else {
             pausedIds.add(sourceId)
             patchScan(sourceId, DesktopScanStatus.PAUSED, "Paused")
@@ -328,6 +399,7 @@ class DesktopSession {
             markRunning(DesktopScanStatus.STOPPED, "Stopped")
             _isScanning.value = false
             _scanMessage.value = "Stopped"
+            persistIndex()
         } else {
             stoppedIds.add(sourceId)
             patchScan(sourceId, DesktopScanStatus.STOPPED, "Stopped")
@@ -357,7 +429,7 @@ class DesktopSession {
                 for (remote in remotes) {
                     if (halted()) break
                     val got = scanOneSource(remote.id, remote.name, force, onlySourceId) {
-                        fetchRemote(remote, partial = !force)
+                        fetchRemote(remote, force = force)
                     }
                     remoteTracks += got
                 }
@@ -365,10 +437,20 @@ class DesktopSession {
                 if (stopAll.get() || pauseAll.get()) return@coroutineScope
 
                 if (onlySourceId == null && force) {
-                    _tracks.value = (localTracks + remoteTracks).distinctBy { it.id }
+                    val keepIds = buildSet {
+                        if (doLocal) add(LOCAL_SCAN_ID)
+                        remotes.forEach { add(it.id) }
+                    }
+                    val leftovers = _tracks.value.filterNot {
+                        (it.sourceId ?: LOCAL_SCAN_ID) in keepIds
+                    }
+                    _tracks.value = (leftovers + localTracks + remoteTracks).distinctBy { it.id }
+                } else if (onlySourceId != null && force) {
+                    replaceSourceTracks(onlySourceId, localTracks + remoteTracks)
                 } else {
                     mergeTracks(localTracks + remoteTracks)
                 }
+                persistIndex()
                 _scanMessage.value = when {
                     _tracks.value.isEmpty() ->
                         "No tracks yet — add a folder or a server in Settings → Library"
@@ -400,9 +482,19 @@ class DesktopSession {
         if (id in stoppedIds && onlySourceId != id) return false
         if (id in pausedIds && onlySourceId != id && !force) return false
         val src = _scanSources.value.firstOrNull { it.id == id }
-        if (force || onlySourceId == id) return true
-        // Partial all: skip already-indexed sources.
-        if (src?.status == DesktopScanStatus.DONE && (src.count > 0)) return false
+        if (force) return true
+        if (onlySourceId == id) return true
+        if (src?.status == DesktopScanStatus.PAUSED || src?.status == DesktopScanStatus.STOPPED) {
+            return true
+        }
+        if (src?.status == DesktopScanStatus.DONE && src.count > 0) {
+            val othersNeedFirst = _scanSources.value.any {
+                it.id != id && it.count == 0 &&
+                    it.status != DesktopScanStatus.DONE &&
+                    it.status != DesktopScanStatus.PAUSED
+            }
+            return !othersNeedFirst
+        }
         return true
     }
 
@@ -452,6 +544,7 @@ class DesktopSession {
                     },
                     nextCount
                 )
+                persistIndex()
                 incoming
             } catch (e: CancellationException) {
                 when {
@@ -486,15 +579,21 @@ class DesktopSession {
         return if (roots.isEmpty()) emptyList() else LocalLibraryScanner.scan(roots)
     }
 
-    private suspend fun fetchRemote(remote: RemoteAccount, partial: Boolean): List<Track> {
-        val known = _scanSources.value.firstOrNull { it.id == remote.id }?.count ?: 0
-        val result = when (remote.kind) {
+    private suspend fun fetchRemote(remote: RemoteAccount, force: Boolean): List<Track> {
+        val src = _scanSources.value.firstOrNull { it.id == remote.id }
+        val known = src?.count ?: _tracks.value.count { it.sourceId == remote.id }
+        val already = known > 0 && src?.status == DesktopScanStatus.DONE
+        val incremental = !force && already
+        val resumeFrom = if (force || incremental) 0 else src?.startIndex ?: 0
+        val priorDelivered = if (force || incremental) 0 else src?.delivered ?: 0
+
+        return when (remote.kind) {
             SourceKind.JELLYFIN -> {
                 val authed = if (remote.accessToken.isNullOrBlank()) {
                     jellyfin.authenticate(remote).getOrElse { throw it }
                         .also { sources.upsertRemote(it) }
                 } else remote
-                if (partial && known > 0) {
+                if (incremental) {
                     val total = jellyfin.audioCount(authed).getOrElse { -1 }
                     if (total in 0..known) return emptyList()
                     val cap = if (total > known) (total - known + 64).coerceIn(1, 2_000) else 256
@@ -503,18 +602,82 @@ class DesktopSession {
                         maxItems = cap,
                         sortBy = "DateCreated",
                         sortOrder = "Descending"
-                    )
+                    ).getOrElse { throw it }
                 } else {
-                    jellyfin.listTracks(authed)
+                    walkJellyfin(authed, remote, resumeFrom, priorDelivered)
                 }
             }
             SourceKind.SUBSONIC -> {
-                if (partial && known > 0) subsonic.listNewestTracks(remote)
-                else subsonic.listTracks(remote)
+                if (incremental) {
+                    subsonic.listNewestTracks(remote).getOrElse { throw it }
+                } else {
+                    walkSubsonic(remote, resumeFrom, priorDelivered)
+                }
             }
-            SourceKind.LOCAL -> Result.success(emptyList())
+            SourceKind.LOCAL -> emptyList()
         }
-        return result.getOrElse { throw it }
+    }
+
+    private suspend fun walkJellyfin(
+        authed: RemoteAccount,
+        remote: RemoteAccount,
+        startFrom: Int,
+        priorDelivered: Int
+    ): List<Track> {
+        var cursor = startFrom
+        var delivered = priorDelivered
+        val collected = ArrayList<Track>()
+        val result = jellyfin.listTracks(authed, startFrom = startFrom) { page, next, total ->
+            collected += page
+            cursor = next
+            delivered += page.size
+            mergeTracks(page)
+            patchScan(
+                id = remote.id,
+                status = DesktopScanStatus.RUNNING,
+                detail = if (total != null) "$delivered / $total" else "$delivered",
+                count = delivered,
+                startIndex = cursor,
+                delivered = delivered,
+                totalHint = total
+            )
+            persistCheckpoints()
+            if (pauseAll.get() || remote.id in pausedIds) {
+                throw CancellationException("paused")
+            }
+            if (stopAll.get() || remote.id in stoppedIds) {
+                throw CancellationException("stopped")
+            }
+        }
+        return result.getOrElse { throw it }.ifEmpty { collected }
+    }
+
+    private suspend fun walkSubsonic(
+        remote: RemoteAccount,
+        startAlbumOffset: Int,
+        priorDelivered: Int
+    ): List<Track> {
+        var cursor = startAlbumOffset
+        var delivered = priorDelivered
+        val collected = ArrayList<Track>()
+        val result = subsonic.listTracks(remote, startAlbumOffset = startAlbumOffset) { page, next, _ ->
+            collected += page
+            cursor = next
+            delivered += page.size
+            mergeTracks(page)
+            patchScan(
+                id = remote.id,
+                status = DesktopScanStatus.RUNNING,
+                detail = "$delivered",
+                count = delivered,
+                startIndex = cursor,
+                delivered = delivered
+            )
+            persistCheckpoints()
+            if (pauseAll.get() || remote.id in pausedIds) throw CancellationException("paused")
+            if (stopAll.get() || remote.id in stoppedIds) throw CancellationException("stopped")
+        }
+        return result.getOrElse { throw it }.ifEmpty { collected }
     }
 
     private fun refreshScanSources() {
@@ -528,7 +691,10 @@ class DesktopSession {
                 name = remote.name,
                 status = prev?.status ?: DesktopScanStatus.IDLE,
                 detail = prev?.detail.orEmpty(),
-                count = prev?.count ?: 0
+                count = prev?.count ?: 0,
+                startIndex = prev?.startIndex ?: 0,
+                delivered = prev?.delivered ?: 0,
+                totalHint = prev?.totalHint
             )
         }
         _scanSources.value = listOf(local.copy(name = "Local library")) + remotes
@@ -538,11 +704,21 @@ class DesktopSession {
         id: String,
         status: DesktopScanStatus,
         detail: String,
-        count: Int? = null
+        count: Int? = null,
+        startIndex: Int? = null,
+        delivered: Int? = null,
+        totalHint: Int? = null
     ) {
         _scanSources.value = _scanSources.value.map {
             if (it.id != id) it
-            else it.copy(status = status, detail = detail, count = count ?: it.count)
+            else it.copy(
+                status = status,
+                detail = detail,
+                count = count ?: it.count,
+                startIndex = startIndex ?: it.startIndex,
+                delivered = delivered ?: it.delivered,
+                totalHint = totalHint ?: it.totalHint
+            )
         }
     }
 

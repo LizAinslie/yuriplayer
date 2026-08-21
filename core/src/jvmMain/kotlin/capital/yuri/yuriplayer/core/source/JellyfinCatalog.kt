@@ -73,14 +73,16 @@ class JellyfinCatalog(
         account: RemoteAccount,
         maxItems: Int = 50_000,
         sortBy: String = "Album,SortName",
-        sortOrder: String = "Ascending"
+        sortOrder: String = "Ascending",
+        startFrom: Int = 0,
+        onPage: suspend (page: List<Track>, cursor: Int, total: Int?) -> Unit = { _, _, _ -> }
     ): Result<List<Track>> =
         runCatching {
             val token = account.accessToken ?: error("Not signed in")
             val userId = account.userId ?: error("Not signed in")
             val root = normalizeBaseUrl(account.baseUrl)
             val out = ArrayList<Track>(512)
-            var start = 0
+            var start = startFrom.coerceAtLeast(0)
             val pageSize = 400
             while (out.size < maxItems) {
                 kotlinx.coroutines.currentCoroutineContext().ensureActive()
@@ -105,10 +107,10 @@ class JellyfinCatalog(
                 val page = json.decodeFromString<ItemsResponse>(response.bodyAsText())
                 val items = page.items
                 if (items.isEmpty()) break
-                items.forEach { item ->
-                    toTrack(account.copy(baseUrl = root), item)?.let { out += it }
-                }
+                val mapped = items.mapNotNull { toTrack(account.copy(baseUrl = root), it) }
+                out += mapped
                 start += items.size
+                onPage(mapped, start, page.total)
                 if (items.size < take) break
                 val total = page.total
                 if (total != null && start >= total) break

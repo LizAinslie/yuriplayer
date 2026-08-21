@@ -39,24 +39,33 @@ class SubsonicCatalog(
         )
     }
 
-    suspend fun listTracks(account: RemoteAccount, maxSongs: Int = 80_000): Result<List<Track>> =
+    suspend fun listTracks(
+        account: RemoteAccount,
+        maxSongs: Int = 80_000,
+        startAlbumOffset: Int = 0,
+        onPage: suspend (page: List<Track>, albumOffset: Int, complete: Boolean) -> Unit = { _, _, _ -> }
+    ): Result<List<Track>> =
         runCatching {
             val session = sessionOf(account)
             val out = ArrayList<Track>(512)
-            var offset = 0
+            var offset = startAlbumOffset.coerceAtLeast(0)
             val pageSize = 100
             while (out.size < maxSongs) {
                 kotlinx.coroutines.currentCoroutineContext().ensureActive()
                 val page = listAlbums(session, offset, pageSize, type = "alphabeticalByName")
                 if (page.isEmpty()) break
+                val batch = ArrayList<Track>()
                 for (album in page) {
                     kotlinx.coroutines.currentCoroutineContext().ensureActive()
                     val id = album.id ?: continue
-                    out += songsForAlbum(session, id, album, account.id)
-                    if (out.size >= maxSongs) break
+                    batch += songsForAlbum(session, id, album, account.id)
+                    if (out.size + batch.size >= maxSongs) break
                 }
+                out += batch
                 offset += page.size
-                if (page.size < pageSize) break
+                val done = page.size < pageSize
+                onPage(batch, offset, done)
+                if (done) break
             }
             out
         }
