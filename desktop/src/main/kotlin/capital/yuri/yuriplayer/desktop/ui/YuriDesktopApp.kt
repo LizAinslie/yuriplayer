@@ -317,10 +317,16 @@ fun YuriDesktopApp(session: DesktopSession) {
                     playlists = playlists,
                     tracks = tracks,
                     recents = history,
+                    pins = pins,
+                    liked = liked,
                     status = engineMessage ?: status,
                     onOpenAlbum = ::openAlbum,
                     onOpenPlaylist = { push(Route.Playlist(it.id)) },
-                    onPlayRecent = { t -> session.player.playTrack(t, tracks.ifEmpty { listOf(t) }) }
+                    onOpenArtist = { name ->
+                        query = name
+                        push(Route.Search)
+                    },
+                    onPlayTracks = { list, i -> session.player.play(list, i) }
                 )
                 Route.Search -> LibraryGrid(
                     albums = visibleAlbums,
@@ -403,66 +409,80 @@ private fun HomeFeed(
     playlists: List<capital.yuri.yuriplayer.desktop.DesktopPlaylist>,
     tracks: List<Track>,
     recents: List<Track>,
+    pins: List<DesktopCollection.Pin>,
+    liked: Set<String>,
     status: String,
     onOpenAlbum: (AlbumPageModel) -> Unit,
     onOpenPlaylist: (capital.yuri.yuriplayer.desktop.DesktopPlaylist) -> Unit,
-    onPlayRecent: (Track) -> Unit
+    onOpenArtist: (String) -> Unit,
+    onPlayTracks: (List<Track>, Int) -> Unit
 ) {
     val recentAlbums = remember(recents, albums) {
         recents.mapNotNull { t ->
             albums.firstOrNull { a -> a.tracks.any { it.id == t.id } }
         }.distinctBy { it.id }
     }
+    val likedTracks = remember(liked, tracks) { tracks.filter { it.id in liked } }
+    val shortcuts = remember(pins, liked, recents, albums, playlists, tracks) {
+        buildHomeShortcuts(
+            pins, liked, likedTracks, recents, albums, playlists, tracks,
+            onOpenAlbum, onOpenPlaylist, onOpenArtist, onPlayTracks
+        )
+    }
+    val greeting = remember {
+        val h = java.time.LocalTime.now().hour
+        when {
+            h < 12 -> "Good morning"
+            h < 18 -> "Good afternoon"
+            else -> "Good evening"
+        }
+    }
+    val stuffAlbums = remember(pins, liked, albums, tracks) {
+        val pinnedAlbumIds = pins.filter { it.kind == DesktopCollection.Kind.ALBUM }.map { it.id }.toSet()
+        albums.filter { album ->
+            album.id in pinnedAlbumIds ||
+                album.tracks.any { it.id in liked }
+        }.ifEmpty { albums }
+    }
+    val stuffArtists = remember(pins, albums) {
+        val pinned = pins.filter { it.kind == DesktopCollection.Kind.ARTIST }.map { it.title }
+        pinned.ifEmpty { albums.map { it.artist }.distinct() }
+    }
+
     Column(
         Modifier
             .fillMaxSize()
             .verticalScroll(rememberScrollState())
-            .padding(20.dp)
+            .padding(horizontal = 24.dp, vertical = 16.dp)
     ) {
+        Text(
+            greeting,
+            style = MaterialTheme.typography.headlineMedium,
+            fontWeight = FontWeight.Bold,
+            color = MaterialTheme.colorScheme.onBackground
+        )
+        Spacer(Modifier.height(12.dp))
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             FilterChip(selected = true, onClick = {}, label = { Text("All") })
             FilterChip(selected = false, onClick = {}, label = { Text("Music") })
         }
-        Spacer(Modifier.height(16.dp))
-        if (recentAlbums.isNotEmpty() || recents.isNotEmpty()) {
-            recentAlbums.take(8).chunked(4).forEach { row ->
+        if (shortcuts.isNotEmpty()) {
+            Spacer(Modifier.height(16.dp))
+            shortcuts.chunked(4).forEach { row ->
                 Row(
                     Modifier.fillMaxWidth().padding(bottom = 8.dp),
                     horizontalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
-                    row.forEach { album ->
-                        Surface(
-                            modifier = Modifier.weight(1f).height(64.dp).clip(RoundedCornerShape(8.dp))
-                                .clickable { onOpenAlbum(album) },
-                            color = MaterialTheme.colorScheme.surfaceVariant,
-                            shape = RoundedCornerShape(8.dp)
-                        ) {
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                CoverArt(model = album.artworkUri, size = 64.dp, corner = 0.dp)
-                                Text(
-                                    album.title,
-                                    modifier = Modifier.padding(horizontal = 12.dp),
-                                    maxLines = 2,
-                                    overflow = TextOverflow.Ellipsis,
-                                    fontWeight = FontWeight.SemiBold,
-                                    style = MaterialTheme.typography.bodyMedium
-                                )
-                            }
-                        }
+                    row.forEach { pin ->
+                        SpotifyPinCard(pin = pin, modifier = Modifier.weight(1f))
                     }
                     repeat(4 - row.size) { Spacer(Modifier.weight(1f)) }
                 }
             }
-            Spacer(Modifier.height(16.dp))
         }
-        Text(
-            status,
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f),
-            modifier = Modifier.padding(bottom = 8.dp)
-        )
+        Spacer(Modifier.height(20.dp))
         if (recents.isNotEmpty()) {
-            SectionHeader("Recents")
+            SectionHeader("Jump back in")
             LazyRow(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                 items(recents.take(12), key = { it.id }) { track ->
                     AlbumCard(
@@ -473,14 +493,14 @@ private fun HomeFeed(
                             artworkUri = track.artworkUri,
                             tracks = emptyList()
                         ),
-                        onClick = { onPlayRecent(track) }
+                        onClick = { onPlayTracks(listOf(track) + tracks, 0) }
                     )
                 }
             }
             Spacer(Modifier.height(24.dp))
         }
         if (playlists.isNotEmpty()) {
-            SectionHeader("Playlists")
+            SectionHeader("Your playlists")
             LazyRow(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                 items(playlists.take(12), key = { it.id }) { pl ->
                     AlbumCard(
@@ -497,26 +517,40 @@ private fun HomeFeed(
             }
             Spacer(Modifier.height(24.dp))
         }
-        if (albums.isNotEmpty()) {
-            SectionHeader("Albums")
+        if (recentAlbums.isNotEmpty()) {
+            SectionHeader("Recently played")
             LazyRow(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                items(albums.shuffled().take(12), key = { it.id }) { album ->
+                items(recentAlbums.take(12), key = { it.id }) { album ->
                     AlbumCard(album = album, onClick = { onOpenAlbum(album) })
                 }
             }
             Spacer(Modifier.height(24.dp))
-            val artists = albums.map { it.artist }.distinct().take(12)
-            SectionHeader("Artists")
+        }
+        if (stuffAlbums.isNotEmpty()) {
+            val mixAlbums = remember(stuffAlbums) { stuffAlbums.shuffled().take(12) }
+            SectionHeader("Albums from My Stuff")
             LazyRow(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                items(artists, key = { it }) { name ->
+                items(mixAlbums, key = { it.id }) { album ->
+                    AlbumCard(album = album, onClick = { onOpenAlbum(album) })
+                }
+            }
+            Spacer(Modifier.height(24.dp))
+        }
+        if (stuffArtists.isNotEmpty()) {
+            SectionHeader("Artists from My Stuff")
+            LazyRow(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                items(stuffArtists.take(12), key = { it }) { name ->
                     val cover = albums.firstOrNull { it.artist == name }?.artworkUri
                     Column(
-                        Modifier.width(140.dp).clickable {
-                            albums.firstOrNull { it.artist == name }?.let(onOpenAlbum)
-                        },
+                        Modifier.width(140.dp).clickable { onOpenArtist(name) },
                         horizontalAlignment = Alignment.CenterHorizontally
                     ) {
-                        CoverArt(model = cover, size = 128.dp, corner = 64.dp)
+                        CoverArt(
+                            model = cover,
+                            size = 128.dp,
+                            corner = 64.dp,
+                            contentScale = androidx.compose.ui.layout.ContentScale.Crop
+                        )
                         Text(
                             name,
                             modifier = Modifier.padding(top = 8.dp),
@@ -527,10 +561,137 @@ private fun HomeFeed(
                     }
                 }
             }
-        } else {
+            Spacer(Modifier.height(24.dp))
+        }
+        if (albums.isEmpty() && playlists.isEmpty() && recents.isEmpty()) {
             Text(
-                "Nothing in the default music folders yet.",
+                status.ifBlank { "Nothing in My Stuff yet. Pin albums from the library rail." },
                 color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
+            )
+        }
+    }
+}
+
+private data class SpotifyPin(
+    val id: String,
+    val title: String,
+    val artworkUri: String?,
+    val circular: Boolean = false,
+    val onClick: () -> Unit
+)
+
+private fun buildHomeShortcuts(
+    pins: List<DesktopCollection.Pin>,
+    liked: Set<String>,
+    likedTracks: List<Track>,
+    recents: List<Track>,
+    albums: List<AlbumPageModel>,
+    playlists: List<capital.yuri.yuriplayer.desktop.DesktopPlaylist>,
+    tracks: List<Track>,
+    onOpenAlbum: (AlbumPageModel) -> Unit,
+    onOpenPlaylist: (capital.yuri.yuriplayer.desktop.DesktopPlaylist) -> Unit,
+    onOpenArtist: (String) -> Unit,
+    onPlayTracks: (List<Track>, Int) -> Unit
+): List<SpotifyPin> {
+    val out = ArrayList<SpotifyPin>(8)
+    fun add(pin: SpotifyPin) {
+        if (out.size >= 8) return
+        if (out.any { it.id == pin.id }) return
+        out += pin
+    }
+    if (liked.isNotEmpty()) {
+        add(
+            SpotifyPin(
+                id = "liked",
+                title = "Liked Songs",
+                artworkUri = likedTracks.firstOrNull()?.artworkUri
+            ) { onPlayTracks(likedTracks.ifEmpty { tracks }, 0) }
+        )
+    }
+    for (pin in pins) {
+        when (pin.kind) {
+            DesktopCollection.Kind.ALBUM -> {
+                val album = albums.firstOrNull { it.id == pin.id }
+                add(
+                    SpotifyPin(pin.id, pin.title, album?.artworkUri) {
+                        album?.let(onOpenAlbum)
+                    }
+                )
+            }
+            DesktopCollection.Kind.ARTIST -> add(
+                SpotifyPin(
+                    pin.id,
+                    pin.title,
+                    tracks.firstOrNull { it.displayArtist == pin.title }?.artworkUri,
+                    circular = true
+                ) { onOpenArtist(pin.title) }
+            )
+            DesktopCollection.Kind.SONG -> {
+                val t = tracks.firstOrNull { it.id == pin.id }
+                add(
+                    SpotifyPin(pin.id, pin.title, t?.artworkUri) {
+                        t?.let { onPlayTracks(listOf(it) + tracks, 0) }
+                    }
+                )
+            }
+            DesktopCollection.Kind.PLAYLIST -> {
+                val pl = playlists.firstOrNull { it.id == pin.id }
+                add(
+                    SpotifyPin(pin.id, pin.title, pl?.artworkUri(tracks)) {
+                        pl?.let(onOpenPlaylist)
+                    }
+                )
+            }
+        }
+    }
+    recents.mapNotNull { t -> albums.firstOrNull { a -> a.tracks.any { it.id == t.id } } }
+        .distinctBy { it.id }
+        .forEach { album ->
+            add(SpotifyPin(album.id, album.title, album.artworkUri) { onOpenAlbum(album) })
+        }
+    playlists.forEach { pl ->
+        add(
+            SpotifyPin("playlist:${pl.id}", pl.name, pl.artworkUri(tracks)) {
+                onOpenPlaylist(pl)
+            }
+        )
+    }
+    albums.forEach { album ->
+        add(SpotifyPin(album.id, album.title, album.artworkUri) { onOpenAlbum(album) })
+    }
+    return out
+}
+
+@Composable
+private fun SpotifyPinCard(pin: SpotifyPin, modifier: Modifier = Modifier) {
+    Surface(
+        modifier = modifier
+            .height(72.dp)
+            .clip(RoundedCornerShape(6.dp))
+            .clickable(onClick = pin.onClick),
+        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.55f),
+        shape = RoundedCornerShape(6.dp),
+        tonalElevation = 2.dp
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            CoverArt(
+                model = pin.artworkUri,
+                size = 72.dp,
+                corner = if (pin.circular) 36.dp else 0.dp,
+                contentScale = if (pin.circular) {
+                    androidx.compose.ui.layout.ContentScale.Crop
+                } else {
+                    androidx.compose.ui.layout.ContentScale.Fit
+                }
+            )
+            Text(
+                pin.title,
+                modifier = Modifier.padding(horizontal = 12.dp),
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis,
+                fontWeight = FontWeight.SemiBold,
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurface
             )
         }
     }

@@ -22,6 +22,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
@@ -41,8 +42,6 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.IconButtonDefaults
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -55,6 +54,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.input.pointer.PointerIcon
 import androidx.compose.ui.input.pointer.pointerHoverIcon
 import androidx.compose.ui.layout.ContentScale
@@ -303,18 +303,10 @@ private fun TopChrome(
             Icon(Icons.Default.Home, contentDescription = "Home")
         }
         Spacer(Modifier.weight(1f))
-        OutlinedTextField(
-            value = searchQuery,
-            onValueChange = onSearchQuery,
-            modifier = Modifier.widthIn(min = 280.dp, max = 520.dp).weight(1.2f).height(48.dp),
-            placeholder = { Text("What do you want to play?") },
-            leadingIcon = { Icon(Icons.Default.Search, contentDescription = null) },
-            singleLine = true,
-            shape = CircleShape,
-            colors = OutlinedTextFieldDefaults.colors(
-                focusedContainerColor = MaterialTheme.colorScheme.surface,
-                unfocusedContainerColor = MaterialTheme.colorScheme.surface
-            )
+        SearchPill(
+            query = searchQuery,
+            onQuery = onSearchQuery,
+            modifier = Modifier.widthIn(min = 280.dp, max = 520.dp).weight(1.2f)
         )
         Spacer(Modifier.weight(1f))
         scanMenu()
@@ -323,6 +315,50 @@ private fun TopChrome(
                 Icons.Default.Settings,
                 contentDescription = "Settings",
                 tint = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.55f)
+            )
+        }
+    }
+}
+
+@Composable
+private fun SearchPill(
+    query: String,
+    onQuery: (String) -> Unit,
+    modifier: Modifier = Modifier
+) {
+    val onSurface = MaterialTheme.colorScheme.onSurface
+    val muted = onSurface.copy(alpha = 0.5f)
+    Row(
+        modifier = modifier
+            .height(40.dp)
+            .clip(CircleShape)
+            .background(MaterialTheme.colorScheme.surface)
+            .padding(horizontal = 14.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Icon(
+            Icons.Default.Search,
+            contentDescription = null,
+            modifier = Modifier.size(18.dp),
+            tint = muted
+        )
+        Spacer(Modifier.width(10.dp))
+        Box(Modifier.weight(1f), contentAlignment = Alignment.CenterStart) {
+            if (query.isEmpty()) {
+                Text(
+                    "What do you want to play?",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = muted,
+                    maxLines = 1
+                )
+            }
+            BasicTextField(
+                value = query,
+                onValueChange = onQuery,
+                singleLine = true,
+                textStyle = MaterialTheme.typography.bodyMedium.copy(color = onSurface),
+                cursorBrush = SolidColor(onSurface),
+                modifier = Modifier.fillMaxWidth()
             )
         }
     }
