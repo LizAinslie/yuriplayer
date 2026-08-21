@@ -71,6 +71,8 @@ class MusicService : Service() {
     private var ignoreAutoAdvancedUntilElapsed: Long = 0L
     private var lastAdvanceElapsed: Long = 0L
     private var ignoreWatchdogUntilElapsed: Long = 0L
+    /** System MediaSession often fires onPlay when the session becomes active. */
+    private var ignoreSessionPlayUntilElapsed: Long = Long.MAX_VALUE
 
     private var stallSamplePos = -1L
     private var stallSampleAtElapsed = 0L
@@ -114,7 +116,13 @@ class MusicService : Service() {
             context = this,
             settings = librarySettings,
             sessionActivity = openPlayerPendingIntent(),
-            onPlay = { play() },
+            onPlay = {
+                if (SystemClock.elapsedRealtime() < ignoreSessionPlayUntilElapsed) {
+                    Log.i(TAG, "session onPlay ignored — startup")
+                    return@MusicServiceEngineHooks
+                }
+                play()
+            },
             onPause = { pause() },
             onNext = { skipToNext() },
             onPrev = { skipToPrevious(forceTrackChange = false) },
@@ -658,32 +666,41 @@ class MusicService : Service() {
         if (restoredOnce) return
         restoredOnce = true
         serviceScope.launch {
-            val saved = withContext(Dispatchers.IO) { stateStore.load() } ?: return@launch
-            queueManager.restore(saved.snapshot)
-            val current = queueManager.currentSong()
-            _nowPlaying.value = current
-            updateForegroundNotification()
-            yield()
-            // Never auto-play on process start. Restore the queue paused;
-            // the user hits play. Opening the app used to resume from the
-            // last persist (playWhenReady=true) and that was awful.
-            userWantsPlay = false
-            if (isRemoteSong(current)) {
-                pendingRemoteRestore = PendingRemoteRestore(
-                    positionMs = saved.positionMs,
-                    wasPlayWhenReady = false
-                )
-                Log.i(
-                    TAG,
-                    "restore deferred remote '${current?.displayTitle}' pos=${saved.positionMs}"
-                )
-            } else {
-                delay(RESTORE_PREPARE_DELAY_MS)
-                rebufferWindow(
-                    saved.positionMs,
-                    autoPlay = false,
-                    forceReload = true
-                )
+            try {
+                val saved = withContext(Dispatchers.IO) { stateStore.load() } ?: return@launch
+                queueManager.restore(saved.snapshot)
+                val current = queueManager.currentSong()
+                _nowPlaying.value = current
+                updateForegroundNotification()
+                yield()
+                userWantsPlay = false
+                if (isRemoteSong(current)) {
+                    pendingRemoteRestore = PendingRemoteRestore(
+                        positionMs = saved.positionMs,
+                        wasPlayWhenReady = false
+                    )
+                    Log.i(
+                        TAG,
+                        "restore deferred remote '${current?.displayTitle}' pos=${saved.positionMs}"
+                    )
+                } else {
+                    delay(RESTORE_PREPARE_DELAY_MS)
+                    rebufferWindow(
+                        saved.positionMs,
+                        autoPlay = false,
+                        forceReload = true
+                    )
+                    engineHooks?.pause()
+                }
+            } finally {
+                userWantsPlay = false
+                persistState(immediate = true)
+                engineHooks?.pause()
+                engineHooks?.updateMetadata(queueManager.currentSong())
+                ignoreSessionPlayUntilElapsed =
+                    SystemClock.elapsedRealtime() + STARTUP_IGNORE_SESSION_PLAY_MS
+                engineHooks?.setSessionActive(true)
+                Log.i(TAG, "restore complete — paused until user plays")
             }
         }
     }
@@ -1084,5 +1101,6 @@ class MusicService : Service() {
         private const val USER_SEEK_GUARD_MS = 1_000L
         private const val SEEK_CONFIRM_MS = 600L
         private const val RESTORE_PREPARE_DELAY_MS = 40L
+        private const val STARTUP_IGNORE_SESSION_PLAY_MS = 2_500L
     }
 }

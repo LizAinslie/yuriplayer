@@ -98,7 +98,11 @@ internal class MusicServiceEngineHooks(
     fun sessionToken() = host.sessionBridge.sessionToken()
 
     fun updateMetadata(song: Song?) {
-        if (active) host.sessionBridge.updateMetadata(song)
+        host.sessionBridge.updateMetadata(song)
+    }
+
+    fun setSessionActive(active: Boolean) {
+        host.sessionBridge.setSessionActive(active)
     }
 
     fun release() {

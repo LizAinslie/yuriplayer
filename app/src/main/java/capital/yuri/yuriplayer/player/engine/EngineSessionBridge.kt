@@ -56,7 +56,7 @@ class EngineSessionBridge(
                 pauseAction()
             }
         })
-        isActive = true
+        isActive = false
     }
 
     private val listener = object : PlaybackEngine.Listener {
@@ -118,6 +118,11 @@ class EngineSessionBridge(
                 if (playing) 1f else 0f
             )
         session.setPlaybackState(pb.build())
+    }
+
+    fun setSessionActive(active: Boolean) {
+        publishState()
+        session.isActive = active
     }
 
     fun release() {
