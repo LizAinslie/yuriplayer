@@ -20,7 +20,6 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Add
-import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.PlayArrow
@@ -184,17 +183,6 @@ fun PlaylistPage(
                     onToggleLike = { onToggleLike(track.id) },
                     contextItems = songMenu(track)
                 )
-                Row(Modifier.fillMaxWidth().padding(horizontal = 8.dp), horizontalArrangement = Arrangement.End) {
-                    TextButton(onClick = {
-                        if (index > 0) store.moveTrack(playlist.id, index, index - 1)
-                    }, enabled = index > 0) { Text("Up") }
-                    TextButton(onClick = {
-                        if (index < tracks.lastIndex) store.moveTrack(playlist.id, index, index + 1)
-                    }, enabled = index < tracks.lastIndex) { Text("Down") }
-                    IconButton(onClick = { store.removeTracks(playlist.id, listOf(track)) }) {
-                        Icon(Icons.Default.Delete, contentDescription = "Remove")
-                    }
-                }
             }
         }
     }
