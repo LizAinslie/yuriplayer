@@ -439,8 +439,6 @@ fun YuriDesktopApp(session: DesktopSession) {
                             if (base < 0) return@NowPlayingSidebar
                             session.player.moveQueueItem(base + 1 + from, base + 1 + to)
                         },
-                        liked = current?.id in liked,
-                        onToggleLike = { current?.id?.let(session.collection::toggleLike) },
                         likedIds = liked,
                         onToggleTrackLike = session.collection::toggleLike,
                         songMenu = { row ->

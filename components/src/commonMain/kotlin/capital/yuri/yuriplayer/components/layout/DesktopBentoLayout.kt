@@ -227,7 +227,7 @@ fun DesktopBentoLayout(
                 }
             }
         }
-        Box(Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 4.dp)) { bottomBar() }
+        Box(Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 8.dp)) { bottomBar() }
     }
 }
 

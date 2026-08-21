@@ -2,25 +2,20 @@ package capital.yuri.yuriplayer.components.player
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.width
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.ui.Alignment
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import capital.yuri.yuriplayer.components.art.CoverArt
-import capital.yuri.yuriplayer.components.list.LikeHeart
 import capital.yuri.yuriplayer.components.menu.MenuEntry
 import capital.yuri.yuriplayer.components.model.CoverRef
 import capital.yuri.yuriplayer.components.model.TrackRowModel
@@ -35,13 +30,12 @@ fun NowPlayingSidebar(
     onClearQueue: () -> Unit = {},
     onClearHistory: () -> Unit = {},
     onMoveUpcoming: ((from: Int, to: Int) -> Unit)? = null,
-    liked: Boolean = false,
-    onToggleLike: () -> Unit = {},
     likedIds: Set<String> = emptySet(),
     onToggleTrackLike: (String) -> Unit = {},
     songMenu: (TrackRowModel) -> List<out MenuEntry> = { emptyList() },
     modifier: Modifier = Modifier
 ) {
+    var artExpanded by remember { mutableStateOf(false) }
     Column(
         modifier
             .fillMaxSize()
@@ -54,44 +48,7 @@ fun NowPlayingSidebar(
             fontWeight = FontWeight.Bold,
             color = MaterialTheme.colorScheme.onSurface
         )
-        Spacer(Modifier.height(12.dp))
-        if (track != null) {
-            Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
-                CoverArt(model = track.artworkUri, size = 48.dp, corner = 8.dp)
-                Spacer(Modifier.width(12.dp))
-                Column(Modifier.weight(1f)) {
-                    Text(
-                        "Now playing",
-                        style = MaterialTheme.typography.labelMedium,
-                        color = MaterialTheme.colorScheme.primary
-                    )
-                    Text(
-                        track.title,
-                        fontWeight = FontWeight.SemiBold,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                        color = MaterialTheme.colorScheme.primary
-                    )
-                    Text(
-                        track.subtitle,
-                        style = MaterialTheme.typography.bodySmall,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
-                    )
-                }
-                LikeHeart(liked = liked, onToggle = onToggleLike)
-            }
-            Spacer(Modifier.height(8.dp))
-        }
-        CoverArt(
-            model = track?.artworkUri,
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(vertical = 8.dp)
-                .aspectRatio(1f),
-            corner = 16.dp
-        )
+        Spacer(Modifier.height(8.dp))
         QueuePanel(
             nowPlaying = track,
             upcoming = queue.dropWhile { it.id != track?.id }.drop(1),
@@ -106,6 +63,8 @@ fun NowPlayingSidebar(
             likedIds = likedIds,
             onToggleLike = onToggleTrackLike,
             songMenu = songMenu,
+            artExpanded = artExpanded,
+            onToggleArt = { artExpanded = !artExpanded },
             modifier = Modifier.weight(1f)
         )
     }

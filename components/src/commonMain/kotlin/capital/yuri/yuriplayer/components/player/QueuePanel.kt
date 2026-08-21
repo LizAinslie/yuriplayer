@@ -1,19 +1,34 @@
 package capital.yuri.yuriplayer.components.player
 
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.expandVertically
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.shrinkVertically
+import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.KeyboardArrowDown
+import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material3.FilterChip
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
+import androidx.compose.material3.IconButtonDefaults
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -25,10 +40,13 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import capital.yuri.yuriplayer.components.art.CoverArt
 import capital.yuri.yuriplayer.components.list.TrackRow
 import capital.yuri.yuriplayer.components.menu.MenuEntry
 import capital.yuri.yuriplayer.components.model.CoverRef
@@ -53,6 +71,8 @@ fun QueuePanel(
     likedIds: Set<String> = emptySet(),
     onToggleLike: (String) -> Unit = {},
     songMenu: (TrackRowModel) -> List<out MenuEntry> = { emptyList() },
+    artExpanded: Boolean = false,
+    onToggleArt: (() -> Unit)? = null,
     modifier: Modifier = Modifier
 ) {
     var tab by remember { mutableStateOf(QueueTab.Queue) }
@@ -92,7 +112,28 @@ fun QueuePanel(
         }
         when (tab) {
             QueueTab.Queue -> {
-                nowPlaying?.let { NowPlayingQueueCard(it) }
+                nowPlaying?.let { np ->
+                    AnimatedVisibility(
+                        visible = artExpanded,
+                        enter = fadeIn() + expandVertically(),
+                        exit = fadeOut() + shrinkVertically()
+                    ) {
+                        ExpandableCover(
+                            artworkUri = np.artworkUri,
+                            expanded = true,
+                            onToggle = onToggleArt,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 8.dp, vertical = 8.dp)
+                                .aspectRatio(1f)
+                        )
+                    }
+                    NowPlayingQueueCard(
+                        track = np,
+                        showCover = !artExpanded,
+                        onToggleArt = onToggleArt
+                    )
+                }
                 if (upcoming.isEmpty()) {
                     Text(
                         "Nothing up next.",
@@ -181,19 +222,26 @@ fun QueuePanel(
 }
 
 @Composable
-private fun NowPlayingQueueCard(track: CoverRef) {
+private fun NowPlayingQueueCard(
+    track: CoverRef,
+    showCover: Boolean,
+    onToggleArt: (() -> Unit)?
+) {
     Row(
         Modifier
             .fillMaxWidth()
             .padding(horizontal = 12.dp, vertical = 8.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
-        capital.yuri.yuriplayer.components.art.CoverArt(
-            model = track.artworkUri,
-            size = 48.dp,
-            corner = 8.dp
-        )
-        Spacer(Modifier.width(12.dp))
+        if (showCover) {
+            ExpandableCover(
+                artworkUri = track.artworkUri,
+                expanded = false,
+                onToggle = onToggleArt,
+                modifier = Modifier.size(48.dp)
+            )
+            Spacer(Modifier.width(12.dp))
+        }
         Column(Modifier.weight(1f)) {
             Text(
                 "Now playing",
@@ -207,6 +255,40 @@ private fun NowPlayingQueueCard(track: CoverRef) {
                 color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
                 maxLines = 1
             )
+        }
+    }
+}
+
+@Composable
+private fun ExpandableCover(
+    artworkUri: String?,
+    expanded: Boolean,
+    onToggle: (() -> Unit)?,
+    modifier: Modifier = Modifier
+) {
+    Box(modifier.clip(MaterialTheme.shapes.medium)) {
+        CoverArt(
+            model = artworkUri,
+            modifier = Modifier.fillMaxSize(),
+            corner = if (expanded) 16.dp else 8.dp
+        )
+        if (onToggle != null) {
+            IconButton(
+                onClick = onToggle,
+                modifier = Modifier
+                    .align(if (expanded) Alignment.TopEnd else Alignment.BottomEnd)
+                    .padding(if (expanded) 8.dp else 2.dp)
+                    .size(if (expanded) 32.dp else 22.dp)
+                    .clip(CircleShape)
+                    .background(Color.Black.copy(alpha = 0.45f)),
+                colors = IconButtonDefaults.iconButtonColors(contentColor = Color.White)
+            ) {
+                Icon(
+                    if (expanded) Icons.Default.KeyboardArrowDown else Icons.Default.KeyboardArrowUp,
+                    contentDescription = if (expanded) "Shrink cover" else "Expand cover",
+                    modifier = Modifier.size(if (expanded) 20.dp else 16.dp)
+                )
+            }
         }
     }
 }
