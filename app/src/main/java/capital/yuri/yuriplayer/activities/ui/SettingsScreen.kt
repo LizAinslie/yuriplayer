@@ -96,7 +96,7 @@ fun SettingsScreen(onBack: () -> Unit) {
         if (stack.size > 1) stack = stack.dropLast(1) else onBack()
     }
 
-    BackHandler { pop() }
+    BackHandler(enabled = stack.size > 1) { pop() }
 
     when (val p = page) {
         SettingsPage.Hub -> SettingsHubScreen(

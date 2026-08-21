@@ -71,6 +71,7 @@
         android:requestLegacyExternalStorage="true"
         android:roundIcon="@mipmap/ic_launcher_round"
         android:supportsRtl="true"
+        android:enableOnBackInvokedCallback="true"
         android:theme="@style/Theme.YuriPlayer">
 
         <activity
@@ -80,6 +81,7 @@
             android:theme="@style/Theme.YuriPlayer"
             android:launchMode="singleTop"
             android:configChanges="orientation|screenSize|keyboardHidden|screenLayout"
+            android:enableOnBackInvokedCallback="true"
             android:windowSoftInputMode="adjustResize">
 
             <intent-filter>

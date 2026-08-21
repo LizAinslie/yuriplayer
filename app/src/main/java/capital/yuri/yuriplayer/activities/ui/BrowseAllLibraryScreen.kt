@@ -30,7 +30,7 @@ fun BrowseAllLibraryScreen(
     onOpenPlaylist: (Playlist) -> Unit,
     onOpenSongAlbum: (Song) -> Unit
 ) {
-    BackHandler(onBack = onBack)
+    BackHandler(enabled = LocalTabBackEnabled.current, onBack = onBack)
     val playlistsRepo: PlaylistRepository = koinInject()
     val songs by library.songs.collectAsState()
     val playlists by playlistsRepo.observePlaylistsResolved().collectAsState(initial = emptyList())

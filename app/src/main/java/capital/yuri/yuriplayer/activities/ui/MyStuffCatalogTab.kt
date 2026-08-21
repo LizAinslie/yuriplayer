@@ -147,7 +147,9 @@ fun MyStuffCatalogTab(
         withContext(Dispatchers.IO) { remotePlaylists.syncOwnedToMyStuff() }
     }
 
-    BackHandler(enabled = page !is CatalogPage.Hub) { page = CatalogPage.Hub }
+    BackHandler(enabled = LocalTabBackEnabled.current && page !is CatalogPage.Hub) {
+        page = CatalogPage.Hub
+    }
 
     when (val p = page) {
         CatalogPage.Hub -> CatalogHub(
