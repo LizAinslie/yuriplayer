@@ -253,20 +253,11 @@ fun subsonicPlayableUri(
         return uri
     }
     val b = uri.buildUpon().clearQuery()
-    val original = quality.bitRate == null
-    if (original) {
-        // `download` is the original file on Subsonic/OpenSubsonic/Navidrome
-        // and is not subject to per-player transcode profiles the way `stream` is.
-        uri.encodedPath?.let { encoded ->
-            if (encoded.contains("stream", ignoreCase = true)) {
-                b.encodedPath(
-                    encoded.replace("stream.view", "download.view")
-                        .replace("/stream", "/download")
-                )
-            }
-        }
-    } else if (uri.encodedPath?.contains("download", ignoreCase = true) == true) {
-        uri.encodedPath?.let { encoded ->
+    // Always play via `stream` so the engine can start as soon as the first
+    // bytes arrive. `download` is the same file but some servers withhold
+    // Range until the whole body is ready.
+    uri.encodedPath?.let { encoded ->
+        if (encoded.contains("download", ignoreCase = true)) {
             b.encodedPath(
                 encoded.replace("download.view", "stream.view")
                     .replace("/download", "/stream")
@@ -279,7 +270,7 @@ fun subsonicPlayableUri(
             b.appendQueryParameter(name, value)
         }
     }
-    if (original) {
+    if (quality.bitRate == null) {
         b.appendQueryParameter("format", "raw")
     } else {
         b.appendQueryParameter("format", "mp3")

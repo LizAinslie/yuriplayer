@@ -402,10 +402,10 @@ private fun StreamingQualitySettingsScreen(onBack: () -> Unit) {
 
         SettingsSectionTitle("Jellyfin & Subsonic")
         TextNote(
-            text = "Original uses the Subsonic/OpenSubsonic download of the source " +
-                "file (FLAC, ALAC, …) with no transcode — Navidrome and other " +
-                "OpenSubsonic servers serve the real file. Lower steps request " +
-                "an mp3 transcode so prefetch uses less data. " +
+            text = "Original streams the Subsonic/OpenSubsonic source file " +
+                "(FLAC, ALAC, …) with format=raw — playback starts as soon as " +
+                "the first bytes arrive, the rest fills in the background. " +
+                "Lower steps request an mp3 transcode so prefetch uses less data. " +
                 "Applies to the next track — the current song keeps playing as-is."
         )
         val pipeline by AudioPipeline.last.collectAsState()

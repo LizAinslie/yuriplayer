@@ -91,8 +91,8 @@ object AudioPipeline {
     fun requestedFromUri(uri: String): String {
         val lower = uri.lowercase()
         return when {
+            lower.contains("format=raw") -> "original FLAC/raw stream"
             lower.contains("/download") -> "original-file (download)"
-            lower.contains("format=raw") -> "original (format=raw)"
             lower.contains("format=opus") -> "transcode opus"
             lower.contains("format=mp3") -> "transcode mp3"
             lower.contains("static=true") -> "original (jellyfin static)"
