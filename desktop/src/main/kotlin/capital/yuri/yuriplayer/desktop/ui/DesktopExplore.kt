@@ -44,6 +44,8 @@ import capital.yuri.yuriplayer.components.model.albums
 import capital.yuri.yuriplayer.components.model.toRow
 import capital.yuri.yuriplayer.core.library.LocalLibraryScanner
 import capital.yuri.yuriplayer.core.library.Track
+import capital.yuri.yuriplayer.core.library.matchesQuery
+import capital.yuri.yuriplayer.core.library.matchesSearch
 import capital.yuri.yuriplayer.desktop.DesktopPlaylist
 import capital.yuri.yuriplayer.desktop.DesktopSession
 import kotlinx.coroutines.Dispatchers
@@ -106,53 +108,54 @@ fun DesktopExplore(
             sid in effective
         }
         val localMatches = withContext(Dispatchers.Default) {
-            indexed.filter { it.matches(q) }.take(SONG_HIT_LIMIT)
+            indexed.filter { it.matchesQuery(q) }.take(SONG_HIT_LIMIT)
         }
         if (query.trim() != q) return@LaunchedEffect
+
+        fun applyHits(songs: List<Track>) {
+            val unique = songs.distinctBy { it.id }.take(SONG_HIT_LIMIT)
+            songHits = unique
+            albumHits = albums.filter { album ->
+                album.title.matchesSearch(q) ||
+                    album.artist.matchesSearch(q) ||
+                    album.tracks.any { row -> unique.any { it.id == row.id } } ||
+                    indexed.any {
+                        it.displayAlbum.equals(album.title, true) && it.matchesQuery(q)
+                    }
+            }.take(ALBUM_HIT_LIMIT).ifEmpty { unique.albums().take(ALBUM_HIT_LIMIT) }
+            artistHits = indexed
+                .map { it.displayArtist }
+                .distinct()
+                .filter { it.matchesSearch(q) }
+                .take(ARTIST_HIT_LIMIT)
+                .map { name ->
+                    val ofArtist = tracks.filter { it.displayArtist.equals(name, true) }
+                    ArtistHit(
+                        name = name,
+                        artworkUri = ofArtist.firstNotNullOfOrNull { it.artworkUri },
+                        trackCount = ofArtist.size,
+                        albumCount = ofArtist.map { it.displayAlbum }.distinct().size
+                    )
+                }
+            playlistHits = if (includeLocal) {
+                playlists.filter { it.name.matchesSearch(q) }.take(12)
+            } else {
+                emptyList()
+            }
+            busy = false
+        }
+
+        applyHits(localMatches)
 
         val remoteMatches = if (remoteIds == null || remoteIds.isNotEmpty()) {
-            withContext(Dispatchers.IO) { session.searchRemotes(q, remoteIds) }
+            runCatching {
+                withContext(Dispatchers.IO) { session.searchRemotes(q, remoteIds) }
+            }.getOrDefault(emptyList())
         } else {
             emptyList()
         }
         if (query.trim() != q) return@LaunchedEffect
-
-        val songs = (localMatches + remoteMatches).distinctBy { it.id }.take(SONG_HIT_LIMIT)
-        val foundAlbums = albums.filter { album ->
-            (album.title.contains(q, true) || album.artist.contains(q, true)) &&
-                album.tracks.any { row ->
-                    val t = tracks.firstOrNull { it.id == row.id }
-                    val sid = t?.sourceId ?: LocalLibraryScanner.SOURCE_LOCAL
-                    sid in effective
-                }
-        }.take(ALBUM_HIT_LIMIT).ifEmpty {
-            songs.albums().take(ALBUM_HIT_LIMIT)
-        }
-        val foundArtists = songs
-            .map { it.displayArtist }
-            .distinct()
-            .filter { it.contains(q, true) }
-            .take(ARTIST_HIT_LIMIT)
-            .map { name ->
-                val ofArtist = tracks.filter { it.displayArtist.equals(name, true) }
-                ArtistHit(
-                    name = name,
-                    artworkUri = ofArtist.firstNotNullOfOrNull { it.artworkUri },
-                    trackCount = ofArtist.size,
-                    albumCount = ofArtist.map { it.displayAlbum }.distinct().size
-                )
-            }
-        val foundPlaylists = if (includeLocal) {
-            playlists.filter { it.name.contains(q, true) }.take(12)
-        } else {
-            emptyList()
-        }
-
-        songHits = songs
-        albumHits = foundAlbums
-        artistHits = foundArtists
-        playlistHits = foundPlaylists
-        busy = false
+        applyHits(localMatches + remoteMatches)
     }
 
     Column(Modifier.fillMaxSize()) {
@@ -247,7 +250,11 @@ fun DesktopExplore(
             !busy && songHits.isEmpty() && albumHits.isEmpty() &&
                 artistHits.isEmpty() && playlistHits.isEmpty() -> {
                 Text(
-                    "No matches for \"${query.trim()}\".",
+                    if (tracks.isEmpty()) {
+                        "Nothing indexed yet — scan a folder from the globe menu or Settings → Library."
+                    } else {
+                        "No matches for \"${query.trim()}\"."
+                    },
                     modifier = Modifier.padding(20.dp),
                     color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.55f)
                 )
@@ -368,12 +375,6 @@ private data class ArtistHit(
     val trackCount: Int,
     val albumCount: Int
 )
-
-private fun Track.matches(q: String): Boolean =
-    displayTitle.contains(q, true) ||
-        displayArtist.contains(q, true) ||
-        displayAlbum.contains(q, true) ||
-        albumArtist.orEmpty().contains(q, true)
 
 private fun toggleKey(key: String, allKeys: Set<String>, selected: Set<String>): Set<String> {
     val effective = if (selected.isEmpty()) allKeys else selected
