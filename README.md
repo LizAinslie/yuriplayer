@@ -14,12 +14,17 @@ A multi-platform Jetpack Compose music player for Android and desktop
 
 ## Desktop
 
-Needs bundled LibVLC (downloaded at build: `:desktop:downloadLibVlc`) so Windows
-and macOS do not require a VLC install. Linux prefers distro LibVLC and falls
-back to a bundled Debian extract. See [desktop/libvlc/README.md](desktop/libvlc/README.md).
+## Desktop
+
+Windows and macOS installers **bundle LibVLC**. Linux `.deb` / `.rpm` **depend on
+distro `vlc`** (system plugins, PipeWire/Pulse, updates). Details:
+[desktop/libvlc/README.md](desktop/libvlc/README.md).
 
 ```bash
 ./gradlew :desktop:run
+./gradlew :desktop:packageDeb          # Linux, Requires/Depends: vlc
+./gradlew :desktop:packageRpm
+./gradlew :desktop:packageDistributionForCurrentOS
 ```
 
 Default music folders (scanned on start):

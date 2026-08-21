@@ -1,20 +1,25 @@
-# Bundled LibVLC
+# LibVLC on desktop
 
-Yuri Player ships LibVLC so desktop machines do not need VLC installed.
-
-| Platform | Source |
+| Ship as | LibVLC |
 | --- | --- |
-| Windows x64 | Official [VideoLAN.LibVLC.Windows](https://www.nuget.org/packages/VideoLAN.LibVLC.Windows) |
-| macOS | Official [VideoLAN.LibVLC.Mac](https://www.nuget.org/packages/VideoLAN.LibVLC.Mac) |
-| Linux x64 | Debian `libvlc5` + `libvlccore9` + `vlc-plugin-base` (glibc). Distro VLC is still used if present. |
+| Windows `.msi` / `.exe` | Bundled official [VideoLAN.LibVLC.Windows](https://www.nuget.org/packages/VideoLAN.LibVLC.Windows) in app resources |
+| macOS `.dmg` / `.pkg` | Bundled official [VideoLAN.LibVLC.Mac](https://www.nuget.org/packages/VideoLAN.LibVLC.Mac) in app resources |
+| Linux `.deb` / `.rpm` | **Depends on distro `vlc`** (libvlc + plugins from the OS). Not vendored. |
 
-Natives are **downloaded at build time** (`:desktop:downloadLibVlc`), not committed.
+Natives for Windows/macOS are downloaded at package time (`:desktop:downloadLibVlc`), not committed.
 
 ```bash
-./gradlew :desktop:downloadLibVlc
-./gradlew :desktop:run
+# Linux packages (this host) — requires system VLC at runtime
+./gradlew :desktop:packageDeb
+./gradlew :desktop:packageRpm
+
+# Windows/macOS natives into the installer (on those OSes, or with -Pyuri.libvlc.all=true)
+./gradlew :desktop:packageMsi
+./gradlew :desktop:packageDmg
 ```
 
-Override the lookup with `YURI_LIBVLC=/path/to/libvlc` or `-Dyuri.libvlc.dir=...`.
+`:desktop:run` on Linux uses NativeDiscovery against `/usr/lib`. Install `vlc` or `libvlc-dev` + `vlc-plugin-base`.
 
-Bundling LibVLC means the desktop distribution is covered by VLC's GPL, which is compatible with this repo's AGPL-3.0.
+Override lookup with `YURI_LIBVLC=/path/to/libvlc` or `-Dyuri.libvlc.dir=...`.
+
+Windows/macOS installers that bundle LibVLC are covered by VLC's GPL, which is compatible with this repo's AGPL-3.0.

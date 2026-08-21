@@ -1,7 +1,8 @@
 import java.io.File
 import java.net.URI
-import java.nio.file.Files
 import java.util.zip.ZipInputStream
+import org.jetbrains.compose.desktop.application.dsl.TargetFormat
+import org.jetbrains.compose.desktop.application.tasks.AbstractJPackageTask
 
 plugins {
     alias(libs.plugins.kotlin.jvm)
@@ -39,10 +40,12 @@ val libvlcRoot = layout.buildDirectory.dir("libvlc")
 val libvlcResources = layout.buildDirectory.dir("libvlc-resources")
 val downloadAllLibVlc = (findProperty("yuri.libvlc.all") as String?) == "true"
 val hostLibVlc = hostLibVlcPlatform()
+val bundleLibVlcOnHost = !hostLibVlc.startsWith("linux")
 
+/** Official VideoLAN natives for Windows/macOS installers. Linux uses distro VLC. */
 val downloadLibVlc by tasks.registering {
     group = "vlc"
-    description = "Download official LibVLC natives for the host OS (set yuri.libvlc.all=true for every OS)."
+    description = "Download bundled LibVLC for Windows/macOS (Linux packages depend on system vlc)."
     val destRoot = libvlcRoot
     val all = downloadAllLibVlc
     val host = hostLibVlc
@@ -50,9 +53,16 @@ val downloadLibVlc by tasks.registering {
     notCompatibleWithConfigurationCache("LibVLC download uses script helpers")
     doLast {
         val wanted = if (all) {
-            listOf("windows-x64", "macos-x64", "linux-x64")
+            listOf("windows-x64", "macos-x64", "macos-arm64")
+        } else if (host.startsWith("linux")) {
+            emptyList()
         } else {
             listOf(host)
+        }
+        if (wanted.isEmpty()) {
+            println("Linux: not bundling LibVLC (installer Depends/Requires vlc)")
+            destRoot.get().asFile.mkdirs()
+            return@doLast
         }
         wanted.forEach { platform ->
             val dest = destRoot.get().asFile.resolve(platform)
@@ -62,19 +72,18 @@ val downloadLibVlc by tasks.registering {
             }
             dest.mkdirs()
             println("Downloading LibVLC for $platform…")
-            when (platform) {
-                "windows-x64" -> unpackNuget(
+            when {
+                platform.startsWith("windows") -> unpackNuget(
                     "https://api.nuget.org/v3-flatcontainer/videolan.libvlc.windows/3.0.23.1/videolan.libvlc.windows.3.0.23.1.nupkg",
                     dest,
                     "libvlc.dll"
                 )
-                "macos-x64" -> unpackNuget(
+                platform.startsWith("macos") -> unpackNuget(
                     "https://api.nuget.org/v3-flatcontainer/videolan.libvlc.mac/3.1.3.1/videolan.libvlc.mac.3.1.3.1.nupkg",
                     dest,
                     "libvlc.dylib"
                 )
-                "linux-x64" -> unpackDebianLibvlc(dest)
-                else -> println("No bundled LibVLC recipe for $platform — system VLC will be used")
+                else -> println("Skip $platform")
             }
         }
     }
@@ -88,9 +97,11 @@ val copyLibVlcResources by tasks.registering {
         val root = libvlcRoot.get().asFile
         val out = libvlcResources.get().asFile
         out.mkdirs()
-        root.listFiles()?.filter { it.isDirectory }?.forEach { src ->
-            src.copyRecursively(out.resolve(src.name), overwrite = true)
-        }
+        root.listFiles()
+            ?.filter { it.isDirectory && !it.name.startsWith("linux") }
+            ?.forEach { src ->
+                src.copyRecursively(out.resolve(src.name), overwrite = true)
+            }
     }
 }
 
@@ -98,12 +109,37 @@ compose.desktop {
     application {
         mainClass = "capital.yuri.yuriplayer.desktop.MainKt"
         nativeDistributions {
+            targetFormats(
+                TargetFormat.Deb,
+                TargetFormat.Rpm,
+                TargetFormat.Dmg,
+                TargetFormat.Pkg,
+                TargetFormat.Msi,
+                TargetFormat.Exe
+            )
             packageName = "Yuri Player"
             packageVersion = "0.1.0"
             description = "Yuri Player"
             copyright = "AGPL-3.0"
             vendor = "Yuri"
             appResourcesRootDir.set(libvlcResources)
+            linux {
+                packageName = "yuri-player"
+                debMaintainer = "yuri@yuri.capital"
+                menuGroup = "AudioVideo"
+                appCategory = "AudioVideo"
+                appRelease = "1"
+                rpmLicenseType = "AGPLv3"
+            }
+            windows {
+                menuGroup = "Yuri"
+                dirChooser = true
+            }
+            macOS {
+                bundleID = "capital.yuri.yuriplayer"
+                dockName = "Yuri Player"
+                packageVersion = "1.0.0"
+            }
         }
     }
 }
@@ -113,10 +149,23 @@ afterEvaluate {
         dependsOn(copyLibVlcResources)
     }
     tasks.matching { it.name == "run" }.configureEach {
-        dependsOn(downloadLibVlc)
-        if (this is JavaExec) {
-            val dir = libvlcRoot.get().asFile.resolve(hostLibVlc)
-            systemProperty("yuri.libvlc.dir", dir.absolutePath)
+        if (bundleLibVlcOnHost) {
+            dependsOn(downloadLibVlc)
+            if (this is JavaExec) {
+                systemProperty("yuri.libvlc.dir", libvlcRoot.get().asFile.resolve(hostLibVlc).absolutePath)
+            }
+        }
+    }
+    tasks.withType<AbstractJPackageTask>().configureEach {
+        if (targetFormat == TargetFormat.Deb || targetFormat == TargetFormat.Rpm) {
+            freeArgs.addAll(listOf("--linux-package-deps", "vlc"))
+        }
+        if (targetFormat == TargetFormat.Msi ||
+            targetFormat == TargetFormat.Exe ||
+            targetFormat == TargetFormat.Dmg ||
+            targetFormat == TargetFormat.Pkg
+        ) {
+            dependsOn(copyLibVlcResources)
         }
     }
 }
@@ -140,7 +189,9 @@ fun hasLibvlc(dir: File): Boolean {
     if (!dir.isDirectory) return false
     return dir.walkTopDown().any { f ->
         val n = f.name
-        n.startsWith("libvlc") && (n.endsWith(".dll") || n.endsWith(".so") || n.endsWith(".dylib") || n.contains(".so."))
+        n.startsWith("libvlc") && (
+            n.endsWith(".dll") || n.endsWith(".so") || n.endsWith(".dylib") || n.contains(".so.")
+        )
     }
 }
 
@@ -174,83 +225,9 @@ fun unzipFile(zip: File, dest: File) {
     }
 }
 
-fun unpackDebianLibvlc(dest: File) {
-    val base = "https://deb.debian.org/debian/pool/main/v/vlc"
-    val debs = listOf(
-        "libvlc5_3.0.23-3+b4_amd64.deb",
-        "libvlccore9_3.0.23-3+b4_amd64.deb",
-        "vlc-plugin-base_3.0.23-3+b4_amd64.deb",
-        "vlc-data_3.0.23-3_all.deb"
-    )
-    val scratch = dest.resolveSibling("${dest.name}-debs")
-    scratch.deleteRecursively()
-    scratch.mkdirs()
-    debs.forEach { name ->
-        val file = scratch.resolve(name)
-        download("$base/$name", file)
-        extractDeb(file, scratch.resolve("tree"))
-    }
-    val tree = scratch.resolve("tree")
-    dest.mkdirs()
-    val libDir = tree.resolve("usr/lib/x86_64-linux-gnu")
-    if (libDir.isDirectory) {
-        libDir.listFiles()?.filter { it.isFile && it.name.startsWith("libvlc") }?.forEach {
-            it.copyTo(dest.resolve(it.name), overwrite = true)
-        }
-        val so = dest.resolve("libvlc.so.5")
-        if (so.exists() && !dest.resolve("libvlc.so").exists()) {
-            dest.resolve("libvlc.so").let { link ->
-                runCatching { Files.createSymbolicLink(link.toPath(), so.toPath().fileName) }
-                    .onFailure { so.copyTo(dest.resolve("libvlc.so"), overwrite = true) }
-            }
-        }
-        val core = dest.resolve("libvlccore.so.9")
-        if (core.exists() && !dest.resolve("libvlccore.so").exists()) {
-            runCatching {
-                Files.createSymbolicLink(
-                    dest.resolve("libvlccore.so").toPath(),
-                    core.toPath().fileName
-                )
-            }.onFailure { core.copyTo(dest.resolve("libvlccore.so"), overwrite = true) }
-        }
-        val plugins = libDir.resolve("vlc/plugins")
-        if (plugins.isDirectory) {
-            plugins.copyRecursively(dest.resolve("plugins"), overwrite = true)
-        }
-    }
-    scratch.deleteRecursively()
-    check(hasLibvlc(dest)) { "Debian LibVLC extract produced no libvlc" }
-}
-
-fun extractDeb(deb: File, into: File) {
-    into.mkdirs()
-    val ar = ProcessBuilder("ar", "t", deb.absolutePath).start()
-    val entries = ar.inputStream.bufferedReader().readLines()
-    check(ar.waitFor() == 0) { "ar failed on ${deb.name}" }
-    val data = entries.firstOrNull { it.startsWith("data.tar") } ?: error("no data.tar in ${deb.name}")
-    val flag = when {
-        data.endsWith(".xz") -> "-xJ"
-        data.endsWith(".gz") -> "-xz"
-        data.endsWith(".zst") -> "-x --zstd"
-        data.endsWith(".bz2") -> "-xj"
-        else -> "-x"
-    }
-    val extract = ProcessBuilder(
-        "bash",
-        "-lc",
-        "ar p ${deb.absolutePath.shell()} $data | tar $flag -C ${into.absolutePath.shell()}"
-    )
-        .redirectErrorStream(true)
-        .start()
-    val out = extract.inputStream.bufferedReader().readText()
-    check(extract.waitFor() == 0) { "extract ${deb.name} failed: $out" }
-}
-
 fun download(url: String, dest: File) {
     dest.parentFile.mkdirs()
     dest.outputStream().use { out ->
         URI(url).toURL().openStream().use { it.copyTo(out) }
     }
 }
-
-fun String.shell(): String = "'" + replace("'", "'\\''") + "'"
