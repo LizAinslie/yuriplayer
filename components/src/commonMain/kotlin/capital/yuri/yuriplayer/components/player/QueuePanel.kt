@@ -49,6 +49,8 @@ fun QueuePanel(
     onClearQueue: () -> Unit = {},
     onClearHistory: () -> Unit = {},
     onMove: ((from: Int, to: Int) -> Unit)? = null,
+    likedIds: Set<String> = emptySet(),
+    onToggleLike: (String) -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     var tab by remember { mutableStateOf(QueueTab.Queue) }
@@ -131,7 +133,9 @@ fun QueuePanel(
                                     track = row,
                                     onClick = { onPlay(row) },
                                     showCover = true,
-                                    showAlbum = false
+                                    showAlbum = false,
+                                    liked = row.id in likedIds,
+                                    onToggleLike = { onToggleLike(row.id) }
                                 )
                             }
                         }
@@ -160,7 +164,9 @@ fun QueuePanel(
                                 track = row,
                                 onClick = { onPlay(row) },
                                 showCover = true,
-                                showAlbum = true
+                                showAlbum = true,
+                                liked = row.id in likedIds,
+                                onToggleLike = { onToggleLike(row.id) }
                             )
                         }
                     }

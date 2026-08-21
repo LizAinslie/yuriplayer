@@ -67,7 +67,9 @@ fun DesktopExplore(
     onOpenAlbum: (AlbumPageModel) -> Unit,
     onOpenPlaylist: (DesktopPlaylist) -> Unit,
     onOpenArtist: (String) -> Unit,
-    onPlaySongs: (List<Track>, Int) -> Unit
+    onPlaySongs: (List<Track>, Int) -> Unit,
+    likedIds: Set<String> = emptySet(),
+    onToggleLike: (String) -> Unit = {}
 ) {
     val remotes by session.sources.remotes.collectAsState()
     val enabled = remember(remotes) { remotes.filter { it.enabled } }
@@ -347,7 +349,9 @@ fun DesktopExplore(
                         itemsIndexed(songHits, key = { _, t -> t.id }) { index, track ->
                             TrackRow(
                                 track = track.toRow(),
-                                onClick = { onPlaySongs(songHits, index) }
+                                onClick = { onPlaySongs(songHits, index) },
+                                liked = track.id in likedIds,
+                                onToggleLike = { onToggleLike(track.id) }
                             )
                         }
                     }

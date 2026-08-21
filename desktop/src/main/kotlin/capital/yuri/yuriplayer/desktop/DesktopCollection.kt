@@ -43,13 +43,17 @@ class DesktopCollection(configDir: String) {
         persist()
     }
 
+    fun isPinned(kind: Kind, id: String): Boolean =
+        _pinned.value.any { it.kind == kind && it.id == id }
+
+    fun togglePin(pin: Pin) {
+        if (isPinned(pin.kind, pin.id)) unpin(pin.kind, pin.id) else pin(pin)
+    }
+
     fun unpin(kind: Kind, id: String) {
         _pinned.value = _pinned.value.filterNot { it.kind == kind && it.id == id }
         persist()
     }
-
-    fun isPinned(kind: Kind, id: String): Boolean =
-        _pinned.value.any { it.kind == kind && it.id == id }
 
     private fun load() {
         if (!file.exists()) return

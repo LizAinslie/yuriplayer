@@ -34,6 +34,7 @@ import androidx.compose.ui.unit.dp
 import capital.yuri.yuriplayer.components.art.CoverArt
 import capital.yuri.yuriplayer.components.layout.WindowWidthClass
 import capital.yuri.yuriplayer.components.layout.windowWidthClass
+import capital.yuri.yuriplayer.components.list.LikeHeart
 import capital.yuri.yuriplayer.components.list.TrackRow
 import capital.yuri.yuriplayer.components.model.AlbumPageModel
 import capital.yuri.yuriplayer.components.theme.AlbumArtBackdrop
@@ -49,6 +50,10 @@ fun AlbumPage(
     onEdit: () -> Unit = {},
     onEditTrack: (Int) -> Unit = {},
     onArtist: (String) -> Unit = {},
+    liked: Boolean = false,
+    onToggleLike: () -> Unit = {},
+    likedTrackIds: Set<String> = emptySet(),
+    onToggleTrackLike: (String) -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val coverColors by rememberCoverColors(
@@ -66,11 +71,13 @@ fun AlbumPage(
             val widthClass = windowWidthClass(maxWidth)
             when (widthClass) {
                 WindowWidthClass.Compact -> AlbumPageCompact(
-                    album, playing, onBack, onPlay, onTrack, onEdit, onEditTrack, onArtist
+                    album, playing, onBack, onPlay, onTrack, onEdit, onEditTrack, onArtist,
+                    liked, onToggleLike, likedTrackIds, onToggleTrackLike
                 )
                 WindowWidthClass.Medium,
                 WindowWidthClass.Expanded -> AlbumPageWide(
-                    album, playing, onBack, onPlay, onTrack, onEdit, onEditTrack, onArtist
+                    album, playing, onBack, onPlay, onTrack, onEdit, onEditTrack, onArtist,
+                    liked, onToggleLike, likedTrackIds, onToggleTrackLike
                 )
             }
         }
@@ -86,7 +93,11 @@ private fun AlbumPageCompact(
     onTrack: (Int) -> Unit,
     onEdit: () -> Unit,
     onEditTrack: (Int) -> Unit,
-    onArtist: (String) -> Unit
+    onArtist: (String) -> Unit,
+    liked: Boolean,
+    onToggleLike: () -> Unit,
+    likedTrackIds: Set<String>,
+    onToggleTrackLike: (String) -> Unit
 ) {
     Column(Modifier.fillMaxSize()) {
         Row(verticalAlignment = Alignment.CenterVertically) {
@@ -99,6 +110,7 @@ private fun AlbumPageCompact(
             }
             Text("Album", style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.onBackground)
             Spacer(Modifier.weight(1f))
+            LikeHeart(liked = liked, onToggle = onToggleLike)
             IconButton(onClick = onEdit) {
                 Icon(Icons.Default.Edit, contentDescription = "Edit album")
             }
@@ -111,8 +123,8 @@ private fun AlbumPageCompact(
                 .aspectRatio(1f),
             corner = 12.dp
         )
-        AlbumMeta(album, playing, onPlay, onArtist, Modifier.padding(20.dp))
-        TrackList(album, onTrack, onEditTrack)
+        AlbumMeta(album, playing, onPlay, onArtist, liked, onToggleLike, Modifier.padding(20.dp))
+        TrackList(album, onTrack, onEditTrack, likedTrackIds, onToggleTrackLike)
     }
 }
 
@@ -125,7 +137,11 @@ private fun AlbumPageWide(
     onTrack: (Int) -> Unit,
     onEdit: () -> Unit,
     onEditTrack: (Int) -> Unit,
-    onArtist: (String) -> Unit
+    onArtist: (String) -> Unit,
+    liked: Boolean,
+    onToggleLike: () -> Unit,
+    likedTrackIds: Set<String>,
+    onToggleTrackLike: (String) -> Unit
 ) {
     Row(Modifier.fillMaxSize().padding(24.dp)) {
         Column(
@@ -142,6 +158,7 @@ private fun AlbumPageWide(
                     )
                 }
                 Spacer(Modifier.weight(1f))
+                LikeHeart(liked = liked, onToggle = onToggleLike)
                 IconButton(onClick = onEdit) {
                     Icon(Icons.Default.Edit, contentDescription = "Edit album")
                 }
@@ -152,9 +169,9 @@ private fun AlbumPageWide(
                 corner = 12.dp
             )
             Spacer(Modifier.height(16.dp))
-            AlbumMeta(album, playing, onPlay, onArtist)
+            AlbumMeta(album, playing, onPlay, onArtist, liked, onToggleLike)
         }
-        TrackList(album, onTrack, onEditTrack, modifier = Modifier.weight(1f))
+        TrackList(album, onTrack, onEditTrack, likedTrackIds, onToggleTrackLike, modifier = Modifier.weight(1f))
     }
 }
 
@@ -164,6 +181,8 @@ private fun AlbumMeta(
     playing: Boolean,
     onPlay: () -> Unit,
     onArtist: (String) -> Unit,
+    liked: Boolean,
+    onToggleLike: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     Column(modifier) {
@@ -189,12 +208,15 @@ private fun AlbumMeta(
             color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f),
             modifier = Modifier.padding(top = 4.dp)
         )
-        IconButton(onClick = onPlay, modifier = Modifier.padding(top = 8.dp)) {
-            Icon(
-                if (playing) Icons.Default.Pause else Icons.Default.PlayArrow,
-                contentDescription = if (playing) "Pause" else "Play",
-                tint = MaterialTheme.colorScheme.primary
-            )
+        Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(top = 8.dp)) {
+            IconButton(onClick = onPlay) {
+                Icon(
+                    if (playing) Icons.Default.Pause else Icons.Default.PlayArrow,
+                    contentDescription = if (playing) "Pause" else "Play",
+                    tint = MaterialTheme.colorScheme.primary
+                )
+            }
+            LikeHeart(liked = liked, onToggle = onToggleLike)
         }
     }
 }
@@ -204,6 +226,8 @@ private fun TrackList(
     album: AlbumPageModel,
     onTrack: (Int) -> Unit,
     onEditTrack: (Int) -> Unit = {},
+    likedTrackIds: Set<String> = emptySet(),
+    onToggleTrackLike: (String) -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val discs = album.tracks.groupBy { it.discNumber ?: 1 }
@@ -227,7 +251,9 @@ private fun TrackList(
                     onClick = { onTrack(global.coerceAtLeast(0)) },
                     onLongClick = { onEditTrack(global.coerceAtLeast(0)) },
                     showCover = false,
-                    showAlbum = false
+                    showAlbum = false,
+                    liked = track.id in likedTrackIds,
+                    onToggleLike = { onToggleTrackLike(track.id) }
                 )
             }
         }

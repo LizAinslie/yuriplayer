@@ -20,6 +20,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import capital.yuri.yuriplayer.components.art.CoverArt
+import capital.yuri.yuriplayer.components.list.LikeHeart
 import capital.yuri.yuriplayer.components.model.CoverRef
 import capital.yuri.yuriplayer.components.model.TrackRowModel
 
@@ -33,6 +34,10 @@ fun NowPlayingSidebar(
     onClearQueue: () -> Unit = {},
     onClearHistory: () -> Unit = {},
     onMoveUpcoming: ((from: Int, to: Int) -> Unit)? = null,
+    liked: Boolean = false,
+    onToggleLike: () -> Unit = {},
+    likedIds: Set<String> = emptySet(),
+    onToggleTrackLike: (String) -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     Column(
@@ -73,6 +78,7 @@ fun NowPlayingSidebar(
                         color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
                     )
                 }
+                LikeHeart(liked = liked, onToggle = onToggleLike)
             }
             Spacer(Modifier.height(8.dp))
         }
@@ -95,6 +101,8 @@ fun NowPlayingSidebar(
             onClearQueue = onClearQueue,
             onClearHistory = onClearHistory,
             onMove = onMoveUpcoming,
+            likedIds = likedIds,
+            onToggleLike = onToggleTrackLike,
             modifier = Modifier.weight(1f)
         )
     }

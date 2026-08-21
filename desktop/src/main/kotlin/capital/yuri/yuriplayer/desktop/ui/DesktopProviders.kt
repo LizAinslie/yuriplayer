@@ -18,7 +18,6 @@ import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.Storage
 import androidx.compose.material.icons.filled.Visibility
 import androidx.compose.material.icons.filled.VisibilityOff
-import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -44,6 +43,7 @@ import capital.yuri.yuriplayer.components.settings.SettingsNote
 import capital.yuri.yuriplayer.components.settings.SettingsSectionTitle
 import capital.yuri.yuriplayer.components.settings.SettingsSwitchRow
 import capital.yuri.yuriplayer.components.settings.SettingsTopBar
+import capital.yuri.yuriplayer.components.dialog.InWindowPanel
 import capital.yuri.yuriplayer.core.source.RemoteAccount
 import capital.yuri.yuriplayer.core.source.SourceKind
 import capital.yuri.yuriplayer.desktop.DesktopSession
@@ -372,25 +372,26 @@ private fun ProviderEditor(
     }
 
     if (confirmDelete && existing != null) {
-        AlertDialog(
-            onDismissRequest = { confirmDelete = false },
-            title = { Text("Delete provider?") },
-            text = {
-                Text("“${label.ifBlank { kindLabel(kind) }}” will be removed. Local files are unaffected.")
-            },
-            confirmButton = {
-                TextButton(
-                    onClick = {
-                        session.removeRemote(existing.id)
-                        confirmDelete = false
-                        onBack()
-                    }
-                ) { Text("Delete") }
-            },
-            dismissButton = {
-                TextButton(onClick = { confirmDelete = false }) { Text("Cancel") }
+        InWindowPanel(onDismiss = { confirmDelete = false }, modifier = Modifier.padding(24.dp)) {
+            Column(Modifier.padding(24.dp).fillMaxWidth()) {
+                Text("Delete provider?", style = MaterialTheme.typography.titleLarge)
+                Text(
+                    "“${label.ifBlank { kindLabel(kind) }}” will be removed. Local files are unaffected.",
+                    style = MaterialTheme.typography.bodyMedium,
+                    modifier = Modifier.padding(top = 8.dp)
+                )
+                Row(Modifier.fillMaxWidth().padding(top = 16.dp), horizontalArrangement = Arrangement.End) {
+                    TextButton(onClick = { confirmDelete = false }) { Text("Cancel") }
+                    TextButton(
+                        onClick = {
+                            session.removeRemote(existing.id)
+                            confirmDelete = false
+                            onBack()
+                        }
+                    ) { Text("Delete") }
+                }
             }
-        )
+        }
     }
 }
 

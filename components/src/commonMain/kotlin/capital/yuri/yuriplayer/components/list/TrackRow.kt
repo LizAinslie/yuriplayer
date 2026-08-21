@@ -28,7 +28,9 @@ fun TrackRow(
     modifier: Modifier = Modifier,
     showCover: Boolean = true,
     showAlbum: Boolean = true,
-    onLongClick: (() -> Unit)? = null
+    onLongClick: (() -> Unit)? = null,
+    liked: Boolean = false,
+    onToggleLike: (() -> Unit)? = null
 ) {
     val highlight = MaterialTheme.colorScheme.primary.copy(alpha = 0.12f)
     Row(
@@ -66,6 +68,9 @@ fun TrackRow(
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.55f)
             )
+        }
+        if (onToggleLike != null) {
+            LikeHeart(liked = liked, onToggle = onToggleLike)
         }
         track.durationMs?.let {
             Text(

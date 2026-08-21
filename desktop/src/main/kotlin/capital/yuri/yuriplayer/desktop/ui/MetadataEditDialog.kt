@@ -20,8 +20,8 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.window.DialogWindow
 import capital.yuri.yuriplayer.components.art.CoverArt
+import capital.yuri.yuriplayer.components.dialog.InWindowPanel
 import capital.yuri.yuriplayer.components.model.AlbumPageModel
 import capital.yuri.yuriplayer.core.library.Track
 import capital.yuri.yuriplayer.desktop.TagWriter
@@ -54,8 +54,8 @@ fun EditSongDialog(
         )
     }
 
-    DialogWindow(onCloseRequest = onDismiss, title = "Edit song") {
-        Surface(Modifier.size(480.dp, 520.dp)) {
+    InWindowPanel(onDismiss = onDismiss, modifier = Modifier.size(480.dp, 520.dp)) {
+        Surface {
             Column(Modifier.padding(20.dp)) {
                 Text("Edit song", style = MaterialTheme.typography.titleLarge)
                 if (!writable) {
@@ -150,8 +150,8 @@ fun EditAlbumDialog(
         )
     }
 
-    DialogWindow(onCloseRequest = onDismiss, title = "Edit album") {
-        Surface(Modifier.size(480.dp, 560.dp)) {
+    InWindowPanel(onDismiss = onDismiss, modifier = Modifier.size(480.dp, 560.dp)) {
+        Surface {
             Column(Modifier.padding(20.dp)) {
                 Text("Edit album", style = MaterialTheme.typography.titleLarge)
                 CoverArt(

@@ -338,7 +338,11 @@ fun YuriDesktopApp(session: DesktopSession) {
                             val base = queue.indexOfFirst { it.id == cur.id }
                             if (base < 0) return@NowPlayingSidebar
                             session.player.moveQueueItem(base + 1 + from, base + 1 + to)
-                        }
+                        },
+                        liked = current?.id in liked,
+                        onToggleLike = { current?.id?.let(session.collection::toggleLike) },
+                        likedIds = liked,
+                        onToggleTrackLike = session.collection::toggleLike
                     )
                 }
             }
@@ -366,7 +370,9 @@ fun YuriDesktopApp(session: DesktopSession) {
                     onOpenAlbum = ::openAlbum,
                     onOpenPlaylist = { push(Route.Playlist(it.id)) },
                     onOpenArtist = ::openArtist,
-                    onPlaySongs = { list, i -> session.player.play(list, i) }
+                    onPlaySongs = { list, i -> session.player.play(list, i) },
+                    likedIds = liked,
+                    onToggleLike = session.collection::toggleLike
                 )
                 is Route.Album -> {
                     val live = albums.firstOrNull { it.id == r.album.id } ?: r.album
@@ -391,7 +397,20 @@ fun YuriDesktopApp(session: DesktopSession) {
                         onEditTrack = { i ->
                             albumTracks.getOrNull(i)?.let { editSong = it }
                         },
-                        onArtist = ::openArtist
+                        onArtist = ::openArtist,
+                        liked = session.collection.isPinned(DesktopCollection.Kind.ALBUM, live.id),
+                        onToggleLike = {
+                            session.collection.togglePin(
+                                DesktopCollection.Pin(
+                                    DesktopCollection.Kind.ALBUM,
+                                    live.id,
+                                    live.title,
+                                    live.artist
+                                )
+                            )
+                        },
+                        likedTrackIds = liked,
+                        onToggleTrackLike = session.collection::toggleLike
                     )
                 }
                 is Route.Artist -> {
@@ -446,7 +465,20 @@ fun YuriDesktopApp(session: DesktopSession) {
                         onFetchHeader = { pickBanner = true },
                         onClearHeader = {
                             profile = session.artists.clearBanner(r.name)
-                        }
+                        },
+                        liked = session.collection.isPinned(DesktopCollection.Kind.ARTIST, r.name),
+                        onToggleLike = {
+                            session.collection.togglePin(
+                                DesktopCollection.Pin(
+                                    DesktopCollection.Kind.ARTIST,
+                                    r.name,
+                                    r.name,
+                                    "Artist"
+                                )
+                            )
+                        },
+                        likedTrackIds = liked,
+                        onToggleTrackLike = session.collection::toggleLike
                     )
                     if (pickBanner) {
                         ArtistBannerPicker(
@@ -477,7 +509,20 @@ fun YuriDesktopApp(session: DesktopSession) {
                             store = session.playlists,
                             onBack = ::goBack,
                             onPlay = { list, i -> session.player.play(list, i) },
-                            onEditTrack = { editSong = it }
+                            onEditTrack = { editSong = it },
+                            likedIds = liked,
+                            onToggleLike = session.collection::toggleLike,
+                            playlistLiked = session.collection.isPinned(DesktopCollection.Kind.PLAYLIST, pl.id),
+                            onTogglePlaylistLike = {
+                                session.collection.togglePin(
+                                    DesktopCollection.Pin(
+                                        DesktopCollection.Kind.PLAYLIST,
+                                        pl.id,
+                                        pl.name,
+                                        "Playlist"
+                                    )
+                                )
+                            }
                         )
                     }
                 }

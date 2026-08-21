@@ -32,8 +32,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.window.Dialog
 import capital.yuri.yuriplayer.components.art.CoverArt
+import capital.yuri.yuriplayer.components.dialog.InWindowPanel
 import capital.yuri.yuriplayer.core.artist.ArtistImageCandidate
 import capital.yuri.yuriplayer.core.artist.ArtistInfoClient
 
@@ -57,11 +57,10 @@ fun ArtistBannerPicker(
         loading = false
     }
 
-    Dialog(onDismissRequest = onDismiss) {
+    InWindowPanel(onDismiss = onDismiss, modifier = Modifier.width(640.dp)) {
         Surface(
             shape = RoundedCornerShape(16.dp),
-            tonalElevation = 6.dp,
-            modifier = Modifier.width(640.dp)
+            tonalElevation = 0.dp
         ) {
             Column(Modifier.padding(20.dp)) {
                 Text("Choose a header", style = MaterialTheme.typography.titleLarge)

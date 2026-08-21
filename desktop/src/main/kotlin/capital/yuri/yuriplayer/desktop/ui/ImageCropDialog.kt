@@ -30,7 +30,7 @@ import androidx.compose.ui.graphics.toComposeImageBitmap
 import androidx.compose.ui.input.pointer.PointerEventType
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.window.DialogWindow
+import capital.yuri.yuriplayer.components.dialog.InWindowPanel
 import java.awt.image.BufferedImage
 import java.io.File
 import javax.imageio.ImageIO
@@ -56,8 +56,8 @@ fun ImageCropDialog(
     var zoom by remember { mutableFloatStateOf(1f) }
     var pan by remember { mutableStateOf(Offset.Zero) }
 
-    DialogWindow(onCloseRequest = onCancel, title = title) {
-        Surface(Modifier.size(560.dp, 640.dp), color = MaterialTheme.colorScheme.surface) {
+    InWindowPanel(onDismiss = onCancel, modifier = Modifier.size(560.dp, 640.dp)) {
+        Surface(color = MaterialTheme.colorScheme.surface) {
             Column(Modifier.fillMaxSize().padding(16.dp)) {
                 Text(title, style = MaterialTheme.typography.titleLarge)
                 Text(

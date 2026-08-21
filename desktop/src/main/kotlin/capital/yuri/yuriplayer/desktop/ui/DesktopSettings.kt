@@ -27,8 +27,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.window.Dialog
-import androidx.compose.ui.window.DialogProperties
+import capital.yuri.yuriplayer.components.dialog.InWindowDialog
 import capital.yuri.yuriplayer.components.settings.SettingsCategory
 import capital.yuri.yuriplayer.components.settings.SettingsShell
 import capital.yuri.yuriplayer.components.theme.AccentPicker
@@ -43,10 +42,7 @@ fun DesktopSettingsDialog(
     onDismiss: () -> Unit
 ) {
     var category by remember { mutableStateOf(SettingsCategory.Appearance) }
-    Dialog(
-        onDismissRequest = onDismiss,
-        properties = DialogProperties(usePlatformDefaultWidth = false)
-    ) {
+    InWindowDialog(onDismiss = onDismiss) {
         SettingsShell(
             selected = category,
             onSelect = { category = it },

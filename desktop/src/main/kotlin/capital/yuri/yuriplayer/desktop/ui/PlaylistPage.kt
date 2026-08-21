@@ -43,8 +43,9 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.window.DialogWindow
 import capital.yuri.yuriplayer.components.art.CoverArt
+import capital.yuri.yuriplayer.components.dialog.InWindowPanel
+import capital.yuri.yuriplayer.components.list.LikeHeart
 import capital.yuri.yuriplayer.components.list.TrackRow
 import capital.yuri.yuriplayer.components.model.toRow
 import capital.yuri.yuriplayer.core.library.Track
@@ -63,7 +64,11 @@ fun PlaylistPage(
     store: DesktopPlaylistStore,
     onBack: () -> Unit,
     onPlay: (List<Track>, Int) -> Unit,
-    onEditTrack: (Track) -> Unit
+    onEditTrack: (Track) -> Unit,
+    likedIds: Set<String> = emptySet(),
+    onToggleLike: (String) -> Unit = {},
+    playlistLiked: Boolean = false,
+    onTogglePlaylistLike: () -> Unit = {}
 ) {
     var name by remember(playlist.id, playlist.updatedAtMs) { mutableStateOf(playlist.name) }
     var description by remember(playlist.id, playlist.updatedAtMs) {
@@ -150,13 +155,18 @@ fun PlaylistPage(
                         modifier = Modifier.padding(top = 8.dp)
                     )
                 }
-                FilledIconButton(
-                    onClick = { if (tracks.isNotEmpty()) onPlay(tracks, 0) },
-                    modifier = Modifier.padding(top = 16.dp)
+                Row(
+                    Modifier.padding(top = 16.dp),
+                    verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Icon(Icons.Default.PlayArrow, contentDescription = "Play")
+                    FilledIconButton(
+                        onClick = { if (tracks.isNotEmpty()) onPlay(tracks, 0) }
+                    ) {
+                        Icon(Icons.Default.PlayArrow, contentDescription = "Play")
+                    }
+                    LikeHeart(liked = playlistLiked, onToggle = onTogglePlaylistLike)
+                    TextButton(onClick = { showAdd = true }) { Text("Add songs") }
                 }
-                TextButton(onClick = { showAdd = true }) { Text("Add songs") }
             }
         }
         Spacer(Modifier.height(16.dp))
@@ -167,7 +177,9 @@ fun PlaylistPage(
                     onClick = { onPlay(tracks, index) },
                     onLongClick = { onEditTrack(track) },
                     showCover = true,
-                    showAlbum = true
+                    showAlbum = true,
+                    liked = track.id in likedIds,
+                    onToggleLike = { onToggleLike(track.id) }
                 )
                 Row(Modifier.fillMaxWidth().padding(horizontal = 8.dp), horizontalArrangement = Arrangement.End) {
                     TextButton(onClick = {
@@ -226,8 +238,8 @@ private fun AddSongsDialog(
         if (q.isEmpty()) library.take(40)
         else library.filter { it.matchesQuery(q) }.take(40)
     }
-    DialogWindow(onCloseRequest = onDismiss, title = "Add songs") {
-        Surface(Modifier.size(520.dp, 560.dp)) {
+    InWindowPanel(onDismiss = onDismiss, modifier = Modifier.size(520.dp, 560.dp)) {
+        Surface {
             Column(Modifier.padding(16.dp)) {
                 OutlinedTextField(
                     value = query,
@@ -260,8 +272,8 @@ private fun CoverManagerDialog(
     onDismiss: () -> Unit,
     onPick: (secret: Boolean) -> Unit
 ) {
-    DialogWindow(onCloseRequest = onDismiss, title = "Playlist covers") {
-        Surface(Modifier.size(560.dp, 420.dp)) {
+    InWindowPanel(onDismiss = onDismiss, modifier = Modifier.size(560.dp, 420.dp)) {
+        Surface {
             Column(Modifier.fillMaxSize().padding(20.dp)) {
                 Text("Covers", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
                 Text(
@@ -364,8 +376,8 @@ fun NewPlaylistDialog(
 ) {
     var name by remember { mutableStateOf("") }
     var description by remember { mutableStateOf("") }
-    DialogWindow(onCloseRequest = onDismiss, title = "New playlist") {
-        Surface(Modifier.size(420.dp, 280.dp)) {
+    InWindowPanel(onDismiss = onDismiss, modifier = Modifier.size(420.dp, 280.dp)) {
+        Surface {
             Column(Modifier.padding(20.dp)) {
                 Text("New playlist", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
                 OutlinedTextField(

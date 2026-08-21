@@ -61,6 +61,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import coil3.compose.AsyncImage
 import capital.yuri.yuriplayer.components.art.CoverArt
+import capital.yuri.yuriplayer.components.list.LikeHeart
 import capital.yuri.yuriplayer.components.list.AlbumCard
 import capital.yuri.yuriplayer.components.list.TrackRow
 import capital.yuri.yuriplayer.components.list.formatTime
@@ -82,7 +83,11 @@ fun ArtistPage(
     modifier: Modifier = Modifier,
     onChangeHeader: () -> Unit = {},
     onFetchHeader: () -> Unit = {},
-    onClearHeader: () -> Unit = {}
+    onClearHeader: () -> Unit = {},
+    liked: Boolean = false,
+    onToggleLike: () -> Unit = {},
+    likedTrackIds: Set<String> = emptySet(),
+    onToggleTrackLike: (String) -> Unit = {}
 ) {
     val listState = rememberLazyListState()
     val mini by remember { derivedStateOf { listState.firstVisibleItemIndex > 0 } }
@@ -132,6 +137,7 @@ fun ArtistPage(
                             tint = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.8f)
                         )
                     }
+                    LikeHeart(liked = liked, onToggle = onToggleLike)
                     IconButton(onClick = { more = true }) {
                         Icon(
                             Icons.Default.MoreHoriz,
@@ -174,6 +180,8 @@ fun ArtistPage(
                             PopularRow(
                                 index = i + 1,
                                 track = track,
+                                liked = track.id in likedTrackIds,
+                                onToggleLike = { onToggleTrackLike(track.id) },
                                 onClick = { onTrack(i) }
                             )
                         }
@@ -440,7 +448,13 @@ private fun ArtistBanner(artist: ArtistPageModel) {
 }
 
 @Composable
-private fun PopularRow(index: Int, track: TrackRowModel, onClick: () -> Unit) {
+private fun PopularRow(
+    index: Int,
+    track: TrackRowModel,
+    liked: Boolean,
+    onToggleLike: () -> Unit,
+    onClick: () -> Unit
+) {
     Row(
         Modifier
             .fillMaxWidth()
@@ -464,6 +478,7 @@ private fun PopularRow(index: Int, track: TrackRowModel, onClick: () -> Unit) {
             overflow = TextOverflow.Ellipsis,
             fontWeight = FontWeight.Medium
         )
+        LikeHeart(liked = liked, onToggle = onToggleLike)
         Text(
             formatTime(track.durationMs ?: 0L),
             style = MaterialTheme.typography.bodySmall,
