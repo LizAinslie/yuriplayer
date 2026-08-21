@@ -50,6 +50,8 @@ import capital.yuri.yuriplayer.data.AlbumItem
 import capital.yuri.yuriplayer.data.ArtistItem
 import capital.yuri.yuriplayer.data.Song
 import capital.yuri.yuriplayer.data.allCreditsForSong
+import capital.yuri.yuriplayer.data.isCombinedArtistName
+import capital.yuri.yuriplayer.data.primaryArtistName
 import capital.yuri.yuriplayer.data.MyStuffPinStore
 import capital.yuri.yuriplayer.data.Playlist
 import capital.yuri.yuriplayer.data.PlaylistRepository
@@ -202,10 +204,14 @@ fun MediaSheetBottomPad() {
 }
 
 private fun songArtistNames(song: Song): List<String> {
-    val credits = allCreditsForSong(song).map { it.name.trim() }.filter { it.isNotEmpty() }
+    val credits = allCreditsForSong(song)
+        .map { it.name.trim() }
+        .filter { it.isNotEmpty() && !isCombinedArtistName(it) }
     if (credits.isNotEmpty()) return credits.distinctBy { it.lowercase() }
-    val single = song.primaryArtist.takeIf { it.isNotBlank() && it != "Unknown Artist" }
-    return listOfNotNull(single)
+    val single = primaryArtistName(song.effectiveAlbumArtist)
+        ?: primaryArtistName(song.artist)
+        ?: song.primaryArtist.takeIf { it.isNotBlank() && it != "Unknown Artist" }
+    return listOfNotNull(single?.takeUnless { isCombinedArtistName(it) })
 }
 
 @OptIn(ExperimentalMaterial3Api::class)

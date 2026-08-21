@@ -514,7 +514,7 @@ fun ArtistDetailScreen(
                         bannerUri = bannerUri,
                         bannerTotalHeight = bannerTotalHeight,
                         artBg = artBg,
-                        stats = "${formatAlbumCount(artist.albumCount)} · ${formatTrackCount(artist.trackCount)}",
+                        stats = "${formatAlbumCount(maxOf(artist.albumCount, albums.size))} · ${formatTrackCount(maxOf(artist.trackCount, albums.sumOf { it.trackCount }))}",
                         titleColor = onArt,
                         mutedColor = mutedOnArt,
                         accent = accent,

@@ -129,7 +129,11 @@ class JellyfinClient(
                 break
             }
 
-            val page = raw.mapNotNull { it.toSong(session) }
+            val page = raw.mapNotNull { item ->
+                runCatching { item.toSong(session) }
+                    .onFailure { e -> Log.w(TAG, "toSong failed for '${item.name}': ${e.message}") }
+                    .getOrNull()
+            }
             pageNum++
             Log.i(
                 TAG,
@@ -222,10 +226,22 @@ class JellyfinClient(
 
         val durationMs = runTimeTicks?.let { it / 10_000L }?.takeIf { it > 0 }
 
-        val artistFromList = artists?.firstOrNull { it.isNotBlank() }
-            ?: artistItems?.mapNotNull { it.name }?.firstOrNull { !it.isNullOrBlank() }
+        val artistNames = buildList {
+            artists?.forEach { n -> if (n.isNotBlank()) add(n.trim()) }
+            artistItems?.forEach { n -> n.name?.trim()?.takeIf { it.isNotBlank() }?.let { add(it) } }
+        }.distinctBy { it.lowercase() }
         val albumArtistName = albumArtist?.takeIf { it.isNotBlank() }
             ?: albumArtists?.mapNotNull { it.name }?.firstOrNull { !it.isNullOrBlank() }
+            ?: artistNames.firstOrNull()
+        val extras = artistNames.filter { name ->
+            albumArtistName == null || !name.equals(albumArtistName, ignoreCase = true)
+        }
+        val trackArtistName = when {
+            extras.isNotEmpty() && !albumArtistName.isNullOrBlank() ->
+                "$albumArtistName feat. ${extras.joinToString("; ")}"
+            artistNames.isNotEmpty() -> artistNames.joinToString("; ")
+            else -> albumArtistName
+        }
 
         val rawTitle = name?.takeIf { it.isNotBlank() }
             ?: this.path?.substringAfterLast('/')?.substringBeforeLast('.')
@@ -239,8 +255,8 @@ class JellyfinClient(
         return Song(
             id = id.hashCode().toLong(),
             title = title,
-            artist = artistFromList ?: albumArtistName,
-            albumArtist = albumArtistName ?: artistFromList,
+            artist = trackArtistName ?: albumArtistName,
+            albumArtist = albumArtistName ?: trackArtistName,
             album = album?.takeIf { it.isNotBlank() },
             durationMs = durationMs,
             contentUri = Uri.parse(stream),
@@ -291,10 +307,13 @@ class JellyfinClient(
             }
         }
 
+        /** "01 - Title" / "3. Title" / "12) Title" → Title. Hyphen is first in the class so it is not a range. */
+        private val TRACK_NUM_PREFIX = Regex("""^0*(\d{1,3})\s*[-._)]\s+(.+)$""")
+
         fun cleanTrackTitle(raw: String?, trackNumber: Int?): String? {
             if (raw.isNullOrBlank()) return raw
             val trimmed = raw.trim()
-            val prefixed = Regex("""^0*(\d{1,3})\s*[\\-._)]\\s+(.+)$""").matchEntire(trimmed)
+            val prefixed = runCatching { TRACK_NUM_PREFIX.matchEntire(trimmed) }.getOrNull()
             if (prefixed != null) {
                 val num = prefixed.groupValues[1].toIntOrNull()
                 val rest = prefixed.groupValues[2].trim()

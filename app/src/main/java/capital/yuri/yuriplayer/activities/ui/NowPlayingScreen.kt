@@ -63,6 +63,7 @@ import androidx.compose.ui.unit.dp
 import capital.yuri.yuriplayer.data.PlayerThemeStore
 import capital.yuri.yuriplayer.data.Song
 import capital.yuri.yuriplayer.data.allCreditsForSong
+import capital.yuri.yuriplayer.data.isCombinedArtistName
 import capital.yuri.yuriplayer.player.ColdSourceType
 import capital.yuri.yuriplayer.player.PlayerController
 import capital.yuri.yuriplayer.player.QueueLane
@@ -639,11 +640,14 @@ fun NowPlayingScreen(
                     MediaSheetItem(
                         label = "Go to artist",
                         onClick = {
-                            val names = allCreditsForSong(song).map { it.name }
+                            val names = allCreditsForSong(song)
+                                .map { it.name }
+                                .filter { !isCombinedArtistName(it) }
+                                .distinctBy { it.lowercase() }
+                            showSongMenu = false
                             if (names.size > 1) {
                                 artistPick = names
                             } else {
-                                showSongMenu = false
                                 onGoToArtist(song)
                             }
                         }

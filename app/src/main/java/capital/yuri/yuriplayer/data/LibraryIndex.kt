@@ -373,5 +373,5 @@ data class ArtistItem(
     val albumCount: Int,
     val songs: List<Song>
 ) {
-    val displayName: String get() = name ?: "Unknown Artist"
+    val displayName: String get() = primaryArtistName(name) ?: name ?: "Unknown Artist"
 }

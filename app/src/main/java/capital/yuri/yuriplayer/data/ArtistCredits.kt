@@ -20,19 +20,30 @@ data class ArtistCredit(
     val position: Int
 )
 
-private val FEAT_SPLIT = Regex("""(?i)\s+(?:feat\.?|ft\.?|featuring)\s+""")
-private val FEAT_IN_PARENS = Regex(
-    """(?i)[\(\[\{]\s*(?:feat\.?|ft\.?|featuring)\s+([^\)\]\}]+)[\)\]\}]"""
+private val FEAT_SPLIT = Regex(
+    """(?i)(?:\p{Zs}+|[\(\[\{]\p{Zs}*)(?:feat\.?|ft\.?|featuring)\.?\p{Zs}*"""
 )
-private val FEAT_SUFFIX = Regex("""(?i)\s+(?:feat\.?|ft\.?|featuring)\s+(.+)$""")
+private val FEAT_IN_PARENS = Regex(
+    """(?i)[\(\[\{]\p{Zs}*(?:feat\.?|ft\.?|featuring)\.?\p{Zs}*([^\)\]\}]+)[\)\]\}]"""
+)
+private val FEAT_SUFFIX = Regex(
+    """(?i)\p{Zs}+(?:feat\.?|ft\.?|featuring)\.?\p{Zs}*(.+)$"""
+)
 private val FEAT_BLOB_SPLIT = Regex("""\s*(?:;|,|&|×)\s+|\s+(?:and|x)\s+""", RegexOption.IGNORE_CASE)
+private val TRAILING_OPEN = Regex("""[\(\[\{]\p{Zs}*$""")
 
 fun parseArtistCreditList(raw: String?): List<ArtistCredit> {
     if (raw.isNullOrBlank()) return emptyList()
-    val parts = raw.split(FEAT_SPLIT, limit = 2)
+    val parenFeats = ArrayList<String>()
+    var cleaned = raw.trim()
+    FEAT_IN_PARENS.findAll(cleaned).forEach { parenFeats += splitFeatBlob(it.groupValues[1]) }
+    cleaned = cleaned.replace(FEAT_IN_PARENS, " ").replace(Regex("""\s+"""), " ").trim()
+    cleaned = cleaned.replace(TRAILING_OPEN, "").trim()
+
+    val parts = cleaned.split(FEAT_SPLIT, limit = 2)
     val out = ArrayList<ArtistCredit>()
     fun addPrimary(blob: String) {
-        blob.split(';').map { it.trim() }.filter { it.isNotEmpty() }.forEach { name ->
+        blob.split(';').map { it.trim().trim('(', ')', '[', ']', '{', '}') }.filter { it.isNotEmpty() }.forEach { name ->
             if (out.none { it.name.equals(name, ignoreCase = true) }) {
                 out += ArtistCredit(name = name, role = ArtistRole.PRIMARY, position = out.size)
             }
@@ -47,6 +58,7 @@ fun parseArtistCreditList(raw: String?): List<ArtistCredit> {
     }
     addPrimary(parts[0])
     parts.getOrNull(1)?.let { addFeatured(it) }
+    parenFeats.forEach { addFeatured(it) }
     return out
 }
 
@@ -76,6 +88,7 @@ fun allCreditsForSong(song: Song): List<ArtistCredit> {
     val artistParsed = parseArtistCreditList(song.artist)
     val titleFeats = featuredFromText(song.title)
     val albumFeats = featuredFromText(song.album)
+    val artistFieldFeats = featuredFromText(song.artist) + featuredFromText(song.albumArtist)
 
     val primaries = LinkedHashSet<String>()
     albumParsed.filter { it.role == ArtistRole.PRIMARY }.forEach { primaries += it.name }
@@ -99,6 +112,7 @@ fun allCreditsForSong(song: Song): List<ArtistCredit> {
     }
     titleFeats.forEach { addFeat(it) }
     albumFeats.forEach { addFeat(it) }
+    artistFieldFeats.forEach { addFeat(it) }
 
     val out = ArrayList<ArtistCredit>(primaries.size + featured.size)
     primaries.forEach { n -> out += ArtistCredit(n, ArtistRole.PRIMARY, out.size) }
@@ -108,7 +122,10 @@ fun allCreditsForSong(song: Song): List<ArtistCredit> {
 
 fun isCombinedArtistName(name: String?): Boolean {
     if (name.isNullOrBlank()) return false
-    return FEAT_SPLIT.containsMatchIn(name)
+    if (name.contains(';')) return true
+    if (FEAT_IN_PARENS.containsMatchIn(name)) return true
+    if (FEAT_SPLIT.containsMatchIn(name)) return true
+    return false
 }
 
 /** Names only (primary then featured) — for linking. */

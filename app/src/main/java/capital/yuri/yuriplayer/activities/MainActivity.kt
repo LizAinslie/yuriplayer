@@ -500,8 +500,11 @@ fun YuriApp(
     }
 
     fun openArtistResolved(seed: ArtistItem) {
+        val stripped = primaryArtistName(seed.name) ?: seed.displayName
+        val item = if (stripped.equals(seed.name, ignoreCase = true)) seed
+        else seed.copy(name = stripped)
         playerExpanded = false
-        pushDetail(DetailRoute.Artist(seed))
+        pushDetail(DetailRoute.Artist(item))
     }
 
     fun openAlbumForSong(song: Song) {
@@ -749,27 +752,38 @@ fun YuriApp(
                             )
                         }
                         is DetailRoute.Artist -> {
-                            val aKey = artistKey(d.artist.name) ?: d.artist.displayName.lowercase()
+                            val artistName = primaryArtistName(d.artist.name) ?: d.artist.displayName
+                            val aKey = artistKey(artistName) ?: artistName.lowercase()
                             var liveArtist by remember(aKey) { mutableStateOf(d.artist) }
                             var albums by remember(aKey) { mutableStateOf<List<AlbumItem>>(emptyList()) }
                             var appearsOn by remember(aKey) { mutableStateOf<List<AlbumItem>>(emptyList()) }
                             LaunchedEffect(aKey) {
                                 val fromCatalog = withContext(Dispatchers.IO) {
-                                    catalog.artistItemForKey(aKey, d.artist.displayName)
+                                    catalog.artistItemForKey(aKey, artistName)
                                 }
                                 val catalogAlbums = withContext(Dispatchers.IO) {
-                                    catalog.albumItemsForArtist(
-                                        aKey,
-                                        fromCatalog?.displayName ?: d.artist.displayName
-                                    )
+                                    catalog.albumItemsForArtist(aKey, artistName)
                                 }
                                 val guestAlbums = withContext(Dispatchers.IO) {
-                                    catalog.appearsOnAlbumItems(aKey, fromCatalog?.displayName ?: d.artist.displayName)
+                                    catalog.appearsOnAlbumItems(aKey, artistName)
                                 }
                                 val localAlbums = library.albums(taggedOnly = false).filter {
                                     artistKey(it.artist) == aKey
                                 }
-                                liveArtist = fromCatalog ?: d.artist
+                                liveArtist = (fromCatalog ?: d.artist).let { base ->
+                                    val name = primaryArtistName(base.name)
+                                        ?: primaryArtistName(artistName)
+                                        ?: base.name
+                                    val albumN = catalogAlbums.size.coerceAtLeast(localAlbums.size)
+                                    val trackN = catalogAlbums.sumOf { it.trackCount }
+                                        .coerceAtLeast(localAlbums.sumOf { it.trackCount })
+                                        .coerceAtLeast(base.trackCount)
+                                    base.copy(
+                                        name = name,
+                                        albumCount = albumN.coerceAtLeast(base.albumCount),
+                                        trackCount = trackN
+                                    )
+                                }
                                 albums = when {
                                     catalogAlbums.isNotEmpty() -> catalogAlbums
                                     localAlbums.isNotEmpty() -> localAlbums
