@@ -101,6 +101,7 @@ fun ExploreScreen(
 
     LaunchedEffect(Unit) {
         explore.hydrateFromCatalog()
+        withContext(Dispatchers.IO) { remotePls.syncOwnedToMyStuff() }
     }
 
     LaunchedEffect(query) {
@@ -134,7 +135,10 @@ fun ExploreScreen(
         if (query.trim() != q) return@LaunchedEffect
 
         val localPl = localPlaylists.filter { it.name.contains(q, true) }.take(12)
-        val remotePl = withContext(Dispatchers.IO) { remotePls.search(q).take(12) }
+        val localIds = localPlaylists.map { it.id }.toHashSet()
+        val remotePl = withContext(Dispatchers.IO) {
+            remotePls.search(q).filter { it.stableId !in localIds }
+        }.take(12)
         if (query.trim() != q) return@LaunchedEffect
 
         hits = songHits
@@ -231,7 +235,7 @@ fun ExploreScreen(
                             color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.55f)
                         )
                         Text(
-                            "Artists, albums, and songs · local + Jellyfin + Subsonic",
+                            "Artists, albums, songs, and playlists · local + Jellyfin + Subsonic",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.4f),
                             modifier = Modifier.padding(top = 6.dp)
@@ -294,7 +298,7 @@ fun ExploreScreen(
                                 Column {
                                     Text(remote.name, fontWeight = FontWeight.SemiBold)
                                     Text(
-                                        "${remote.sourceName} · tap to add",
+                                        "${remote.sourceName} · tap to add to My Stuff",
                                         style = MaterialTheme.typography.bodySmall,
                                         color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.55f)
                                     )

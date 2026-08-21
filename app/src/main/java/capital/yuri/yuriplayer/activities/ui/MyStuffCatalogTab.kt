@@ -1,6 +1,5 @@
 package capital.yuri.yuriplayer.activities.ui
 
-import android.widget.Toast
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -36,13 +35,11 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.layout.ContentScale
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -60,7 +57,6 @@ import capital.yuri.yuriplayer.data.artistKey
 import capital.yuri.yuriplayer.data.db.CatalogSources
 import capital.yuri.yuriplayer.data.db.SourceInstanceEntity
 import capital.yuri.yuriplayer.data.source.LibraryFaviconStore
-import capital.yuri.yuriplayer.data.source.RemotePlaylist
 import capital.yuri.yuriplayer.data.source.RemotePlaylistService
 import capital.yuri.yuriplayer.data.source.SourceInstanceRepository
 import capital.yuri.yuriplayer.ui.TestTags
@@ -68,7 +64,6 @@ import capital.yuri.yuriplayer.ui.formatTrackCount
 import coil3.compose.AsyncImage
 import coil3.request.ImageRequest
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.koin.compose.koinInject
 import java.io.File
@@ -106,14 +101,11 @@ fun MyStuffCatalogTab(
     val remotePlaylists: RemotePlaylistService = koinInject()
     val sources by sourcesRepo.observeAll().collectAsState(initial = emptyList())
     val allSongs by library.songs.collectAsState()
-    val context = LocalContext.current
-    val scope = rememberCoroutineScope()
 
     var page by remember { mutableStateOf<CatalogPage>(CatalogPage.Hub) }
     var resolvedArtists by remember { mutableStateOf<List<ArtistItem>>(emptyList()) }
     var resolvedAlbums by remember { mutableStateOf<List<AlbumItem>>(emptyList()) }
     var resolvedSongs by remember { mutableStateOf<List<Song>>(emptyList()) }
-    var remotePls by remember { mutableStateOf<List<RemotePlaylist>>(emptyList()) }
 
     val artistPins = remember(entries) { entries.filter { it.kind == StuffPinKind.ARTIST } }
     val albumPins = remember(entries) { entries.filter { it.kind == StuffPinKind.ALBUM } }
@@ -144,7 +136,7 @@ fun MyStuffCatalogTab(
     }
 
     LaunchedEffect(sources) {
-        remotePls = withContext(Dispatchers.IO) { remotePlaylists.listAll() }
+        withContext(Dispatchers.IO) { remotePlaylists.syncOwnedToMyStuff() }
     }
 
     BackHandler(enabled = page !is CatalogPage.Hub) { page = CatalogPage.Hub }
@@ -155,7 +147,6 @@ fun MyStuffCatalogTab(
             albums = resolvedAlbums,
             songs = resolvedSongs,
             playlists = playlists,
-            remotePlaylists = remotePls,
             sources = sources.filter { it.enabled },
             favicons = favicons,
             nowPlaying = nowPlaying,
@@ -169,17 +160,6 @@ fun MyStuffCatalogTab(
             onOpenPlaylist = onOpenPlaylist,
             onOpenSongAlbum = onOpenSongAlbum,
             onOpenLibrary = { page = it },
-            onImportRemote = { remote ->
-                scope.launch {
-                    val created = withContext(Dispatchers.IO) { remotePlaylists.importToLocal(remote) }
-                    if (created != null) {
-                        Toast.makeText(context, "Added ${created.name}", Toast.LENGTH_SHORT).show()
-                        onOpenPlaylist(created)
-                    } else {
-                        Toast.makeText(context, "Couldn't import playlist", Toast.LENGTH_SHORT).show()
-                    }
-                }
-            },
             onAddToQueue = onAddToQueue
         )
         CatalogPage.Artists -> CatalogShowAll(
@@ -216,14 +196,7 @@ fun MyStuffCatalogTab(
         ) {
             PlaylistShowAll(
                 local = playlists,
-                remote = remotePls,
-                onOpenLocal = onOpenPlaylist,
-                onImportRemote = { remote ->
-                    scope.launch {
-                        val created = withContext(Dispatchers.IO) { remotePlaylists.importToLocal(remote) }
-                        if (created != null) onOpenPlaylist(created)
-                    }
-                }
+                onOpenLocal = onOpenPlaylist
             )
         }
         CatalogPage.Songs -> CatalogShowAll(
@@ -292,7 +265,6 @@ private fun CatalogHub(
     albums: List<AlbumItem>,
     songs: List<Song>,
     playlists: List<Playlist>,
-    remotePlaylists: List<RemotePlaylist>,
     sources: List<SourceInstanceEntity>,
     favicons: LibraryFaviconStore,
     nowPlaying: Song?,
@@ -306,7 +278,6 @@ private fun CatalogHub(
     onOpenPlaylist: (Playlist) -> Unit,
     onOpenSongAlbum: (Song) -> Unit,
     onOpenLibrary: (CatalogPage.Library) -> Unit,
-    onImportRemote: (RemotePlaylist) -> Unit,
     onAddToQueue: (Song) -> Unit
 ) {
     LazyColumn(
@@ -374,12 +345,12 @@ private fun CatalogHub(
         item {
             CatalogSectionHeader(
                 "Playlists",
-                playlists.size + remotePlaylists.size,
+                playlists.size,
                 onShowAllPlaylists
             )
         }
-        if (playlists.isEmpty() && remotePlaylists.isEmpty()) {
-            item { EmptyHint("Local playlists live here. Remote ones can be added from a source.") }
+        if (playlists.isEmpty()) {
+            item { EmptyHint("Your playlists live here. Find others in Explore.") }
         } else {
             item {
                 LazyRow(
@@ -392,30 +363,6 @@ private fun CatalogHub(
                             subtitle = formatTrackCount(pl.trackCount),
                             onClick = { onOpenPlaylist(pl) }
                         ) { PlaylistCoverArt(pl, size = 120.dp) }
-                    }
-                    items(remotePlaylists, key = { it.stableId }) { remote ->
-                        CatalogPlaylistCard(
-                            title = remote.name,
-                            subtitle = "${remote.sourceName} · add",
-                            onClick = { onImportRemote(remote) }
-                        ) {
-                            if (!remote.coverUrl.isNullOrBlank()) {
-                                AsyncImage(
-                                    model = remote.coverUrl,
-                                    contentDescription = null,
-                                    modifier = Modifier
-                                        .size(120.dp)
-                                        .clip(RoundedCornerShape(8.dp)),
-                                    contentScale = ContentScale.Crop
-                                )
-                            } else {
-                                Icon(
-                                    Icons.Default.LibraryMusic,
-                                    contentDescription = null,
-                                    modifier = Modifier.size(120.dp).padding(32.dp)
-                                )
-                            }
-                        }
                     }
                 }
             }
@@ -607,64 +554,14 @@ private fun CatalogPlaylistCard(
 @Composable
 private fun PlaylistShowAll(
     local: List<Playlist>,
-    remote: List<RemotePlaylist>,
-    onOpenLocal: (Playlist) -> Unit,
-    onImportRemote: (RemotePlaylist) -> Unit
+    onOpenLocal: (Playlist) -> Unit
 ) {
     LazyColumn(modifier = Modifier.fillMaxSize(), contentPadding = PaddingValues(bottom = 24.dp)) {
-        if (local.isNotEmpty()) {
-            item {
-                Text(
-                    "On this device",
-                    style = MaterialTheme.typography.titleSmall,
-                    fontWeight = FontWeight.Bold,
-                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)
-                )
-            }
-            items(local, key = { it.id }) { pl ->
-                PlaylistRow(pl, onClick = { onOpenLocal(pl) })
-            }
+        if (local.isEmpty()) {
+            item { EmptyHint("No playlists in My Stuff yet. Search Explore to add one.") }
         }
-        if (remote.isNotEmpty()) {
-            item {
-                Text(
-                    "From libraries",
-                    style = MaterialTheme.typography.titleSmall,
-                    fontWeight = FontWeight.Bold,
-                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)
-                )
-            }
-            items(remote, key = { it.stableId }) { remotePl ->
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .clickable { onImportRemote(remotePl) }
-                        .padding(horizontal = 16.dp, vertical = 10.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    if (!remotePl.coverUrl.isNullOrBlank()) {
-                        AsyncImage(
-                            model = remotePl.coverUrl,
-                            contentDescription = null,
-                            modifier = Modifier
-                                .size(56.dp)
-                                .clip(RoundedCornerShape(8.dp)),
-                            contentScale = ContentScale.Crop
-                        )
-                    } else {
-                        Icon(Icons.Default.LibraryMusic, null, Modifier.size(56.dp).padding(12.dp))
-                    }
-                    Spacer(modifier = Modifier.width(12.dp))
-                    Column(modifier = Modifier.weight(1f)) {
-                        Text(remotePl.name, fontWeight = FontWeight.SemiBold)
-                        Text(
-                            "${remotePl.sourceName} · tap to add to My Stuff",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.55f)
-                        )
-                    }
-                }
-            }
+        items(local, key = { it.id }) { pl ->
+            PlaylistRow(pl, onClick = { onOpenLocal(pl) })
         }
     }
 }

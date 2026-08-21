@@ -105,6 +105,38 @@ class PlaylistRepository(
         return tracks.mapNotNull { byKey[it.songKey] }
     }
 
+    suspend fun get(id: String): Playlist? = withContext(Dispatchers.IO) {
+        val entity = dao.get(id) ?: return@withContext null
+        val tracks = dao.getTracks(id)
+        entity.toPlaylist(tracks.size, resolveSongs(tracks))
+    }
+
+    /**
+     * Idempotent import for a remote playlist. [id] is the remote stable id
+     * (`JELLYFIN:1:uuid`). Existing rows keep their cover; tracks are replaced
+     * from the source of truth on first insert only.
+     */
+    suspend fun upsertImported(id: String, name: String, songs: List<Song>): Playlist =
+        withContext(Dispatchers.IO) {
+            val existing = dao.get(id)
+            val now = System.currentTimeMillis()
+            if (existing == null) {
+                dao.upsert(
+                    PlaylistEntity(
+                        id = id,
+                        name = name.trim().ifEmpty { "Playlist" },
+                        createdAtMs = now,
+                        updatedAtMs = now
+                    )
+                )
+                catalog.ensureTracksPresent(songs)
+                dao.replaceTracks(id, songs.map { it.songKey })
+            }
+            val entity = dao.get(id)!!
+            val tracks = dao.getTracks(id)
+            entity.toPlaylist(tracks.size, resolveSongs(tracks))
+        }
+
     suspend fun create(name: String, description: String? = null): Playlist =
         withContext(Dispatchers.IO) {
             val id = UUID.randomUUID().toString()

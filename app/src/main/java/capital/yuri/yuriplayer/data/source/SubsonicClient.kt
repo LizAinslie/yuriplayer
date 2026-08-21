@@ -243,7 +243,8 @@ class SubsonicClient(
         val id: String,
         val name: String,
         val songCount: Int,
-        val coverArt: String?
+        val coverArt: String?,
+        val owner: String? = null
     )
 
     suspend fun listPlaylists(session: Session): Result<List<PlaylistRef>> = runCatching {
@@ -257,7 +258,8 @@ class SubsonicClient(
                 id = id,
                 name = name,
                 songCount = p.songCount ?: 0,
-                coverArt = p.coverArt
+                coverArt = p.coverArt,
+                owner = p.owner
             )
         }
     }.onFailure { Log.w(TAG, "listPlaylists failed: ${it.message}") }

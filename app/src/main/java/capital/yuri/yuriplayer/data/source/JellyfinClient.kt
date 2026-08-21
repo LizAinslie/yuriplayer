@@ -190,7 +190,9 @@ class JellyfinClient(
         val id: String,
         val name: String,
         val songCount: Int,
-        val coverUrl: String?
+        val coverUrl: String?,
+        val owner: String? = null,
+        val owned: Boolean = false
     )
 
     suspend fun listPlaylists(session: Session): Result<List<PlaylistRef>> = runCatching {
@@ -213,7 +215,8 @@ class JellyfinClient(
                 id = id,
                 name = name,
                 songCount = item.childCount ?: 0,
-                coverUrl = primaryImageUrl(session, id, 256)
+                coverUrl = primaryImageUrl(session, id, 256),
+                owned = item.canDelete == true
             )
         }
     }.onFailure { Log.w(TAG, "listPlaylists failed: ${it.message}") }

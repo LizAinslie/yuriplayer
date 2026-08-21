@@ -14,7 +14,9 @@ data class RemotePlaylist(
     val remoteId: String,
     val name: String,
     val songCount: Int,
-    val coverUrl: String?
+    val coverUrl: String?,
+    val owner: String? = null,
+    val ownedByUser: Boolean = false
 ) {
     val stableId: String get() = "$sourceType:$sourceInstanceId:$remoteId"
 }
@@ -45,11 +47,26 @@ class RemotePlaylistService(
     }
 
     suspend fun importToLocal(remote: RemotePlaylist): Playlist? {
+        val existing = playlists.get(remote.stableId)
+        if (existing != null) return existing
         val songs = loadSongs(remote)
         if (songs.isEmpty()) return null
-        val created = playlists.create(remote.name)
-        playlists.addSongs(created.id, songs)
-        return created.copy(trackCount = songs.size, songs = songs)
+        return playlists.upsertImported(remote.stableId, remote.name, songs)
+    }
+
+    /**
+     * Playlists the signed-in user created on Jellyfin / Navidrome become
+     * local My Stuff playlists (catalog + Playlists tab). Others stay in Explore.
+     */
+    suspend fun syncOwnedToMyStuff(): Int {
+        var imported = 0
+        for (remote in listAll()) {
+            if (!remote.ownedByUser) continue
+            if (playlists.get(remote.stableId) != null) continue
+            if (importToLocal(remote) != null) imported++
+        }
+        if (imported > 0) Log.i(TAG, "imported $imported owned remote playlists")
+        return imported
     }
 
     suspend fun loadSongs(remote: RemotePlaylist): List<Song> {
@@ -77,7 +94,9 @@ class RemotePlaylistService(
                 remoteId = p.id,
                 name = p.name,
                 songCount = p.songCount,
-                coverUrl = p.coverUrl
+                coverUrl = p.coverUrl,
+                owner = p.owner,
+                ownedByUser = p.owned
             )
         }
     }
@@ -85,6 +104,8 @@ class RemotePlaylistService(
     private suspend fun subsonicPlaylists(row: SourceInstanceEntity): List<RemotePlaylist> {
         val session = subsonicSession(row) ?: return emptyList()
         return subsonic.listPlaylists(session).getOrElse { emptyList() }.map { p ->
+            val owned = !p.owner.isNullOrBlank() &&
+                p.owner.equals(session.username, ignoreCase = true)
             RemotePlaylist(
                 sourceType = row.type,
                 sourceInstanceId = row.id,
@@ -92,7 +113,9 @@ class RemotePlaylistService(
                 remoteId = p.id,
                 name = p.name,
                 songCount = p.songCount,
-                coverUrl = subsonic.coverUrl(session, p.coverArt, 256)
+                coverUrl = subsonic.coverUrl(session, p.coverArt, 256),
+                owner = p.owner,
+                ownedByUser = owned
             )
         }
     }
