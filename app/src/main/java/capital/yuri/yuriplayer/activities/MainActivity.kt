@@ -457,27 +457,9 @@ fun YuriApp(
             themeStore.updateCurrent(context, null, baseScheme)
             return@LaunchedEffect
         }
-        val already = themeStore.isShowing(incoming)
-        val warmNext = themeStore.themeIsFor(themeStore.peekNext.value, incoming)
-        val warmPrev = themeStore.themeIsFor(themeStore.peekPrev.value, incoming)
-        if (already) {
-            // Cover already matches this song.
-        } else if (warmNext) {
-            // SwipeableAlbumArt slides then promoteNext. Snap if that doesn't.
-            delay(320)
-            if (!themeStore.isShowing(incoming)) themeStore.promoteNext()
-            if (!themeStore.isShowing(incoming)) {
-                themeStore.updateCurrent(context, incoming, baseScheme)
-            }
-        } else if (warmPrev) {
-            delay(320)
-            if (!themeStore.isShowing(incoming)) themeStore.promotePrev()
-            if (!themeStore.isShowing(incoming)) {
-                themeStore.updateCurrent(context, incoming, baseScheme)
-            }
-        } else {
-            themeStore.updateCurrent(context, incoming, baseScheme)
-        }
+        // Apply the new cover now. Waiting on swipe animation is what left
+        // the previous album art on screen after auto-advance.
+        themeStore.showSong(context, incoming, baseScheme)
         themeStore.updateNeighbors(context, peekNext, peekPrev, baseScheme)
     }
     LaunchedEffect(peekNext?.id, peekPrev?.id, peekNext?.path, peekPrev?.path) {

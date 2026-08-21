@@ -66,6 +66,25 @@ class PlayerThemeStore(
     fun isShowing(song: Song): Boolean = themeIsFor(_current.value, song)
 
     /**
+     * Make [current] this song's cover right now. Promote a warm neighbor if
+     * it is actually this song; otherwise decode. Never wait on animation.
+     */
+    suspend fun showSong(
+        context: Context,
+        song: Song,
+        baseScheme: ColorScheme
+    ) {
+        if (isShowing(song)) return
+        when {
+            themeIsFor(_peekNext.value, song) -> promoteNext()
+            themeIsFor(_peekPrev.value, song) -> promotePrev()
+        }
+        if (!isShowing(song)) {
+            updateCurrent(context, song, baseScheme)
+        }
+    }
+
+    /**
      * @param forceRefresh re-decode art and palette (e.g. after MusicBrainz cover lands).
      */
     suspend fun updateCurrent(

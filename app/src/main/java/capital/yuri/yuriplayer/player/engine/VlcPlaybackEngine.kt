@@ -62,6 +62,8 @@ class VlcPlaybackEngine(
     private var currentAfd: AssetFileDescriptor? = null
     private var nextPfd: ParcelFileDescriptor? = null
     private var nextAfd: AssetFileDescriptor? = null
+    private var currentMedia: Media? = null
+    private var nextMedia: Media? = null
 
     private var nextItem: PlaybackMedia? = null
     @Volatile private var nextReady: Boolean = false
@@ -121,6 +123,16 @@ class VlcPlaybackEngine(
                 _isPlaying.value = false
                 dispatch { onIsPlayingChanged(false) }
                 dispatch { onPlaybackStateChanged(PlaybackEngine.PlaybackState.IDLE) }
+                // HTTP cancel/EOF often Stopped without EndReached. If we still
+                // intend to play, treat this as the end of the track.
+                if (playWhenReady) {
+                    if (swapToPreparedNext()) {
+                        dispatch { onAutoAdvanced() }
+                    } else {
+                        eventGeneration = -1
+                        dispatch { onEnded() }
+                    }
+                }
             }
             MediaPlayer.Event.EndReached -> {
                 if (loadGeneration != eventGeneration) return
@@ -139,6 +151,10 @@ class VlcPlaybackEngine(
                 Log.e(TAG, "VLC EncounteredError uri=${_currentUri.value}")
                 _isPlaying.value = false
                 dispatch { onIsPlayingChanged(false) }
+                if (playWhenReady && swapToPreparedNext()) {
+                    dispatch { onAutoAdvanced() }
+                    return
+                }
                 dispatch { onError("VLC playback error", recoverable = true) }
             }
             MediaPlayer.Event.Buffering -> {
@@ -160,13 +176,10 @@ class VlcPlaybackEngine(
                 val buffered = event.type == MediaPlayer.Event.Playing ||
                     event.buffering >= 100f
                 if (!buffered) return
-                // Pause so we don't consume the next track before swap.
-                // Warmup only runs in the last seconds of the current song,
-                // so a short pause does not kill the HTTP session the way
-                // play-then-pause at the start of a 3-minute track did.
-                if (mp.isPlaying) runCatching { mp.pause() }
                 nextReady = true
                 Log.i(TAG, "standby ready '${nextItem?.title}' warming=$nextWarming")
+                // Stay playing at volume 0. Pause kills HTTP (`reading while
+                // paused`) and the swapped stream then dies at EOF.
             }
             MediaPlayer.Event.EncounteredError -> {
                 Log.w(TAG, "standby prepare failed '${nextItem?.title}'")
@@ -305,9 +318,14 @@ class VlcPlaybackEngine(
             runCatching {
                 mp.setEventListener(null)
                 mp.stop()
+                mp.media = null
                 mp.release()
             }
         }
+        runCatching { currentMedia?.release() }
+        runCatching { nextMedia?.release() }
+        currentMedia = null
+        nextMedia = null
         closeDescriptors()
         closeNextDescriptors()
         runCatching { libVLC.release() }
@@ -371,8 +389,7 @@ class VlcPlaybackEngine(
             return
         }
         applyStreamOptions(media, item)
-        active().media = media
-        media.release()
+        bindMedia(active(), media, isNext = false)
         dispatch { onMediaTransition(PlaybackEngine.TransitionReason.PLAYLIST) }
         Log.i(
             TAG,
@@ -432,14 +449,10 @@ class VlcPlaybackEngine(
         applyStreamOptions(media, item)
         val sp = standby()
         runCatching { sp.stop() }
-        sp.media = media
-        media.release()
+        bindMedia(sp, media, isNext = true)
         runCatching { sp.volume = 0 }
         Log.i(TAG, "standby attached '${item.title}' network=${item.isNetwork}")
         nextPreparing = false
-        // Don't play() yet — a paused HTTP session dies before this track
-        // ends, and swap then freezes. Attach now; warmupNext() fills cache
-        // in the last seconds; swap plays if we never warmed.
         nextReady = true
     }
 
@@ -452,12 +465,14 @@ class VlcPlaybackEngine(
         eventGeneration = -1
         loadGeneration += 1
         runCatching { old.stop() }
-        runCatching { old.media = null }
+        unbindMedia(old, isNext = false)
         closeDescriptors()
         currentAfd = nextAfd
         currentPfd = nextPfd
         nextAfd = null
         nextPfd = null
+        currentMedia = nextMedia
+        nextMedia = null
 
         activeSlot = 1 - activeSlot
         window = listOf(nxt)
@@ -472,7 +487,9 @@ class VlcPlaybackEngine(
         playWhenReady = true
         val np = active()
         runCatching { np.volume = 100 }
+        val warmed = runCatching { np.time }.getOrDefault(0L)
         if (!np.isPlaying) np.play()
+        if (warmed > 1_000L) runCatching { np.time = 0L }
         _isPlaying.value = true
         buffering = false
         Log.i(TAG, "swap → '${nxt.title}'")
@@ -486,8 +503,9 @@ class VlcPlaybackEngine(
         nextReady = false
         nextPreparing = false
         nextWarming = false
-        runCatching { standby().stop() }
-        runCatching { standby().media = null }
+        val sp = standby()
+        runCatching { sp.stop() }
+        unbindMedia(sp, isNext = true)
         closeNextDescriptors()
     }
 
@@ -542,6 +560,19 @@ class VlcPlaybackEngine(
         }
     }
 
+    private fun bindMedia(mp: MediaPlayer, media: Media, isNext: Boolean) {
+        unbindMedia(mp, isNext)
+        mp.media = media
+        if (isNext) nextMedia = media else currentMedia = media
+    }
+
+    private fun unbindMedia(mp: MediaPlayer, isNext: Boolean) {
+        runCatching { mp.media = null }
+        val held = if (isNext) nextMedia else currentMedia
+        if (isNext) nextMedia = null else currentMedia = null
+        if (held != null) runCatching { held.release() }
+    }
+
     private fun closeDescriptors() {
         runCatching { currentAfd?.close() }
         runCatching { currentPfd?.close() }
@@ -560,7 +591,7 @@ class VlcPlaybackEngine(
         loadGeneration += 1
         eventGeneration = loadGeneration
         runCatching { active().stop() }
-        runCatching { active().media = null }
+        unbindMedia(active(), isNext = false)
         closeDescriptors()
         clearNext()
         _isPlaying.value = false

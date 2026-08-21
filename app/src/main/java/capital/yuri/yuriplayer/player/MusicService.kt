@@ -67,7 +67,7 @@ class MusicService : Service() {
     private var windowGeneration: Int = 0
     private var endedForWindow: Int = -1
     /** Engine posts onAutoAdvanced after playPreparedNext; the queue already moved. */
-    private var consumeAutoAdvanced: Boolean = false
+    private var ignoreAutoAdvancedUntilElapsed: Long = 0L
     private var lastAdvanceElapsed: Long = 0L
     private var ignoreWatchdogUntilElapsed: Long = 0L
 
@@ -238,7 +238,7 @@ class MusicService : Service() {
         try {
             windowGeneration += 1
             endedForWindow = -1
-            consumeAutoAdvanced = false
+            ignoreAutoAdvancedUntilElapsed = 0L
             lastAdvanceElapsed = SystemClock.elapsedRealtime()
             ignoreWatchdogUntilElapsed = lastAdvanceElapsed + WATCHDOG_GRACE_MS
             stallSamplePos = -1L
@@ -323,7 +323,9 @@ class MusicService : Service() {
             hooks.setNext(null)
             return
         }
-        hooks.setNext(queueManager.peekNext())
+        val next = queueManager.peekNext()
+        Log.i(TAG, "syncPreparedNext '${next?.displayTitle}'")
+        hooks.setNext(next)
     }
 
     /**
@@ -344,15 +346,19 @@ class MusicService : Service() {
     }
 
     private fun onEngineAutoAdvanced() {
-        if (consumeAutoAdvanced) {
-            consumeAutoAdvanced = false
+        val now = SystemClock.elapsedRealtime()
+        if (now < ignoreAutoAdvancedUntilElapsed) {
+            ignoreAutoAdvancedUntilElapsed = 0L
+            Log.i(TAG, "autoAdvanced ignored — queue already moved")
             return
         }
         if (advancing) return
         if (!claimEndOfWindow(fromUser = false)) return
         advancing = true
         try {
-            applyAdvanceKeepEngine(queueManager.advance(userInitiated = false))
+            val result = queueManager.advance(userInitiated = false)
+            Log.i(TAG, "autoAdvanced → '${result.song?.displayTitle}'")
+            applyAdvanceKeepEngine(result)
         } finally {
             advancing = false
         }
@@ -365,9 +371,13 @@ class MusicService : Service() {
     private fun advanceUsingPreparedNext(userInitiated: Boolean): Boolean {
         val hooks = engineHooks ?: return false
         if (!hooks.hasPreparedNext()) return false
-        consumeAutoAdvanced = true
+        // VLC swap does not post onAutoAdvanced; Media3 AUTO transition does.
+        // Only ignore that callback for a short window so a later EndReached
+        // is not swallowed (that left audio on the next track with old art).
+        ignoreAutoAdvancedUntilElapsed =
+            SystemClock.elapsedRealtime() + AUTO_ADVANCE_IGNORE_MS
         if (!hooks.playPreparedNext()) {
-            consumeAutoAdvanced = false
+            ignoreAutoAdvancedUntilElapsed = 0L
             return false
         }
         claimEndOfWindow(fromUser = userInitiated)
@@ -1058,6 +1068,7 @@ class MusicService : Service() {
         private const val ENDED_SILENCE_MS = 1_500L
         private const val UNEXPECTED_PAUSE_MS = 1_200L
         private const val ADVANCE_DEBOUNCE_MS = 600L
+        private const val AUTO_ADVANCE_IGNORE_MS = 800L
         private const val WATCHDOG_GRACE_MS = 2_000L
         private const val STICKY_SEEK_MS = 1_200L
         private const val USER_SEEK_GUARD_MS = 1_000L
