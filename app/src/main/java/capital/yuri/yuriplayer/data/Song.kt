@@ -31,7 +31,9 @@ data class Song(
     val path: String? = null,
     val mimeType: String? = null,
     /** Explicit content flag when known from tags / remote metadata. */
-    val explicit: Boolean = false
+    val explicit: Boolean = false,
+    /** MusicBrainz artist id when the source publishes one (Navidrome / OpenSubsonic). */
+    val musicBrainzArtistId: String? = null
 ) {
     val displayTitle: String
         get() = title?.takeIf { it.isNotBlank() }
@@ -42,6 +44,12 @@ data class Song(
         get() = artist?.takeIf { it.isMeaningfulTag() }
             ?: albumArtist?.takeIf { it.isMeaningfulTag() }
             ?: "Unknown Artist"
+
+    /** Album cards / explore — never includes feat. credits. */
+    val primaryArtist: String
+        get() = primaryArtistName(effectiveAlbumArtist)
+            ?: primaryArtistName(artist)
+            ?: displayArtist
 
     val displayAlbum: String
         get() = album?.takeIf { it.isMeaningfulTag() } ?: "Unknown Album"
@@ -144,14 +152,14 @@ fun foldTagToken(value: String): String {
 }
 
 fun albumKey(name: String?, artist: String?): String {
-    val a = foldTagToken(artist ?: "")
+    val a = foldTagToken(primaryArtistName(artist) ?: artist ?: "")
     val n = foldTagToken(name ?: "")
     return "$a|$n"
 }
 
 fun artistKey(name: String?): String? {
-    if (name == null) return null
-    val t = foldTagToken(name)
+    val primary = primaryArtistName(name) ?: name ?: return null
+    val t = foldTagToken(primary)
     return t.takeIf { it.isNotEmpty() }
 }
 
@@ -186,7 +194,9 @@ object TrackIdentity {
     fun of(song: Song): String {
         val title = normalizeTitle(song.title)
         val album = normalizeToken(song.album)
-        val albumArtist = normalizeToken(song.effectiveAlbumArtist)
+        val albumArtist = foldTagToken(
+            primaryArtistName(song.effectiveAlbumArtist) ?: song.effectiveAlbumArtist ?: ""
+        )
         return when {
             title.isNotEmpty() && (album.isNotEmpty() || albumArtist.isNotEmpty()) ->
                 "$title|$albumArtist|$album"
@@ -209,9 +219,10 @@ object TrackIdentity {
     }
 
     fun albumArtistsMatch(a: String?, b: String?): Boolean {
-        val na = normalizeToken(a)
-        val nb = normalizeToken(b)
-        return na == nb
+        val pa = foldTagToken(primaryArtistName(a) ?: a ?: "")
+        val pb = foldTagToken(primaryArtistName(b) ?: b ?: "")
+        if (pa.isNotEmpty() && pb.isNotEmpty()) return pa == pb
+        return normalizeToken(a) == normalizeToken(b)
     }
 
     fun matches(a: Song, b: Song): Boolean {
@@ -219,12 +230,14 @@ object TrackIdentity {
         val albumA = normalizeToken(a.album)
         val albumB = normalizeToken(b.album)
         if (albumA.isNotEmpty() && albumB.isNotEmpty() && albumA != albumB) return false
-        val aaA = normalizeToken(a.effectiveAlbumArtist)
-        val aaB = normalizeToken(b.effectiveAlbumArtist)
-        if (aaA.isNotEmpty() && aaB.isNotEmpty() && aaA != aaB) return false
-        if (albumA.isEmpty() && albumB.isEmpty() && aaA.isEmpty() && aaB.isEmpty()) {
-            val ta = normalizeToken(a.artist)
-            val tb = normalizeToken(b.artist)
+        if (!albumArtistsMatch(a.effectiveAlbumArtist, b.effectiveAlbumArtist)) {
+            val aaA = foldTagToken(primaryArtistName(a.effectiveAlbumArtist) ?: "")
+            val aaB = foldTagToken(primaryArtistName(b.effectiveAlbumArtist) ?: "")
+            if (aaA.isNotEmpty() && aaB.isNotEmpty()) return false
+        }
+        if (albumA.isEmpty() && albumB.isEmpty()) {
+            val ta = foldTagToken(primaryArtistName(a.artist) ?: a.artist ?: "")
+            val tb = foldTagToken(primaryArtistName(b.artist) ?: b.artist ?: "")
             if (ta.isNotEmpty() && tb.isNotEmpty() && ta != tb) return false
         }
         return true

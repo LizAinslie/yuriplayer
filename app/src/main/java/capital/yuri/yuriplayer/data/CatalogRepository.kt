@@ -3,6 +3,7 @@ package capital.yuri.yuriplayer.data
 import android.util.Log
 import capital.yuri.yuriplayer.data.db.CatalogAlbumEntity
 import capital.yuri.yuriplayer.data.db.CatalogArtistEntity
+import capital.yuri.yuriplayer.data.db.CatalogCreditEntity
 import capital.yuri.yuriplayer.data.db.CatalogDao
 import capital.yuri.yuriplayer.data.db.CatalogSources
 import capital.yuri.yuriplayer.data.db.CatalogTrackEntity
@@ -166,22 +167,28 @@ class CatalogRepository(
     suspend fun offeringsMatchingSong(song: Song, limit: Int = 12): List<SourceOffering> =
         withContext(Dispatchers.IO) {
             val title = song.title?.trim().orEmpty()
-            val artist = (song.effectiveAlbumArtist ?: song.artist)?.trim().orEmpty()
             val album = song.album?.trim().orEmpty()
-
-            val exact = if (title.isNotEmpty() || artist.isNotEmpty() || album.isNotEmpty()) {
-                dao.findTracksMatching(title, artist, album, limit)
-            } else emptyList()
-
             val candidates = LinkedHashMap<String, CatalogTrackEntity>()
-            exact.forEach { candidates[it.songKey] = it }
 
-            if (candidates.size < 2 && (title.isNotEmpty() || album.isNotEmpty())) {
-                val needle = TrackIdentity.normalizeTitle(title).ifEmpty { title }
-                val broaden = if (needle.isNotEmpty()) dao.searchTracks(needle.take(48), limit = 48) else emptyList()
-                for (row in broaden) {
-                    if (candidates.size >= limit) break
-                    if (TrackIdentity.matches(song, row.toSong())) candidates.putIfAbsent(row.songKey, row)
+            if (title.isNotEmpty() || album.isNotEmpty()) {
+                dao.findTracksMatching(
+                    title,
+                    song.effectiveAlbumArtist?.trim().orEmpty(),
+                    album,
+                    limit
+                ).forEach { candidates[it.songKey] = it }
+            }
+
+            val needle = TrackIdentity.normalizeTitle(title).ifEmpty { title }
+            if (needle.isNotEmpty()) {
+                dao.searchTracks(needle.take(48), limit = 80).forEach { row ->
+                    if (candidates.size >= limit) return@forEach
+                    if (TrackIdentity.matches(song, row.toSong()) ||
+                        TrackIdentity.titlesMatch(song.title, row.title) &&
+                        TrackIdentity.albumsMatch(song.album, row.album)
+                    ) {
+                        candidates.putIfAbsent(row.songKey, row)
+                    }
                 }
             }
 
@@ -252,6 +259,7 @@ class CatalogRepository(
         val trackEntities = scanned.map { it.toLocalTrackEntity(seenAt) }
 
         dao.upsertTracks(trackEntities)
+        persistCreditsLocked(scanned)
         dao.pruneStaleTracks(CatalogSources.LOCAL, null, seenAt)
         rebuildRollupsLocked()
 
@@ -276,6 +284,7 @@ class CatalogRepository(
             )
         }
         dao.upsertTracks(entities)
+        persistCreditsLocked(songs)
     }
 
     suspend fun ensureTracksPresent(songs: List<Song>) = withContext(Dispatchers.IO) {
@@ -318,7 +327,7 @@ class CatalogRepository(
             CatalogAlbumEntity(
                 albumKey = row.albumKey,
                 name = row.name,
-                artist = row.artist,
+                artist = primaryArtistName(row.artist) ?: row.artist,
                 artistKey = aKey,
                 year = row.year,
                 trackCount = row.trackCount,
@@ -337,13 +346,14 @@ class CatalogRepository(
             val existing = prevArtists[row.artistKey]
             CatalogArtistEntity(
                 artistKey = row.artistKey,
-                displayName = row.displayName.ifBlank { row.artistKey },
+                displayName = primaryArtistName(row.displayName) ?: row.displayName.ifBlank { row.artistKey },
                 trackCount = row.trackCount,
                 albumCount = row.albumCount,
                 bio = existing?.bio,
                 imageUri = existing?.imageUri,
                 websiteUrl = existing?.websiteUrl,
                 linksJson = existing?.linksJson,
+                mbid = existing?.mbid,
                 updatedAtMs = System.currentTimeMillis()
             )
         }
@@ -450,6 +460,49 @@ class CatalogRepository(
 
     suspend fun coverPathForAlbum(albumKey: String): String? =
         dao.getAlbum(albumKey)?.coverPath
+
+    private suspend fun persistCreditsLocked(songs: List<Song>) {
+        if (songs.isEmpty()) return
+        val credits = ArrayList<CatalogCreditEntity>()
+        val albumSeen = HashSet<String>()
+        for (song in songs) {
+            dao.deleteCredits("TRACK", song.songKey)
+            parseArtistCreditList(song.artist ?: song.effectiveAlbumArtist).forEach { c ->
+                val key = artistKey(c.name) ?: return@forEach
+                credits += CatalogCreditEntity(
+                    subjectType = "TRACK",
+                    subjectKey = song.songKey,
+                    artistKey = key,
+                    displayName = c.name,
+                    role = c.role.name,
+                    position = c.position
+                )
+            }
+            val aKey = albumKey(song.album, song.effectiveAlbumArtist)
+            if (aKey.isNotBlank() && albumSeen.add(aKey)) {
+                dao.deleteCredits("ALBUM", aKey)
+                parseArtistCreditList(song.albumArtist ?: song.effectiveAlbumArtist).forEach { c ->
+                    val key = artistKey(c.name) ?: return@forEach
+                    credits += CatalogCreditEntity(
+                        subjectType = "ALBUM",
+                        subjectKey = aKey,
+                        artistKey = key,
+                        displayName = c.name,
+                        role = c.role.name,
+                        position = c.position
+                    )
+                }
+            }
+            song.musicBrainzArtistId?.takeIf { it.isNotBlank() }?.let { mbid ->
+                val key = artistKey(song.effectiveAlbumArtist) ?: return@let
+                val existing = dao.getArtist(key)
+                if (existing != null && existing.mbid.isNullOrBlank()) {
+                    dao.upsertArtist(existing.copy(mbid = mbid, updatedAtMs = System.currentTimeMillis()))
+                }
+            }
+        }
+        if (credits.isNotEmpty()) dao.upsertCredits(credits)
+    }
 
     private fun Song.toLocalTrackEntity(seenAt: Long) = toTrackEntity(
         sourceType = CatalogSources.LOCAL,

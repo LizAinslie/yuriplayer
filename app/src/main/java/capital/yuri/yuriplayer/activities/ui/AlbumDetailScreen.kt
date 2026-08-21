@@ -75,9 +75,11 @@ import capital.yuri.yuriplayer.data.MyStuffPinStore
 import capital.yuri.yuriplayer.data.Song
 import capital.yuri.yuriplayer.data.StuffPinKind
 import capital.yuri.yuriplayer.data.albumKey
+import capital.yuri.yuriplayer.data.dedupeAlbumPageTracks
 import capital.yuri.yuriplayer.data.db.CatalogDao
 import capital.yuri.yuriplayer.data.findLocalAlbum
 import capital.yuri.yuriplayer.data.mergeAlbumSources
+import capital.yuri.yuriplayer.data.primaryArtistName
 import capital.yuri.yuriplayer.data.resolveAlbumItem
 import capital.yuri.yuriplayer.data.theme.ArtColorSurface
 import capital.yuri.yuriplayer.data.theme.ThemeService
@@ -140,7 +142,8 @@ fun AlbumDetailScreen(
     onEditSong: (Song) -> Unit = {},
     onAddSongToQueue: (Song) -> Unit,
     onAddAlbumToQueue: (List<Song>) -> Unit,
-    onStartRadio: () -> Unit = {}
+    onStartRadio: () -> Unit = {},
+    onExpanded: (AlbumItem) -> Unit = {}
 ) {
     val context = LocalContext.current
     val themeService: ThemeService = koinInject()
@@ -168,41 +171,45 @@ fun AlbumDetailScreen(
     val density = LocalDensity.current
 
     val albumKeyStr = albumKey(album.name, album.artist)
-    val albumSaved = remember(entries, albumKeyStr) {
-        pinStore.contains(StuffPinKind.ALBUM, albumKeyStr)
+    val stableKey = albumKey(album.name, primaryArtistName(album.artist) ?: album.artist)
+    val albumSaved = remember(entries, albumKeyStr, stableKey) {
+        pinStore.contains(StuffPinKind.ALBUM, albumKeyStr) ||
+            pinStore.contains(StuffPinKind.ALBUM, stableKey)
     }
 
-    var liveAlbum by remember(albumKeyStr) { mutableStateOf(album) }
-    LaunchedEffect(albumKeyStr, album.name, album.artist) {
+    var liveAlbum by remember(stableKey) { mutableStateOf(album) }
+    LaunchedEffect(stableKey) {
         val resolved = withContext(Dispatchers.IO) {
             resolveAlbumItem(
                 dao = catalogDao,
                 name = album.name,
-                artist = album.artist,
+                artist = primaryArtistName(album.artist) ?: album.artist,
                 seedSongs = album.songs,
                 library = library
             )
         }
         val fromCatalog = withContext(Dispatchers.IO) {
-            catalog.albumItemForKey(albumKeyStr)
+            catalog.albumItemForKey(stableKey)
+                ?: catalog.albumItemForKey(albumKeyStr)
         }
-        val fromLocal = findLocalAlbum(library, album.name, album.artist)
+        val fromLocal = findLocalAlbum(
+            library,
+            album.name,
+            primaryArtistName(album.artist) ?: album.artist
+        )
         val merged = mergeAlbumSources(
             seed = resolved ?: album,
             fromCatalog = fromCatalog,
             fromLocal = fromLocal
         )
-        liveAlbum = if (liveAlbum.songs.size > 1 && merged.songs.size < liveAlbum.songs.size) {
-            liveAlbum.copy(
-                trackCount = maxOf(liveAlbum.trackCount, merged.trackCount, liveAlbum.songs.size)
-            )
-        } else if (merged.songs.size >= liveAlbum.songs.size) {
-            merged
-        } else if (liveAlbum.songs.size <= 1) {
-            merged
-        } else {
-            liveAlbum
-        }
+        val union = dedupeAlbumPageTracks(liveAlbum.songs + merged.songs + album.songs)
+        val next = merged.copy(
+            artist = primaryArtistName(merged.artist) ?: merged.artist,
+            songs = union,
+            trackCount = union.size.coerceAtLeast(merged.trackCount)
+        )
+        liveAlbum = next
+        onExpanded(next)
     }
 
     val collapseRangePx = with(density) { (ExpandedHeaderBody - CollapsedBarHeight).toPx() }

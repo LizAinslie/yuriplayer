@@ -82,19 +82,25 @@ class MusicBrainzClient(
             basic.copy(genres = genres)
         }
 
-    suspend fun searchArtist(name: String): ArtistHit? =
+    suspend fun lookupArtist(mbid: String): ArtistHit? =
         withContext(Dispatchers.IO) {
-            if (name.isBlank()) return@withContext null
-            val trimmed = name.trim()
-            val mbid = findBestArtistMbid(trimmed) ?: return@withContext null
+            if (mbid.isBlank()) return@withContext null
             val detailUrl =
                 "https://musicbrainz.org/ws/2/artist/$mbid?inc=url-rels+tags&fmt=json"
-            val detail = getText(detailUrl) ?: return@withContext ArtistHit(mbid, trimmed)
+            val detail = getText(detailUrl) ?: return@withContext ArtistHit(mbid, mbid)
             val hit = parseArtistDetail(detail, mbid)
             val image = hit.imageUrl
                 ?: resolveWikidataImage(hit)
                 ?: resolveWikipediaImage(hit)
             hit.copy(imageUrl = image)
+        }
+
+    suspend fun searchArtist(name: String): ArtistHit? =
+        withContext(Dispatchers.IO) {
+            if (name.isBlank()) return@withContext null
+            val trimmed = name.trim()
+            val mbid = findBestArtistMbid(trimmed) ?: return@withContext null
+            lookupArtist(mbid) ?: ArtistHit(mbid, trimmed)
         }
 
     suspend fun expandImageCandidates(hit: ArtistHit): List<Pair<String, String>> =

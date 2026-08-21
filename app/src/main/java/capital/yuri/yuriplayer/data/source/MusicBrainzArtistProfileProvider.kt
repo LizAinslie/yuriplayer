@@ -3,13 +3,15 @@ package capital.yuri.yuriplayer.data.source
 import android.content.Context
 import android.util.Log
 import capital.yuri.yuriplayer.data.artistKey
+import capital.yuri.yuriplayer.data.db.CatalogDao
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.io.File
 
 class MusicBrainzArtistProfileProvider(
     private val context: Context,
-    private val mb: MusicBrainzClient
+    private val mb: MusicBrainzClient,
+    private val catalog: CatalogDao
 ) : ArtistProfileProvider, ArtistInfoSource {
 
     override val id: String = "musicbrainz"
@@ -19,7 +21,12 @@ class MusicBrainzArtistProfileProvider(
 
     override suspend fun fetchProfile(artistName: String): ArtistProfile? = withContext(Dispatchers.IO) {
         val key = artistKey(artistName) ?: return@withContext null
-        val hit = mb.searchArtist(artistName) ?: return@withContext ArtistProfile(
+        val storedMbid = catalog.getArtist(key)?.mbid
+        val hit = if (!storedMbid.isNullOrBlank()) {
+            mb.lookupArtist(storedMbid)
+        } else {
+            mb.searchArtist(artistName)
+        } ?: return@withContext ArtistProfile(
             artistKey = key,
             displayName = artistName.trim(),
             source = id

@@ -47,7 +47,10 @@ class DiscogsArtistImageSource(
                 source = id
             )
             val name = detail.optString("name").ifBlank { hit.title }
-            val profile = detail.optString("profile").takeIf { it.isNotBlank() }
+            val profile = DiscogsMarkup.resolve(
+                detail.optString("profile").takeIf { it.isNotBlank() },
+                http
+            )
             val urls = detail.optJSONArray("urls")
             val links = buildList {
                 add(categorizeLink("https://www.discogs.com/artist/${hit.id}", "Discogs"))

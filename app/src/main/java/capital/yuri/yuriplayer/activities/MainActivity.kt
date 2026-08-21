@@ -104,6 +104,7 @@ import capital.yuri.yuriplayer.data.StuffPin
 import capital.yuri.yuriplayer.data.StuffPinKind
 import capital.yuri.yuriplayer.data.albumKey
 import capital.yuri.yuriplayer.data.artistKey
+import capital.yuri.yuriplayer.data.primaryArtistName
 import capital.yuri.yuriplayer.player.ColdSource
 import capital.yuri.yuriplayer.player.ColdSourceType
 import capital.yuri.yuriplayer.player.PlayerController
@@ -704,49 +705,44 @@ fun YuriApp(
                     when (val d = detail) {
                         is DetailRoute.Album -> {
                             val key = albumKey(d.album.name, d.album.artist)
-                            var liveAlbum by remember(key) { mutableStateOf(d.album) }
-                            LaunchedEffect(key) {
-                                val fromCatalog = withContext(Dispatchers.IO) {
-                                    catalog.albumItemForKey(key)
-                                }
-                                val fromLocal = library.albums(taggedOnly = false).firstOrNull {
-                                    albumKey(it.name, it.artist) == key
-                                }
-                                liveAlbum = when {
-                                    fromCatalog != null && fromCatalog.songs.size >=
-                                        (fromLocal?.songs?.size ?: 0) &&
-                                        fromCatalog.songs.isNotEmpty() -> fromCatalog
-                                    fromLocal != null && fromLocal.songs.isNotEmpty() -> fromLocal
-                                    fromCatalog != null -> fromCatalog
-                                    else -> d.album
-                                }
-                                if (liveAlbum.songs.isNotEmpty()) {
-                                    player.updateColdFromSource(liveAlbum.songs, key)
-                                }
-                                if (settings.isNetworkMetadataEnabled()) {
-                                    enrichment.enrichAlbumAsync(liveAlbum)
-                                }
-                            }
+                            var resolvedAlbum by remember(key) { mutableStateOf(d.album) }
                             AlbumDetailScreen(
-                                album = liveAlbum,
+                                album = d.album,
                                 nowPlaying = currentSong,
                                 isSourceActive = snapshot.isPlayingFromAlbum(key),
                                 isPlaying = playing,
                                 shuffleEnabled = snapshot.shuffleEnabled,
                                 onBack = { popDetail() },
-                                onPlayAlbum = { songs, index -> playAlbumFrom(liveAlbum, songs, index) },
+                                onPlayAlbum = { songs, index ->
+                                    val item = resolvedAlbum.copy(
+                                        songs = songs,
+                                        trackCount = songs.size
+                                    )
+                                    playAlbumFrom(item, songs, index)
+                                },
                                 onTogglePlayPause = { player.togglePlayPause() },
                                 onToggleShuffle = { player.toggleShuffle() },
                                 onFavorite = {},
                                 onOpenArtist = {
-                                    val name = liveAlbum.artist ?: return@AlbumDetailScreen
+                                    val name = primaryArtistName(resolvedAlbum.artist)
+                                        ?: resolvedAlbum.artist
+                                        ?: return@AlbumDetailScreen
                                     openArtistByName(name)
                                 },
-                                onEditAlbum = { pushDetail(DetailRoute.EditAlbum(liveAlbum)) },
+                                onEditAlbum = { pushDetail(DetailRoute.EditAlbum(resolvedAlbum)) },
                                 onEditSong = { pushDetail(DetailRoute.EditSong(it)) },
                                 onAddSongToQueue = { player.addToHotQueue(it) },
-                                onAddAlbumToQueue = { player.addToHotQueue(it) },
-                                onStartRadio = { player.startAlbumRadio(liveAlbum) }
+                                onAddAlbumToQueue = { songs -> player.addToHotQueue(songs) },
+                                onStartRadio = { player.startAlbumRadio(resolvedAlbum) },
+                                onExpanded = { expanded ->
+                                    if (expanded.songs.size >= resolvedAlbum.songs.size) {
+                                        resolvedAlbum = expanded
+                                        player.updateColdFromSource(expanded.songs, key)
+                                        if (settings.isNetworkMetadataEnabled()) {
+                                            enrichment.enrichAlbumAsync(expanded)
+                                        }
+                                    }
+                                }
                             )
                         }
                         is DetailRoute.Artist -> {

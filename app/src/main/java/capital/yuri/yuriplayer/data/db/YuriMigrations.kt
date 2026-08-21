@@ -57,5 +57,30 @@ object YuriMigrations {
         }
     }
 
-    val ALL: Array<Migration> = arrayOf(MIGRATION_6_7)
+    val MIGRATION_7_8 = object : Migration(7, 8) {
+        override fun migrate(db: SupportSQLiteDatabase) {
+            db.execSQL("ALTER TABLE catalog_artists ADD COLUMN mbid TEXT")
+            db.execSQL(
+                """
+                CREATE TABLE IF NOT EXISTS catalog_credits (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+                    subjectType TEXT NOT NULL,
+                    subjectKey TEXT NOT NULL,
+                    artistKey TEXT NOT NULL,
+                    displayName TEXT NOT NULL,
+                    role TEXT NOT NULL,
+                    position INTEGER NOT NULL DEFAULT 0
+                )
+                """.trimIndent()
+            )
+            db.execSQL(
+                "CREATE INDEX IF NOT EXISTS index_catalog_credits_subjectType_subjectKey ON catalog_credits(subjectType, subjectKey)"
+            )
+            db.execSQL(
+                "CREATE INDEX IF NOT EXISTS index_catalog_credits_artistKey ON catalog_credits(artistKey)"
+            )
+        }
+    }
+
+    val ALL: Array<Migration> = arrayOf(MIGRATION_6_7, MIGRATION_7_8)
 }

@@ -190,10 +190,11 @@ val appModule = module {
             dao = get(),
             providers = listOf(
                 LocalArtistProfileProvider(),
-                MusicBrainzArtistProfileProvider(androidContext(), get())
+                MusicBrainzArtistProfileProvider(androidContext(), get(), get())
             ),
             images = get(),
-            artistInfo = get()
+            artistInfo = get(),
+            http = get()
         )
     }
 

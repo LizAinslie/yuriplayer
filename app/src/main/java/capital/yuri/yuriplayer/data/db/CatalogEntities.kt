@@ -117,5 +117,35 @@ data class CatalogArtistEntity(
     val imageUri: String? = null,
     val websiteUrl: String? = null,
     val linksJson: String? = null,
+    val mbid: String? = null,
     val updatedAtMs: Long = System.currentTimeMillis()
+)
+
+enum class CreditSubject {
+    TRACK,
+    ALBUM
+}
+
+/**
+ * Primary vs featured credits for a track or album.
+ * Album cards / explore show [ArtistRole.PRIMARY] only.
+ */
+@Entity(
+    tableName = "catalog_credits",
+    indices = [
+        Index(value = ["subjectType", "subjectKey"]),
+        Index(value = ["artistKey"])
+    ]
+)
+data class CatalogCreditEntity(
+    @PrimaryKey(autoGenerate = true) val id: Long = 0,
+    /** TRACK | ALBUM */
+    val subjectType: String,
+    /** songKey or albumKey */
+    val subjectKey: String,
+    val artistKey: String,
+    val displayName: String,
+    /** PRIMARY | FEATURED */
+    val role: String,
+    val position: Int = 0
 )

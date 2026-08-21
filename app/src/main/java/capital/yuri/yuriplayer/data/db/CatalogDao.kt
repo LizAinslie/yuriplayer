@@ -281,4 +281,13 @@ interface CatalogDao {
             "(SELECT DISTINCT artistKey FROM catalog_tracks WHERE artistKey IS NOT NULL)"
     )
     suspend fun deleteOrphanArtists()
+
+    @Query("DELETE FROM catalog_credits WHERE subjectType = :subjectType AND subjectKey = :subjectKey")
+    suspend fun deleteCredits(subjectType: String, subjectKey: String)
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun upsertCredits(credits: List<CatalogCreditEntity>)
+
+    @Query("SELECT * FROM catalog_credits WHERE subjectType = :subjectType AND subjectKey = :subjectKey ORDER BY position")
+    suspend fun creditsFor(subjectType: String, subjectKey: String): List<CatalogCreditEntity>
 }

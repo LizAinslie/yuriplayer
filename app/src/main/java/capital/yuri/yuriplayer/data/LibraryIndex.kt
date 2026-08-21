@@ -208,11 +208,17 @@ class LibraryIndex(
                 if (albumKeyNorm == null) return@mapNotNull null
 
                 val albumArtistVotes = tracks
-                    .mapNotNull { it.albumArtist?.let { a -> normalizeKey(a) to a } }
+                    .mapNotNull {
+                        val raw = primaryArtistName(it.albumArtist) ?: it.albumArtist
+                        raw?.let { a -> normalizeKey(a) to a }
+                    }
                     .groupingBy { it.first }
                     .eachCount()
                 val trackArtistVotes = tracks
-                    .mapNotNull { it.artist?.let { a -> normalizeKey(a) to a } }
+                    .mapNotNull {
+                        val raw = primaryArtistName(it.artist) ?: it.artist
+                        raw?.let { a -> normalizeKey(a) to a }
+                    }
                     .groupingBy { it.first }
                     .eachCount()
 
@@ -356,7 +362,8 @@ data class AlbumItem(
     val songs: List<Song>
 ) {
     val displayName: String get() = name ?: "Unknown Album"
-    val displayArtist: String get() = artist ?: "Unknown Artist"
+    val displayArtist: String
+        get() = primaryArtistName(artist) ?: artist ?: "Unknown Artist"
 }
 
 data class ArtistItem(

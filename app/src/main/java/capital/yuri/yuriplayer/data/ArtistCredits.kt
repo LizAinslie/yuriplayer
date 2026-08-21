@@ -1,22 +1,53 @@
 package capital.yuri.yuriplayer.data
 
 /**
- * Split a raw artist tag into discrete credit names for linking.
+ * Split a raw artist tag into primary vs featured credits.
  *
- * **Local tags:** only `;` is treated as a multi-artist separator. Commas and
- * ampersands stay inside names ("Earth, Wind & Fire", "Simon & Garfunkel").
- * `feat.` / `ft.` are never split — they belong in the credit / title text.
+ * Separators:
+ *  - `;` always splits peers (same role)
+ *  - `feat.` / `ft.` / `featuring` starts the featured list
  *
- * **Structured sources** (Jellyfin, Navidrome, MusicBrainz) should supply an
- * artist array and skip this parser entirely.
+ * Commas and `&` stay inside names ("Earth, Wind & Fire").
  */
-fun parseArtistCredits(raw: String?): List<String> {
-    if (raw.isNullOrBlank()) return emptyList()
-    return raw.split(';')
-        .map { it.trim() }
-        .filter { it.isNotEmpty() }
-        .distinctBy { it.lowercase() }
+enum class ArtistRole {
+    PRIMARY,
+    FEATURED
 }
+
+data class ArtistCredit(
+    val name: String,
+    val role: ArtistRole,
+    val position: Int
+)
+
+private val FEAT_SPLIT = Regex("""(?i)\s+(?:feat\.?|ft\.?|featuring)\s+""")
+
+fun parseArtistCreditList(raw: String?): List<ArtistCredit> {
+    if (raw.isNullOrBlank()) return emptyList()
+    val parts = raw.split(FEAT_SPLIT, limit = 2)
+    val out = ArrayList<ArtistCredit>()
+    fun addBlob(blob: String, role: ArtistRole) {
+        blob.split(';').map { it.trim() }.filter { it.isNotEmpty() }.forEach { name ->
+            if (out.none { it.name.equals(name, ignoreCase = true) }) {
+                out += ArtistCredit(name = name, role = role, position = out.size)
+            }
+        }
+    }
+    addBlob(parts[0], ArtistRole.PRIMARY)
+    parts.getOrNull(1)?.let { addBlob(it, ArtistRole.FEATURED) }
+    return out
+}
+
+/** Names only (primary then featured) — for linking. */
+fun parseArtistCredits(raw: String?): List<String> =
+    parseArtistCreditList(raw).map { it.name }
+
+fun primaryArtistName(raw: String?): String? =
+    parseArtistCreditList(raw).firstOrNull { it.role == ArtistRole.PRIMARY }?.name
+        ?: parseArtistCreditList(raw).firstOrNull()?.name
+
+fun featuredArtistNames(raw: String?): List<String> =
+    parseArtistCreditList(raw).filter { it.role == ArtistRole.FEATURED }.map { it.name }
 
 enum class ReleaseType {
     SINGLE,

@@ -97,16 +97,18 @@ suspend fun expandAlbumTracksByName(
         }
     }
 
-    val artistFolded = TrackIdentity.normalizeToken(artistName)
+    val artistFolded = foldTagToken(primaryArtistName(artistName) ?: artistName ?: "")
 
     fun artistOk(t: CatalogTrackEntity): Boolean {
         if (artistFolded.isEmpty()) return true
-        val aa = TrackIdentity.normalizeToken(t.albumArtist ?: t.artist)
-        if (aa.isEmpty()) return true // untagged — keep if album matched
-        if (aa == artistFolded) return true
-        if (TrackIdentity.normalizeToken(t.artist) == artistFolded) return true
-        // soft containment for "twenty one pilots" vs longer credits
-        return aa.contains(artistFolded) || artistFolded.contains(aa)
+        val aa = foldTagToken(
+            primaryArtistName(t.albumArtist ?: t.artist) ?: t.albumArtist ?: t.artist ?: ""
+        )
+        val ta = foldTagToken(primaryArtistName(t.artist) ?: t.artist ?: "")
+        if (aa.isEmpty() && ta.isEmpty()) return true
+        if (aa == artistFolded || ta == artistFolded) return true
+        return aa.contains(artistFolded) || artistFolded.contains(aa) ||
+            ta.contains(artistFolded) || artistFolded.contains(ta)
     }
 
     fun albumOk(t: CatalogTrackEntity): Boolean {
@@ -158,13 +160,13 @@ private fun albumPageIdentity(song: Song): String {
     val disc = song.discNumber ?: 1
     val tn = song.trackNumber
     val title = TrackIdentity.normalizeTitle(song.title)
-    return if (tn != null && tn > 0) {
-        // Track number anchors identity on a release
+    // Always include title so missing/duplicate track numbers cannot collapse
+    // a whole release onto one row (Clancy / The Craving).
+    return if (tn != null && tn > 0 && title.isNotEmpty()) {
         "n:$disc|$tn|$title"
     } else if (title.isNotEmpty()) {
         TrackIdentity.of(song)
     } else {
-        // Untagged — never collapse distinct files
         "path:${song.songKey}"
     }
 }

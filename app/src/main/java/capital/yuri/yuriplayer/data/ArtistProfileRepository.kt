@@ -7,11 +7,13 @@ import capital.yuri.yuriplayer.data.source.ArtistLink
 import capital.yuri.yuriplayer.data.source.ArtistNameMatch
 import capital.yuri.yuriplayer.data.source.ArtistProfile
 import capital.yuri.yuriplayer.data.source.ArtistProfileProvider
+import capital.yuri.yuriplayer.data.source.DiscogsMarkup
 import capital.yuri.yuriplayer.data.source.LinkCategory
 import capital.yuri.yuriplayer.data.source.categorizeLink
 import capital.yuri.yuriplayer.data.source.genresToJson
 import capital.yuri.yuriplayer.data.source.parseGenresJson
 import capital.yuri.yuriplayer.data.source.toProfile
+import io.ktor.client.HttpClient
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
@@ -23,7 +25,8 @@ class ArtistProfileRepository(
     private val dao: ArtistProfileDao,
     private val providers: List<ArtistProfileProvider>,
     private val images: UserImageStore,
-    private val artistInfo: ArtistInfoService? = null
+    private val artistInfo: ArtistInfoService? = null,
+    private val http: HttpClient? = null
 ) {
 
     fun observe(artistName: String): Flow<ArtistProfile?> {
@@ -67,6 +70,7 @@ class ArtistProfileRepository(
 
         merged = ensureDiscoveryLinks(merged)
         merged = preferLocalImage(merged, key)
+        val cleanedBio = http?.let { DiscogsMarkup.resolve(merged.bio, it) } ?: merged.bio
 
         // Final hard veto: cleared always wins over any provider image
         if (imageCleared) {
@@ -75,7 +79,7 @@ class ArtistProfileRepository(
 
         merged = merged.copy(
             links = dedupeLinksPreferCanonical(merged.links),
-            bio = merged.bio?.takeIf { ArtistNameMatch.bioRelevant(artistName, it) }
+            bio = cleanedBio?.takeIf { ArtistNameMatch.bioRelevant(artistName, it) }
         )
 
         dao.upsert(
