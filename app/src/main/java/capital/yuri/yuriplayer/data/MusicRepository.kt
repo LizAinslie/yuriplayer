@@ -390,33 +390,33 @@ class MusicRepository(
         val year: Int? = null,
         val genre: String? = null,
         val pathHint: String? = null
-    ) {
-        fun withFilenameFallback(fileName: String?, persistPath: String?): FileTags {
-            val inferred = FilenameMetadataParser.parse(
-                persistPath ?: fileName
+    }
+
+    private fun FileTags.withFilenameFallback(fileName: String?, persistPath: String?): FileTags {
+        val inferred = FilenameMetadataParser.parse(
+            persistPath ?: fileName
+        )
+        if (inferred.isEmpty) return this
+        val rawName = fileName?.substringBeforeLast('.')
+            ?: persistPath?.substringAfterLast('/')?.substringBeforeLast('.')
+        val titleNeedsFill = title.isNullOrBlank() || title == rawName
+        val next = copy(
+            trackNumber = trackNumber ?: inferred.trackNumber,
+            discNumber = discNumber ?: inferred.discNumber,
+            title = if (titleNeedsFill) inferred.title ?: title else title
+        )
+        val writeTrack = trackNumber == null && inferred.trackNumber != null
+        val writeDisc = discNumber == null && inferred.discNumber != null
+        val writeTitle = titleNeedsFill && inferred.title != null && inferred.title != title
+        if (persistPath != null && (writeTrack || writeDisc || writeTitle)) {
+            persistInferredTags(
+                persistPath,
+                track = inferred.trackNumber.takeIf { writeTrack },
+                disc = inferred.discNumber.takeIf { writeDisc },
+                title = inferred.title.takeIf { writeTitle }
             )
-            if (inferred.isEmpty) return this
-            val rawName = fileName?.substringBeforeLast('.')
-                ?: persistPath?.substringAfterLast('/')?.substringBeforeLast('.')
-            val titleNeedsFill = title.isNullOrBlank() || title == rawName
-            val next = copy(
-                trackNumber = trackNumber ?: inferred.trackNumber,
-                discNumber = discNumber ?: inferred.discNumber,
-                title = if (titleNeedsFill) inferred.title ?: title else title
-            )
-            val writeTrack = trackNumber == null && inferred.trackNumber != null
-            val writeDisc = discNumber == null && inferred.discNumber != null
-            val writeTitle = titleNeedsFill && inferred.title != null && inferred.title != title
-            if (persistPath != null && (writeTrack || writeDisc || writeTitle)) {
-                persistInferredTags(
-                    persistPath,
-                    track = inferred.trackNumber.takeIf { writeTrack },
-                    disc = inferred.discNumber.takeIf { writeDisc },
-                    title = inferred.title.takeIf { writeTitle }
-                )
-            }
-            return next
         }
+        return next
     }
 
     private fun readTagsFromUri(uri: Uri, fileName: String? = null): FileTags {
