@@ -56,10 +56,19 @@ fun NowPlayingPreview(
     shadowElevation: androidx.compose.ui.unit.Dp = 4.dp
 ) {
     val themeStore: PlayerThemeStore = koinInject()
-    val theme by themeStore.current.collectAsState()
     val ambient = MaterialTheme.colorScheme
-    val accent = theme?.colors?.accent ?: ambient.primary
-    val onAccent = theme?.colors?.onAccent ?: ambient.onPrimary
+    val theme by themeStore.current.collectAsState()
+    val peekNext by themeStore.peekNext.collectAsState()
+    val peekPrev by themeStore.peekPrev.collectAsState()
+    val matched = when {
+        song == null -> null
+        theme?.songKey == song.songKey -> theme
+        peekNext?.songKey == song.songKey -> peekNext
+        peekPrev?.songKey == song.songKey -> peekPrev
+        else -> null
+    }
+    val accent = matched?.colors?.accent ?: ambient.primary
+    val onAccent = matched?.colors?.onAccent ?: ambient.onPrimary
     val trackInactive = ambient.onBackground.copy(alpha = 0.2f)
 
     Surface(

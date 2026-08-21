@@ -243,10 +243,10 @@ fun NowPlayingScreen(
         (positionMs.toDouble() / durationMs.toDouble()).toFloat().coerceIn(0f, 1f)
     }
 
-    val playerColors = theme?.colors ?: fallbackPlayerColors(baseScheme)
+    val playerColors = themeStore.colorsFor(song, fallbackPlayerColors(baseScheme))
     val blendTarget = when {
-        hFrac < -0.02f -> nextTheme?.colors
-        hFrac > 0.02f && canSwipePrev -> prevTheme?.colors
+        hFrac < -0.02f -> nextTheme?.takeIf { peekNextSong != null && it.songKey == peekNextSong.songKey }?.colors
+        hFrac > 0.02f && canSwipePrev -> prevTheme?.takeIf { peekPrevSong != null && it.songKey == peekPrevSong.songKey }?.colors
         else -> null
     }
     val blendT = abs(hFrac).coerceIn(0f, 1f)

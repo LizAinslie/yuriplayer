@@ -434,10 +434,8 @@ fun YuriApp(
     }
 
     LaunchedEffect(
-        currentSong?.id,
-        currentSong?.path,
-        currentSong?.title,
-        currentSong?.album,
+        currentSong?.songKey,
+        currentSong?.albumArtUri,
         colorRev
     ) {
         val incoming = currentSong
@@ -446,8 +444,6 @@ fun YuriApp(
             themeStore.updateCurrent(context, null, baseScheme)
             return@LaunchedEffect
         }
-        // Apply the new cover now. Waiting on swipe animation is what left
-        // the previous album art on screen after auto-advance.
         themeStore.showSong(context, incoming, baseScheme)
         themeStore.updateNeighbors(context, peekNext, peekPrev, baseScheme)
     }

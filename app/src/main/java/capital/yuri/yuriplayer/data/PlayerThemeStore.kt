@@ -12,8 +12,11 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 
 /**
- * Holds the active now-playing palette + **HQ** art so reopening the full player
- * does not FOUC. Uses [ThemeService] for muted-bg / punchy-accent extraction.
+ * Now-playing palette for the **currently playing song**.
+ *
+ * Neighbors are warm caches for swipe blend only. They must never become
+ * [current] unless their [Theme.songKey] is that playing song. Slow palette
+ * extracts are generation-guarded so a skipped track cannot overwrite the new one.
  */
 class PlayerThemeStore(
     private val artCache: AlbumArtCache,
@@ -39,23 +42,11 @@ class PlayerThemeStore(
     private val _peekPrev = MutableStateFlow<Theme?>(null)
     val peekPrev: StateFlow<Theme?> = _peekPrev.asStateFlow()
 
-    fun promoteNext() {
-        val n = _peekNext.value ?: return
-        _peekPrev.value = _current.value
-        _current.value = n
-        _peekNext.value = null
-    }
-
-    fun promotePrev() {
-        val p = _peekPrev.value ?: return
-        _peekNext.value = _current.value
-        _current.value = p
-        _peekPrev.value = null
-    }
+    @Volatile private var applyGen: Int = 0
+    @Volatile private var playingKey: String? = null
 
     fun artKey(song: Song): String = artCache.artKey(song)
 
-    /** True when [theme] is this exact song, never a neighbor with a colliding id. */
     fun themeIsFor(theme: Theme?, song: Song): Boolean {
         if (theme == null) return false
         return theme.songKey == song.songKey
@@ -63,28 +54,64 @@ class PlayerThemeStore(
 
     fun isShowing(song: Song): Boolean = themeIsFor(_current.value, song)
 
+    /** Colors for [song] only — never a leftover palette from a previous track. */
+    fun colorsFor(song: Song?, fallback: PlayerColors): PlayerColors {
+        if (song == null) return fallback
+        _current.value?.takeIf { it.songKey == song.songKey }?.let { return it.colors }
+        _peekNext.value?.takeIf { it.songKey == song.songKey }?.let { return it.colors }
+        _peekPrev.value?.takeIf { it.songKey == song.songKey }?.let { return it.colors }
+        return fallback
+    }
+
+    fun themeFor(song: Song?): Theme? {
+        if (song == null) return null
+        _current.value?.takeIf { it.songKey == song.songKey }?.let { return it }
+        _peekNext.value?.takeIf { it.songKey == song.songKey }?.let { return it }
+        _peekPrev.value?.takeIf { it.songKey == song.songKey }?.let { return it }
+        return null
+    }
+
     /**
-     * Make [current] this song's cover right now. Promote a warm neighbor if
-     * it is actually this song; otherwise decode. Never wait on animation.
+     * Unsafe peek-promote. Prefer [showSong]. Kept for swipe; ignored when the
+     * peek is not the playing track.
      */
+    fun promoteNext() {
+        val n = _peekNext.value ?: return
+        if (playingKey != null && n.songKey != playingKey) return
+        _peekPrev.value = _current.value
+        _current.value = n
+        _peekNext.value = null
+    }
+
+    fun promotePrev() {
+        val p = _peekPrev.value ?: return
+        if (playingKey != null && p.songKey != playingKey) return
+        _peekNext.value = _current.value
+        _current.value = p
+        _peekPrev.value = null
+    }
+
     suspend fun showSong(
         context: Context,
         song: Song,
         baseScheme: ColorScheme
     ) {
+        playingKey = song.songKey
+        val gen = ++applyGen
         if (isShowing(song)) return
         when {
-            themeIsFor(_peekNext.value, song) -> promoteNext()
-            themeIsFor(_peekPrev.value, song) -> promotePrev()
+            themeIsFor(_peekNext.value, song) -> {
+                _current.value = _peekNext.value
+                return
+            }
+            themeIsFor(_peekPrev.value, song) -> {
+                _current.value = _peekPrev.value
+                return
+            }
         }
-        if (!isShowing(song)) {
-            updateCurrent(context, song, baseScheme)
-        }
+        updateCurrent(context, song, baseScheme, requestGen = gen)
     }
 
-    /**
-     * @param forceRefresh re-decode art and palette (e.g. after MusicBrainz cover lands).
-     */
     suspend fun updateCurrent(
         context: Context,
         song: Song?,
@@ -92,9 +119,22 @@ class PlayerThemeStore(
         forceRefresh: Boolean = false
     ) {
         if (song == null) {
+            applyGen += 1
+            playingKey = null
             _current.value = null
             return
         }
+        playingKey = song.songKey
+        updateCurrent(context, song, baseScheme, forceRefresh, requestGen = ++applyGen)
+    }
+
+    private suspend fun updateCurrent(
+        context: Context,
+        song: Song,
+        baseScheme: ColorScheme,
+        forceRefresh: Boolean = false,
+        requestGen: Int
+    ) {
         val key = artCache.artKey(song)
         val rev = settings.colorPrefsRevision.value
         val existing = _current.value
@@ -104,10 +144,10 @@ class PlayerThemeStore(
             return
         }
         if (!forceRefresh) {
-            val fromNext = _peekNext.value?.takeIf { it.songKey == song.songKey }
-            val fromPrev = _peekPrev.value?.takeIf { it.songKey == song.songKey }
-            val warm = fromNext ?: fromPrev
+            val warm = _peekNext.value?.takeIf { it.songKey == song.songKey }
+                ?: _peekPrev.value?.takeIf { it.songKey == song.songKey }
             if (warm != null) {
+                if (requestGen != applyGen) return
                 _current.value = warm
                 return
             }
@@ -121,6 +161,7 @@ class PlayerThemeStore(
             surface = ArtColorSurface.COVER,
             loadBitmap = true
         )
+        if (requestGen != applyGen) return
         _current.value = Theme(
             artKey = resolved.key,
             songId = song.id,
