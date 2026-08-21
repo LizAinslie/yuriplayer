@@ -1001,10 +1001,26 @@ class MusicService : Service() {
     }
 
     override fun onTaskRemoved(rootIntent: Intent?) {
-        // Keep playing after recents swipe — this is a music service.
-        Log.i(TAG, "onTaskRemoved — keeping playback userWantsPlay=$userWantsPlay")
-        persistState(immediate = true)
+        Log.i(TAG, "onTaskRemoved — stopping playback")
+        stopForAppClosed()
         super.onTaskRemoved(rootIntent)
+    }
+
+    /** Recents swipe / close-the-app. Home and lock-screen keep playing. */
+    private fun stopForAppClosed() {
+        userWantsPlay = false
+        val pos = getPositionMs()
+        val snap = queueManager.getSnapshot()
+        runCatching { engineHooks?.pause() }
+        runCatching { engineHooks?.deactivate() }
+        releaseSleepLocks()
+        try {
+            stateStore.save(snap, pos, playWhenReady = false)
+        } catch (e: Exception) {
+            Log.w(TAG, "persist on close", e)
+        }
+        stopForeground(STOP_FOREGROUND_REMOVE)
+        stopSelf()
     }
 
     override fun onDestroy() {
