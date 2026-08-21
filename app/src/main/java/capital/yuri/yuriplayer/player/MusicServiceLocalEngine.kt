@@ -94,6 +94,8 @@ class MusicServiceLocalEngine(
 
     fun hasPreparedNext(): Boolean = engine.hasPreparedNext()
 
+    fun preparedNextId(): String? = engine.preparedNextId()
+
     fun playPreparedNext(): Boolean = engine.playPreparedNext()
 
     fun warmupNext() = engine.warmupNext()

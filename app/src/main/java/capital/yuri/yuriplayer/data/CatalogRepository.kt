@@ -88,6 +88,7 @@ class CatalogRepository(
             val out = ArrayList<ArtistItem>()
             for (row in dao.searchArtists(q, limit * 3)) {
                 if (row.artistKey in aliasKeys) continue
+                if (ArtistAliasResolver.isAlias(row.artistKey)) continue
                 if (isCombinedArtistName(row.displayName)) continue
                 val name = primaryArtistName(row.displayName) ?: row.displayName
                 val key = artistKey(name) ?: continue
@@ -145,8 +146,10 @@ class CatalogRepository(
 
     suspend fun artistItemForKey(artistKey: String, hintName: String? = null): ArtistItem? = withContext(Dispatchers.IO) {
         if (artistKey.isBlank()) return@withContext null
-        val row = dao.getArtist(artistKey)?.takeUnless { isCombinedArtistName(it.displayName) }
-        val tracks = dedupeLogicalTracks(primaryTracksForArtistLocked(artistKey, hintName ?: row?.displayName))
+        val key = ArtistAliasResolver.resolve(artistKey)
+        val row = dao.getArtist(key)?.takeUnless { isCombinedArtistName(it.displayName) }
+            ?: dao.getArtist(artistKey)?.takeUnless { isCombinedArtistName(it.displayName) }
+        val tracks = dedupeLogicalTracks(primaryTracksForArtistLocked(key, hintName ?: row?.displayName))
         if (row == null && tracks.isEmpty()) return@withContext null
         val albums = tracks.mapNotNull { TrackIdentity.normalizeToken(it.album).takeIf { n -> n.isNotEmpty() } }.toSet()
         val name = primaryArtistName(row?.displayName)
@@ -505,7 +508,8 @@ class CatalogRepository(
     }
 
     /**
-     * Collapse [fromName] into [intoName]. [intoName] is the kept display name.
+     * Remember [fromName] as an alias of [intoName]. Track rows stay as-is;
+     * lookups expand through [ArtistAliasResolver].
      */
     suspend fun mergeArtists(fromName: String, intoName: String): ArtistItem? =
         withContext(Dispatchers.IO) {
@@ -516,52 +520,25 @@ class CatalogRepository(
                 ArtistAliasEntity(
                     aliasKey = fromKey,
                     canonicalKey = intoKey,
-                    aliasName = fromName,
+                    aliasName = fromName.trim(),
                     source = ArtistAliasEntity.SOURCE_USER
                 )
             )
             dao.retargetAliases(fromKey, intoKey)
             loadAliasesLocked()
-            retargetArtistRowsLocked(fromKey, intoKey, intoName)
-            rebuildRollupsLocked()
             artistItemForKey(intoKey, intoName)
         }
 
-    private suspend fun retargetArtistRowsLocked(fromKey: String, intoKey: String, intoName: String) {
-        dao.retargetTrackArtistKey(fromKey, intoKey)
-        dao.retargetCreditArtistKey(fromKey, intoKey)
-        dao.retargetAlbumArtistKey(fromKey, intoKey)
-        val from = dao.getArtist(fromKey)
-        val into = dao.getArtist(intoKey)
-        when {
-            into != null -> {
-                dao.upsertArtist(
-                    into.copy(
-                        displayName = intoName,
-                        trackCount = maxOf(into.trackCount, from?.trackCount ?: 0),
-                        albumCount = maxOf(into.albumCount, from?.albumCount ?: 0),
-                        bio = into.bio ?: from?.bio,
-                        imageUri = into.imageUri ?: from?.imageUri,
-                        websiteUrl = into.websiteUrl ?: from?.websiteUrl,
-                        linksJson = into.linksJson ?: from?.linksJson,
-                        mbid = into.mbid ?: from?.mbid,
-                        updatedAtMs = System.currentTimeMillis()
-                    )
-                )
-                if (from != null) dao.deleteArtist(fromKey)
-            }
-            from != null -> {
-                dao.upsertArtist(
-                    from.copy(
-                        artistKey = intoKey,
-                        displayName = intoName,
-                        updatedAtMs = System.currentTimeMillis()
-                    )
-                )
-                dao.deleteArtist(fromKey)
-            }
-        }
+    suspend fun unmergeArtist(aliasKey: String) = withContext(Dispatchers.IO) {
+        dao.deleteAlias(aliasKey)
+        loadAliasesLocked()
     }
+
+    suspend fun aliasesForArtist(artistKey: String): List<ArtistAliasEntity> =
+        withContext(Dispatchers.IO) {
+            val canonical = ArtistAliasResolver.resolve(artistKey)
+            dao.aliasesForCanonical(canonical)
+        }
 
     private suspend fun applyMbidAliasesLocked() {
         val groups = dao.artistsWithMbid().groupBy { it.mbid.orEmpty() }
@@ -573,6 +550,7 @@ class CatalogRepository(
             )
             for (other in rows) {
                 if (other.artistKey == canonical.artistKey) continue
+                if (ArtistAliasResolver.resolve(other.artistKey) == canonical.artistKey) continue
                 dao.upsertAlias(
                     ArtistAliasEntity(
                         aliasKey = other.artistKey,
@@ -581,7 +559,6 @@ class CatalogRepository(
                         source = ArtistAliasEntity.SOURCE_MBID
                     )
                 )
-                retargetArtistRowsLocked(other.artistKey, canonical.artistKey, canonical.displayName)
                 changed = true
             }
         }
@@ -844,17 +821,24 @@ class CatalogRepository(
     }
 
     private suspend fun primaryTracksForArtistLocked(artistKey: String, hintName: String? = null): List<Song> {
+        val keys = ArtistAliasResolver.identityKeys(artistKey)
         val out = LinkedHashMap<String, Song>()
-        dao.getTracksForArtist(artistKey).map { it.toSong() }.forEach { out[it.songKey] = it }
-        dao.getTracksByCreditRole(artistKey, ArtistRole.PRIMARY.name)
+        dao.getTracksForArtists(keys).map { it.toSong() }.forEach { out[it.songKey] = it }
+        dao.getTracksByCreditRoles(keys, ArtistRole.PRIMARY.name)
             .map { it.toSong() }
             .forEach { out.putIfAbsent(it.songKey, it) }
-        val name = dao.getArtist(artistKey)?.displayName ?: hintName
-        if (!name.isNullOrBlank() && name.length >= 3) {
+        val names = buildList {
+            dao.getArtist(keys.first())?.displayName?.let { add(it) }
+            hintName?.let { add(it) }
+            dao.aliasesForCanonical(keys.first()).forEach { add(it.aliasName) }
+        }.distinct()
+        names.filter { it.length >= 3 }.forEach { name ->
             dao.getTracksMentioning(name).forEach { entity ->
                 val song = entity.toSong()
                 val hit = allCreditsForSong(song).any {
-                    it.role == ArtistRole.PRIMARY && artistKey(it.name) == artistKey
+                    it.role == ArtistRole.PRIMARY &&
+                        ArtistAliasResolver.resolve(artistKey(it.name) ?: "") ==
+                        ArtistAliasResolver.resolve(artistKey)
                 }
                 if (hit) out.putIfAbsent(entity.songKey, song)
             }

@@ -60,6 +60,8 @@ internal class MusicServiceEngineHooks(
 
     fun hasPreparedNext(): Boolean = active && host.hasPreparedNext()
 
+    fun preparedNextId(): String? = if (active) host.preparedNextId() else null
+
     fun playPreparedNext(): Boolean = active && host.playPreparedNext()
 
     fun warmupNext() {

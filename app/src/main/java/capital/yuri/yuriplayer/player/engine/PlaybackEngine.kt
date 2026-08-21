@@ -66,6 +66,9 @@ interface PlaybackEngine {
     /** True when a next item is loaded/buffered and [playPreparedNext] will start it immediately. */
     fun hasPreparedNext(): Boolean = false
 
+    /** mediaId of the prepared successor, or null. */
+    fun preparedNextId(): String? = null
+
     /**
      * Switch to the pre-buffered next item with no reload.
      * @return false if nothing was prepared (caller should load a new source).

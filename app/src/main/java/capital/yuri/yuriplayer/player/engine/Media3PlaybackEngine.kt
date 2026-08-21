@@ -288,6 +288,13 @@ class Media3PlaybackEngine(
 
     override fun hasPreparedNext(): Boolean = player.hasNextMediaItem()
 
+    override fun preparedNextId(): String? {
+        if (!player.hasNextMediaItem()) return null
+        val idx = player.currentMediaItemIndex + 1
+        if (idx < 0 || idx >= player.mediaItemCount) return null
+        return player.getMediaItemAt(idx).mediaId
+    }
+
     override fun playPreparedNext(): Boolean {
         if (!player.hasNextMediaItem()) return false
         player.seekToNextMediaItem()

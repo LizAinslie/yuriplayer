@@ -19,7 +19,7 @@ import androidx.core.app.NotificationCompat
 import capital.yuri.yuriplayer.activities.MainActivity
 import capital.yuri.yuriplayer.data.LibrarySettings
 import capital.yuri.yuriplayer.data.Song
-import capital.yuri.yuriplayer.player.engine.isNetworkUri
+import capital.yuri.yuriplayer.player.engine.toPlaybackMedia
 import capital.yuri.yuriplayer.player.engine.isVirtualLibraryPath
 import capital.yuri.yuriplayer.player.radio.RadioSourcePrefs
 import kotlinx.coroutines.CoroutineScope
@@ -402,6 +402,17 @@ class MusicService : Service() {
     private fun advanceUsingPreparedNext(userInitiated: Boolean): Boolean {
         val hooks = engineHooks ?: return false
         if (!hooks.hasPreparedNext()) return false
+        val expected = queueManager.peekNext() ?: return false
+        val preparedId = hooks.preparedNextId()
+        val expectedId = expected.toPlaybackMedia(quality = librarySettings.getStreamQuality()).mediaId
+        if (preparedId == null || preparedId != expectedId) {
+            Log.i(
+                TAG,
+                "skip prepared mismatch want='${expected.displayTitle}' have=$preparedId"
+            )
+            syncPreparedNext()
+            return false
+        }
         // VLC swap does not post onAutoAdvanced; Media3 AUTO transition does.
         // Only ignore that callback for a short window so a later EndReached
         // is not swallowed (that left audio on the next track with old art).

@@ -318,14 +318,19 @@ class VlcPlaybackEngine(
             return
         }
         prefetcher.start(item) { file -> onPrefetchReady(item, file) }
-        if (nextItem?.uri == item.uri && (nextMedia != null || nextPreparing)) {
+        if (nextItem?.mediaId == item.mediaId && (nextReady || nextPreparing)) {
             return
         }
+        clearNext()
         val local = prefetcher.fileIfReady(item.mediaId)
         prepareStandby(if (local != null) item.copy(uri = Uri.fromFile(local), isNetwork = false) else item)
     }
 
-    override fun hasPreparedNext(): Boolean = nextItem != null && nextMedia != null
+    override fun hasPreparedNext(): Boolean =
+        nextReady && nextItem != null && nextMedia != null
+
+    override fun preparedNextId(): String? =
+        nextItem?.mediaId?.takeIf { nextReady && nextMedia != null }
 
     override fun playPreparedNext(): Boolean = swapToPreparedNext()
 

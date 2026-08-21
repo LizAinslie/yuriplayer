@@ -171,8 +171,12 @@ object ArtistAliasResolver {
     @Volatile
     private var map: Map<String, String> = emptyMap()
 
+    @Volatile
+    private var reverse: Map<String, List<String>> = emptyMap()
+
     fun replace(aliases: Map<String, String>) {
         map = aliases
+        reverse = aliases.entries.groupBy({ it.value }, { it.key })
     }
 
     fun resolve(key: String): String {
@@ -183,6 +187,21 @@ object ArtistAliasResolver {
             val next = map[cur] ?: return cur
             if (next == cur || !seen.add(cur)) return next
             cur = next
+        }
+    }
+
+    fun isAlias(key: String): Boolean = map.containsKey(key)
+
+    fun aliasKeysOf(canonicalKey: String): List<String> = reverse[canonicalKey].orEmpty()
+
+    /** Canonical key plus every alias that redirects here. */
+    fun identityKeys(key: String): List<String> {
+        val canonical = resolve(key)
+        val aliases = aliasKeysOf(canonical)
+        if (aliases.isEmpty()) return listOf(canonical)
+        return buildList(aliases.size + 1) {
+            add(canonical)
+            addAll(aliases)
         }
     }
 }

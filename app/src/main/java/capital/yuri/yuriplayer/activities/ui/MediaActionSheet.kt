@@ -596,7 +596,7 @@ fun ArtistContextSheet(
             }
         }
         if (onMerge != null) {
-            MediaSheetItem("Merge with another artist") {
+            MediaSheetItem("Merge other artists into this page") {
                 onDismiss()
                 onMerge()
             }

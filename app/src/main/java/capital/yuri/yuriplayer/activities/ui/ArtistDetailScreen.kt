@@ -35,6 +35,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.ArrowDropDown
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Link
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.PlayArrow
@@ -56,6 +57,7 @@ import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -80,6 +82,7 @@ import capital.yuri.yuriplayer.data.AlbumItem
 import capital.yuri.yuriplayer.data.ArtistItem
 import capital.yuri.yuriplayer.data.ArtistProfileRepository
 import capital.yuri.yuriplayer.data.CatalogRepository
+import capital.yuri.yuriplayer.data.db.ArtistAliasEntity
 import capital.yuri.yuriplayer.data.LibrarySettings
 import capital.yuri.yuriplayer.data.MyStuffPinStore
 import capital.yuri.yuriplayer.data.ReleaseType
@@ -202,6 +205,8 @@ fun ArtistDetailScreen(
     var appearsOnFilters by remember { mutableStateOf(DiscographyFilters()) }
     var showMenu by remember { mutableStateOf(false) }
     var showMerge by remember { mutableStateOf(false) }
+    var aliasTick by remember { mutableIntStateOf(0) }
+    var aliases by remember { mutableStateOf<List<ArtistAliasEntity>>(emptyList()) }
     var showDataSources by remember { mutableStateOf(false) }
     var fetchKind by remember { mutableStateOf<ArtistImageKind?>(null) }
     var cropUri by remember { mutableStateOf<Uri?>(null) }
@@ -218,6 +223,9 @@ fun ArtistDetailScreen(
     val artistKeyStr = artistKey(artist.name) ?: artist.displayName.lowercase()
     val artistSaved = remember(entries, artistKeyStr) {
         pinStore.contains(StuffPinKind.ARTIST, artistKeyStr)
+    }
+    LaunchedEffect(artistKeyStr, aliasTick) {
+        aliases = catalog.aliasesForArtist(artistKeyStr)
     }
 
     val pickProfile = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri ->
@@ -418,6 +426,7 @@ fun ArtistDetailScreen(
                 onDismiss = { showMerge = false },
                 onMerged = { merged ->
                     showMerge = false
+                    aliasTick++
                     onArtistMerged(merged)
                 }
             )
@@ -551,6 +560,28 @@ fun ArtistDetailScreen(
                         onOpenLinks = { showDataSources = true },
                         onPlayAll = onStartRadio
                     )
+                }
+
+                if (aliases.isNotEmpty()) {
+                    item {
+                        ArtistAliasesSection(
+                            aliases = aliases,
+                            titleColor = base.onBackground,
+                            mutedColor = base.onBackground.copy(alpha = 0.6f),
+                            onUnmerge = { alias ->
+                                scope.launch {
+                                    catalog.unmergeArtist(alias.aliasKey)
+                                    aliasTick++
+                                    onArtistMerged(artist)
+                                    Toast.makeText(
+                                        context,
+                                        "Unmerged ${alias.aliasName}",
+                                        Toast.LENGTH_SHORT
+                                    ).show()
+                                }
+                            }
+                        )
+                    }
                 }
 
                 item {
@@ -1193,12 +1224,12 @@ private fun ArtistMergeSheet(
     ) {
         Column(modifier = Modifier.padding(horizontal = 20.dp)) {
             Text(
-                "Merge into ${artist.displayName}",
+                "Merge other artists into this page",
                 style = MaterialTheme.typography.titleLarge,
                 fontWeight = FontWeight.Bold
             )
             Text(
-                "Search for a duplicate name (for example nightcord at 25:00). That artist’s albums and credits move here.",
+                "Pick a duplicate name (for example nightcord at 25:00). Yuri remembers it as an alias of ${artist.displayName}. Unmerge anytime from this page.",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
                 modifier = Modifier.padding(top = 6.dp, bottom = 12.dp)
@@ -1243,11 +1274,9 @@ private fun ArtistMergeSheet(
     if (other != null) {
         androidx.compose.material3.AlertDialog(
             onDismissRequest = { if (!busy) pending = null },
-            title = { Text("Keep which name?") },
+            title = { Text("Add alias?") },
             text = {
-                Text(
-                    "Merge “${other.displayName}” and “${artist.displayName}” into one artist page."
-                )
+                Text("“${other.displayName}” will show up on ${artist.displayName}’s page. You can unmerge it later.")
             },
             confirmButton = {
                 TextButton(
@@ -1259,34 +1288,62 @@ private fun ArtistMergeSheet(
                             if (merged != null) {
                                 pinStore.retargetArtist(other.name, merged)
                                 onMerged(merged)
-                                Toast.makeText(context, "Merged into ${merged.displayName}", Toast.LENGTH_SHORT).show()
+                                Toast.makeText(
+                                    context,
+                                    "Aliased ${other.displayName}",
+                                    Toast.LENGTH_SHORT
+                                ).show()
                             } else {
                                 busy = false
+                                pending = null
                                 Toast.makeText(context, "Merge failed", Toast.LENGTH_SHORT).show()
                             }
                         }
                     }
-                ) { Text("Keep ${artist.displayName}") }
+                ) { Text("Merge") }
             },
             dismissButton = {
-                TextButton(
-                    enabled = !busy,
-                    onClick = {
-                        busy = true
-                        scope.launch {
-                            val merged = catalog.mergeArtists(artist.displayName, other.displayName)
-                            if (merged != null) {
-                                pinStore.retargetArtist(artist.name, merged)
-                                onMerged(merged)
-                                Toast.makeText(context, "Merged into ${merged.displayName}", Toast.LENGTH_SHORT).show()
-                            } else {
-                                busy = false
-                                Toast.makeText(context, "Merge failed", Toast.LENGTH_SHORT).show()
-                            }
-                        }
-                    }
-                ) { Text("Keep ${other.displayName}") }
+                TextButton(enabled = !busy, onClick = { pending = null }) { Text("Cancel") }
             }
         )
+    }
+}
+
+@Composable
+private fun ArtistAliasesSection(
+    aliases: List<ArtistAliasEntity>,
+    titleColor: Color,
+    mutedColor: Color,
+    onUnmerge: (ArtistAliasEntity) -> Unit
+) {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 20.dp, vertical = 8.dp)
+    ) {
+        Text(
+            "Also known as",
+            style = MaterialTheme.typography.titleSmall,
+            fontWeight = FontWeight.SemiBold,
+            color = titleColor
+        )
+        aliases.forEach { alias ->
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(top = 4.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    alias.aliasName,
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = titleColor,
+                    modifier = Modifier.weight(1f)
+                )
+                TextButton(onClick = { onUnmerge(alias) }) {
+                    Text("Unmerge", color = mutedColor)
+                }
+            }
+        }
     }
 }

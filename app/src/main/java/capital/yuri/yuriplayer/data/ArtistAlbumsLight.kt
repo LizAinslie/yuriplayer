@@ -18,18 +18,25 @@ suspend fun lightAlbumItemsForArtist(
     displayName: String? = null
 ): List<AlbumItem> = withContext(Dispatchers.IO) {
     if (artistKey.isBlank()) return@withContext emptyList()
+    val keys = ArtistAliasResolver.identityKeys(artistKey)
 
     val songs = LinkedHashMap<String, Song>()
-    dao.getTracksForArtist(artistKey).forEach { songs[it.songKey] = it.toLightSong() }
-    dao.getTracksByCreditRole(artistKey, ArtistRole.PRIMARY.name).forEach {
+    dao.getTracksForArtists(keys).forEach { songs[it.songKey] = it.toLightSong() }
+    dao.getTracksByCreditRoles(keys, ArtistRole.PRIMARY.name).forEach {
         songs.putIfAbsent(it.songKey, it.toLightSong())
     }
-    val name = displayName ?: dao.getArtist(artistKey)?.displayName
-    if (!name.isNullOrBlank() && name.length >= 3) {
-        dao.getTracksMentioning(name).forEach { entity ->
+    val canonical = ArtistAliasResolver.resolve(artistKey)
+    val name = displayName ?: dao.getArtist(canonical)?.displayName
+    val names = buildList {
+        if (!name.isNullOrBlank()) add(name)
+        dao.aliasesForCanonical(canonical).forEach { add(it.aliasName) }
+    }.distinct()
+    names.filter { it.length >= 3 }.forEach { n ->
+        dao.getTracksMentioning(n).forEach { entity ->
             val song = entity.toLightSong()
             val hit = allCreditsForSong(song).any {
-                it.role == ArtistRole.PRIMARY && artistKey(it.name) == artistKey
+                it.role == ArtistRole.PRIMARY &&
+                    ArtistAliasResolver.resolve(artistKey(it.name) ?: "") == canonical
             }
             if (hit) songs.putIfAbsent(entity.songKey, song)
         }
@@ -48,7 +55,7 @@ suspend fun lightAlbumItemsForArtist(
             )
         }
 
-    val rows = dao.getAlbumsForArtist(artistKey)
+    val rows = dao.getAlbumsForArtists(keys)
     val fromRows = ArrayList<AlbumItem>()
     if (rows.isNotEmpty()) {
         val seen = LinkedHashSet<String>()
@@ -88,17 +95,29 @@ suspend fun lightAppearsOnForArtist(
     displayName: String? = null
 ): List<AlbumItem> = withContext(Dispatchers.IO) {
     if (artistKey.isBlank()) return@withContext emptyList()
+    val keys = ArtistAliasResolver.identityKeys(artistKey)
+    val canonical = ArtistAliasResolver.resolve(artistKey)
     val songs = LinkedHashMap<String, Song>()
-    dao.getTracksByCreditRole(artistKey, ArtistRole.FEATURED.name).forEach {
+    dao.getTracksByCreditRoles(keys, ArtistRole.FEATURED.name).forEach {
         songs[it.songKey] = it.toLightSong()
     }
-    val name = displayName ?: dao.getArtist(artistKey)?.displayName
-    if (!name.isNullOrBlank() && name.length >= 3) {
-        dao.getTracksMentioning(name).forEach { entity ->
+    val name = displayName ?: dao.getArtist(canonical)?.displayName
+    val names = buildList {
+        if (!name.isNullOrBlank()) add(name)
+        dao.aliasesForCanonical(canonical).forEach { add(it.aliasName) }
+    }.distinct()
+    names.filter { it.length >= 3 }.forEach { n ->
+        dao.getTracksMentioning(n).forEach { entity ->
             val song = entity.toLightSong()
             val credits = allCreditsForSong(song)
-            val featured = credits.any { it.role == ArtistRole.FEATURED && artistKey(it.name) == artistKey }
-            val primary = credits.any { it.role == ArtistRole.PRIMARY && artistKey(it.name) == artistKey }
+            val featured = credits.any {
+                it.role == ArtistRole.FEATURED &&
+                    ArtistAliasResolver.resolve(artistKey(it.name) ?: "") == canonical
+            }
+            val primary = credits.any {
+                it.role == ArtistRole.PRIMARY &&
+                    ArtistAliasResolver.resolve(artistKey(it.name) ?: "") == canonical
+            }
             if (featured && !primary) songs.putIfAbsent(entity.songKey, song)
         }
     }

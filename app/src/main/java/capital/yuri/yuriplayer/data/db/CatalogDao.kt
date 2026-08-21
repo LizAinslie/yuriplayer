@@ -183,8 +183,22 @@ interface CatalogDao {
     )
     suspend fun getOneTrackForAlbum(albumKey: String): CatalogTrackEntity?
 
+    @Query("SELECT * FROM catalog_tracks WHERE artistKey IN (:keys) ORDER BY album, trackNumber, title")
+    suspend fun getTracksForArtists(keys: List<String>): List<CatalogTrackEntity>
+
     @Query("SELECT * FROM catalog_tracks WHERE artistKey = :artistKey ORDER BY album, trackNumber, title")
     suspend fun getTracksForArtist(artistKey: String): List<CatalogTrackEntity>
+
+    @Query(
+        """
+        SELECT t.* FROM catalog_tracks t
+        INNER JOIN catalog_credits c
+          ON c.subjectType = 'TRACK' AND c.subjectKey = t.songKey
+        WHERE c.artistKey IN (:keys) AND c.role = :role
+        ORDER BY t.album, t.trackNumber, t.title
+        """
+    )
+    suspend fun getTracksByCreditRoles(keys: List<String>, role: String): List<CatalogTrackEntity>
 
     @Query(
         """
@@ -283,6 +297,9 @@ interface CatalogDao {
     @Query("SELECT * FROM catalog_albums WHERE albumKey = :albumKey LIMIT 1")
     suspend fun getAlbum(albumKey: String): CatalogAlbumEntity?
 
+    @Query("SELECT * FROM catalog_albums WHERE artistKey IN (:keys) ORDER BY year DESC, name COLLATE NOCASE")
+    suspend fun getAlbumsForArtists(keys: List<String>): List<CatalogAlbumEntity>
+
     @Query("SELECT * FROM catalog_albums WHERE artistKey = :artistKey ORDER BY year DESC, name COLLATE NOCASE")
     suspend fun getAlbumsForArtist(artistKey: String): List<CatalogAlbumEntity>
 
@@ -367,6 +384,9 @@ interface CatalogDao {
 
     @Query("SELECT * FROM artist_aliases")
     suspend fun getAllAliases(): List<ArtistAliasEntity>
+
+    @Query("SELECT * FROM artist_aliases WHERE canonicalKey = :canonicalKey ORDER BY aliasName COLLATE NOCASE")
+    suspend fun aliasesForCanonical(canonicalKey: String): List<ArtistAliasEntity>
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun upsertAlias(alias: ArtistAliasEntity)
