@@ -171,9 +171,7 @@ fun EditSongMetadataScreen(
         ) {
             if (!canEdit) {
                 Text(
-                    "This track isn’t from a writable file source. " +
-                        "Tag editing works for local files, SAF folders, and future cloud drives " +
-                        "(OneDrive, Dropbox, Drive, Nextcloud). Jellyfin / Subsonic streams stay server-side.",
+                    "This song is streaming from a server, so tags can’t be edited here.",
                     color = MaterialTheme.colorScheme.error,
                     style = MaterialTheme.typography.bodyMedium
                 )
@@ -232,7 +230,7 @@ fun EditSongMetadataScreen(
                 enabled = canEdit && !saving,
                 modifier = Modifier.fillMaxWidth()
             ) {
-                Text(if (saving) "Saving…" else "Save to file tags")
+                Text(if (saving) "Saving…" else "Save")
             }
         }
     }
@@ -363,8 +361,7 @@ fun EditAlbumMetadataScreen(
         ) {
             if (!canEdit) {
                 Text(
-                    "No writable files in this album. Tag editing needs local / SAF / cloud file " +
-                        "copies — not Jellyfin or Subsonic streams alone.",
+                    "None of these songs are files on this device, so tags can’t be edited.",
                     color = MaterialTheme.colorScheme.error,
                     style = MaterialTheme.typography.bodyMedium
                 )
@@ -380,9 +377,9 @@ fun EditAlbumMetadataScreen(
                 Column {
                     Text(
                         if (canEdit) {
-                            "$writableCount of ${album.songs.size} tracks are writable"
+                            "$writableCount of ${album.songs.size} songs can be edited"
                         } else {
-                            "${album.songs.size} tracks — none writable"
+                            "${album.songs.size} songs — none can be edited"
                         },
                         style = MaterialTheme.typography.bodyMedium
                     )
@@ -429,7 +426,7 @@ fun EditAlbumMetadataScreen(
                 modifier = Modifier.fillMaxWidth(),
                 label = { Text("Genre") },
                 supportingText = {
-                    Text("Written to every writable track in the album")
+                    Text("Saved to every file in this album")
                 },
                 singleLine = true,
                 enabled = canEdit && !saving
@@ -444,12 +441,11 @@ fun EditAlbumMetadataScreen(
                 enabled = canEdit && !saving,
                 modifier = Modifier.fillMaxWidth()
             ) {
-                Text(if (saving) "Saving…" else "Save to file tags")
+                Text(if (saving) "Saving…" else "Save")
             }
 
             Text(
-                "Changes are written into each writable audio file. Folder cover.jpg is updated when you pick a new image. " +
-                    "Streaming-only copies (Jellyfin / Subsonic) are skipped.",
+                "Saved to files on this device. Streams from Jellyfin or Navidrome aren't changed.",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
             )

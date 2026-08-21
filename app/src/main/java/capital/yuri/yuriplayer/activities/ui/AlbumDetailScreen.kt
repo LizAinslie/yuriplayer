@@ -505,7 +505,7 @@ fun AlbumDetailScreen(
                         enrichment.enrichAlbumAsync(liveAlbum, force = true)
                         Toast.makeText(
                             context,
-                            "Looking up year & cover online\u2026",
+                            "Looking up artwork…",
                             Toast.LENGTH_SHORT
                         ).show()
                     }

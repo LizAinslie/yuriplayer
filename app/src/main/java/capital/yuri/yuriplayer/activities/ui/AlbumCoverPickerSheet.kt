@@ -219,7 +219,7 @@ fun AlbumCoverPickerSheet(
                             }
                         }
                         Spacer(modifier = Modifier.height(8.dp))
-                        Text("Custom image", style = MaterialTheme.typography.labelLarge)
+                        Text("Choose photo", style = MaterialTheme.typography.labelLarge)
                         Text(
                             "File → crop",
                             style = MaterialTheme.typography.labelSmall,
@@ -259,7 +259,7 @@ fun AlbumCoverPickerSheet(
                 onClick = onUseDefault,
                 modifier = Modifier.padding(top = 8.dp)
             ) {
-                Text("Reset to default (prefer local)")
+                Text("Use original cover")
             }
         }
     }

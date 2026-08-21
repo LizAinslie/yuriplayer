@@ -236,8 +236,8 @@ private fun SettingsHubScreen(
         SettingsSectionTitle("Metadata")
         SettingsGroup {
             SettingsSwitchRow(
-                title = "Automatic online metadata",
-                subtitle = "Background year & cover lookup via MusicBrainz",
+                title = "Find missing artwork",
+                subtitle = "Fill in album art and release years in the background",
                 icon = Icons.Default.Sync,
                 checked = autoMetadata,
                 onCheckedChange = { enabled ->
@@ -251,7 +251,7 @@ private fun SettingsHubScreen(
         SettingsGroup {
             SettingsNavRow(
                 title = "Streaming quality",
-                subtitle = streamQuality.displayName + " — Jellyfin & Subsonic buffer",
+                subtitle = streamQuality.displayName + " — Jellyfin and Navidrome",
                 icon = Icons.Default.HighQuality,
                 onClick = onOpenStreamingQuality
             )
@@ -285,7 +285,7 @@ private fun SettingsHubScreen(
         SettingsGroup {
             SettingsNavRow(
                 title = "Appearance",
-                subtitle = "Cover · ${coverVariant.displayName}  ·  Banner · ${bannerVariant.displayName}",
+                subtitle = "Cover · ${coverVariant.displayName}  ·  Header · ${bannerVariant.displayName}",
                 icon = Icons.Default.ColorLens,
                 onClick = onOpenAppearance
             )
@@ -399,20 +399,16 @@ private fun StreamingQualitySettingsScreen(onBack: () -> Unit) {
     ) {
         SettingsTopBar(title = "Streaming quality", onBack = onBack)
 
-        SettingsSectionTitle("Jellyfin & Subsonic")
+        SettingsSectionTitle("Remote libraries")
         TextNote(
-            text = "Original streams the Subsonic/OpenSubsonic source file " +
-                "(FLAC, ALAC, …) with format=raw — playback starts as soon as " +
-                "the first bytes arrive, the rest fills in the background. " +
-                "Lower steps request an mp3 transcode so prefetch uses less data. " +
-                "Applies to the next track — the current song keeps playing as-is."
+            text = "Original plays the file as stored on the server. Lower options " +
+                "use less data. Changes apply to the next song."
         )
         val pipeline by AudioPipeline.last.collectAsState()
         pipeline?.let { snap ->
             SettingsSectionTitle("Last stream")
             TextNote(
-                text = "${snap.title}\n${snap.engine} · ${snap.summary}\n" +
-                    "logcat: adb logcat -s YuriAudio:I"
+                text = "${snap.title}\n${snap.engine} · ${snap.summary}"
             )
         }
         SettingsGroup {
@@ -448,9 +444,8 @@ private fun AppearanceSettingsScreen(onBack: () -> Unit) {
         SettingsTopBar(title = "Appearance", onBack = onBack)
 
         TextNote(
-            text = "Dynamic colors come from artwork. Covers (now playing, albums, " +
-                "playlists) and artist banners can use different Palette variants. " +
-                "Cached per artwork — only re-extracted when the art or these settings change."
+            text = "Colors come from your artwork. Album covers and artist headers " +
+                "can use different palettes."
         )
 
         SettingsSectionTitle("Cover")
@@ -468,7 +463,7 @@ private fun AppearanceSettingsScreen(onBack: () -> Unit) {
             }
         }
 
-        SettingsSectionTitle("Banner")
+        SettingsSectionTitle("Header")
         SettingsGroup {
             ArtColorVariant.entries.forEach { variant ->
                 SettingsNavRow(

@@ -8,7 +8,7 @@ package capital.yuri.yuriplayer.data.theme
  */
 enum class ArtColorSurface(val id: String, val displayName: String) {
     COVER("cover", "Cover"),
-    BANNER("banner", "Banner")
+    BANNER("banner", "Header")
 }
 
 /**

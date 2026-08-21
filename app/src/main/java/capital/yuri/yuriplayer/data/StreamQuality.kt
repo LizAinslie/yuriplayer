@@ -15,13 +15,13 @@ enum class StreamQuality(
     ORIGINAL(
         id = "original",
         displayName = "Original",
-        subtitle = "FLAC / source file — streamed, no transcode",
+        subtitle = "As stored on the server",
         bitRate = null
     ),
     KBPS_320(
         id = "320",
         displayName = "320 kbps",
-        subtitle = "High — AAC/MP3 transcode",
+        subtitle = "High quality transcode",
         bitRate = 320_000
     ),
     KBPS_256(

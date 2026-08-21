@@ -481,7 +481,7 @@ fun AlbumContextSheet(
             editMeta()
         }
         if (onFetchMetadata != null) {
-            MediaSheetItem("Fetch additional metadata") {
+            MediaSheetItem("Find artwork") {
                 onDismiss()
                 onFetchMetadata()
             }
@@ -554,37 +554,37 @@ fun ArtistContextSheet(
             }
         }
         if (fetchImage != null) {
-            MediaSheetItem("Fetch artist image") {
+            MediaSheetItem("Find photos") {
                 onDismiss()
                 fetchImage()
             }
         }
         if (changeImage != null) {
-            MediaSheetItem("Change artist image") {
+            MediaSheetItem("Choose photo") {
                 onDismiss()
                 changeImage()
             }
         }
         if (clearImage != null) {
-            MediaSheetItem("Clear artist image") {
+            MediaSheetItem("Remove photo") {
                 onDismiss()
                 clearImage()
             }
         }
         if (fetchBanner != null) {
-            MediaSheetItem("Fetch banner") {
+            MediaSheetItem("Find header") {
                 onDismiss()
                 fetchBanner()
             }
         }
         if (changeBanner != null) {
-            MediaSheetItem("Change banner") {
+            MediaSheetItem("Choose header") {
                 onDismiss()
                 changeBanner()
             }
         }
         if (clearBanner != null) {
-            MediaSheetItem("Clear banner") {
+            MediaSheetItem("Remove header") {
                 onDismiss()
                 clearBanner()
             }
@@ -596,7 +596,7 @@ fun ArtistContextSheet(
             }
         }
         if (onMerge != null) {
-            MediaSheetItem("Merge other artists into this page") {
+            MediaSheetItem("Merge artists") {
                 onDismiss()
                 onMerge()
             }
