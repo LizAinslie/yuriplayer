@@ -18,9 +18,11 @@ fun url(base: String, block: UrlScope.() -> Unit = {}): String =
     UrlScope(URLBuilder(base.trim())).apply(block).build()
 
 class UrlScope internal constructor(private val builder: URLBuilder) {
-    fun path(vararg segments: String) {
-        val parts = segments.map { it.trim('/') }.filter { it.isNotEmpty() }
-        if (parts.isNotEmpty()) builder.appendPathSegments(*parts.toTypedArray())
+    fun path(vararg segments: String, encodeSlash: Boolean = false) {
+        val parts = segments.filter { it.isNotBlank() }
+        if (parts.isNotEmpty()) {
+            builder.appendPathSegments(*parts.toTypedArray(), encodeSlash = encodeSlash)
+        }
     }
 
     fun param(name: String, value: Any?) {

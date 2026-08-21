@@ -13,6 +13,7 @@ import capital.yuri.yuriplayer.data.source.categorizeLink
 import capital.yuri.yuriplayer.data.source.genresToJson
 import capital.yuri.yuriplayer.data.source.parseGenresJson
 import capital.yuri.yuriplayer.data.source.toProfile
+import capital.yuri.yuriplayer.http.url
 import io.ktor.client.HttpClient
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
@@ -231,7 +232,7 @@ class ArtistProfileRepository(
     }
 
     private fun ensureDiscoveryLinks(profile: ArtistProfile): ArtistProfile {
-        val q = java.net.URLEncoder.encode(profile.displayName, "UTF-8")
+        val q = profile.displayName
         val existingFp = profile.links.map { ArtistNameMatch.linkFingerprint(it.url) }.toHashSet()
         val existingLabels = profile.links.map { it.label.lowercase() }.toHashSet()
         val extras = buildList {
@@ -241,14 +242,46 @@ class ArtistProfileRepository(
                 add(categorizeLink(url, label))
             }
             addIfMissing(
-                "https://musicbrainz.org/search?query=$q&type=artist&method=indexed",
+                url("https://musicbrainz.org") {
+                    path("search")
+                    param("query", q)
+                    param("type", "artist")
+                    param("method", "indexed")
+                },
                 "MusicBrainz"
             )
-            addIfMissing("https://open.spotify.com/search/$q", "Spotify")
-            addIfMissing("https://music.apple.com/search?term=$q", "Apple Music")
-            addIfMissing("https://www.youtube.com/results?search_query=$q", "YouTube")
-            addIfMissing("https://bandcamp.com/search?q=$q", "Bandcamp")
-            addIfMissing("https://soundcloud.com/search?q=$q", "SoundCloud")
+            addIfMissing(
+                url("https://open.spotify.com") { path("search", q, encodeSlash = true) },
+                "Spotify"
+            )
+            addIfMissing(
+                url("https://music.apple.com") {
+                    path("search")
+                    param("term", q)
+                },
+                "Apple Music"
+            )
+            addIfMissing(
+                url("https://www.youtube.com") {
+                    path("results")
+                    param("search_query", q)
+                },
+                "YouTube"
+            )
+            addIfMissing(
+                url("https://bandcamp.com") {
+                    path("search")
+                    param("q", q)
+                },
+                "Bandcamp"
+            )
+            addIfMissing(
+                url("https://soundcloud.com") {
+                    path("search")
+                    param("q", q)
+                },
+                "SoundCloud"
+            )
         }
         return profile.copy(
             links = (profile.links + extras)

@@ -1,6 +1,7 @@
 package capital.yuri.yuriplayer.data.source
 
 import android.util.Log
+import capital.yuri.yuriplayer.http.url
 import io.ktor.client.HttpClient
 import io.ktor.client.request.get
 import io.ktor.client.statement.bodyAsText
@@ -8,7 +9,6 @@ import io.ktor.http.isSuccess
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import org.json.JSONObject
-import java.net.URLEncoder
 
 /** Deezer public search API — no key required. One highest-res image per matched artist. */
 class DeezerArtistImageSource(
@@ -25,8 +25,12 @@ class DeezerArtistImageSource(
         kind: ArtistImageKind
     ): List<ArtistImageCandidate> = withContext(Dispatchers.IO) {
         if (kind == ArtistImageKind.BANNER) return@withContext emptyList()
-        val q = URLEncoder.encode(artistName.trim(), "UTF-8")
-        val body = get("https://api.deezer.com/search/artist?q=$q&limit=8")
+        val requestUrl = url("https://api.deezer.com") {
+            path("search", "artist")
+            param("q", artistName.trim())
+            param("limit", 8)
+        }
+        val body = get(requestUrl)
             ?: return@withContext emptyList()
         try {
             val data = JSONObject(body).optJSONArray("data") ?: return@withContext emptyList()

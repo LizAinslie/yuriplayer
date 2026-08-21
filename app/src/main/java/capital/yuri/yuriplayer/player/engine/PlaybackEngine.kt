@@ -3,6 +3,7 @@ package capital.yuri.yuriplayer.player.engine
 import android.net.Uri
 import capital.yuri.yuriplayer.data.Song
 import capital.yuri.yuriplayer.data.StreamQuality
+import capital.yuri.yuriplayer.http.url
 import kotlinx.coroutines.flow.StateFlow
 
 /**
@@ -222,17 +223,22 @@ fun jellyfinPlayableUri(
                 segs.getOrNull(i + 1)
             }
     } ?: return uri
-    val auth = "api_key=${Uri.encode(apiKey)}&_id=$id"
-    return if (quality.bitRate == null) {
-        Uri.parse("$scheme://$host/Audio/$id/stream?static=true&$auth")
-    } else {
-        val bps = quality.bitRate
-        Uri.parse(
-            "$scheme://$host/Audio/$id/stream?$auth" +
-                "&audioCodec=aac&container=mp3" +
-                "&audioBitRate=$bps&maxStreamingBitrate=$bps"
-        )
+    val authKey = apiKey
+    val built = url("$scheme://$host") {
+        path("Audio", id, "stream")
+        param("api_key", authKey)
+        param("_id", id)
+        if (quality.bitRate == null) {
+            param("static", true)
+        } else {
+            val bps = quality.bitRate
+            param("audioCodec", "aac")
+            param("container", "mp3")
+            param("audioBitRate", bps)
+            param("maxStreamingBitrate", bps)
+        }
     }
+    return Uri.parse(built)
 }
 
 /** Subsonic/OpenSubsonic: `format=raw` for original, else mp3 + maxBitRate. */

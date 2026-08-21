@@ -1,6 +1,7 @@
 package capital.yuri.yuriplayer.data.source
 
 import android.util.Log
+import capital.yuri.yuriplayer.http.url
 import io.ktor.client.HttpClient
 import io.ktor.client.request.get
 import io.ktor.client.statement.bodyAsText
@@ -41,7 +42,7 @@ object DiscogsMarkup {
     private suspend fun resolveEntity(http: HttpClient, kind: String, id: String): String? {
         val cacheKey = "$kind:$id"
         cache[cacheKey]?.let { return it }
-        val path = when (kind.lowercase()) {
+        val resource = when (kind.lowercase()) {
             "a" -> "artists"
             "l" -> "labels"
             "r" -> "releases"
@@ -50,7 +51,7 @@ object DiscogsMarkup {
         }
         return withContext(Dispatchers.IO) {
             try {
-                val response = http.get("https://api.discogs.com/$path/$id")
+                val response = http.get(url("https://api.discogs.com") { path(resource, id) })
                 if (!response.status.isSuccess()) return@withContext null
                 val json = JSONObject(response.bodyAsText())
                 val name = json.optString("name").takeIf { it.isNotBlank() }

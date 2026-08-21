@@ -6,6 +6,7 @@ import android.util.Log
 import capital.yuri.yuriplayer.data.db.AlbumMetadataDao
 import capital.yuri.yuriplayer.data.db.AlbumMetadataEntity
 import capital.yuri.yuriplayer.data.source.MusicBrainzClient
+import capital.yuri.yuriplayer.http.url
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -242,7 +243,9 @@ class MetadataEnrichmentService(
                 year = year,
                 mbid = hit.mbid,
                 coverPath = coverPath,
-                coverUrl = "https://coverartarchive.org/release/${hit.mbid}/front",
+                coverUrl = url("https://coverartarchive.org") {
+                    path("release", hit.mbid, "front")
+                },
                 source = "musicbrainz",
                 lookupFailed = false,
                 updatedAtMs = System.currentTimeMillis()

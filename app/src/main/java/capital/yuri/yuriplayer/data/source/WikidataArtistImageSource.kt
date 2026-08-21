@@ -2,6 +2,7 @@ package capital.yuri.yuriplayer.data.source
 
 import android.util.Log
 import capital.yuri.yuriplayer.data.artistKey
+import capital.yuri.yuriplayer.http.url
 import io.ktor.client.HttpClient
 import io.ktor.client.request.get
 import io.ktor.client.statement.bodyAsText
@@ -10,7 +11,6 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import org.json.JSONArray
 import org.json.JSONObject
-import java.net.URLEncoder
 
 /**
  * Wikidata: music *artists* only (person/group with music occupation or instance-of).
@@ -32,7 +32,12 @@ class WikidataArtistImageSource(
             ArtistProfile(
                 artistKey = key,
                 displayName = artistName.trim(),
-                links = listOf(categorizeLink("https://www.wikidata.org/wiki/$qid", "Wikidata")) + social,
+                links = listOf(
+                    categorizeLink(
+                        url("https://www.wikidata.org") { path("wiki", qid) },
+                        "Wikidata"
+                    )
+                ) + social,
                 genres = genres,
                 source = id
             )
@@ -60,11 +65,16 @@ class WikidataArtistImageSource(
     )
 
     private suspend fun searchMusicArtists(name: String): List<String> {
-        val q = URLEncoder.encode(name.trim(), "UTF-8")
-        val url =
-            "https://www.wikidata.org/w/api.php?action=wbsearchentities" +
-                "&search=$q&language=en&type=item&limit=10&format=json"
-        val body = get(url) ?: return emptyList()
+        val requestUrl = url("https://www.wikidata.org") {
+            path("w", "api.php")
+            param("action", "wbsearchentities")
+            param("search", name.trim())
+            param("language", "en")
+            param("type", "item")
+            param("limit", 10)
+            param("format", "json")
+        }
+        val body = get(requestUrl) ?: return emptyList()
 
         val candidates: List<SearchHit> = try {
             val arr: JSONArray? = JSONObject(body).optJSONArray("search")
@@ -174,8 +184,12 @@ class WikidataArtistImageSource(
             val datavalue = mainsnak.optJSONObject("datavalue") ?: continue
             val fileName = datavalue.optString("value")
             if (fileName.isBlank()) continue
-            val encoded = URLEncoder.encode(fileName.replace(' ', '_'), "UTF-8").replace("+", "%20")
-            out.add("https://commons.wikimedia.org/wiki/Special:FilePath/$encoded?width=1000")
+            out.add(
+                url("https://commons.wikimedia.org") {
+                    path("wiki", "Special:FilePath", fileName.replace(' ', '_'), encodeSlash = true)
+                    param("width", 1000)
+                }
+            )
         }
         return out
     }
@@ -210,32 +224,42 @@ class WikidataArtistImageSource(
             return value.takeIf { it.isNotBlank() }
         }
 
-        firstString("P856")?.let { url ->
-            out += categorizeLink(if (url.startsWith("http")) url else "https://$url", "Website")
+        firstString("P856")?.let { site ->
+            out += categorizeLink(
+                if (site.startsWith("http")) site else url("https://$site"),
+                "Website"
+            )
         }
         firstString("P2002")?.let { handle ->
-            out += categorizeLink("https://x.com/$handle", "X / Twitter")
+            out += categorizeLink(url("https://x.com") { path(handle, encodeSlash = true) }, "X / Twitter")
         }
         firstString("P2003")?.let { handle ->
-            out += categorizeLink("https://www.instagram.com/$handle", "Instagram")
+            out += categorizeLink(url("https://www.instagram.com") { path(handle, encodeSlash = true) }, "Instagram")
         }
         firstString("P2013")?.let { handle ->
-            out += categorizeLink("https://www.facebook.com/$handle", "Facebook")
+            out += categorizeLink(url("https://www.facebook.com") { path(handle, encodeSlash = true) }, "Facebook")
         }
         firstString("P2397")?.let { channel ->
-            out += categorizeLink("https://www.youtube.com/channel/$channel", "YouTube")
+            out += categorizeLink(
+                url("https://www.youtube.com") { path("channel", channel) },
+                "YouTube"
+            )
         }
         firstString("P3040")?.let { handle ->
-            out += categorizeLink("https://soundcloud.com/$handle", "SoundCloud")
+            out += categorizeLink(url("https://soundcloud.com") { path(handle, encodeSlash = true) }, "SoundCloud")
         }
         return out.distinctBy { ArtistNameMatch.linkFingerprint(it.url) }
     }
 
     private suspend fun entityClaims(qid: String): JSONObject? {
-        val url =
-            "https://www.wikidata.org/w/api.php?action=wbgetentities&ids=$qid" +
-                "&props=claims&format=json"
-        val body = get(url) ?: return null
+        val requestUrl = url("https://www.wikidata.org") {
+            path("w", "api.php")
+            param("action", "wbgetentities")
+            param("ids", qid)
+            param("props", "claims")
+            param("format", "json")
+        }
+        val body = get(requestUrl) ?: return null
         return try {
             JSONObject(body)
                 .optJSONObject("entities")
@@ -248,10 +272,15 @@ class WikidataArtistImageSource(
 
     private suspend fun entityLabels(ids: List<String>): List<String> {
         val joined = ids.joinToString("|")
-        val url =
-            "https://www.wikidata.org/w/api.php?action=wbgetentities&ids=$joined" +
-                "&props=labels&languages=en&format=json"
-        val body = get(url) ?: return emptyList()
+        val requestUrl = url("https://www.wikidata.org") {
+            path("w", "api.php")
+            param("action", "wbgetentities")
+            param("ids", joined)
+            param("props", "labels")
+            param("languages", "en")
+            param("format", "json")
+        }
+        val body = get(requestUrl) ?: return emptyList()
         return try {
             val entities = JSONObject(body).optJSONObject("entities") ?: return emptyList()
             ids.mapNotNull { id ->

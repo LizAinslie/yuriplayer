@@ -1,6 +1,7 @@
 package capital.yuri.yuriplayer.data.source
 
 import android.util.Log
+import capital.yuri.yuriplayer.http.url
 import io.ktor.client.HttpClient
 import io.ktor.client.request.get
 import io.ktor.client.request.prepareGet
@@ -15,7 +16,7 @@ import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import org.json.JSONObject
 import java.io.File
-import java.net.URLEncoder
+import java.net.URLDecoder
 import kotlin.time.Duration.Companion.milliseconds
 
 /**
@@ -69,14 +70,21 @@ class MusicBrainzClient(
                     append("\"")
                 }
             }
-            val url = "https://musicbrainz.org/ws/2/release?query=" +
-                URLEncoder.encode(query, "UTF-8") +
-                "&fmt=json&limit=5"
-            val body = getText(url) ?: return@withContext null
+            val requestUrl = url("https://musicbrainz.org") {
+                path("ws", "2", "release")
+                param("query", query)
+                param("fmt", "json")
+                param("limit", 5)
+            }
+            val body = getText(requestUrl) ?: return@withContext null
             val basic = parseReleaseSearch(body) ?: return@withContext null
             if (!includeTags) return@withContext basic
             val detail = getText(
-                "https://musicbrainz.org/ws/2/release/${basic.mbid}?inc=tags&fmt=json"
+                url("https://musicbrainz.org") {
+                    path("ws", "2", "release", basic.mbid)
+                    param("inc", "tags")
+                    param("fmt", "json")
+                }
             )
             val genres = detail?.let { parseTags(it) }.orEmpty()
             basic.copy(genres = genres)
@@ -85,8 +93,11 @@ class MusicBrainzClient(
     suspend fun lookupArtist(mbid: String): ArtistHit? =
         withContext(Dispatchers.IO) {
             if (mbid.isBlank()) return@withContext null
-            val detailUrl =
-                "https://musicbrainz.org/ws/2/artist/$mbid?inc=url-rels+tags&fmt=json"
+            val detailUrl = url("https://musicbrainz.org") {
+                path("ws", "2", "artist", mbid)
+                param("inc", "url-rels+tags")
+                param("fmt", "json")
+            }
             val detail = getText(detailUrl) ?: return@withContext ArtistHit(mbid, mbid)
             val hit = parseArtistDetail(detail, mbid)
             val image = hit.imageUrl
@@ -125,8 +136,13 @@ class MusicBrainzClient(
         }
 
     private suspend fun allWikidataP18(qid: String): List<String> {
-        val api =
-            "https://www.wikidata.org/w/api.php?action=wbgetentities&ids=$qid&props=claims&format=json"
+        val api = url("https://www.wikidata.org") {
+            path("w", "api.php")
+            param("action", "wbgetentities")
+            param("ids", qid)
+            param("props", "claims")
+            param("format", "json")
+        }
         val body = getText(api) ?: return emptyList()
         return try {
             val p18 = JSONObject(body)
@@ -144,9 +160,10 @@ class MusicBrainzClient(
                         ?.takeIf { it.isNotBlank() }
                         ?: continue
                     add(
-                        "https://commons.wikimedia.org/wiki/Special:FilePath/" +
-                            URLEncoder.encode(fileName.replace(' ', '_'), "UTF-8") +
-                            "?width=1000"
+                        url("https://commons.wikimedia.org") {
+                            path("wiki", "Special:FilePath", fileName.replace(' ', '_'), encodeSlash = true)
+                            param("width", 1000)
+                        }
                     )
                 }
             }
@@ -162,10 +179,13 @@ class MusicBrainzClient(
             escapeLucene(name)
         )
         for (q in queries) {
-            val url = "https://musicbrainz.org/ws/2/artist?query=" +
-                URLEncoder.encode(q, "UTF-8") +
-                "&fmt=json&limit=10"
-            val body = getText(url) ?: continue
+            val requestUrl = url("https://musicbrainz.org") {
+                path("ws", "2", "artist")
+                param("query", q)
+                param("fmt", "json")
+                param("limit", 10)
+            }
+            val body = getText(requestUrl) ?: continue
             val mbid = pickBestArtistMbid(body, name)
             if (mbid != null) return mbid
         }
@@ -225,10 +245,13 @@ class MusicBrainzClient(
         val wikiUrl = hit.links.firstOrNull {
             it.url.contains("wikipedia.org", ignoreCase = true)
         }?.url ?: return null
-        val path = wikiUrl.substringAfter("/wiki/").takeIf { it.isNotBlank() } ?: return null
+        val encodedPath = wikiUrl.substringAfter("/wiki/").takeIf { it.isNotBlank() } ?: return null
+        val page = URLDecoder.decode(encodedPath, "UTF-8")
         val lang = Regex("https?://([a-z]{2,3})\\.wikipedia").find(wikiUrl)?.groupValues?.getOrNull(1)
             ?: "en"
-        val api = "https://$lang.wikipedia.org/api/rest_v1/page/summary/$path"
+        val api = url("https://$lang.wikipedia.org") {
+            path("api", "rest_v1", "page", "summary", page.replace(' ', '_'), encodeSlash = true)
+        }
         val body = getText(api) ?: return null
         return try {
             val root = JSONObject(body)
@@ -243,8 +266,8 @@ class MusicBrainzClient(
     suspend fun downloadFrontCover(mbid: String, destFile: File): Boolean =
         withContext(Dispatchers.IO) {
             val urls = listOf(
-                "https://coverartarchive.org/release/$mbid/front-500",
-                "https://coverartarchive.org/release/$mbid/front"
+                url("https://coverartarchive.org") { path("release", mbid, "front-500") },
+                url("https://coverartarchive.org") { path("release", mbid, "front") }
             )
             for (u in urls) {
                 if (downloadToFile(u, destFile)) return@withContext true

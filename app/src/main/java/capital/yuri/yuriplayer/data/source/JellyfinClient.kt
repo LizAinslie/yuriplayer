@@ -4,6 +4,7 @@ import android.content.Context
 import android.net.Uri
 import android.util.Log
 import capital.yuri.yuriplayer.data.Song
+import capital.yuri.yuriplayer.http.url
 import org.jellyfin.sdk.Jellyfin
 import org.jellyfin.sdk.api.client.ApiClient
 import org.jellyfin.sdk.api.client.exception.ApiClientException
@@ -237,34 +238,35 @@ class JellyfinClient(
             result.items.orEmpty().mapNotNull { it.toSong(session) }
         }.onFailure { Log.w(TAG, "playlistSongs failed: ${it.message}") }
 
-    fun streamUrl(session: Session, itemId: String, container: String? = null): String {
-        val root = session.baseUrl.trimEnd('/')
-        // Direct original-file stream. /universal 401s unless DeviceId matches the
-        // SDK session (we authenticate with a UUID, not "YuriPlayer").
-        return buildString {
-            append(root)
-            append("/Audio/")
-            append(itemId)
-            append("/stream?static=true")
-            append("&api_key=").append(Uri.encode(session.accessToken))
-            append("&_id=").append(itemId)
-            val ext = containerExt(container)
-            if (ext != null) append("&Container=").append(ext)
+    fun streamUrl(session: Session, itemId: String, container: String? = null): String =
+        url(session.baseUrl) {
+            path("Audio", itemId, "stream")
+            param("static", true)
+            param("api_key", session.accessToken)
+            param("_id", itemId)
+            param("Container", containerExt(container))
         }
-    }
 
     fun primaryImageUrl(session: Session, itemId: String, maxWidth: Int = 512): String =
-        "${session.baseUrl.trimEnd('/')}/Items/$itemId/Images/Primary" +
-            "?maxWidth=$maxWidth&quality=90&api_key=${session.accessToken}"
+        imageUrl(session, itemId, "Primary", maxWidth)
 
     fun artistImageUrl(session: Session, artistId: String, maxWidth: Int = 512): String =
-        "${session.baseUrl.trimEnd('/')}/Items/$artistId/Images/Primary" +
-            "?maxWidth=$maxWidth&quality=90&api_key=${session.accessToken}"
+        imageUrl(session, artistId, "Primary", maxWidth)
 
-    /** Wide banner / backdrop for artist pages. */
     fun artistBackdropUrl(session: Session, artistId: String, maxWidth: Int = 1920): String =
-        "${session.baseUrl.trimEnd('/')}/Items/$artistId/Images/Backdrop" +
-            "?maxWidth=$maxWidth&quality=90&api_key=${session.accessToken}"
+        imageUrl(session, artistId, "Backdrop", maxWidth)
+
+    private fun imageUrl(
+        session: Session,
+        itemId: String,
+        image: String,
+        maxWidth: Int
+    ): String = url(session.baseUrl) {
+        path("Items", itemId, "Images", image)
+        param("maxWidth", maxWidth)
+        param("quality", 90)
+        param("api_key", session.accessToken)
+    }
 
     private fun BaseItemDto.toSong(session: Session): Song? {
         val id = id?.toString() ?: return null

@@ -2,6 +2,7 @@ package capital.yuri.yuriplayer.data.source
 
 import android.util.Log
 import capital.yuri.yuriplayer.data.artistKey
+import capital.yuri.yuriplayer.http.url
 import io.ktor.client.HttpClient
 import io.ktor.client.request.get
 import io.ktor.client.statement.bodyAsText
@@ -12,7 +13,6 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import org.json.JSONObject
-import java.net.URLEncoder
 import kotlin.time.Duration.Companion.milliseconds
 
 /**
@@ -42,7 +42,10 @@ class DiscogsArtistImageSource(
                 artistKey = key,
                 displayName = hit.title,
                 links = listOf(
-                    categorizeLink("https://www.discogs.com/artist/${hit.id}", "Discogs")
+                    categorizeLink(
+                        url("https://www.discogs.com") { path("artist", hit.id.toString()) },
+                        "Discogs"
+                    )
                 ),
                 source = id
             )
@@ -53,7 +56,12 @@ class DiscogsArtistImageSource(
             )
             val urls = detail.optJSONArray("urls")
             val links = buildList {
-                add(categorizeLink("https://www.discogs.com/artist/${hit.id}", "Discogs"))
+                add(
+                    categorizeLink(
+                        url("https://www.discogs.com") { path("artist", hit.id.toString()) },
+                        "Discogs"
+                    )
+                )
                 if (urls != null) {
                     for (i in 0 until urls.length()) {
                         val u = urls.optString(i).takeIf { it.startsWith("http") } ?: continue
@@ -131,10 +139,13 @@ class DiscogsArtistImageSource(
     )
 
     private suspend fun searchArtists(name: String): List<ArtistSearchHit> {
-        val q = URLEncoder.encode(name.trim(), "UTF-8")
-        val url =
-            "https://api.discogs.com/database/search?q=$q&type=artist&per_page=10"
-        val body = get(url) ?: return emptyList()
+        val requestUrl = url("https://api.discogs.com") {
+            path("database", "search")
+            param("q", name.trim())
+            param("type", "artist")
+            param("per_page", 10)
+        }
+        val body = get(requestUrl) ?: return emptyList()
         return try {
             val results = JSONObject(body).optJSONArray("results") ?: return emptyList()
             val wanted = name.trim()
@@ -164,7 +175,7 @@ class DiscogsArtistImageSource(
     }
 
     private suspend fun artistDetail(id: Long): JSONObject? {
-        val body = get("https://api.discogs.com/artists/$id") ?: return null
+        val body = get(url("https://api.discogs.com") { path("artists", id.toString()) }) ?: return null
         return try {
             JSONObject(body)
         } catch (e: Exception) {

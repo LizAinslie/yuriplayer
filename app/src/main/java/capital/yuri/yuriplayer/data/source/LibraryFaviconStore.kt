@@ -3,6 +3,7 @@ package capital.yuri.yuriplayer.data.source
 import android.content.Context
 import android.util.Log
 import capital.yuri.yuriplayer.data.db.SourceInstanceEntity
+import capital.yuri.yuriplayer.http.url
 import io.ktor.client.HttpClient
 import io.ktor.client.request.get
 import io.ktor.client.statement.bodyAsBytes
@@ -25,11 +26,11 @@ class LibraryFaviconStore(
     suspend fun ensure(instance: SourceInstanceEntity): File? = withContext(Dispatchers.IO) {
         val existing = cachedFile(instance.id)
         if (existing != null) return@withContext existing
-        val base = instance.baseUrl?.trimEnd('/') ?: return@withContext null
+        val base = instance.baseUrl ?: return@withContext null
         val candidates = listOf(
-            "$base/web/favicon.ico",
-            "$base/favicon.ico",
-            "$base/favicon.png"
+            url(base) { path("web", "favicon.ico") },
+            url(base) { path("favicon.ico") },
+            url(base) { path("favicon.png") }
         )
         for (url in candidates) {
             val bytes = runCatching {
