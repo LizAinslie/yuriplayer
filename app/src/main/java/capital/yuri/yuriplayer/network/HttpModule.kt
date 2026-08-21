@@ -82,7 +82,7 @@ private object SkipBinaryBodyFilter : LogBodyFilter {
     ): BodyFilterResult {
         if (shouldOmitBody(url, contentType, contentLength)) {
             return BodyFilterResult.Skip(
-                reason = "binary ${contentType?.withoutParameters() ?: url.encodedPath}",
+                reason = binaryResponseLabel(contentType, contentLength),
                 byteSize = contentLength
             )
         }
@@ -147,6 +147,13 @@ internal fun redactSecrets(message: String): String {
     return out
 }
 
+internal fun binaryResponseLabel(contentType: ContentType?, contentLength: Long?): String {
+    val type = contentType?.withoutParameters()?.toString()
+    val size = contentLength?.takeIf { it > 0 }?.let { "$it bytes" }
+    val extra = listOfNotNull(type, size).joinToString(" ")
+    return if (extra.isEmpty()) "[Binary response]" else "[Binary response] $extra"
+}
+
 /** Last-resort: if a JPEG/PNG dump still made it into the log line, drop the payload. */
 internal fun omitBinaryDump(message: String): String {
     if (!looksLikeBinaryDump(message)) return message
@@ -155,7 +162,7 @@ internal fun omitBinaryDump(message: String): String {
         ?: message.indexOf("\nBODY START")
         ?: message.indexOf("\nBODY Content")
     val head = if (cut != null && cut > 0) message.substring(0, cut) else message.take(400)
-    return "$head\n[binary body omitted ${message.length} chars]"
+    return "$head\n[Binary response]"
 }
 
 private fun looksLikeBinaryDump(message: String): Boolean {
