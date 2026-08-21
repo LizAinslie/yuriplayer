@@ -64,47 +64,42 @@ fun DesktopScanMenu(session: DesktopSession) {
             )
             HorizontalDivider()
             DropdownMenuItem(
-                text = { Text(if (scanning) "Resume / continue scan" else "Scan libraries") },
+                text = { Text("Partial scan all") },
                 onClick = {
                     expanded = false
                     session.requestScan(force = false)
                 }
             )
             DropdownMenuItem(
-                text = { Text("Force re-scan all") },
+                text = { Text("Full scan all") },
                 onClick = {
                     expanded = false
                     session.requestScan(force = true)
                 }
             )
             DropdownMenuItem(
-                text = { Text("Refresh local library only") },
+                text = { Text("Full scan local only") },
                 onClick = {
                     expanded = false
                     session.requestScan(force = true, sourceId = DesktopSession.LOCAL_SCAN_ID)
                 }
             )
-            if (scanning || sources.any {
-                    it.status == DesktopScanStatus.RUNNING ||
-                        it.status == DesktopScanStatus.PAUSED
+            DropdownMenuItem(
+                text = { Text("Pause all") },
+                enabled = scanning,
+                onClick = {
+                    expanded = false
+                    session.pauseScan(null)
                 }
-            ) {
-                HorizontalDivider()
-                DropdownMenuItem(
-                    text = { Text("Pause all") },
-                    onClick = {
-                        expanded = false
-                        session.pauseScan(null)
-                    }
-                )
-                DropdownMenuItem(
-                    text = { Text("Stop all") },
-                    onClick = {
-                        expanded = false
-                        session.stopScan(null)
-                    }
-                )
-            }
+            )
+            DropdownMenuItem(
+                text = { Text("Stop all") },
+                enabled = scanning,
+                onClick = {
+                    expanded = false
+                    session.stopScan(null)
+                }
+            )
             if (sources.isNotEmpty()) {
                 HorizontalDivider()
                 sources.forEach { row ->
@@ -117,54 +112,42 @@ fun DesktopScanMenu(session: DesktopSession) {
                         DesktopScanStatus.ERROR -> row.detail.ifBlank { "error" }
                         DesktopScanStatus.IDLE -> "idle"
                     }
+                    val busy = row.status == DesktopScanStatus.RUNNING || scanning
                     DropdownMenuItem(
                         text = { Text("${row.name} · $statusLabel") },
                         onClick = { },
                         enabled = false
                     )
-                    when (row.status) {
-                        DesktopScanStatus.RUNNING -> {
-                            DropdownMenuItem(
-                                text = { Text("  Pause ${row.name}") },
-                                onClick = {
-                                    expanded = false
-                                    session.pauseScan(row.id)
-                                }
-                            )
-                            DropdownMenuItem(
-                                text = { Text("  Stop ${row.name}") },
-                                onClick = {
-                                    expanded = false
-                                    session.stopScan(row.id)
-                                }
-                            )
+                    DropdownMenuItem(
+                        text = { Text("  Partial scan") },
+                        onClick = {
+                            expanded = false
+                            session.requestScan(force = false, sourceId = row.id)
                         }
-                        DesktopScanStatus.PAUSED, DesktopScanStatus.STOPPED -> {
-                            DropdownMenuItem(
-                                text = { Text("  Resume ${row.name} only") },
-                                onClick = {
-                                    expanded = false
-                                    session.requestScan(force = false, sourceId = row.id)
-                                }
-                            )
+                    )
+                    DropdownMenuItem(
+                        text = { Text("  Full scan") },
+                        onClick = {
+                            expanded = false
+                            session.requestScan(force = true, sourceId = row.id)
                         }
-                        else -> {
-                            DropdownMenuItem(
-                                text = { Text("  Scan ${row.name} only") },
-                                onClick = {
-                                    expanded = false
-                                    session.requestScan(force = false, sourceId = row.id)
-                                }
-                            )
-                            DropdownMenuItem(
-                                text = { Text("  Force re-scan ${row.name}") },
-                                onClick = {
-                                    expanded = false
-                                    session.requestScan(force = true, sourceId = row.id)
-                                }
-                            )
+                    )
+                    DropdownMenuItem(
+                        text = { Text("  Pause") },
+                        enabled = busy,
+                        onClick = {
+                            expanded = false
+                            session.pauseScan(row.id)
                         }
-                    }
+                    )
+                    DropdownMenuItem(
+                        text = { Text("  Stop") },
+                        enabled = busy,
+                        onClick = {
+                            expanded = false
+                            session.stopScan(row.id)
+                        }
+                    )
                 }
             }
         }

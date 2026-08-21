@@ -15,6 +15,8 @@ import capital.yuri.yuriplayer.desktop.os.createOsMediaControls
 import capital.yuri.yuriplayer.desktop.player.VlcjPlaybackEngine
 import io.ktor.client.HttpClient
 import io.ktor.client.engine.cio.CIO
+import kotlinx.coroutines.async
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -34,6 +36,7 @@ import java.io.File
 import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicReference
 
 enum class DesktopScanStatus { IDLE, RUNNING, PAUSED, STOPPED, DONE, ERROR }
 
@@ -87,11 +90,13 @@ class DesktopSession {
 
     private var ticker: Job? = null
     private var scanJob: Job? = null
+    private var sourceJob: Job? = null
     private val scanGate = Mutex()
     private val stopAll = AtomicBoolean(false)
     private val pauseAll = AtomicBoolean(false)
     private val pausedIds = ConcurrentHashMap.newKeySet<String>()
     private val stoppedIds = ConcurrentHashMap.newKeySet<String>()
+    private val currentSourceId = AtomicReference<String?>(null)
 
     init {
         engine.addListener(object : capital.yuri.yuriplayer.core.player.PlaybackEngine.Listener {
@@ -128,6 +133,9 @@ class DesktopSession {
             player.current.collect { track ->
                 _coverPixels.value = CoverPixels.argb(track?.artworkUri, track?.path)
             }
+        }
+        scope.launch {
+            sources.remotes.collect { refreshScanSources() }
         }
         rescan()
     }
@@ -262,7 +270,7 @@ class DesktopSession {
     }
 
     fun indexFolder(path: String) {
-        requestScan(force = false, sourceId = LOCAL_SCAN_ID)
+        requestScan(force = true, sourceId = LOCAL_SCAN_ID)
     }
 
     fun indexRemote(account: RemoteAccount) {
@@ -281,17 +289,21 @@ class DesktopSession {
         if (force && sourceId == null) {
             pausedIds.clear()
             stoppedIds.clear()
+            sourceJob?.cancel()
             scanJob?.cancel()
         }
         stopAll.set(false)
-        if (sourceId == null) pauseAll.set(false)
+        pauseAll.set(false)
         if (sourceId != null) {
             pausedIds.remove(sourceId)
             stoppedIds.remove(sourceId)
+        } else if (force) {
+            pausedIds.clear()
+            stoppedIds.clear()
         }
         scanJob = scope.launch(Dispatchers.IO) {
             scanGate.withLock {
-                runScan(force, sourceId)
+                runScan(force = force, onlySourceId = sourceId)
             }
         }
     }
@@ -299,101 +311,166 @@ class DesktopSession {
     fun pauseScan(sourceId: String? = null) {
         if (sourceId == null) {
             pauseAll.set(true)
-            scanJob?.cancel()
+            sourceJob?.cancel()
             markRunning(DesktopScanStatus.PAUSED, "Paused")
-            _isScanning.value = false
             _scanMessage.value = "Paused"
         } else {
             pausedIds.add(sourceId)
             patchScan(sourceId, DesktopScanStatus.PAUSED, "Paused")
+            if (currentSourceId.get() == sourceId) sourceJob?.cancel()
         }
     }
 
     fun stopScan(sourceId: String? = null) {
         if (sourceId == null) {
             stopAll.set(true)
-            scanJob?.cancel()
+            sourceJob?.cancel()
             markRunning(DesktopScanStatus.STOPPED, "Stopped")
             _isScanning.value = false
             _scanMessage.value = "Stopped"
         } else {
             stoppedIds.add(sourceId)
             patchScan(sourceId, DesktopScanStatus.STOPPED, "Stopped")
+            if (currentSourceId.get() == sourceId) sourceJob?.cancel()
         }
     }
 
-    private suspend fun runScan(force: Boolean, sourceId: String?) {
+    private suspend fun runScan(force: Boolean, onlySourceId: String?) {
         _isScanning.value = true
         refreshScanSources()
         try {
-            val doLocal = sourceId == null || sourceId == LOCAL_SCAN_ID
-            val remotes = sources.remotes.value.filter { it.enabled }
-                .filter { sourceId == null || it.id == sourceId }
+            coroutineScope {
+                val doLocal = onlySourceId == null || onlySourceId == LOCAL_SCAN_ID
+                val remotes = sources.remotes.value.filter { it.enabled }
+                    .filter { onlySourceId == null || it.id == onlySourceId }
 
-            val localTracks = if (doLocal && !stopAll.get() && !pauseAll.get()) {
-                scanLocalLibrary()
-            } else {
-                emptyList()
-            }
-            if (stopAll.get() || pauseAll.get()) return
-
-            val remoteTracks = mutableListOf<Track>()
-            for (remote in remotes) {
-                if (stopAll.get()) {
-                    patchScan(remote.id, DesktopScanStatus.STOPPED, "Stopped")
-                    continue
-                }
-                if (pauseAll.get() || remote.id in pausedIds) {
-                    patchScan(remote.id, DesktopScanStatus.PAUSED, "Paused")
-                    continue
-                }
-                if (remote.id in stoppedIds) {
-                    patchScan(remote.id, DesktopScanStatus.STOPPED, "Stopped")
-                    continue
-                }
-                patchScan(remote.id, DesktopScanStatus.RUNNING, "Indexing…")
-                _scanMessage.value = "Indexing ${remote.name}…"
-                val result = fetchRemote(remote)
-                result
-                    .onSuccess { incoming ->
-                        remoteTracks += incoming
-                        patchScan(
-                            remote.id,
-                            DesktopScanStatus.DONE,
-                            "${incoming.size} tracks",
-                            incoming.size
-                        )
+                val localTracks = if (doLocal) {
+                    scanOneSource(LOCAL_SCAN_ID, "Local library", force, onlySourceId) {
+                        scanLocalLibrary()
                     }
-                    .onFailure {
-                        patchScan(
-                            remote.id,
-                            DesktopScanStatus.ERROR,
-                            it.message ?: "Failed"
-                        )
-                        _scanMessage.value = "${remote.name}: ${it.message}"
-                    }
-            }
+                } else {
+                    emptyList()
+                }
+                if (halted()) return@coroutineScope
 
-            if (sourceId == null) {
-                _tracks.value = (localTracks + remoteTracks).distinctBy { it.id }
-            } else if (sourceId == LOCAL_SCAN_ID) {
-                mergeTracks(localTracks)
-            } else {
-                mergeTracks(remoteTracks)
-            }
-            _scanMessage.value = when {
-                _tracks.value.isEmpty() ->
-                    "No tracks yet — add a folder or a server in Settings → Library"
-                else -> "${_tracks.value.size} tracks"
+                val remoteTracks = mutableListOf<Track>()
+                for (remote in remotes) {
+                    if (halted()) break
+                    val got = scanOneSource(remote.id, remote.name, force, onlySourceId) {
+                        fetchRemote(remote, partial = !force)
+                    }
+                    remoteTracks += got
+                }
+
+                if (stopAll.get() || pauseAll.get()) return@coroutineScope
+
+                if (onlySourceId == null && force) {
+                    _tracks.value = (localTracks + remoteTracks).distinctBy { it.id }
+                } else {
+                    mergeTracks(localTracks + remoteTracks)
+                }
+                _scanMessage.value = when {
+                    _tracks.value.isEmpty() ->
+                        "No tracks yet — add a folder or a server in Settings → Library"
+                    else -> "${_tracks.value.size} tracks"
+                }
             }
         } catch (e: CancellationException) {
-            if (!pauseAll.get() && !stopAll.get()) {
+            if (pauseAll.get()) {
+                markRunning(DesktopScanStatus.PAUSED, "Paused")
+                _scanMessage.value = "Paused"
+            } else {
                 markRunning(DesktopScanStatus.STOPPED, "Stopped")
                 _scanMessage.value = "Stopped"
             }
             throw e
         } finally {
+            currentSourceId.set(null)
+            sourceJob = null
+            if (!pauseAll.get()) {
+                // keep isScanning true only while a source child is in flight
+            }
             _isScanning.value = false
+        }
+    }
+
+    private fun halted(): Boolean = stopAll.get() || pauseAll.get()
+
+    private fun shouldScan(id: String, force: Boolean, onlySourceId: String?): Boolean {
+        if (id in stoppedIds && onlySourceId != id) return false
+        if (id in pausedIds && onlySourceId != id && !force) return false
+        val src = _scanSources.value.firstOrNull { it.id == id }
+        if (force || onlySourceId == id) return true
+        // Partial all: skip already-indexed sources.
+        if (src?.status == DesktopScanStatus.DONE && (src.count > 0)) return false
+        return true
+    }
+
+    private suspend fun scanOneSource(
+        id: String,
+        name: String,
+        force: Boolean,
+        onlySourceId: String?,
+        block: suspend () -> List<Track>
+    ): List<Track> {
+        if (!shouldScan(id, force, onlySourceId)) {
+            val src = _scanSources.value.firstOrNull { it.id == id }
+            if (src?.status == DesktopScanStatus.DONE) {
+                _scanMessage.value = "$name: indexed (${src.count}) — skip"
+            }
+            return emptyList()
+        }
+        if (id in stoppedIds) {
+            patchScan(id, DesktopScanStatus.STOPPED, "Stopped")
+            return emptyList()
+        }
+        if (id in pausedIds || pauseAll.get()) {
+            patchScan(id, DesktopScanStatus.PAUSED, "Paused")
+            return emptyList()
+        }
+        if (stopAll.get()) {
+            patchScan(id, DesktopScanStatus.STOPPED, "Stopped")
+            return emptyList()
+        }
+        currentSourceId.set(id)
+        patchScan(id, DesktopScanStatus.RUNNING, if (force) "Full scan…" else "Checking…")
+        _scanMessage.value = if (force) "Full scan · $name" else "Partial scan · $name"
+        return coroutineScope {
+            val child = async { block() }
+            sourceJob = child
+            try {
+                val incoming = child.await()
+                val prev = _scanSources.value.firstOrNull { it.id == id }?.count ?: 0
+                val nextCount = if (force) incoming.size else maxOf(prev, incoming.size)
+                patchScan(
+                    id,
+                    DesktopScanStatus.DONE,
+                    when {
+                        incoming.isEmpty() && !force -> "up to date"
+                        incoming.isEmpty() -> "0 tracks"
+                        else -> "${incoming.size} tracks"
+                    },
+                    nextCount
+                )
+                incoming
+            } catch (e: CancellationException) {
+                when {
+                    stopAll.get() || id in stoppedIds ->
+                        patchScan(id, DesktopScanStatus.STOPPED, "Stopped")
+                    pauseAll.get() || id in pausedIds ->
+                        patchScan(id, DesktopScanStatus.PAUSED, "Paused")
+                    else -> patchScan(id, DesktopScanStatus.STOPPED, "Stopped")
+                }
+                if (halted()) throw e
+                emptyList()
+            } catch (e: Exception) {
+                patchScan(id, DesktopScanStatus.ERROR, e.message ?: "Failed")
+                _scanMessage.value = "$name: ${e.message}"
+                emptyList()
+            } finally {
+                if (currentSourceId.get() == id) currentSourceId.set(null)
+                if (sourceJob === child) sourceJob = null
+            }
         }
     }
 
@@ -401,51 +478,60 @@ class DesktopSession {
         val defaultRoots = LocalLibraryScanner.defaultRoots()
         val extra = sources.extraFolders.value.map { File(it) }.filter { it.isDirectory }
         val roots = (defaultRoots + extra).distinctBy { it.absolutePath }
-        patchScan(
-            LOCAL_SCAN_ID,
-            DesktopScanStatus.RUNNING,
-            if (roots.isEmpty()) "No folders" else "Scanning ${roots.joinToString { it.name }}…"
-        )
         _scanMessage.value = if (roots.isEmpty()) {
             "No local folders yet"
         } else {
             "Scanning ${roots.joinToString { it.name }}…"
         }
-        val local = if (roots.isEmpty()) emptyList() else LocalLibraryScanner.scan(roots)
-        patchScan(
-            LOCAL_SCAN_ID,
-            DesktopScanStatus.DONE,
-            "${local.size} tracks",
-            local.size
-        )
-        return local
+        return if (roots.isEmpty()) emptyList() else LocalLibraryScanner.scan(roots)
     }
 
-    private suspend fun fetchRemote(remote: RemoteAccount): Result<List<Track>> =
-        when (remote.kind) {
+    private suspend fun fetchRemote(remote: RemoteAccount, partial: Boolean): List<Track> {
+        val known = _scanSources.value.firstOrNull { it.id == remote.id }?.count ?: 0
+        val result = when (remote.kind) {
             SourceKind.JELLYFIN -> {
                 val authed = if (remote.accessToken.isNullOrBlank()) {
-                    jellyfin.authenticate(remote).getOrElse {
-                        return Result.failure(it)
-                    }.also { sources.upsertRemote(it) }
+                    jellyfin.authenticate(remote).getOrElse { throw it }
+                        .also { sources.upsertRemote(it) }
                 } else remote
-                jellyfin.listTracks(authed)
+                if (partial && known > 0) {
+                    val total = jellyfin.audioCount(authed).getOrElse { -1 }
+                    if (total in 0..known) return emptyList()
+                    val cap = if (total > known) (total - known + 64).coerceIn(1, 2_000) else 256
+                    jellyfin.listTracks(
+                        authed,
+                        maxItems = cap,
+                        sortBy = "DateCreated",
+                        sortOrder = "Descending"
+                    )
+                } else {
+                    jellyfin.listTracks(authed)
+                }
             }
-            SourceKind.SUBSONIC -> subsonic.listTracks(remote)
+            SourceKind.SUBSONIC -> {
+                if (partial && known > 0) subsonic.listNewestTracks(remote)
+                else subsonic.listTracks(remote)
+            }
             SourceKind.LOCAL -> Result.success(emptyList())
         }
+        return result.getOrElse { throw it }
+    }
 
     private fun refreshScanSources() {
-        val local = _scanSources.value.firstOrNull { it.id == LOCAL_SCAN_ID }
+        val existing = _scanSources.value.associateBy { it.id }
+        val local = existing[LOCAL_SCAN_ID]
             ?: DesktopScanSource(LOCAL_SCAN_ID, "Local library", DesktopScanStatus.IDLE)
         val remotes = sources.remotes.value.filter { it.enabled }.map { remote ->
-            _scanSources.value.firstOrNull { it.id == remote.id }
-                ?: DesktopScanSource(remote.id, remote.name, DesktopScanStatus.IDLE)
+            val prev = existing[remote.id]
+            DesktopScanSource(
+                id = remote.id,
+                name = remote.name,
+                status = prev?.status ?: DesktopScanStatus.IDLE,
+                detail = prev?.detail.orEmpty(),
+                count = prev?.count ?: 0
+            )
         }
-        _scanSources.value = listOf(local.copy(name = "Local library")) + remotes.map { src ->
-            val name = sources.remotes.value.firstOrNull { it.id == src.id }?.name ?: src.name
-            src.copy(name = name)
-        }
+        _scanSources.value = listOf(local.copy(name = "Local library")) + remotes
     }
 
     private fun patchScan(

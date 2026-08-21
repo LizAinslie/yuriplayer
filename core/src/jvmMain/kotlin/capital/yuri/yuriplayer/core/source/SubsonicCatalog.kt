@@ -8,6 +8,7 @@ import io.ktor.client.HttpClient
 import io.ktor.client.request.get
 import io.ktor.client.statement.bodyAsText
 import io.ktor.http.isSuccess
+import kotlinx.coroutines.ensureActive
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
@@ -45,9 +46,11 @@ class SubsonicCatalog(
             var offset = 0
             val pageSize = 100
             while (out.size < maxSongs) {
-                val page = listAlbums(session, offset, pageSize)
+                kotlinx.coroutines.currentCoroutineContext().ensureActive()
+                val page = listAlbums(session, offset, pageSize, type = "alphabeticalByName")
                 if (page.isEmpty()) break
                 for (album in page) {
+                    kotlinx.coroutines.currentCoroutineContext().ensureActive()
                     val id = album.id ?: continue
                     out += songsForAlbum(session, id, album)
                     if (out.size >= maxSongs) break
@@ -58,9 +61,27 @@ class SubsonicCatalog(
             out
         }
 
-    private suspend fun listAlbums(session: Session, offset: Int, size: Int): List<SubsonicAlbum> {
+    suspend fun listNewestTracks(account: RemoteAccount, maxAlbums: Int = 40): Result<List<Track>> =
+        runCatching {
+            val session = sessionOf(account)
+            val albums = listAlbums(session, offset = 0, size = maxAlbums, type = "newest")
+            val out = ArrayList<Track>(albums.size * 12)
+            for (album in albums) {
+                kotlinx.coroutines.currentCoroutineContext().ensureActive()
+                val id = album.id ?: continue
+                out += songsForAlbum(session, id, album)
+            }
+            out
+        }
+
+    private suspend fun listAlbums(
+        session: Session,
+        offset: Int,
+        size: Int,
+        type: String = "alphabeticalByName"
+    ): List<SubsonicAlbum> {
         val body = apiGet(session, "getAlbumList2") {
-            param("type", "alphabeticalByName")
+            param("type", type)
             param("size", size)
             param("offset", offset)
         }

@@ -12,6 +12,7 @@ import io.ktor.client.statement.bodyAsText
 import io.ktor.http.ContentType
 import io.ktor.http.content.TextContent
 import io.ktor.http.isSuccess
+import kotlinx.coroutines.ensureActive
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
@@ -50,7 +51,30 @@ class JellyfinCatalog(
         )
     }
 
-    suspend fun listTracks(account: RemoteAccount, maxItems: Int = 50_000): Result<List<Track>> =
+    suspend fun audioCount(account: RemoteAccount): Result<Int> = runCatching {
+        val token = account.accessToken ?: error("Not signed in")
+        val userId = account.userId ?: error("Not signed in")
+        val root = normalizeBaseUrl(account.baseUrl)
+        val requestUrl = url(root) {
+            path("Users", userId, "Items")
+            param("IncludeItemTypes", "Audio")
+            param("Recursive", "true")
+            param("Limit", 0)
+        }
+        val response = http.get(requestUrl) {
+            header("X-Emby-Authorization", authHeader(token))
+            header("X-Emby-Token", token)
+        }
+        if (!response.status.isSuccess()) error("Items HTTP ${response.status.value}")
+        json.decodeFromString<ItemsResponse>(response.bodyAsText()).total ?: 0
+    }
+
+    suspend fun listTracks(
+        account: RemoteAccount,
+        maxItems: Int = 50_000,
+        sortBy: String = "Album,SortName",
+        sortOrder: String = "Ascending"
+    ): Result<List<Track>> =
         runCatching {
             val token = account.accessToken ?: error("Not signed in")
             val userId = account.userId ?: error("Not signed in")
@@ -59,6 +83,7 @@ class JellyfinCatalog(
             var start = 0
             val pageSize = 400
             while (out.size < maxItems) {
+                kotlinx.coroutines.currentCoroutineContext().ensureActive()
                 val take = minOf(pageSize, maxItems - out.size)
                 val requestUrl = url(root) {
                     path("Users", userId, "Items")
@@ -69,7 +94,8 @@ class JellyfinCatalog(
                     param("ImageTypeLimit", "1")
                     param("StartIndex", start)
                     param("Limit", take)
-                    param("SortBy", "Album,SortName")
+                    param("SortBy", sortBy)
+                    param("SortOrder", sortOrder)
                 }
                 val response = http.get(requestUrl) {
                     header("X-Emby-Authorization", authHeader(token))
