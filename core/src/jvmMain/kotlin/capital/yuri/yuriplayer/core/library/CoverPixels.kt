@@ -21,12 +21,18 @@ object CoverPixels {
     private fun load(uri: String?): BufferedImage? {
         if (uri.isNullOrBlank()) return null
         return try {
-            val file = when {
-                uri.startsWith("file:") -> File(URI(uri))
-                else -> File(uri)
+            when {
+                uri.startsWith("http://", true) || uri.startsWith("https://", true) ->
+                    ImageIO.read(URI(uri).toURL())
+                uri.startsWith("file:") -> {
+                    val file = File(URI(uri))
+                    if (!file.isFile) null else ImageIO.read(file)
+                }
+                else -> {
+                    val file = File(uri)
+                    if (!file.isFile) null else ImageIO.read(file)
+                }
             }
-            if (!file.isFile) return null
-            ImageIO.read(file)
         } catch (_: Exception) {
             null
         }

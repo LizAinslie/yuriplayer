@@ -25,6 +25,9 @@ interface PlaybackEngine {
     fun getPositionMs(): Long
     fun getDurationMs(): Long
 
+    fun setVolume(percent: Int) {}
+    fun getVolume(): Int = 100
+
     fun setNext(item: PlaybackMedia?) {}
     fun hasPreparedNext(): Boolean = false
     fun playPreparedNext(): Boolean = false

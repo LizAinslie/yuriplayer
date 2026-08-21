@@ -41,6 +41,9 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import capital.yuri.yuriplayer.BuildConfig
+import capital.yuri.yuriplayer.components.theme.AccentPicker
+import capital.yuri.yuriplayer.components.theme.ThemeModePicker
+import capital.yuri.yuriplayer.data.HomeRowId
 import capital.yuri.yuriplayer.data.LibraryIndex
 import capital.yuri.yuriplayer.data.LibraryScanMode
 import capital.yuri.yuriplayer.data.LibrarySettings
@@ -62,6 +65,7 @@ private sealed class SettingsPage {
     data object StreamingQuality : SettingsPage()
     data object PlaybackHistory : SettingsPage()
     data object Appearance : SettingsPage()
+    data object HomeLayout : SettingsPage()
     data object Sync : SettingsPage()
     data class Organize(
         val rootKey: String,
@@ -103,6 +107,7 @@ fun SettingsScreen(onBack: () -> Unit) {
             onOpenStreamingQuality = { push(SettingsPage.StreamingQuality) },
             onOpenPlaybackHistory = { push(SettingsPage.PlaybackHistory) },
             onOpenAppearance = { push(SettingsPage.Appearance) },
+            onOpenHomeLayout = { push(SettingsPage.HomeLayout) },
             onOpenSync = { push(SettingsPage.Sync) },
             onOpenLicenses = { push(SettingsPage.OpenSourceLicenses) },
             onOpenVersion = { push(SettingsPage.VersionInfo) }
@@ -123,6 +128,7 @@ fun SettingsScreen(onBack: () -> Unit) {
         SettingsPage.StreamingQuality -> StreamingQualitySettingsScreen(onBack = { pop() })
         SettingsPage.PlaybackHistory -> PlaybackHistorySettingsScreen(onBack = { pop() })
         SettingsPage.Appearance -> AppearanceSettingsScreen(onBack = { pop() })
+        SettingsPage.HomeLayout -> HomeLayoutSettingsScreen(onBack = { pop() })
         SettingsPage.Sync -> SyncSettingsScreen(onBack = { pop() })
         is SettingsPage.Organize -> OrganizeLayoutScreen(
             rootKey = p.rootKey,
@@ -148,6 +154,7 @@ private fun SettingsHubScreen(
     onOpenStreamingQuality: () -> Unit,
     onOpenPlaybackHistory: () -> Unit,
     onOpenAppearance: () -> Unit,
+    onOpenHomeLayout: () -> Unit,
     onOpenSync: () -> Unit,
     onOpenLicenses: () -> Unit,
     onOpenVersion: () -> Unit
@@ -294,9 +301,15 @@ private fun SettingsHubScreen(
         SettingsGroup {
             SettingsNavRow(
                 title = "Appearance",
-                subtitle = "Cover · ${coverVariant.displayName}  ·  Header · ${bannerVariant.displayName}",
+                subtitle = "Theme, accent, cover colors",
                 icon = Icons.Default.ColorLens,
                 onClick = onOpenAppearance
+            )
+            SettingsNavRow(
+                title = "Home rows",
+                subtitle = "Recents, random albums, and more",
+                icon = Icons.Default.LibraryMusic,
+                onClick = onOpenHomeLayout
             )
             SettingsNavRow(
                 title = "Library browser",
@@ -495,6 +508,8 @@ private fun AppearanceSettingsScreen(onBack: () -> Unit) {
     var coverVariant by remember { mutableStateOf(settings.getCoverColorVariant()) }
     var bannerVariant by remember { mutableStateOf(settings.getBannerColorVariant()) }
     var systemColors by remember { mutableStateOf(settings.useSystemColors()) }
+    var themeMode by remember { mutableStateOf(settings.getThemeMode()) }
+    var accentId by remember { mutableStateOf(settings.getAccentId()) }
 
     Column(
         modifier = Modifier
@@ -505,15 +520,33 @@ private fun AppearanceSettingsScreen(onBack: () -> Unit) {
         SettingsTopBar(title = "Appearance", onBack = onBack)
 
         TextNote(
-            text = "On Android 12 and newer, the app chrome can follow your system " +
-                "palette. Playing artwork still tints now playing."
+            text = "Light, dark, or follow the system. Pick an accent for the Material 3 " +
+                "primary. On Android 12+, system colors use your wallpaper palette instead."
         )
 
-        SettingsSectionTitle("System")
+        SettingsSectionTitle("Theme")
         SettingsGroup {
+            androidx.compose.foundation.layout.Box(Modifier.padding(16.dp)) {
+                ThemeModePicker(
+                    mode = themeMode,
+                    onMode = {
+                        settings.setThemeMode(it)
+                        themeMode = it
+                    }
+                )
+            }
+            androidx.compose.foundation.layout.Box(Modifier.padding(16.dp)) {
+                AccentPicker(
+                    selectedId = accentId,
+                    onSelect = {
+                        settings.setAccentId(it)
+                        accentId = it
+                    }
+                )
+            }
             SettingsSwitchRow(
                 title = "Use system colors",
-                subtitle = "Material You on devices that support it. Desktop stays Yuri purple.",
+                subtitle = "Material You on Android 12 and newer. Accent still applies when this is off.",
                 checked = systemColors,
                 onCheckedChange = {
                     settings.setUseSystemColors(it)
@@ -551,7 +584,35 @@ private fun AppearanceSettingsScreen(onBack: () -> Unit) {
                 )
             }
         }
+        Spacer(modifier = Modifier.height(48.dp))
+    }
+}
 
+@Composable
+private fun HomeLayoutSettingsScreen(onBack: () -> Unit) {
+    val settings: LibrarySettings = koinInject()
+    var enabled by remember { mutableStateOf(settings.enabledHomeRows()) }
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .statusBarsPadding()
+            .verticalScroll(rememberScrollState())
+    ) {
+        SettingsTopBar(title = "Home rows", onBack = onBack)
+        TextNote("Pins stay at the top. Turn rows on or off below.")
+        SettingsGroup {
+            HomeRowId.entries.forEach { row ->
+                SettingsSwitchRow(
+                    title = row.label,
+                    subtitle = row.subtitle,
+                    checked = row in enabled,
+                    onCheckedChange = { on ->
+                        settings.setHomeRowEnabled(row, on)
+                        enabled = settings.enabledHomeRows()
+                    }
+                )
+            }
+        }
         Spacer(modifier = Modifier.height(48.dp))
     }
 }

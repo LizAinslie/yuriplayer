@@ -1,11 +1,15 @@
 package capital.yuri.yuriplayer.desktop
 
+import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Window
 import androidx.compose.ui.window.application
 import androidx.compose.ui.window.rememberWindowState
+import capital.yuri.yuriplayer.components.theme.isDark
 import capital.yuri.yuriplayer.core.platform.appDirectories
 import capital.yuri.yuriplayer.desktop.player.LibVlcBootstrap
 import capital.yuri.yuriplayer.desktop.ui.YuriDesktopApp
@@ -47,6 +51,10 @@ fun main() {
                 onDispose { session.release() }
             }
             YuriDesktopApp(session)
+            val choice by session.theme.choice.collectAsState()
+            val dark = choice.isDark(isSystemInDarkTheme())
+            window.background = if (dark) java.awt.Color(0x12, 0x10, 0x18)
+            else java.awt.Color(0xF6, 0xF0, 0xFA)
         }
     }
 }

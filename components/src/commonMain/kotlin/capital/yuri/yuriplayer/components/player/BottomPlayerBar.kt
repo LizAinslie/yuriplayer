@@ -1,18 +1,29 @@
 package capital.yuri.yuriplayer.components.player
 
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.QueueMusic
+import androidx.compose.material.icons.filled.Repeat
+import androidx.compose.material.icons.filled.RepeatOne
+import androidx.compose.material.icons.filled.Shuffle
 import androidx.compose.material.icons.filled.SkipNext
 import androidx.compose.material.icons.filled.SkipPrevious
+import androidx.compose.material.icons.filled.VolumeUp
+import androidx.compose.material.icons.outlined.FavoriteBorder
 import androidx.compose.material3.FilledIconButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -32,6 +43,7 @@ import androidx.compose.ui.unit.dp
 import capital.yuri.yuriplayer.components.art.CoverArt
 import capital.yuri.yuriplayer.components.list.formatTime
 import capital.yuri.yuriplayer.components.model.CoverRef
+import capital.yuri.yuriplayer.core.player.RepeatMode
 
 @Composable
 fun BottomPlayerBar(
@@ -44,40 +56,45 @@ fun BottomPlayerBar(
     onNext: () -> Unit,
     onSeek: (Long) -> Unit,
     modifier: Modifier = Modifier,
-    accent: Color = MaterialTheme.colorScheme.primary
+    accent: Color = MaterialTheme.colorScheme.primary,
+    shuffle: Boolean = false,
+    repeat: RepeatMode = RepeatMode.OFF,
+    onToggleShuffle: () -> Unit = {},
+    onCycleRepeat: () -> Unit = {},
+    volume: Float = 1f,
+    onVolume: (Float) -> Unit = {},
+    liked: Boolean = false,
+    onToggleLike: () -> Unit = {},
+    queueVisible: Boolean = true,
+    onToggleQueue: () -> Unit = {}
 ) {
+    val onAccent = MaterialTheme.colorScheme.onPrimary
+    val muted = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.55f)
     Surface(
         modifier = modifier.fillMaxWidth(),
         color = MaterialTheme.colorScheme.surface,
         contentColor = MaterialTheme.colorScheme.onSurface,
-        shape = MaterialTheme.shapes.large,
-        tonalElevation = 0.dp
+        shape = MaterialTheme.shapes.large
     ) {
-        Column(Modifier.padding(horizontal = 16.dp, vertical = 10.dp)) {
-            if (durationMs > 0) {
-                Slider(
-                    value = (positionMs.toFloat() / durationMs).coerceIn(0f, 1f),
-                    onValueChange = { onSeek((it * durationMs).toLong()) },
-                    modifier = Modifier.fillMaxWidth(),
-                    colors = SliderDefaults.colors(
-                        thumbColor = accent,
-                        activeTrackColor = accent,
-                        inactiveTrackColor = accent.copy(alpha = 0.24f)
-                    )
-                )
-            }
+        Box(
+            Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 12.dp, vertical = 8.dp)
+                .height(72.dp)
+        ) {
             Row(
-                Modifier.fillMaxWidth(),
+                Modifier.align(Alignment.CenterStart).widthIn(max = 360.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                CoverArt(model = track?.artworkUri, size = 56.dp, corner = 12.dp)
+                CoverArt(model = track?.artworkUri, size = 56.dp, corner = 6.dp)
                 Spacer(Modifier.width(12.dp))
-                Column(Modifier.weight(1f)) {
+                Column(Modifier.weight(1f, fill = false).widthIn(max = 220.dp)) {
                     Text(
                         track?.title ?: "Nothing playing",
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
                         fontWeight = FontWeight.SemiBold,
+                        style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.onSurface
                     )
                     Text(
@@ -85,38 +102,125 @@ fun BottomPlayerBar(
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
                         style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.55f)
+                        color = muted
                     )
                 }
-                IconButton(onClick = onPrev) {
-                    Icon(Icons.Default.SkipPrevious, contentDescription = "Previous", tint = MaterialTheme.colorScheme.onSurface)
+                if (track != null) {
+                    IconButton(onClick = onToggleLike) {
+                        Icon(
+                            if (liked) Icons.Filled.Favorite else Icons.Outlined.FavoriteBorder,
+                            contentDescription = if (liked) "Unlike" else "Like",
+                            tint = if (liked) accent else muted
+                        )
+                    }
                 }
-                FilledIconButton(
-                    onClick = onToggle,
-                    modifier = Modifier.size(56.dp),
-                    shape = CircleShape,
-                    colors = IconButtonDefaults.filledIconButtonColors(
-                        containerColor = accent,
-                        contentColor = MaterialTheme.colorScheme.onPrimary
-                    )
+            }
+            Column(
+                Modifier
+                    .align(Alignment.Center)
+                    .fillMaxWidth(0.42f),
+                horizontalAlignment = Alignment.CenterHorizontally
+            ) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(2.dp)
                 ) {
-                    Icon(
-                        if (playing) Icons.Default.Pause else Icons.Default.PlayArrow,
-                        contentDescription = if (playing) "Pause" else "Play",
-                        modifier = Modifier.size(28.dp)
-                    )
+                    IconButton(onClick = onToggleShuffle, modifier = Modifier.size(36.dp)) {
+                        Icon(
+                            Icons.Default.Shuffle,
+                            contentDescription = "Shuffle",
+                            modifier = Modifier.size(18.dp),
+                            tint = if (shuffle) accent else muted
+                        )
+                    }
+                    IconButton(onClick = onPrev, modifier = Modifier.size(36.dp)) {
+                        Icon(
+                            Icons.Default.SkipPrevious,
+                            contentDescription = "Previous",
+                            modifier = Modifier.size(22.dp)
+                        )
+                    }
+                    FilledIconButton(
+                        onClick = onToggle,
+                        modifier = Modifier.size(36.dp),
+                        shape = CircleShape,
+                        colors = IconButtonDefaults.filledIconButtonColors(
+                            containerColor = MaterialTheme.colorScheme.onSurface,
+                            contentColor = MaterialTheme.colorScheme.surface
+                        )
+                    ) {
+                        Icon(
+                            if (playing) Icons.Default.Pause else Icons.Default.PlayArrow,
+                            contentDescription = if (playing) "Pause" else "Play",
+                            modifier = Modifier.size(20.dp)
+                        )
+                    }
+                    IconButton(onClick = onNext, modifier = Modifier.size(36.dp)) {
+                        Icon(
+                            Icons.Default.SkipNext,
+                            contentDescription = "Next",
+                            modifier = Modifier.size(22.dp)
+                        )
+                    }
+                    IconButton(onClick = onCycleRepeat, modifier = Modifier.size(36.dp)) {
+                        Icon(
+                            if (repeat == RepeatMode.ONE) Icons.Default.RepeatOne else Icons.Default.Repeat,
+                            contentDescription = "Repeat",
+                            modifier = Modifier.size(18.dp),
+                            tint = if (repeat != RepeatMode.OFF) accent else muted
+                        )
+                    }
                 }
-                IconButton(onClick = onNext) {
-                    Icon(Icons.Default.SkipNext, contentDescription = "Next", tint = MaterialTheme.colorScheme.onSurface)
-                }
-                if (durationMs > 0) {
-                    Spacer(Modifier.width(8.dp))
+                Row(
+                    Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
                     Text(
-                        "${formatTime(positionMs)} / ${formatTime(durationMs)}",
+                        formatTime(positionMs),
                         style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f)
+                        color = muted
+                    )
+                    Slider(
+                        value = if (durationMs > 0) {
+                            (positionMs.toFloat() / durationMs).coerceIn(0f, 1f)
+                        } else 0f,
+                        onValueChange = { if (durationMs > 0) onSeek((it * durationMs).toLong()) },
+                        modifier = Modifier.weight(1f).height(20.dp).padding(horizontal = 8.dp),
+                        colors = SliderDefaults.colors(
+                            thumbColor = MaterialTheme.colorScheme.onSurface,
+                            activeTrackColor = MaterialTheme.colorScheme.onSurface,
+                            inactiveTrackColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.22f)
+                        )
+                    )
+                    Text(
+                        formatTime(durationMs),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = muted
                     )
                 }
+            }
+            Row(
+                Modifier.align(Alignment.CenterEnd),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                IconButton(onClick = onToggleQueue) {
+                    Icon(
+                        Icons.Default.QueueMusic,
+                        contentDescription = "Queue",
+                        tint = if (queueVisible) accent else muted
+                    )
+                }
+                Icon(Icons.Default.VolumeUp, contentDescription = "Volume", tint = muted)
+                Slider(
+                    value = volume,
+                    onValueChange = onVolume,
+                    modifier = Modifier.width(100.dp).height(20.dp),
+                    colors = SliderDefaults.colors(
+                        thumbColor = MaterialTheme.colorScheme.onSurface,
+                        activeTrackColor = MaterialTheme.colorScheme.onSurface,
+                        inactiveTrackColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.22f)
+                    )
+                )
             }
         }
     }

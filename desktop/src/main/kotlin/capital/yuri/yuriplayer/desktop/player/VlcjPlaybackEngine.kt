@@ -153,6 +153,10 @@ class VlcjPlaybackEngine : PlaybackEngine {
 
     override fun getDurationMs(): Long = durationMs.get()
 
+    override fun setVolume(percent: Int) {
+        onVlc { player?.audio()?.setVolume(percent.coerceIn(0, 100)) }
+    }
+
     override fun setNext(item: PlaybackMedia?) {
         preparedNext.set(item)
     }

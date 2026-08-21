@@ -24,23 +24,32 @@ import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.WindowInsetsSides
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.only
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.systemBars
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Favorite
+import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.outlined.FavoriteBorder
+import androidx.compose.material.icons.outlined.Home
+import androidx.compose.material.icons.outlined.Search
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.NavigationBar
+import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -57,7 +66,6 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.dp
@@ -73,6 +81,7 @@ import capital.yuri.yuriplayer.activities.ui.EditAlbumMetadataScreen
 import capital.yuri.yuriplayer.activities.ui.EditSongMetadataScreen
 import capital.yuri.yuriplayer.activities.ui.ExploreScanMenu
 import capital.yuri.yuriplayer.activities.ui.ExploreScreen
+import capital.yuri.yuriplayer.activities.ui.HomeFeedScreen
 import capital.yuri.yuriplayer.activities.ui.LocalAlbumNav
 import capital.yuri.yuriplayer.activities.ui.LocalArtistNav
 import capital.yuri.yuriplayer.activities.ui.LocalPlaylistNav
@@ -298,9 +307,10 @@ class MainActivity : ComponentActivity() {
     }
 }
 
-private enum class TopTab(val label: String, val icon: ImageVector) {
-    MyStuff("My Stuff", Icons.Default.Favorite),
-    Explore("Explore", Icons.Default.Search)
+private enum class TopTab(val label: String) {
+    Home("Home"),
+    MyStuff("My Stuff"),
+    Search("Search")
 }
 
 private sealed class DetailRoute {
@@ -390,7 +400,7 @@ fun YuriApp(
         )
     }
 
-    var topTab by remember { mutableStateOf(TopTab.MyStuff) }
+    var topTab by remember { mutableStateOf(TopTab.Home) }
     var playerExpanded by remember { mutableStateOf(false) }
     var detailStack by remember { mutableStateOf<List<DetailRoute>>(emptyList()) }
     var npPlaylistSong by remember { mutableStateOf<Song?>(null) }
@@ -658,35 +668,9 @@ fun YuriApp(
                 topBar = {
                     if (detail == null) {
                         TopAppBar(
-                            title = {
-                                Row(
-                                    horizontalArrangement = Arrangement.spacedBy(4.dp),
-                                    verticalAlignment = androidx.compose.ui.Alignment.CenterVertically
-                                ) {
-                                    TopTab.entries.forEach { tab ->
-                                        val selected = topTab == tab
-                                        val tag = when (tab) {
-                                            TopTab.MyStuff -> TestTags.TAB_MY_STUFF
-                                            TopTab.Explore -> TestTags.TAB_EXPLORE
-                                        }
-                                        IconButton(
-                                            onClick = { topTab = tab },
-                                            modifier = Modifier.testTag(tag)
-                                        ) {
-                                            Icon(
-                                                imageVector = tab.icon,
-                                                contentDescription = tab.label,
-                                                tint = if (selected) MaterialTheme.colorScheme.primary
-                                                else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.45f)
-                                            )
-                                        }
-                                    }
-                                }
-                            },
+                            title = { Text(topTab.label) },
                             actions = {
-                                if (topTab == TopTab.Explore) {
-                                    // TravelExplore dropdown: scan / pause / stop per source.
-                                    // Never auto-starts on tab enter — only explicit menu actions.
+                                if (topTab == TopTab.Search) {
                                     ExploreScanMenu()
                                 }
                                 IconButton(
@@ -700,14 +684,60 @@ fun YuriApp(
                     }
                 },
                 bottomBar = {
-                    MiniPlayerBar(
-                        song = currentSong,
-                        playing = playing,
-                        positionMs = positionMs,
-                        durationMs = durationMs,
-                        onToggle = { player.togglePlayPause() },
-                        onExpand = { playerExpanded = true }
-                    )
+                    Column(
+                        Modifier
+                            .fillMaxWidth()
+                            .then(if (detail != null) Modifier.navigationBarsPadding() else Modifier)
+                    ) {
+                        MiniPlayerBar(
+                            song = currentSong,
+                            playing = playing,
+                            positionMs = positionMs,
+                            durationMs = durationMs,
+                            onToggle = { player.togglePlayPause() },
+                            onExpand = { playerExpanded = true }
+                        )
+                        if (detail == null) {
+                            NavigationBar {
+                                NavigationBarItem(
+                                    selected = topTab == TopTab.Home,
+                                    onClick = { topTab = TopTab.Home },
+                                    modifier = Modifier.testTag(TestTags.TAB_HOME),
+                                    icon = {
+                                        Icon(
+                                            if (topTab == TopTab.Home) Icons.Filled.Home else Icons.Outlined.Home,
+                                            contentDescription = "Home"
+                                        )
+                                    },
+                                    label = { Text("Home") }
+                                )
+                                NavigationBarItem(
+                                    selected = topTab == TopTab.MyStuff,
+                                    onClick = { topTab = TopTab.MyStuff },
+                                    modifier = Modifier.testTag(TestTags.TAB_MY_STUFF),
+                                    icon = {
+                                        Icon(
+                                            if (topTab == TopTab.MyStuff) Icons.Filled.Favorite else Icons.Outlined.FavoriteBorder,
+                                            contentDescription = "My Stuff"
+                                        )
+                                    },
+                                    label = { Text("My Stuff") }
+                                )
+                                NavigationBarItem(
+                                    selected = topTab == TopTab.Search,
+                                    onClick = { topTab = TopTab.Search },
+                                    modifier = Modifier.testTag(TestTags.TAB_SEARCH),
+                                    icon = {
+                                        Icon(
+                                            if (topTab == TopTab.Search) Icons.Filled.Search else Icons.Outlined.Search,
+                                            contentDescription = "Search"
+                                        )
+                                    },
+                                    label = { Text("Search") }
+                                )
+                            }
+                        }
+                    }
                 }
             ) { innerPadding ->
                 val contentPadding = if (edgeToEdgeDetail) {
@@ -906,6 +936,16 @@ fun YuriApp(
                         }
                         is DetailRoute.Settings -> SettingsScreen(onBack = { popDetail() })
                         null -> when (topTab) {
+                            TopTab.Home -> HomeFeedScreen(
+                                library = library,
+                                onPlay = { songs, index -> player.playSource(songs, index) },
+                                onOpenAlbum = { openAlbumResolved(it) },
+                                onOpenArtist = { openArtistResolved(it) },
+                                onOpenPlaylist = { pl: Playlist ->
+                                    pushDetail(DetailRoute.Playlist(pl.id))
+                                },
+                                onOpenSongAlbum = { openAlbumForSong(it) }
+                            )
                             TopTab.MyStuff -> MyStuffScreen(
                                 library = library,
                                 nowPlaying = currentSong,
@@ -919,7 +959,7 @@ fun YuriApp(
                                 },
                                 onOpenSongAlbum = { openAlbumForSong(it) }
                             )
-                            TopTab.Explore -> ExploreScreen(
+                            TopTab.Search -> ExploreScreen(
                                 nowPlaying = currentSong,
                                 isPlaybackActive = playing,
                                 onPlay = { songs, index -> player.playSource(songs, index) },

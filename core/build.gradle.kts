@@ -23,12 +23,15 @@ kotlin {
         commonMain.dependencies {
             implementation(libs.kotlinx.coroutines.core)
             implementation(libs.kotlinx.serialization.json)
+            implementation(libs.ktor.client.core)
         }
         androidMain.dependencies {
             implementation(libs.kotlinx.coroutines.android)
+            implementation(libs.ktor.client.cio)
         }
         jvmMain.dependencies {
             implementation(libs.jaudiotagger)
+            implementation(libs.ktor.client.cio)
         }
         jvmTest.dependencies {
             implementation(kotlin("test"))

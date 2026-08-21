@@ -6,8 +6,15 @@ import capital.yuri.yuriplayer.core.library.Track
 import capital.yuri.yuriplayer.core.os.OsMediaControls
 import capital.yuri.yuriplayer.core.platform.appDirectories
 import capital.yuri.yuriplayer.core.player.PlayerSession
+import capital.yuri.yuriplayer.core.source.JellyfinCatalog
+import capital.yuri.yuriplayer.core.source.LibrarySourceStore
+import capital.yuri.yuriplayer.core.source.RemoteAccount
+import capital.yuri.yuriplayer.core.source.SourceKind
+import capital.yuri.yuriplayer.core.source.SubsonicCatalog
 import capital.yuri.yuriplayer.desktop.os.createOsMediaControls
 import capital.yuri.yuriplayer.desktop.player.VlcjPlaybackEngine
+import io.ktor.client.HttpClient
+import io.ktor.client.engine.cio.CIO
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -20,12 +27,14 @@ import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.swing.Swing
 import java.io.File
+import java.util.UUID
 
 class DesktopSession {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Swing)
     private val engine = VlcjPlaybackEngine()
     val player = PlayerSession(engine)
     private val media: OsMediaControls = createOsMediaControls()
+    private val http = HttpClient(CIO)
 
     private val _engineMessage = MutableStateFlow(engine.nativeError)
     val engineMessage: StateFlow<String?> = _engineMessage.asStateFlow()
@@ -46,6 +55,12 @@ class DesktopSession {
     val coverPixels: StateFlow<IntArray?> = _coverPixels.asStateFlow()
 
     val dirs = appDirectories()
+    val theme = DesktopThemeStore(dirs.configDir)
+    val layout = DesktopLayoutStore(dirs.configDir)
+    val collection = DesktopCollection(dirs.configDir)
+    val sources = LibrarySourceStore(dirs.configDir)
+    val jellyfin = JellyfinCatalog(http, sources.deviceId)
+    val subsonic = SubsonicCatalog(http)
 
     private var ticker: Job? = null
 
@@ -85,21 +100,7 @@ class DesktopSession {
                 _coverPixels.value = CoverPixels.argb(track?.artworkUri, track?.path)
             }
         }
-        scope.launch(Dispatchers.IO) {
-            val roots = LocalLibraryScanner.defaultRoots()
-            _scanMessage.value = if (roots.isEmpty()) {
-                "No default music folder found"
-            } else {
-                "Scanning ${roots.joinToString { it.name }}…"
-            }
-            val found = LocalLibraryScanner.scan(roots)
-            _tracks.value = found
-            _scanMessage.value = when {
-                found.isEmpty() ->
-                    "No audio in ${roots.joinToString { it.absolutePath }}"
-                else -> "${found.size} tracks"
-            }
-        }
+        rescan()
     }
 
     fun playTrack(track: Track) {
@@ -108,21 +109,108 @@ class DesktopSession {
         player.play(if (list.isNotEmpty()) list else listOf(track), i)
     }
 
-    fun extraScan(path: String) {
+    fun addFolder(path: String) {
+        sources.addFolder(path)
+        rescan()
+    }
+
+    fun removeFolder(path: String) {
+        sources.removeFolder(path)
+        rescan()
+    }
+
+    fun addJellyfin(name: String, baseUrl: String, username: String, password: String) {
         scope.launch(Dispatchers.IO) {
-            val dir = File(path)
-            if (!dir.isDirectory) return@launch
-            val extra = LocalLibraryScanner.scan(listOf(dir))
-            val merged = (_tracks.value + extra).distinctBy { it.id }
-            _tracks.value = merged
-            _scanMessage.value = "${merged.size} tracks"
+            _scanMessage.value = "Signing in to Jellyfin…"
+            val seed = RemoteAccount(
+                id = UUID.randomUUID().toString(),
+                kind = SourceKind.JELLYFIN,
+                name = name.ifBlank { "Jellyfin" },
+                baseUrl = baseUrl,
+                username = username,
+                secret = password
+            )
+            jellyfin.authenticate(seed)
+                .onSuccess {
+                    sources.upsertRemote(it)
+                    rescan()
+                }
+                .onFailure { _scanMessage.value = "Jellyfin: ${it.message}" }
         }
     }
+
+    fun addSubsonic(name: String, baseUrl: String, username: String, password: String) {
+        scope.launch(Dispatchers.IO) {
+            _scanMessage.value = "Signing in to Subsonic…"
+            val seed = RemoteAccount(
+                id = UUID.randomUUID().toString(),
+                kind = SourceKind.SUBSONIC,
+                name = name.ifBlank { "Subsonic" },
+                baseUrl = baseUrl,
+                username = username,
+                secret = password
+            )
+            subsonic.ping(seed)
+                .onSuccess {
+                    sources.upsertRemote(it)
+                    rescan()
+                }
+                .onFailure { _scanMessage.value = "Subsonic: ${it.message}" }
+        }
+    }
+
+    fun removeRemote(id: String) {
+        sources.removeRemote(id)
+        rescan()
+    }
+
+    fun rescan() {
+        scope.launch(Dispatchers.IO) {
+            val defaultRoots = LocalLibraryScanner.defaultRoots()
+            val extra = sources.extraFolders.value.map { File(it) }.filter { it.isDirectory }
+            val roots = (defaultRoots + extra).distinctBy { it.absolutePath }
+            _scanMessage.value = if (roots.isEmpty()) {
+                "No local folders yet"
+            } else {
+                "Scanning ${roots.joinToString { it.name }}…"
+            }
+            val local = if (roots.isEmpty()) emptyList() else LocalLibraryScanner.scan(roots)
+            val remoteTracks = mutableListOf<Track>()
+            for (remote in sources.remotes.value.filter { it.enabled }) {
+                _scanMessage.value = "Indexing ${remote.name}…"
+                val result = when (remote.kind) {
+                    SourceKind.JELLYFIN -> {
+                        val authed = if (remote.accessToken.isNullOrBlank()) {
+                            jellyfin.authenticate(remote).getOrElse {
+                                _scanMessage.value = "${remote.name}: ${it.message}"
+                                continue
+                            }.also { sources.upsertRemote(it) }
+                        } else remote
+                        jellyfin.listTracks(authed)
+                    }
+                    SourceKind.SUBSONIC -> subsonic.listTracks(remote)
+                    SourceKind.LOCAL -> continue
+                }
+                result
+                    .onSuccess { remoteTracks += it }
+                    .onFailure { _scanMessage.value = "${remote.name}: ${it.message}" }
+            }
+            val merged = (local + remoteTracks).distinctBy { it.id }
+            _tracks.value = merged
+            _scanMessage.value = when {
+                merged.isEmpty() -> "No tracks yet — add a folder or a server in Settings → Library"
+                else -> "${merged.size} tracks"
+            }
+        }
+    }
+
+    fun extraScan(path: String) = addFolder(path)
 
     fun release() {
         ticker?.cancel()
         media.release()
         player.release()
+        runCatching { http.close() }
         scope.coroutineContext[Job]?.cancel()
     }
 }

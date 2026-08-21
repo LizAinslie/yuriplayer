@@ -5,8 +5,10 @@ package capital.yuri.yuriplayer.ui
  * Keep these stable — instrumented tests and Maestro flows both use them.
  */
 object TestTags {
+    const val TAB_HOME = "tab_home"
     const val TAB_MY_STUFF = "tab_my_stuff"
     const val TAB_EXPLORE = "tab_explore"
+    const val TAB_SEARCH = "tab_search"
     const val SETTINGS = "settings"
 
     const val MYSTUFF_PINS = "mystuff_pins"

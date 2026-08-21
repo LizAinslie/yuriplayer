@@ -9,7 +9,6 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -37,11 +36,9 @@ import capital.yuri.yuriplayer.ui.TestTags
 import org.koin.compose.koinInject
 
 /**
- * Compact now-playing strip (bottom of library / detail pages).
- *
- * Uses the **app default background** — not album art colors — so it stays
- * neutral across pages. Accents (progress + play) still come from current art.
- * Full Now Playing screen keeps the art-derived background.
+ * Compact now-playing chip. Background follows the current cover; it sits
+ * in the scaffold bottom bar so lists pad above it, visually floating over
+ * the tab bar.
  */
 @Composable
 fun NowPlayingPreview(
@@ -53,9 +50,8 @@ fun NowPlayingPreview(
     onOpen: () -> Unit,
     modifier: Modifier = Modifier,
     enableSwipeUp: Boolean = false,
-    edgeToEdgeBottom: Boolean = false,
-    tonalElevation: androidx.compose.ui.unit.Dp = 0.dp,
-    shadowElevation: androidx.compose.ui.unit.Dp = 4.dp
+    tonalElevation: androidx.compose.ui.unit.Dp = 2.dp,
+    shadowElevation: androidx.compose.ui.unit.Dp = 8.dp
 ) {
     val themeStore: PlayerThemeStore = koinInject()
     val ambient = MaterialTheme.colorScheme
@@ -69,15 +65,19 @@ fun NowPlayingPreview(
         peekPrev?.songKey == song.songKey -> peekPrev
         else -> null
     }
-    val accent = matched?.colors?.accent ?: ambient.primary
-    val onAccent = matched?.colors?.onAccent ?: ambient.onPrimary
-    val trackInactive = ambient.onBackground.copy(alpha = 0.2f)
+    val colors = matched?.colors
+    val container = colors?.container ?: ambient.surfaceVariant
+    val onContainer = colors?.onContainer ?: ambient.onSurface
+    val accent = colors?.accent ?: ambient.primary
+    val onAccent = colors?.onAccent ?: ambient.onPrimary
+    val trackInactive = onContainer.copy(alpha = 0.22f)
 
     Surface(
         tonalElevation = tonalElevation,
         shadowElevation = shadowElevation,
-        color = ambient.background,
-        contentColor = ambient.onBackground,
+        shape = RoundedCornerShape(16.dp),
+        color = container,
+        contentColor = onContainer,
         modifier = modifier
             .fillMaxWidth()
             .testTag(TestTags.MINI_PLAYER)
@@ -91,9 +91,7 @@ fun NowPlayingPreview(
                 } else Modifier
             )
     ) {
-        Column(
-            modifier = if (edgeToEdgeBottom) Modifier.navigationBarsPadding() else Modifier
-        ) {
+        Column {
             PlaybackProgress(
                 positionMs = positionMs,
                 durationMs = durationMs,
@@ -124,13 +122,13 @@ fun NowPlayingPreview(
                     MarqueeText(
                         text = song?.displayTitle ?: "Not playing",
                         style = MaterialTheme.typography.bodyMedium,
-                        color = ambient.onBackground,
+                        color = onContainer,
                         modifier = Modifier.testTag(TestTags.MINI_TITLE)
                     )
                     MarqueeText(
                         text = song?.displayArtist ?: "",
                         style = MaterialTheme.typography.bodySmall,
-                        color = ambient.onBackground.copy(alpha = 0.6f),
+                        color = onContainer.copy(alpha = 0.65f),
                         modifier = Modifier.testTag(TestTags.MINI_ARTIST)
                     )
                 }
@@ -163,7 +161,8 @@ fun MiniPlayerBar(
     positionMs: Long,
     durationMs: Long,
     onToggle: () -> Unit,
-    onExpand: () -> Unit
+    onExpand: () -> Unit,
+    modifier: Modifier = Modifier
 ) {
     NowPlayingPreview(
         song = song,
@@ -173,6 +172,6 @@ fun MiniPlayerBar(
         onToggle = onToggle,
         onOpen = onExpand,
         enableSwipeUp = true,
-        edgeToEdgeBottom = true
+        modifier = modifier.padding(start = 8.dp, end = 8.dp, top = 4.dp, bottom = 8.dp)
     )
 }

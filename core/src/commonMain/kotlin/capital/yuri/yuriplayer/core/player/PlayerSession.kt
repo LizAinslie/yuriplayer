@@ -26,9 +26,35 @@ class PlayerSession(
 
     val isPlaying: StateFlow<Boolean> = engine.isPlaying
 
+    private val _shuffle = MutableStateFlow(false)
+    val shuffle: StateFlow<Boolean> = _shuffle.asStateFlow()
+
+    private val _repeat = MutableStateFlow(RepeatMode.OFF)
+    val repeat: StateFlow<RepeatMode> = _repeat.asStateFlow()
+
+    private val _volume = MutableStateFlow(1f)
+    val volume: StateFlow<Float> = _volume.asStateFlow()
+
     private val listener = object : PlaybackEngine.Listener {
         override fun onEnded() {
-            if (!engine.playPreparedNext()) next()
+            when (_repeat.value) {
+                RepeatMode.ONE -> {
+                    engine.seekTo(0)
+                    engine.play()
+                }
+                RepeatMode.ALL -> {
+                    val q = _queue.value
+                    if (q.isEmpty()) return
+                    if (!engine.playPreparedNext()) {
+                        val i = _index.value + 1
+                        if (i in q.indices) next()
+                        else loadAt(0, 0L, play = true)
+                    }
+                }
+                RepeatMode.OFF -> {
+                    if (!engine.playPreparedNext()) next()
+                }
+            }
         }
 
         override fun onAutoAdvanced() {
@@ -94,6 +120,30 @@ class PlayerSession(
     }
 
     fun seekTo(positionMs: Long) = engine.seekTo(positionMs.coerceAtLeast(0))
+
+    fun toggleShuffle() {
+        _shuffle.value = !_shuffle.value
+        if (_shuffle.value) {
+            val cur = _current.value
+            val rest = _queue.value.filter { it.id != cur?.id }.shuffled()
+            if (cur != null) {
+                _queue.value = listOf(cur) + rest
+                _index.value = 0
+            } else {
+                _queue.value = _queue.value.shuffled()
+            }
+        }
+    }
+
+    fun cycleRepeat() {
+        _repeat.value = _repeat.value.next()
+    }
+
+    fun setVolume(value: Float) {
+        val v = value.coerceIn(0f, 1f)
+        _volume.value = v
+        engine.setVolume((v * 100).toInt())
+    }
 
     fun skipTo(index: Int) {
         if (index in _queue.value.indices) loadAt(index, 0L, play = true)

@@ -1,5 +1,6 @@
 package capital.yuri.yuriplayer.components.theme
 
+import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.material3.ColorScheme
 import androidx.compose.material3.MaterialTheme
@@ -9,17 +10,19 @@ import androidx.compose.ui.Modifier
 
 @Composable
 fun YuriTheme(
-    colorScheme: ColorScheme = YuriDarkColorScheme,
+    choice: ThemeChoice = ThemeChoice(),
+    colorScheme: ColorScheme? = null,
     content: @Composable () -> Unit
 ) {
+    val scheme = colorScheme ?: choice.colorScheme(isSystemInDarkTheme())
     MaterialTheme(
-        colorScheme = colorScheme,
+        colorScheme = scheme,
         shapes = YuriShapes
     ) {
         Surface(
             modifier = Modifier.fillMaxSize(),
-            color = colorScheme.background,
-            contentColor = colorScheme.onBackground
+            color = scheme.background,
+            contentColor = scheme.onBackground
         ) {
             content()
         }
