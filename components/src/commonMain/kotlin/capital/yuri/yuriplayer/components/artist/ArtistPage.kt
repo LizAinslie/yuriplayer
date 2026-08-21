@@ -27,6 +27,8 @@ import androidx.compose.material.icons.filled.MoreHoriz
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Shuffle
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.FilledIconButton
 import androidx.compose.material3.Icon
@@ -70,11 +72,15 @@ fun ArtistPage(
     onShuffle: () -> Unit,
     onTrack: (Int) -> Unit,
     onOpenAlbum: (AlbumPageModel) -> Unit,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    onChangeHeader: () -> Unit = {},
+    onFetchHeader: () -> Unit = {},
+    onClearHeader: () -> Unit = {}
 ) {
     val listState = rememberLazyListState()
     val mini by remember { derivedStateOf { listState.firstVisibleItemIndex > 0 } }
     var disco by remember { mutableStateOf(DiscoFilter.Popular) }
+    var more by remember { mutableStateOf(false) }
     val releases = remember(artist.discography, disco) {
         when (disco) {
             DiscoFilter.Popular -> artist.discography
@@ -116,11 +122,25 @@ fun ArtistPage(
                             tint = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.8f)
                         )
                     }
-                    IconButton(onClick = {}) {
+                    IconButton(onClick = { more = true }) {
                         Icon(
                             Icons.Default.MoreHoriz,
                             contentDescription = "More",
                             tint = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.8f)
+                        )
+                    }
+                    DropdownMenu(expanded = more, onDismissRequest = { more = false }) {
+                        DropdownMenuItem(
+                            text = { Text("Change header") },
+                            onClick = { more = false; onChangeHeader() }
+                        )
+                        DropdownMenuItem(
+                            text = { Text("Choose from sources") },
+                            onClick = { more = false; onFetchHeader() }
+                        )
+                        DropdownMenuItem(
+                            text = { Text("Clear header") },
+                            onClick = { more = false; onClearHeader() }
                         )
                     }
                 }
@@ -264,7 +284,7 @@ fun ArtistPage(
                         .clip(RoundedCornerShape(12.dp)),
                     color = MaterialTheme.colorScheme.surfaceVariant
                 ) {
-                    Box(Modifier.fillMaxWidth().height(220.dp)) {
+                    Box(Modifier.fillMaxWidth().height(280.dp)) {
                         CoverArt(
                             model = artist.artworkUri,
                             modifier = Modifier.fillMaxSize(),
@@ -276,16 +296,28 @@ fun ArtistPage(
                                 .fillMaxSize()
                                 .background(
                                     Brush.verticalGradient(
-                                        listOf(Color.Transparent, Color.Black.copy(alpha = 0.75f))
+                                        listOf(Color.Transparent, Color.Black.copy(alpha = 0.82f))
                                     )
                                 )
                         )
-                        Text(
-                            artist.about ?: artist.stats,
-                            color = Color.White,
-                            style = MaterialTheme.typography.bodyMedium,
-                            modifier = Modifier.align(Alignment.BottomStart).padding(16.dp)
-                        )
+                        Column(
+                            Modifier.align(Alignment.BottomStart).padding(16.dp)
+                        ) {
+                            Text(
+                                artist.stats,
+                                color = Color.White.copy(alpha = 0.8f),
+                                style = MaterialTheme.typography.labelMedium,
+                                modifier = Modifier.padding(bottom = 8.dp)
+                            )
+                            Text(
+                                artist.about?.takeIf { it.isNotBlank() }
+                                    ?: "No bio yet — we’ll fill this in from Wikipedia and TheAudioDB.",
+                                color = Color.White,
+                                style = MaterialTheme.typography.bodyMedium,
+                                maxLines = 8,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                        }
                     }
                 }
                 Spacer(Modifier.height(48.dp))

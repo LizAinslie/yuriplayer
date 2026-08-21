@@ -1,5 +1,7 @@
 package capital.yuri.yuriplayer.desktop
 
+import capital.yuri.yuriplayer.core.artist.ArtistInfoClient
+import capital.yuri.yuriplayer.core.artist.ArtistProfileStore
 import capital.yuri.yuriplayer.core.library.CoverPixels
 import capital.yuri.yuriplayer.core.library.LocalLibraryScanner
 import capital.yuri.yuriplayer.core.library.Track
@@ -89,6 +91,10 @@ class DesktopSession {
     val playlists = DesktopPlaylistStore(dirs.configDir)
     val sources = LibrarySourceStore(dirs.configDir)
     private val index = DesktopIndexStore(dirs.cacheDir)
+    val artists = ArtistInfoClient(
+        http,
+        ArtistProfileStore(dirs.configDir, dirs.cacheDir)
+    )
     val jellyfin = JellyfinCatalog(http, sources.deviceId)
     val subsonic = SubsonicCatalog(http)
 

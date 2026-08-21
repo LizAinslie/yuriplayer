@@ -27,10 +27,12 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -56,9 +58,11 @@ import capital.yuri.yuriplayer.components.player.NowPlayingSidebar
 import capital.yuri.yuriplayer.components.theme.PlayerChromeTheme
 import capital.yuri.yuriplayer.components.theme.YuriTheme
 import capital.yuri.yuriplayer.components.theme.playerColorsFromPixels
+import capital.yuri.yuriplayer.core.artist.ArtistProfile
 import capital.yuri.yuriplayer.core.library.Track
 import capital.yuri.yuriplayer.desktop.DesktopCollection
 import capital.yuri.yuriplayer.desktop.DesktopSession
+import kotlinx.coroutines.launch
 
 private sealed class Route {
     data object Home : Route()
@@ -104,6 +108,7 @@ fun YuriDesktopApp(session: DesktopSession) {
         var editAlbum by remember { mutableStateOf<AlbumPageModel?>(null) }
         val route = stack.last()
         val nav = if (route is Route.Search) DesktopNav.Search else DesktopNav.Home
+        val scope = rememberCoroutineScope()
 
         fun push(next: Route) {
             stack = stack + next
@@ -361,8 +366,22 @@ fun YuriDesktopApp(session: DesktopSession) {
                     )
                 }
                 is Route.Artist -> {
-                    val model = remember(r.name, tracks, liked, history) {
-                        tracks.artistPage(r.name, liked, history)
+                    var profile by remember(r.name) { mutableStateOf<ArtistProfile?>(null) }
+                    var pickBanner by remember { mutableStateOf(false) }
+                    LaunchedEffect(r.name) {
+                        profile = runCatching { session.artists.resolve(r.name) }.getOrNull()
+                    }
+                    val model = remember(r.name, tracks, liked, history, profile) {
+                        val base = tracks.artistPage(r.name, liked, history)
+                        base.copy(
+                            about = profile?.bio ?: base.about,
+                            artworkUri = profile?.imageUri ?: base.artworkUri,
+                            bannerUri = when {
+                                profile?.bannerCleared == true -> ""
+                                !profile?.bannerUri.isNullOrBlank() -> profile!!.bannerUri
+                                else -> base.bannerUri
+                            }
+                        )
                     }
                     val artistTracks = remember(r.name, tracks) {
                         tracks.filter {
@@ -388,8 +407,32 @@ fun YuriDesktopApp(session: DesktopSession) {
                                 .ifEmpty { artistTracks }
                             if (i in list.indices) session.player.play(list, i)
                         },
-                        onOpenAlbum = ::openAlbum
+                        onOpenAlbum = ::openAlbum,
+                        onChangeHeader = {
+                            DesktopFiles.pickImage("Choose header")?.let { file ->
+                                profile = session.artists.applyLocalBanner(r.name, file)
+                            }
+                        },
+                        onFetchHeader = { pickBanner = true },
+                        onClearHeader = {
+                            profile = session.artists.clearBanner(r.name)
+                        }
                     )
+                    if (pickBanner) {
+                        ArtistBannerPicker(
+                            artistName = r.name,
+                            client = session.artists,
+                            onDismiss = { pickBanner = false },
+                            onPicked = { c ->
+                                pickBanner = false
+                                scope.launch {
+                                    profile = runCatching {
+                                        session.artists.applyBannerUrl(r.name, c.url)
+                                    }.getOrNull() ?: profile
+                                }
+                            }
+                        )
+                    }
                 }
                 is Route.Playlist -> {
                     val pl = playlists.firstOrNull { it.id == r.id }
