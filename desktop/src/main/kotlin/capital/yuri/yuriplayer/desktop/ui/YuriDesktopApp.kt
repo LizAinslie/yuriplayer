@@ -92,7 +92,6 @@ fun YuriDesktopApp(session: DesktopSession) {
         val tracks by session.tracks.collectAsState()
         val current by session.player.current.collectAsState()
         val playing by session.player.isPlaying.collectAsState()
-        val queue by session.player.queue.collectAsState()
         val history by session.player.history.collectAsState()
         val status by session.scanMessage.collectAsState()
         val position by session.positionMs.collectAsState()
@@ -103,6 +102,9 @@ fun YuriDesktopApp(session: DesktopSession) {
         val volume by session.player.volume.collectAsState()
         val liked by session.collection.liked.collectAsState()
         val pins by session.collection.pinned.collectAsState()
+        val saved by session.collection.saved.collectAsState()
+        val hotQueue by session.player.hotQueue.collectAsState()
+        val coldQueue by session.player.coldQueue.collectAsState()
         val playlists by session.playlists.playlists.collectAsState()
         val remotes by session.sources.remotes.collectAsState()
         val leftFrac by session.layout.leftFraction.collectAsState()
@@ -230,7 +232,7 @@ fun YuriDesktopApp(session: DesktopSession) {
         fun albumRecency(album: AlbumPageModel): Int =
             album.tracks.minOfOrNull { recency[it.id] ?: Int.MAX_VALUE } ?: Int.MAX_VALUE
 
-        val libraryItems = remember(albums, tracks, libraryFilter, pins, history, liked, playlists) {
+        val libraryItems = remember(albums, tracks, libraryFilter, pins, saved, history, liked, playlists) {
             val likedAlbums = albums.filter { album -> album.tracks.any { it.id in liked } }
             val likedArtists = tracks.filter { it.id in liked }.map { it.displayArtist }.distinct()
             val pinItems = pins.map { pin ->
@@ -278,6 +280,7 @@ fun YuriDesktopApp(session: DesktopSession) {
                 LibraryFilter.Artists -> {
                     val names = (
                         pins.filter { it.kind == DesktopCollection.Kind.ARTIST }.map { it.title } +
+                            saved.filter { it.kind == DesktopCollection.Kind.ARTIST }.map { it.title } +
                             likedArtists
                         ).distinct()
                     names.map { name ->
@@ -291,7 +294,10 @@ fun YuriDesktopApp(session: DesktopSession) {
                     }
                 }
                 LibraryFilter.Albums -> {
-                    val pinnedAlbums = pins.filter { it.kind == DesktopCollection.Kind.ALBUM }
+                    val pinnedAlbums = (
+                        pins.filter { it.kind == DesktopCollection.Kind.ALBUM } +
+                            saved.filter { it.kind == DesktopCollection.Kind.ALBUM }
+                        )
                         .mapNotNull { pin ->
                             albums.firstOrNull { it.id == pin.id }
                                 ?: albums.firstOrNull { it.title.equals(pin.title, true) }
@@ -430,17 +436,6 @@ fun YuriDesktopApp(session: DesktopSession) {
                     onToggleLike = {
                         val t = current ?: return@BottomPlayerBar
                         session.collection.toggleLike(t.id)
-                        val album = albums.firstOrNull { a -> a.tracks.any { it.id == t.id } }
-                        if (album != null && session.collection.isLiked(t.id)) {
-                            session.collection.pin(
-                                DesktopCollection.Pin(
-                                    DesktopCollection.Kind.ALBUM,
-                                    album.id,
-                                    album.title,
-                                    album.artist
-                                )
-                            )
-                        }
                     },
                     queueVisible = showSidebar,
                     onToggleQueue = { showSidebar = !showSidebar }
@@ -448,32 +443,41 @@ fun YuriDesktopApp(session: DesktopSession) {
             },
             sidebar = {
                 PlayerChromeTheme(playerColors, useArtBackground = true) {
+                    val curId = current?.id
+                    val hotIdx = hotQueue.indexOfFirst { it.id == curId }
+                    val coldIdx = coldQueue.indexOfFirst { it.id == curId }
+                    val hotUp = if (hotIdx >= 0) hotQueue.drop(hotIdx + 1) else hotQueue
+                    val coldUp = if (coldIdx >= 0) coldQueue.drop(coldIdx + 1) else coldQueue
+                    val coldLabel = coldUp.firstOrNull()?.displayAlbum?.takeIf { it.isNotBlank() && it != "Unknown Album" }
+                        ?: "Up next"
                     NowPlayingSidebar(
                         track = current?.toCover(),
-                        queue = queue.map { it.toRow(highlighted = it.id == current?.id) },
+                        hot = hotUp.map { it.toRow() },
+                        cold = coldUp.map { it.toRow() },
+                        coldLabel = coldLabel,
                         history = history.map { it.toRow() },
-                        onQueueTrack = { row ->
-                            session.player.playTrack(
-                                queue.first { it.id == row.id },
-                                queue
-                            )
-                        },
+                        onPlayHot = { i -> hotUp.getOrNull(i)?.let { session.player.playTrack(it) } },
+                        onPlayCold = { i -> coldUp.getOrNull(i)?.let { session.player.playTrack(it) } },
                         onHistoryTrack = { row ->
                             val t = history.firstOrNull { it.id == row.id } ?: return@NowPlayingSidebar
                             session.player.playTrack(t, tracks.ifEmpty { listOf(t) })
                         },
-                        onClearQueue = session.player::clearQueueKeepCurrent,
+                        onClearHot = session.player::clearHot,
                         onClearHistory = session.player::clearHistory,
-                        onMoveUpcoming = { from, to ->
-                            val cur = current ?: return@NowPlayingSidebar
-                            val base = queue.indexOfFirst { it.id == cur.id }
-                            if (base < 0) return@NowPlayingSidebar
-                            session.player.moveQueueItem(base + 1 + from, base + 1 + to)
+                        onMoveHot = { from, to ->
+                            val skip = if (hotIdx >= 0) hotIdx + 1 else 0
+                            session.player.moveHot(from + skip, to + skip)
+                        },
+                        onMoveCold = { from, to ->
+                            val skip = if (coldIdx >= 0) coldIdx + 1 else 0
+                            session.player.moveCold(from + skip, to + skip)
                         },
                         likedIds = liked,
                         onToggleTrackLike = session.collection::toggleLike,
                         songMenu = { row ->
-                            tracks.firstOrNull { it.id == row.id }?.let { songMenu(it) }.orEmpty()
+                            (hotQueue + coldQueue + tracks).firstOrNull { it.id == row.id }
+                                ?.let { songMenu(it) }
+                                .orEmpty()
                         }
                     )
                 }
@@ -539,9 +543,9 @@ fun YuriDesktopApp(session: DesktopSession) {
                             albumTracks.getOrNull(i)?.let { editSong = it }
                         },
                         onArtist = ::openArtist,
-                        liked = session.collection.isPinned(DesktopCollection.Kind.ALBUM, live.id),
+                        liked = session.collection.isSaved(DesktopCollection.Kind.ALBUM, live.id),
                         onToggleLike = {
-                            session.collection.togglePin(
+                            session.collection.toggleSaved(
                                 DesktopCollection.Pin(
                                     DesktopCollection.Kind.ALBUM,
                                     live.id,
@@ -615,9 +619,9 @@ fun YuriDesktopApp(session: DesktopSession) {
                         onClearHeader = {
                             profile = session.artists.clearBanner(r.name)
                         },
-                        liked = session.collection.isPinned(DesktopCollection.Kind.ARTIST, r.name),
+                        liked = session.collection.isSaved(DesktopCollection.Kind.ARTIST, r.name),
                         onToggleLike = {
-                            session.collection.togglePin(
+                            session.collection.toggleSaved(
                                 DesktopCollection.Pin(
                                     DesktopCollection.Kind.ARTIST,
                                     r.name,
@@ -665,6 +669,9 @@ fun YuriDesktopApp(session: DesktopSession) {
                     if (pl == null) {
                         Text("Playlist gone.", modifier = Modifier.padding(24.dp))
                     } else {
+                        LaunchedEffect(pl.id, pl.snapshots.map { it.id }) {
+                            session.ensureTracks(pl.snapshots)
+                        }
                         PlaylistPage(
                             playlist = pl,
                             tracks = pl.tracks(tracks),
@@ -676,9 +683,9 @@ fun YuriDesktopApp(session: DesktopSession) {
                             onEditTrack = { editSong = it },
                             likedIds = liked,
                             onToggleLike = session.collection::toggleLike,
-                            playlistLiked = session.collection.isPinned(DesktopCollection.Kind.PLAYLIST, pl.id),
+                            playlistLiked = session.collection.isSaved(DesktopCollection.Kind.PLAYLIST, pl.id),
                             onTogglePlaylistLike = {
-                                session.collection.togglePin(
+                                session.collection.toggleSaved(
                                     DesktopCollection.Pin(
                                         DesktopCollection.Kind.PLAYLIST,
                                         pl.id,
@@ -704,14 +711,6 @@ fun YuriDesktopApp(session: DesktopSession) {
                 onDismiss = { showNewPlaylist = false },
                 onCreate = { name, description ->
                     val created = session.playlists.create(name, description)
-                    session.collection.pin(
-                        DesktopCollection.Pin(
-                            DesktopCollection.Kind.PLAYLIST,
-                            created.id,
-                            created.name,
-                            "Playlist"
-                        )
-                    )
                     showNewPlaylist = false
                     push(Route.Playlist(created.id))
                 }

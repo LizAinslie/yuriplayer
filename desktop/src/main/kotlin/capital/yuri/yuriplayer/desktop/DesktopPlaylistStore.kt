@@ -266,24 +266,23 @@ data class DesktopPlaylist(
         fun put(t: Track) {
             for (k in t.indexKeys()) index.putIfAbsent(k, t)
         }
-        for (t in library) put(t)
         for (t in snapshots) put(t)
+        for (t in library) put(t)
         val seen = HashSet<String>()
         val out = ArrayList<Track>()
+        val missed = ArrayList<String>()
         fun take(t: Track) {
             if (t.indexKeys().any { it in seen }) return
             seen += t.indexKeys()
             out += t
         }
-        for (snap in snapshots) {
-            val live = snap.indexKeys().firstNotNullOfOrNull { index[it] }
-            take(live ?: snap)
-        }
-        val missed = ArrayList<String>()
         for (key in trackIds) {
-            val hit = index[key] ?: matchLoose(key, library)
+            val hit = index[key]
+                ?: snapshots.firstOrNull { key in it.indexKeys() }
+                ?: matchLoose(key, library + snapshots)
             if (hit != null) take(hit) else missed += key
         }
+        for (snap in snapshots) take(snap)
         if (out.size < trackIds.size.coerceAtLeast(snapshots.size) || missed.isNotEmpty()) {
             PlaylistLog.resolve(name, trackIds, snapshots, out, missed)
         }

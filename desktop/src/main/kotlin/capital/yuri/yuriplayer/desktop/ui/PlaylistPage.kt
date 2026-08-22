@@ -172,7 +172,7 @@ fun PlaylistPage(
         }
         Spacer(Modifier.height(16.dp))
         LazyColumn(Modifier.weight(1f)) {
-            itemsIndexed(tracks, key = { _, t -> t.id }) { index, track ->
+            itemsIndexed(tracks, key = { i, t -> "${t.id}#$i" }) { index, track ->
                 TrackRow(
                     track = track.toRow(highlighted = track.id == currentId),
                     onClick = { onPlay(tracks, index) },

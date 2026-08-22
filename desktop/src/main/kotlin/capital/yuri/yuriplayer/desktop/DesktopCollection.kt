@@ -18,6 +18,9 @@ class DesktopCollection(configDir: String) {
     private val _pinned = MutableStateFlow<List<Pin>>(emptyList())
     val pinned: StateFlow<List<Pin>> = _pinned.asStateFlow()
 
+    private val _saved = MutableStateFlow<List<Pin>>(emptyList())
+    val saved: StateFlow<List<Pin>> = _saved.asStateFlow()
+
     data class Pin(val kind: Kind, val id: String, val title: String, val subtitle: String)
 
     enum class Kind { ALBUM, ARTIST, SONG, PLAYLIST }
@@ -46,6 +49,17 @@ class DesktopCollection(configDir: String) {
     fun isPinned(kind: Kind, id: String): Boolean =
         _pinned.value.any { it.kind == kind && it.id == id }
 
+    fun isSaved(kind: Kind, id: String): Boolean =
+        _saved.value.any { it.kind == kind && it.id == id }
+
+    fun toggleSaved(pin: Pin) {
+        val cur = _saved.value.toMutableList()
+        val had = cur.removeAll { it.kind == pin.kind && it.id == pin.id }
+        if (!had) cur.add(0, pin)
+        _saved.value = cur
+        persist()
+    }
+
     fun togglePin(pin: Pin) {
         if (isPinned(pin.kind, pin.id)) unpin(pin.kind, pin.id) else pin(pin)
     }
@@ -69,6 +83,13 @@ class DesktopCollection(configDir: String) {
                 Pin(kind, parts[1], parts[2], parts[3])
             }
             _pinned.value = pins
+            val saved = p.getProperty("saved").orEmpty().split('\n').mapNotNull { line ->
+                val parts = line.split('\t')
+                if (parts.size < 4) return@mapNotNull null
+                val kind = runCatching { Kind.valueOf(parts[0]) }.getOrNull() ?: return@mapNotNull null
+                Pin(kind, parts[1], parts[2], parts[3])
+            }
+            _saved.value = saved
         }
     }
 
@@ -80,6 +101,10 @@ class DesktopCollection(configDir: String) {
             p.setProperty(
                 "pins",
                 _pinned.value.joinToString("\n") { "${it.kind}\t${it.id}\t${it.title}\t${it.subtitle}" }
+            )
+            p.setProperty(
+                "saved",
+                _saved.value.joinToString("\n") { "${it.kind}\t${it.id}\t${it.title}\t${it.subtitle}" }
             )
             file.outputStream().use { p.store(it, "Yuri Player collection") }
         }

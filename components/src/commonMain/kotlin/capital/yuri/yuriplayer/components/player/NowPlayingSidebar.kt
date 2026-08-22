@@ -23,13 +23,17 @@ import capital.yuri.yuriplayer.components.model.TrackRowModel
 @Composable
 fun NowPlayingSidebar(
     track: CoverRef?,
-    queue: List<TrackRowModel>,
+    hot: List<TrackRowModel>,
+    cold: List<TrackRowModel>,
+    coldLabel: String = "Up next",
     history: List<TrackRowModel>,
-    onQueueTrack: (TrackRowModel) -> Unit,
+    onPlayHot: (Int) -> Unit,
+    onPlayCold: (Int) -> Unit,
     onHistoryTrack: (TrackRowModel) -> Unit,
-    onClearQueue: () -> Unit = {},
+    onClearHot: () -> Unit = {},
     onClearHistory: () -> Unit = {},
-    onMoveUpcoming: ((from: Int, to: Int) -> Unit)? = null,
+    onMoveHot: ((from: Int, to: Int) -> Unit)? = null,
+    onMoveCold: ((from: Int, to: Int) -> Unit)? = null,
     likedIds: Set<String> = emptySet(),
     onToggleTrackLike: (String) -> Unit = {},
     songMenu: (TrackRowModel) -> List<out MenuEntry> = { emptyList() },
@@ -51,15 +55,17 @@ fun NowPlayingSidebar(
         Spacer(Modifier.height(8.dp))
         QueuePanel(
             nowPlaying = track,
-            upcoming = queue.dropWhile { it.id != track?.id }.drop(1),
+            hot = hot,
+            cold = cold,
+            coldLabel = coldLabel,
             history = history,
-            onPlay = { row ->
-                if (history.any { it.id == row.id } && queue.none { it.id == row.id }) onHistoryTrack(row)
-                else onQueueTrack(row)
-            },
-            onClearQueue = onClearQueue,
+            onPlayHot = onPlayHot,
+            onPlayCold = onPlayCold,
+            onPlayHistory = onHistoryTrack,
+            onClearHot = onClearHot,
             onClearHistory = onClearHistory,
-            onMove = onMoveUpcoming,
+            onMoveHot = onMoveHot,
+            onMoveCold = onMoveCold,
             likedIds = likedIds,
             onToggleLike = onToggleTrackLike,
             songMenu = songMenu,

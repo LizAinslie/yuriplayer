@@ -58,17 +58,33 @@ class PlayerSessionTest {
         session.toggleShuffle()
         assertFalse(session.shuffle.value)
         assertEquals("4", session.current.value?.id)
-        assertEquals(list.map { it.id }, session.queue.value.map { it.id })
+        assertEquals(list.map { it.id }, session.coldQueue.value.map { it.id })
     }
 
     @Test
-    fun enqueueAppendsWithoutChangingCurrent() {
+    fun enqueueGoesToHotAndPlaysNext() {
         val engine = FakeEngine()
         val session = PlayerSession(engine)
         session.play(tracks(2), 0)
         session.enqueue(Track(id = "9", uri = "file://9", title = "t9"))
         assertEquals("1", session.current.value?.id)
-        assertEquals(listOf("1", "2", "9"), session.queue.value.map { it.id })
+        assertEquals(listOf("9"), session.hotQueue.value.map { it.id })
+        assertEquals(listOf("1", "9", "2"), session.queue.value.map { it.id })
+        session.next()
+        assertEquals("9", session.current.value?.id)
+        session.next()
+        assertEquals("2", session.current.value?.id)
+    }
+
+    @Test
+    fun endedAdvancesAndPlays() {
+        val engine = FakeEngine()
+        val session = PlayerSession(engine)
+        session.play(tracks(3), 0)
+        engine.played = false
+        engine.emitEnded()
+        assertEquals("2", session.current.value?.id)
+        assertTrue(engine.played)
     }
 
     @Test
@@ -83,7 +99,8 @@ class PlayerSessionTest {
         other.restore(snap, play = false)
         assertEquals("3", other.current.value?.id)
         assertEquals(12_000L, other.positionMs())
-        assertEquals(listOf("1", "2", "3", "4"), other.queue.value.map { it.id })
+        assertEquals(listOf("3", "4"), other.queue.value.map { it.id })
+        assertEquals(listOf("1", "2", "3", "4"), other.coldQueue.value.map { it.id })
         assertEquals(RepeatMode.ALL, other.repeat.value)
         assertFalse(other.isPlaying.value)
         other.seekTo(45_000L)

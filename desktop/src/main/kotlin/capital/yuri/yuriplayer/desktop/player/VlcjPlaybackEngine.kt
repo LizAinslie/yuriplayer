@@ -194,6 +194,7 @@ class VlcjPlaybackEngine : PlaybackEngine {
     override fun playPreparedNext(): Boolean {
         val next = preparedNext.getAndSet(null) ?: return false
         load(next, null, 0L)
+        play()
         return true
     }
 

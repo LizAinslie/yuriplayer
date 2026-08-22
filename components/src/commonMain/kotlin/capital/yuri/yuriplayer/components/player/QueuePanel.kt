@@ -19,6 +19,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyListScope
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.shape.CircleShape
@@ -34,7 +35,6 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -56,18 +56,23 @@ import kotlin.math.roundToInt
 private enum class QueueTab { Queue, History }
 
 /**
- * Shared queue chrome used by the mobile overlay and the desktop right rail.
- * Long-press a row and drag to reorder when [onMove] is set.
+ * Shared queue chrome (mobile overlay + desktop rail).
+ * Hot = user-queued (plays next). Cold = album / playlist / radio rest.
  */
 @Composable
 fun QueuePanel(
     nowPlaying: CoverRef?,
-    upcoming: List<TrackRowModel>,
+    hot: List<TrackRowModel>,
+    cold: List<TrackRowModel>,
+    coldLabel: String = "Up next",
     history: List<TrackRowModel>,
-    onPlay: (TrackRowModel) -> Unit,
-    onClearQueue: () -> Unit = {},
+    onPlayHot: (Int) -> Unit,
+    onPlayCold: (Int) -> Unit,
+    onPlayHistory: (TrackRowModel) -> Unit = {},
+    onClearHot: () -> Unit = {},
     onClearHistory: () -> Unit = {},
-    onMove: ((from: Int, to: Int) -> Unit)? = null,
+    onMoveHot: ((from: Int, to: Int) -> Unit)? = null,
+    onMoveCold: ((from: Int, to: Int) -> Unit)? = null,
     likedIds: Set<String> = emptySet(),
     onToggleLike: (String) -> Unit = {},
     songMenu: (TrackRowModel) -> List<out MenuEntry> = { emptyList() },
@@ -103,8 +108,8 @@ fun QueuePanel(
                     )
                 }
             }
-            if (tab == QueueTab.Queue && upcoming.isNotEmpty()) {
-                TextButton(onClick = onClearQueue) { Text("Clear") }
+            if (tab == QueueTab.Queue && hot.isNotEmpty()) {
+                TextButton(onClick = onClearHot) { Text("Clear") }
             }
             if (tab == QueueTab.History && history.isNotEmpty()) {
                 TextButton(onClick = onClearHistory) { Text("Clear") }
@@ -134,63 +139,55 @@ fun QueuePanel(
                         onToggleArt = onToggleArt
                     )
                 }
-                if (upcoming.isEmpty()) {
-                    Text(
-                        "Nothing up next.",
-                        modifier = Modifier.padding(16.dp),
-                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f)
-                    )
-                } else {
-                    val density = LocalDensity.current
-                    val rowPx = with(density) { 64.dp.toPx() }
-                    Box(Modifier.weight(1f)) {
-                        LazyColumn(
-                            modifier = if (onMove == null) Modifier.fillMaxSize()
-                            else Modifier
-                                .fillMaxSize()
-                                .pointerInput(upcoming, onMove) {
-                                    var from: Int? = null
-                                    var dy = 0f
-                                    detectDragGesturesAfterLongPress(
-                                        onDragStart = { offset ->
-                                            from = (offset.y / rowPx).toInt().coerceIn(0, upcoming.lastIndex)
-                                            dy = 0f
-                                        },
-                                        onDrag = { change, drag ->
-                                            change.consume()
-                                            dy += drag.y
-                                        },
-                                        onDragEnd = {
-                                            val start = from ?: return@detectDragGesturesAfterLongPress
-                                            val to = (start + (dy / rowPx).roundToInt())
-                                                .coerceIn(0, upcoming.lastIndex)
-                                            if (start != to) onMove(start, to)
-                                            from = null
-                                        },
-                                        onDragCancel = { from = null }
-                                    )
-                                }
-                        ) {
-                            itemsIndexed(upcoming, key = { _, row -> row.id }) { _, row ->
-                                TrackRow(
-                                    track = row,
-                                    onClick = { onPlay(row) },
-                                    showCover = true,
-                                    showAlbum = false,
-                                    liked = row.id in likedIds,
-                                    onToggleLike = { onToggleLike(row.id) },
-                                    contextItems = songMenu(row)
+                Box(Modifier.weight(1f)) {
+                    LazyColumn(Modifier.fillMaxSize()) {
+                        if (hot.isNotEmpty()) {
+                            item(key = "hdr-hot") {
+                                SectionHeader("Queue · ${hot.size}")
+                            }
+                            queueRows(
+                                rows = hot,
+                                prefix = "hot",
+                                onPlay = onPlayHot,
+                                onMove = onMoveHot,
+                                likedIds = likedIds,
+                                onToggleLike = onToggleLike,
+                                songMenu = songMenu
+                            )
+                        }
+                        item(key = "hdr-cold") {
+                            SectionHeader("$coldLabel · ${cold.size}")
+                            Text(
+                                if (hot.isNotEmpty()) {
+                                    "Queued tracks play first. Drag to reorder."
+                                } else {
+                                    "Play an album or list to fill what comes next."
+                                },
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.4f),
+                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp)
+                            )
+                        }
+                        if (cold.isEmpty()) {
+                            item(key = "cold-empty") {
+                                Text(
+                                    "Nothing else queued.",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f),
+                                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 8.dp)
                                 )
                             }
+                        } else {
+                            queueRows(
+                                rows = cold,
+                                prefix = "cold",
+                                onPlay = onPlayCold,
+                                onMove = onMoveCold,
+                                likedIds = likedIds,
+                                onToggleLike = onToggleLike,
+                                songMenu = songMenu
+                            )
                         }
-                    }
-                    if (onMove != null) {
-                        Text(
-                            "Long-press and drag to reorder",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.4f),
-                            modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp)
-                        )
                     }
                 }
             }
@@ -203,10 +200,10 @@ fun QueuePanel(
                     )
                 } else {
                     LazyColumn(Modifier.weight(1f)) {
-                        itemsIndexed(history, key = { _, row -> row.id }) { _, row ->
+                        itemsIndexed(history, key = { i, row -> "hist-${row.id}-$i" }) { _, row ->
                             TrackRow(
                                 track = row,
-                                onClick = { onPlay(row) },
+                                onClick = { onPlayHistory(row) },
                                 showCover = true,
                                 showAlbum = true,
                                 liked = row.id in likedIds,
@@ -218,6 +215,63 @@ fun QueuePanel(
                 }
             }
         }
+    }
+}
+
+@Composable
+private fun SectionHeader(label: String) {
+    Text(
+        label,
+        style = MaterialTheme.typography.titleSmall,
+        fontWeight = FontWeight.SemiBold,
+        modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp)
+    )
+}
+
+private fun LazyListScope.queueRows(
+    rows: List<TrackRowModel>,
+    prefix: String,
+    onPlay: (Int) -> Unit,
+    onMove: ((Int, Int) -> Unit)?,
+    likedIds: Set<String>,
+    onToggleLike: (String) -> Unit,
+    songMenu: (TrackRowModel) -> List<out MenuEntry>
+) {
+    itemsIndexed(rows, key = { i, row -> "$prefix-${row.id}-$i" }) { index, row ->
+        val density = LocalDensity.current
+        val rowPx = with(density) { 64.dp.toPx() }
+        TrackRow(
+            track = row,
+            onClick = { onPlay(index) },
+            showCover = true,
+            showAlbum = false,
+            liked = row.id in likedIds,
+            onToggleLike = { onToggleLike(row.id) },
+            contextItems = songMenu(row),
+            modifier = if (onMove == null) Modifier
+            else Modifier.pointerInput(rows, onMove) {
+                var from: Int? = null
+                var dy = 0f
+                detectDragGesturesAfterLongPress(
+                    onDragStart = {
+                        from = index
+                        dy = 0f
+                    },
+                    onDrag = { change, drag ->
+                        change.consume()
+                        dy += drag.y
+                    },
+                    onDragEnd = {
+                        val start = from ?: return@detectDragGesturesAfterLongPress
+                        val to = (start + (dy / rowPx).roundToInt())
+                            .coerceIn(0, rows.lastIndex)
+                        if (start != to) onMove(start, to)
+                        from = null
+                    },
+                    onDragCancel = { from = null }
+                )
+            }
+        )
     }
 }
 
