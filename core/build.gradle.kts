@@ -32,6 +32,7 @@ kotlin {
         jvmMain.dependencies {
             implementation(libs.jaudiotagger)
             implementation(libs.ktor.client.cio)
+            implementation(libs.slf4j.api)
         }
         jvmTest.dependencies {
             implementation(kotlin("test"))

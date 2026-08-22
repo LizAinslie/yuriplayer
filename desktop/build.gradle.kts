@@ -32,6 +32,7 @@ dependencies {
     implementation(libs.junixsocket.core)
     implementation(libs.jna)
     implementation(libs.jna.platform)
+    implementation(libs.logback.classic)
     implementation(libs.coil.compose)
     implementation(libs.coil.network.ktor3)
     implementation(libs.ktor.client.cio)

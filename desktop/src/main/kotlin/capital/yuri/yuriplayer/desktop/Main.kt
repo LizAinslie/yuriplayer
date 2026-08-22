@@ -32,6 +32,8 @@ import java.io.File
 
 fun main() {
     if (hostOs() == HostOs.LINUX) LinuxDesktopIntegration.install()
+    val dirs = appDirectories()
+    System.setProperty("LOG_DIR", dirs.cacheDir)
     LibVlcBootstrap.install()
     application {
         val dirs = appDirectories()

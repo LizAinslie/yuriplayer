@@ -1,5 +1,7 @@
 package capital.yuri.yuriplayer.desktop.player
 
+import capital.yuri.yuriplayer.core.log.redactSecrets
+import capital.yuri.yuriplayer.core.log.yuriLog
 import capital.yuri.yuriplayer.core.player.PlaybackEngine
 import capital.yuri.yuriplayer.core.player.PlaybackMedia
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -13,23 +15,24 @@ import java.io.File
 import java.net.URI
 import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.Executors
+import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicLong
 import java.util.concurrent.atomic.AtomicReference
 
 /**
  * LibVLC via vlcj. Same job as Android's VlcPlaybackEngine: decode + output.
- * LWJGL/OpenAL is a mixer, not a codec — we are not going there.
  *
- * All native calls run on one worker so the Compose/AWT thread never blocks
- * inside libvlc (start() can deadlock the EDT).
+ * HTTPS streams (Navidrome/Jellyfin) must use HTTP/1.1 — VLC's h2 stack
+ * dies with "peer stream 1 error: Protocol error" and poisons later plays.
  */
 class VlcjPlaybackEngine : PlaybackEngine {
+    private val log = yuriLog("Vlcj")
     private val vlc = Executors.newSingleThreadExecutor { r ->
         Thread(r, "yuri-vlc").apply { isDaemon = true }
     }
     private val factory: MediaPlayerFactory?
-    private val player: MediaPlayer?
+    private var player: MediaPlayer?
     private val listeners = CopyOnWriteArrayList<PlaybackEngine.Listener>()
     private val _isPlaying = MutableStateFlow(false)
     private val _currentUri = MutableStateFlow<String?>(null)
@@ -41,6 +44,7 @@ class VlcjPlaybackEngine : PlaybackEngine {
     private val preparedNext = AtomicReference<PlaybackMedia?>(null)
     private val openedMrl = AtomicReference<String?>(null)
     private val ignoreFinishedUntil = AtomicLong(0)
+    private val recreating = AtomicBoolean(false)
     val nativeError: String?
 
     override val isPlaying: StateFlow<Boolean> = _isPlaying.asStateFlow()
@@ -49,13 +53,7 @@ class VlcjPlaybackEngine : PlaybackEngine {
     init {
         val discovered = NativeDiscovery().discover()
         val created = runCatching {
-            MediaPlayerFactory(
-                "--no-video",
-                "--no-metadata-network-access",
-                "--network-caching=3000",
-                "--file-caching=300",
-                "--aout=any"
-            )
+            MediaPlayerFactory(*FACTORY_ARGS)
         }
         factory = created.getOrNull()
         player = factory?.mediaPlayers()?.newMediaPlayer()
@@ -68,50 +66,11 @@ class VlcjPlaybackEngine : PlaybackEngine {
             else -> null
         }
         if (nativeError != null) {
-            System.err.println("VlcjPlaybackEngine: $nativeError")
+            log.e { nativeError }
+        } else {
+            log.i { "libvlc ready http1.1" }
         }
-        player?.events()?.addMediaPlayerEventListener(object : MediaPlayerEventAdapter() {
-            override fun playing(mediaPlayer: MediaPlayer) {
-                val pending = pendingStartMs.getAndSet(-1L)
-                if (pending > 0L) {
-                    mediaPlayer.controls().setTime(pending)
-                    positionMs.set(pending)
-                } else {
-                    positionMs.set(mediaPlayer.status().time().coerceAtLeast(0L))
-                }
-                _isPlaying.value = true
-                listeners.forEach { it.onIsPlayingChanged(true) }
-            }
-
-            override fun paused(mediaPlayer: MediaPlayer) {
-                _isPlaying.value = false
-                listeners.forEach { it.onIsPlayingChanged(false) }
-            }
-
-            override fun stopped(mediaPlayer: MediaPlayer) {
-                _isPlaying.value = false
-                listeners.forEach { it.onIsPlayingChanged(false) }
-            }
-
-            override fun timeChanged(mediaPlayer: MediaPlayer, newTime: Long) {
-                positionMs.set(newTime)
-            }
-
-            override fun lengthChanged(mediaPlayer: MediaPlayer, newLength: Long) {
-                durationMs.set(newLength)
-            }
-
-            override fun finished(mediaPlayer: MediaPlayer) {
-                if (System.currentTimeMillis() < ignoreFinishedUntil.get()) return
-                _isPlaying.value = false
-                listeners.forEach { it.onEnded() }
-            }
-
-            override fun error(mediaPlayer: MediaPlayer) {
-                _isPlaying.value = false
-                listeners.forEach { it.onError("VLC failed to play", recoverable = true) }
-            }
-        })
+        bindEvents(player)
         onVlc {
             player?.audio()?.setVolume(volumePercent.get())
             player?.audio()?.setMute(false)
@@ -206,15 +165,22 @@ class VlcjPlaybackEngine : PlaybackEngine {
                 return@onVlc
             }
             val mrl = toMrl(media.uri)
-            System.err.println("Vlcj play $mrl")
+            log.i { "play ${redactSecrets(mrl)}" }
             ignoreFinishedUntil.set(System.currentTimeMillis() + 1_200)
             silentStop()
             p.audio().setMute(false)
             p.audio().setVolume(volumePercent.get())
-            val extra = pendingStartMs.get().takeIf { it > 0 }?.let {
-                arrayOf(":start-time=${it / 1000.0}")
-            } ?: emptyArray()
-            val ok = p.media().play(mrl, *(mediaOptions(media) + extra))
+            val extra = buildList {
+                addAll(mediaOptions(media))
+                pendingStartMs.get().takeIf { it > 0 }?.let {
+                    add(":start-time=${it / 1000.0}")
+                }
+                if (mrl.startsWith("http")) {
+                    add(":http-reconnect")
+                    add(":http-user-agent=YuriPlayer/1.0")
+                }
+            }.toTypedArray()
+            val ok = p.media().play(mrl, *extra)
             if (!ok) {
                 listeners.forEach { it.onError("Could not open ${media.title}", recoverable = true) }
                 return@onVlc
@@ -238,8 +204,7 @@ class VlcjPlaybackEngine : PlaybackEngine {
             try {
                 block()
             } catch (t: Throwable) {
-                System.err.println("Vlcj: ${t.message}")
-                t.printStackTrace()
+                log.e(t) { "native call failed" }
                 listeners.forEach { it.onError(t.message ?: "VLC error", true) }
             }
         }
@@ -257,8 +222,90 @@ class VlcjPlaybackEngine : PlaybackEngine {
         }
     }
 
+    private fun bindEvents(target: MediaPlayer?) {
+        target?.events()?.addMediaPlayerEventListener(object : MediaPlayerEventAdapter() {
+            override fun playing(mediaPlayer: MediaPlayer) {
+                val pending = pendingStartMs.getAndSet(-1L)
+                if (pending > 0L) {
+                    mediaPlayer.controls().setTime(pending)
+                    positionMs.set(pending)
+                } else {
+                    positionMs.set(mediaPlayer.status().time().coerceAtLeast(0L))
+                }
+                _isPlaying.value = true
+                log.d { "playing pos=${positionMs.get()} dur=${durationMs.get()}" }
+                listeners.forEach { it.onIsPlayingChanged(true) }
+            }
+
+            override fun paused(mediaPlayer: MediaPlayer) {
+                _isPlaying.value = false
+                listeners.forEach { it.onIsPlayingChanged(false) }
+            }
+
+            override fun stopped(mediaPlayer: MediaPlayer) {
+                _isPlaying.value = false
+                listeners.forEach { it.onIsPlayingChanged(false) }
+            }
+
+            override fun timeChanged(mediaPlayer: MediaPlayer, newTime: Long) {
+                positionMs.set(newTime)
+            }
+
+            override fun lengthChanged(mediaPlayer: MediaPlayer, newLength: Long) {
+                durationMs.set(newLength)
+            }
+
+            override fun finished(mediaPlayer: MediaPlayer) {
+                if (System.currentTimeMillis() < ignoreFinishedUntil.get()) return
+                _isPlaying.value = false
+                log.i { "finished ${redactSecrets(_currentUri.value.orEmpty())}" }
+                listeners.forEach { it.onEnded() }
+            }
+
+            override fun error(mediaPlayer: MediaPlayer) {
+                _isPlaying.value = false
+                log.e { "error ${redactSecrets(_currentUri.value.orEmpty())}" }
+                recyclePlayer()
+                listeners.forEach { it.onError("VLC failed to play", recoverable = true) }
+            }
+        })
+    }
+
+    private fun recyclePlayer() {
+        if (!recreating.compareAndSet(false, true)) return
+        onVlc {
+            try {
+                val old = player
+                runCatching { old?.controls()?.stop() }
+                runCatching { old?.release() }
+                val next = factory?.mediaPlayers()?.newMediaPlayer()
+                player = next
+                bindEvents(next)
+                next?.audio()?.setVolume(volumePercent.get())
+                next?.audio()?.setMute(false)
+                openedMrl.set(null)
+                log.w { "recycled media player after stream error" }
+            } finally {
+                recreating.set(false)
+            }
+        }
+    }
+
     private fun mediaOptions(media: PlaybackMedia): Array<String> {
         if (media.headers.isEmpty()) return emptyArray()
         return media.headers.map { (k, v) -> ":http-header=$k: $v" }.toTypedArray()
+    }
+
+    companion object {
+        private val FACTORY_ARGS = arrayOf(
+            "--no-video",
+            "--no-metadata-network-access",
+            "--network-caching=4000",
+            "--file-caching=300",
+            "--http-reconnect",
+            "--no-http-h2",
+            "--http-user-agent=YuriPlayer/1.0",
+            "--aout=any"
+        )
     }
 }
