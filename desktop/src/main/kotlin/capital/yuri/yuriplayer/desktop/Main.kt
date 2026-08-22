@@ -15,7 +15,10 @@ import androidx.compose.ui.window.Window
 import androidx.compose.ui.window.application
 import androidx.compose.ui.window.rememberWindowState
 import capital.yuri.yuriplayer.components.theme.isDark
+import capital.yuri.yuriplayer.core.platform.HostOs
 import capital.yuri.yuriplayer.core.platform.appDirectories
+import capital.yuri.yuriplayer.core.platform.hostOs
+import capital.yuri.yuriplayer.desktop.os.linux.LinuxDesktopIntegration
 import capital.yuri.yuriplayer.desktop.player.LibVlcBootstrap
 import capital.yuri.yuriplayer.desktop.ui.YuriDesktopApp
 import coil3.ImageLoader
@@ -28,6 +31,7 @@ import okio.Path.Companion.toOkioPath
 import java.io.File
 
 fun main() {
+    if (hostOs() == HostOs.LINUX) LinuxDesktopIntegration.install()
     LibVlcBootstrap.install()
     application {
         val dirs = appDirectories()
@@ -83,6 +87,9 @@ fun main() {
             }
         ) {
             window.background = java.awt.Color(0x12, 0x10, 0x18)
+            if (hostOs() == HostOs.LINUX) {
+                window.iconImage = LinuxDesktopIntegration.windowIcon()
+            }
             session.onRaise = {
                 window.isMinimized = false
                 window.toFront()

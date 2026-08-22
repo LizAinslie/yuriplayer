@@ -29,6 +29,7 @@ dependencies {
     implementation(libs.vlcj)
     implementation(libs.dbus.java.core)
     implementation(libs.dbus.java.transport.native.unix)
+    implementation(libs.junixsocket.core)
     implementation(libs.jna)
     implementation(libs.jna.platform)
     implementation(libs.coil.compose)

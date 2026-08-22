@@ -30,6 +30,7 @@ robolectric = "4.16"
 composeMultiplatform = "1.8.2"
 vlcj = "4.10.1"
 dbusJava = "5.1.1"
+junixsocket = "2.10.1"
 jna = "5.17.0"
 
 [libraries]
@@ -81,6 +82,7 @@ jaudiotagger = { group = "com.github.goxr3plus", name = "jaudiotagger", version.
 vlcj = { group = "uk.co.caprica", name = "vlcj", version.ref = "vlcj" }
 dbus-java-core = { group = "com.github.hypfvieh", name = "dbus-java-core", version.ref = "dbusJava" }
 dbus-java-transport-native-unix = { group = "com.github.hypfvieh", name = "dbus-java-transport-native-unixsocket", version.ref = "dbusJava" }
+junixsocket-core = { group = "com.kohlschutter.junixsocket", name = "junixsocket-core", version.ref = "junixsocket" }
 jna = { group = "net.java.dev.jna", name = "jna", version.ref = "jna" }
 jna-platform = { group = "net.java.dev.jna", name = "jna-platform", version.ref = "jna" }
 

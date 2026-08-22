@@ -160,6 +160,13 @@ class DesktopSession {
         player.mediaFor = ::freshMedia
         hydrateIndex()
         restorePlayback()
+        media.update(
+            track = player.current.value,
+            playing = player.isPlaying.value,
+            positionMs = player.positionMs(),
+            durationMs = player.durationMs(),
+            volume = player.volume.value
+        )
         startPersist()
     }
 

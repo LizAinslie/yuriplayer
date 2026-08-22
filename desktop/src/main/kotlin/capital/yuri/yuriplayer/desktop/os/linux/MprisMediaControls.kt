@@ -41,10 +41,45 @@ class MprisMediaControls : OsMediaControls {
             connection = conn
             exported = obj
             System.err.println("MPRIS: claimed $BUS_NAME")
+            announce(conn, obj)
             grabGnomeKeys(conn, callbacks)
         } catch (e: Exception) {
             System.err.println("MPRIS unavailable: ${e.javaClass.simpleName}: ${e.message}")
             e.printStackTrace()
+        }
+    }
+
+    private fun announce(conn: DBusConnection, obj: MprisObject) {
+        val now = state.get()
+        runCatching {
+            conn.sendMessage(
+                Properties.PropertiesChanged(
+                    OBJECT_PATH,
+                    ROOT_IFACE,
+                    mapOf(
+                        "Identity" to Variant("Yuri Player"),
+                        "DesktopEntry" to Variant(APP_ID),
+                        "CanRaise" to Variant(true)
+                    ),
+                    emptyList()
+                )
+            )
+            conn.sendMessage(
+                Properties.PropertiesChanged(
+                    OBJECT_PATH,
+                    PLAYER_IFACE,
+                    mapOf(
+                        "PlaybackStatus" to Variant(obj.playbackStatus(now)),
+                        "Metadata" to Variant(obj.metadata(now)),
+                        "CanControl" to Variant(true),
+                        "CanPlay" to Variant(true),
+                        "CanPause" to Variant(true),
+                        "CanGoNext" to Variant(true),
+                        "CanGoPrevious" to Variant(true)
+                    ),
+                    emptyList()
+                )
+            )
         }
     }
 
