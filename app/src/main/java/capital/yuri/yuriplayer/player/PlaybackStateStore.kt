@@ -1,7 +1,7 @@
 package capital.yuri.yuriplayer.player
 
 import android.content.Context
-import android.util.Log
+import capital.yuri.yuriplayer.core.log.yuriLog
 import capital.yuri.yuriplayer.data.Song
 import capital.yuri.yuriplayer.data.json.AppJson
 import kotlinx.serialization.Serializable
@@ -44,7 +44,7 @@ class PlaybackStateStore(context: Context) {
                 tmp.delete()
             }
         } catch (e: Exception) {
-            Log.w(TAG, "Failed to save playback state", e)
+            log.w(e) { "Failed to save playback state" }
         }
     }
 
@@ -81,7 +81,7 @@ class PlaybackStateStore(context: Context) {
                 playWhenReady = dto.playWhenReady
             )
         } catch (e: Exception) {
-            Log.w(TAG, "Failed to load playback state", e)
+            log.w(e) { "Failed to load playback state" }
             null
         }
     }
@@ -121,7 +121,7 @@ class PlaybackStateStore(context: Context) {
     )
 
     companion object {
-        private const val TAG = "PlaybackStateStore"
+        private val log = yuriLog("PlaybackStateStore")
         private const val FILE_NAME = "playback_state.json"
         /** v4: playedStack for Previous across restarts. */
         private const val VERSION = 4

@@ -30,10 +30,7 @@ suspend fun lightAlbumItemsForArtist(
         val items = rows.map { row ->
             row.toLightAlbum(seeds[row.albumKey]?.toLightSong())
         }
-        AlbumLog.i(
-            displayName,
-            "light discography from album rows n=${items.size} keys=${keys.size}"
-        )
+        AlbumLog.i(displayName, "light discography from album rows n=${items.size} keys=${keys.size}")
         return@withContext clusterNearDuplicateAlbums(items).sortedWith(lightAlbumOrder())
     }
 
@@ -56,6 +53,7 @@ suspend fun lightAlbumItemsForArtist(
             )
         }
     AlbumLog.i(displayName, "light discography from tracks n=${fromTracks.size}")
+
     clusterNearDuplicateAlbums(fromTracks).sortedWith(lightAlbumOrder())
 }
 
@@ -130,10 +128,7 @@ private fun clusterNearDuplicateAlbums(items: List<AlbumItem>): List<AlbumItem> 
     val exact = items.groupBy { albumKey(it.name, it.artist) }.map { (key, group) ->
         val pick = group.maxByOrNull { it.trackCount } ?: group.first()
         if (group.size > 1) {
-            AlbumLog.d(
-                pick.name,
-                "light merge cards=${group.size} key='$key' counts=${group.map { it.trackCount }}"
-            )
+            AlbumLog.d(pick.name, "light merge cards=${group.size} key='$key' counts=${group.map { it.trackCount }}")
         }
         pick
     }

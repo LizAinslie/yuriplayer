@@ -1,6 +1,6 @@
 package capital.yuri.yuriplayer.player.radio
 
-import android.util.Log
+import capital.yuri.yuriplayer.core.log.yuriLog
 import capital.yuri.yuriplayer.data.AlbumItem
 import capital.yuri.yuriplayer.data.LibraryIndex
 import capital.yuri.yuriplayer.data.LibrarySettings
@@ -57,7 +57,7 @@ class RadioEngine(
         activeAlgorithm = RadioAlgorithmId.RELEASE_POOL
         session = withPrefs
         memory.note(ReleaseClassifier.releaseKey(album), ReleaseClassifier.kindOf(album))
-        Log.i(TAG, "album radio '${withPrefs.displayName}' artists=${cfg.artistKeys.size}")
+        log.i { "album radio '${withPrefs.displayName}' artists=${cfg.artistKeys.size}" }
         return withPrefs
     }
 
@@ -66,7 +66,7 @@ class RadioEngine(
         activeAlgorithm = RadioAlgorithmId.PLAYBACK
         session = sess
         poolReleases = releasesForArtist(artistName)
-        Log.i(TAG, "artist radio '${sess.displayName}' releases=${poolReleases.size}")
+        log.i { "artist radio '${sess.displayName}' releases=${poolReleases.size}" }
         return sess
     }
 
@@ -80,7 +80,7 @@ class RadioEngine(
         configurePool(cfg)
         activeAlgorithm = RadioAlgorithmId.RELEASE_POOL
         session = withPrefs
-        Log.i(TAG, "playlist radio '${withPrefs.displayName}'")
+        log.i { "playlist radio '${withPrefs.displayName}'" }
         return withPrefs
     }
 
@@ -107,11 +107,8 @@ class RadioEngine(
                 }
             }
         }
-        Log.i(
-            TAG,
-            "adoptSession '${sess.displayName}' kind=${sess.kind} " +
-                "pool=${poolReleases.size} shuffle=${sess.prefs.shuffle}"
-        )
+        log.i { "adoptSession '${sess.displayName}' kind=${sess.kind} " +
+                "pool=${poolReleases.size} shuffle=${sess.prefs.shuffle}" }
     }
 
     fun ensureAutoPlaySession(seedSong: Song?, finishedSource: ColdSource?): RadioSession {
@@ -127,12 +124,9 @@ class RadioEngine(
     fun updatePrefs(prefs: RadioSourcePrefs) {
         val s = session ?: return
         session = s.copy(prefs = prefs)
-        Log.i(
-            TAG,
-            "prefs shuffle=${prefs.shuffle} unit=${prefs.shuffleUnit} max=${prefs.maxRadioQueue} " +
+        log.i { "prefs shuffle=${prefs.shuffle} unit=${prefs.shuffleUnit} max=${prefs.maxRadioQueue} " +
                 "lib=${prefs.useLibraryDiscovery} jf=${prefs.useJellyfinInstantMix} " +
-                "sub=${prefs.useSubsonicSimilar} mono=${prefs.useMonochromeDiscovery}"
-        )
+                "sub=${prefs.useSubsonicSimilar} mono=${prefs.useMonochromeDiscovery}" }
     }
 
     fun setShufflePrefs(enabled: Boolean): RadioSourcePrefs? {
@@ -140,7 +134,7 @@ class RadioEngine(
         if (s.prefs.shuffle == enabled) return null
         val next = s.prefs.copy(shuffle = enabled)
         session = s.copy(prefs = next)
-        Log.i(TAG, "prefs shuffle=${next.shuffle} unit=${next.shuffleUnit} max=${next.maxRadioQueue}")
+        log.i { "prefs shuffle=${next.shuffle} unit=${next.shuffleUnit} max=${next.maxRadioQueue}" }
         return next
     }
 
@@ -152,7 +146,7 @@ class RadioEngine(
     fun stopRadio() {
         session = null
         poolReleases = emptyList()
-        Log.i(TAG, "radio stopped")
+        log.i { "radio stopped" }
     }
 
     fun noteSource(source: ColdSource?) {
@@ -171,7 +165,7 @@ class RadioEngine(
         val max = prefs.maxRadioQueue.coerceIn(1, 500)
         val releases = availableReleases(excludeKeys)
         if (releases.isEmpty()) {
-            Log.i(TAG, "planBatch: no releases")
+            log.i { "planBatch: no releases" }
             return null
         }
 
@@ -198,11 +192,8 @@ class RadioEngine(
             prefs.shuffleUnit == RadioShuffleUnit.RELEASES -> "shuffle-releases"
             else -> "shuffle-songs"
         }
-        Log.i(
-            TAG,
-            "planBatch '${sess.displayName}' songs=${songs.size} " +
-                "shuffle=${prefs.shuffle} unit=${prefs.shuffleUnit} max=$max pool=${releases.size}"
-        )
+        log.i { "planBatch '${sess.displayName}' songs=${songs.size} " +
+                "shuffle=${prefs.shuffle} unit=${prefs.shuffleUnit} max=$max pool=${releases.size}" }
         return RadioBatch(
             songs = songs,
             source = source,
@@ -225,11 +216,11 @@ class RadioEngine(
             val pool = songPool(availableReleases(emptySet()))
                 .filter { songKey(it) !in alreadyQueuedKeys }
             if (pool.isEmpty()) {
-                Log.i(TAG, "restock songs: empty pool (cold=$currentColdSize max=$max)")
+                log.i { "restock songs: empty pool (cold=$currentColdSize max=$max)" }
                 return emptyList()
             }
             val pick = pool.shuffled(Random(System.nanoTime())).take(need)
-            Log.i(TAG, "restock songs +${pick.size} (cold was $currentColdSize / $max)")
+            log.i { "restock songs +${pick.size} (cold was $currentColdSize / $max)" }
             return pick
         }
 
@@ -241,18 +232,15 @@ class RadioEngine(
         } else {
             nextOrderedRelease(alreadyQueuedKeys)
         } ?: run {
-            Log.i(TAG, "restock release: no candidate (cold=$currentColdSize max=$max)")
+            log.i { "restock release: no candidate (cold=$currentColdSize max=$max)" }
             return emptyList()
         }
 
         val tracks = sortedTracks(next).filter { songKey(it) !in alreadyQueuedKeys }
         if (tracks.isEmpty()) return emptyList()
         memory.note(ReleaseClassifier.releaseKey(next), ReleaseClassifier.kindOf(next))
-        Log.i(
-            TAG,
-            "restock release +${tracks.size} from '${next.displayName}' " +
-                "(cold was $currentColdSize / $max)"
-        )
+        log.i { "restock release +${tracks.size} from '${next.displayName}' " +
+                "(cold was $currentColdSize / $max)" }
         return tracks
     }
 
@@ -263,7 +251,7 @@ class RadioEngine(
     ): RadioBatch? {
         val radioActive = session?.active == true
         if (!radioActive && !settings.isAutoPlayRecommendedEnabled()) {
-            Log.d(TAG, "skip — no session & auto-play off")
+            log.d { "skip — no session & auto-play off" }
             return null
         }
         if (repeatMode != RepeatMode.OFF) return null
@@ -411,6 +399,6 @@ class RadioEngine(
         s.path?.lowercase() ?: s.contentUri.toString()
 
     companion object {
-        private const val TAG = "YuriPlayer.Radio"
+        private val log = yuriLog("Radio")
     }
 }

@@ -1,6 +1,6 @@
 package capital.yuri.yuriplayer.data.source
 
-import android.util.Log
+import capital.yuri.yuriplayer.core.log.yuriLog
 import capital.yuri.yuriplayer.http.url
 import io.ktor.client.HttpClient
 import io.ktor.client.request.get
@@ -30,7 +30,7 @@ class BandsintownClient(
         if (name.isEmpty()) return@withContext emptyList()
         val id = appId?.trim().orEmpty()
         if (id.isEmpty()) {
-            Log.i(TAG, "skip events for $name — no partner app_id configured")
+            log.i { "skip events for $name — no partner app_id configured" }
             return@withContext emptyList()
         }
         val requestUrl = url("https://rest.bandsintown.com") {
@@ -41,20 +41,17 @@ class BandsintownClient(
         val body = try {
             val response = http.get(requestUrl)
             if (response.status.value == 403) {
-                Log.w(
-                    TAG,
-                    "403 for $name — app_id is not partner-approved. " +
-                        "Request access at API@bandsintown.com or use a Bandsintown-for-Artists key."
-                )
+                log.w { "403 for $name — app_id is not partner-approved. " +
+                        "Request access at API@bandsintown.com or use a Bandsintown-for-Artists key." }
                 return@withContext emptyList()
             }
             if (!response.status.isSuccess()) {
-                Log.w(TAG, "events ${response.status} for $name")
+                log.w { "events ${response.status} for $name" }
                 return@withContext emptyList()
             }
             response.bodyAsText()
         } catch (e: Exception) {
-            Log.w(TAG, "events failed for $name", e)
+            log.w(e) { "events failed for $name" }
             return@withContext emptyList()
         }
         // API returns [] or error object
@@ -83,14 +80,13 @@ class BandsintownClient(
                 }
             }
         } catch (e: Exception) {
-            Log.w(TAG, "parse events failed", e)
+            log.w(e) { "parse events failed" }
             emptyList()
         }
     }
 
     companion object {
-        private const val TAG = "Bandsintown"
-
+        private val log = yuriLog("Bandsintown")
         /** Deep-link fallback when API access is unavailable. */
         fun publicArtistUrl(artistName: String): String {
             return url("https://www.bandsintown.com") {

@@ -1,6 +1,7 @@
 package capital.yuri.yuriplayer.desktop.os.linux
 
 import capital.yuri.yuriplayer.core.library.Track
+import capital.yuri.yuriplayer.core.log.yuriLog
 import capital.yuri.yuriplayer.core.os.OsMediaControls
 import org.freedesktop.dbus.DBusPath
 import org.freedesktop.dbus.annotations.DBusInterfaceName
@@ -23,6 +24,8 @@ import kotlin.math.abs
  * GNOME/KDE media keys and `playerctl -p yuriplayer` talk to this.
  */
 class MprisMediaControls : OsMediaControls {
+    private val log = yuriLog("Mpris")
+
     private val callbacks = AtomicReference<OsMediaControls.Callbacks?>(null)
     private val state = AtomicReference(NowPlaying())
     private var connection: DBusConnection? = null
@@ -40,12 +43,11 @@ class MprisMediaControls : OsMediaControls {
             conn.requestBusName(BUS_NAME)
             connection = conn
             exported = obj
-            System.err.println("MPRIS: claimed $BUS_NAME")
+            log.w { "MPRIS: claimed $BUS_NAME" }
             announce(conn, obj)
             grabGnomeKeys(conn, callbacks)
         } catch (e: Exception) {
-            System.err.println("MPRIS unavailable: ${e.javaClass.simpleName}: ${e.message}")
-            e.printStackTrace()
+            log.w(e) { "MPRIS unavailable: ${e.javaClass.simpleName}: ${e.message}" }
         }
     }
 
@@ -102,9 +104,9 @@ class MprisMediaControls : OsMediaControls {
             )
             keys.GrabMediaPlayerKeys(APP_ID, UInt32(0))
             gnomeKeys = keys
-            System.err.println("MPRIS: grabbed GNOME media keys")
+            log.w { "MPRIS: grabbed GNOME media keys" }
         }.onFailure {
-            System.err.println("MPRIS: GNOME media keys skipped (${it.message})")
+            log.w { "MPRIS: GNOME media keys skipped (${it.message})" }
         }
     }
 

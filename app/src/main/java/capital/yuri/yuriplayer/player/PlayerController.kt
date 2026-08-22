@@ -5,7 +5,7 @@ import android.content.Context
 import android.content.Intent
 import android.content.ServiceConnection
 import android.os.IBinder
-import android.util.Log
+import capital.yuri.yuriplayer.core.log.yuriLog
 import androidx.core.content.ContextCompat
 import capital.yuri.yuriplayer.data.AlbumItem
 import capital.yuri.yuriplayer.data.Song
@@ -79,7 +79,7 @@ class PlayerController(
             try {
                 pending?.invoke()
             } catch (e: Exception) {
-                Log.e(TAG, "pending action failed", e)
+                log.e(e) { "pending action failed" }
             }
         }
 
@@ -139,7 +139,7 @@ class PlayerController(
         if (s != null) {
             action(s)
         } else {
-            Log.i(TAG, "service not bound yet — queueing action")
+            log.i { "service not bound yet — queueing action" }
             pendingAction = { service?.let(action) }
         }
     }
@@ -327,6 +327,6 @@ class PlayerController(
     }
 
     companion object {
-        private const val TAG = "YuriPlayer.Ctrl"
+        private val log = yuriLog("Ctrl")
     }
 }

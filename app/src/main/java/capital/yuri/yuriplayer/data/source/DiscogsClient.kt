@@ -1,6 +1,6 @@
 package capital.yuri.yuriplayer.data.source
 
-import android.util.Log
+import capital.yuri.yuriplayer.core.log.yuriLog
 import capital.yuri.yuriplayer.http.UrlScope
 import capital.yuri.yuriplayer.http.url
 import io.ktor.client.HttpClient
@@ -64,7 +64,7 @@ class DiscogsClient(
             }
             hits.sortedByDescending { ArtistNameMatch.score(wanted, it.title) }
         } catch (e: Exception) {
-            Log.w(TAG, "search parse failed", e)
+            log.w(e) { "search parse failed" }
             emptyList()
         }
     }
@@ -78,7 +78,7 @@ class DiscogsClient(
         return try {
             JSONObject(body)
         } catch (e: Exception) {
-            Log.w(TAG, "json parse failed ${path.joinToString("/")}", e)
+            log.w(e) { "json parse failed ${path.joinToString("/")}" }
             null
         }
     }
@@ -107,18 +107,18 @@ class DiscogsClient(
                 }
             }
             if (!response.status.isSuccess()) {
-                Log.w(TAG, "GET $requestUrl → ${response.status}")
+                log.w { "GET $requestUrl → ${response.status}" }
                 return@withLock null
             }
             response.bodyAsText()
         } catch (e: Exception) {
-            Log.w(TAG, "GET failed $requestUrl", e)
+            log.w(e) { "GET failed $requestUrl" }
             null
         }
     }
 
     companion object {
-        private const val TAG = "Discogs"
+        private val log = yuriLog("Discogs")
         private const val API = "https://api.discogs.com"
         private const val MIN_INTERVAL_MS = 1_100L
     }

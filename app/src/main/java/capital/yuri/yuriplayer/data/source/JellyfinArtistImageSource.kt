@@ -1,6 +1,6 @@
 package capital.yuri.yuriplayer.data.source
 
-import android.util.Log
+import capital.yuri.yuriplayer.core.log.yuriLog
 import capital.yuri.yuriplayer.data.db.SourceInstanceEntity
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -70,7 +70,7 @@ class JellyfinArtistImageSource(
             username = user,
             password = secret
         ).getOrElse {
-            Log.w(TAG, "auth failed for ${server.name}: ${it.message}")
+            log.w { "auth failed for ${server.name}: ${it.message}" }
             null
         }
     }
@@ -116,12 +116,12 @@ class JellyfinArtistImageSource(
                 )
             }
         } catch (e: Exception) {
-            Log.w(TAG, "searchArtists failed: ${e.message}")
+            log.w { "searchArtists failed: ${e.message}" }
             emptyList()
         }
     }
 
     companion object {
-        private const val TAG = "JellyfinArtistImg"
+        private val log = yuriLog("JellyfinArtistImg")
     }
 }

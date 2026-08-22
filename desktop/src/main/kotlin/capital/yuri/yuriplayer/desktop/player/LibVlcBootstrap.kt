@@ -1,5 +1,6 @@
 package capital.yuri.yuriplayer.desktop.player
 
+import capital.yuri.yuriplayer.core.log.yuriLog
 import java.io.File
 
 /**
@@ -11,6 +12,8 @@ import java.io.File
  * packages are still preferred when present.
  */
 object LibVlcBootstrap {
+    private val log = yuriLog("LibVlc")
+
     fun install(): File? {
         val dir = resolveDir() ?: return null
         val path = dir.canonicalPath
@@ -23,7 +26,7 @@ object LibVlcBootstrap {
         if (plugins.isDirectory) {
             System.setProperty("VLC_PLUGIN_PATH", plugins.canonicalPath)
         }
-        System.err.println("LibVLC bundle: $path")
+        log.w { "LibVLC bundle: $path" }
         return dir
     }
 

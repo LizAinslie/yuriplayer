@@ -30,6 +30,7 @@ suspend fun expandAlbumTracks(
         ?: albumKey.substringBefore('|').takeIf { it.isNotBlank() }
 
     AlbumLog.i(albumName, "expand key='$albumKey' artist='$artistName' direct=${direct.size} row=${row != null}")
+
     AlbumLog.entities(albumName, "direct", direct)
 
     return expandAlbumTracksByName(
@@ -84,6 +85,7 @@ suspend fun fastExpandAlbumTracks(
 
     val deduped = dedupeAlbumPageTracks(songs + extraSeedSongs)
     AlbumLog.i(name, "fast expand n=${deduped.size} raw=${bySongKey.size}")
+
     return deduped.sortedWith(albumTrackOrder())
 }
 
@@ -131,11 +133,13 @@ suspend fun expandAlbumTracksByName(
             keys += albumKey(name, null)
         }
         AlbumLog.d(name, "albumKeys=${keys.size} ${keys.joinToString()}")
+
         for (k in keys) {
             if (k.isBlank()) continue
             val rows = dao.getTracksForAlbum(k)
             rows.forEach { put(it) }
             AlbumLog.v(name, "  key '$k' → ${rows.size}")
+
         }
         AlbumLog.step(name, "after keys", bySongKey.size)
 
@@ -211,11 +215,10 @@ suspend fun expandAlbumTracksByName(
     val dropped = bySongKey.size - filtered.size
     if (dropped > 0) {
         AlbumLog.w(name, "filter dropped $dropped/${bySongKey.size} artistFold='$artistFolded'")
+
         bySongKey.values.filter { !albumOk(it) || !artistOk(it) }.forEach {
-            AlbumLog.v(
-                name,
-                "  DROP albumOk=${albumOk(it)} artistOk=${artistOk(it)} ${AlbumLog.entityLine(it)}"
-            )
+            AlbumLog.v(name, "  DROP albumOk=${albumOk(it)} artistOk=${artistOk(it)} ${AlbumLog.entityLine(it)}")
+
         }
     }
     AlbumLog.entities(name, "filtered", filtered)
@@ -229,10 +232,8 @@ suspend fun expandAlbumTracksByName(
 
     val deduped = dedupeAlbumPageTracks(combined)
 
-    AlbumLog.i(
-        name,
-        "expand done artist='$artist' raw=${combined.size} deduped=${deduped.size} keys=${bySongKey.size} filtered=${filtered.size}"
-    )
+    AlbumLog.i(name, "expand done artist='$artist' raw=${combined.size} deduped=${deduped.size} keys=${bySongKey.size} filtered=${filtered.size}")
+
     AlbumLog.songs(name, "deduped", deduped)
 
     return deduped.sortedWith(albumTrackOrder())

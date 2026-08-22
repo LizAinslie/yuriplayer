@@ -1,6 +1,6 @@
 package capital.yuri.yuriplayer.player.radio
 
-import android.util.Log
+import capital.yuri.yuriplayer.core.log.yuriLog
 import capital.yuri.yuriplayer.data.AlbumItem
 import capital.yuri.yuriplayer.data.artistKey
 import capital.yuri.yuriplayer.player.ColdSource
@@ -31,7 +31,7 @@ class ReleasePoolAlgorithm(
             context.focusArtistKeys).toSet()
 
         if (artistFocus.isEmpty() && config.genreKeys.isEmpty()) {
-            Log.i(TAG, "empty pool")
+            log.i { "empty pool" }
             return null
         }
 
@@ -55,13 +55,13 @@ class ReleasePoolAlgorithm(
             // Stub: merge external candidates when privacy gate opens.
             val remote = external.fetchCandidates(context)
             if (remote.isNotEmpty()) {
-                Log.i(TAG, "external returned ${remote.size} (not persisted)")
+                log.i { "external returned ${remote.size} (not persisted)" }
                 pool = pool + remote.filter { it.songs.isNotEmpty() }
             }
         }
 
         if (pool.isEmpty()) {
-            Log.i(TAG, "no local releases in pool artists=$artistFocus")
+            log.i { "no local releases in pool artists=$artistFocus" }
             return null
         }
 
@@ -79,7 +79,7 @@ class ReleasePoolAlgorithm(
         val album = filtered[Random.nextInt(filtered.size)]
         val key = ReleaseClassifier.releaseKey(album)
         val kind = ReleaseClassifier.kindOf(album)
-        Log.i(TAG, "pool pick '${album.displayName}' kind=$kind from ${filtered.size}")
+        log.i { "pool pick '${album.displayName}' kind=$kind from ${filtered.size}" }
         return RadioPick(
             album = album,
             source = ColdSource(ColdSourceType.ALBUM, key, album.name),
@@ -99,6 +99,6 @@ class ReleasePoolAlgorithm(
     }
 
     companion object {
-        private const val TAG = "YuriPlayer.RadioPool"
+        private val log = yuriLog("RadioPool")
     }
 }

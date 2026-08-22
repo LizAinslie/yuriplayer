@@ -1,6 +1,6 @@
 package capital.yuri.yuriplayer.player
 
-import android.util.Log
+import capital.yuri.yuriplayer.core.log.yuriLog
 import capital.yuri.yuriplayer.data.PlaylistRepository
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
@@ -37,7 +37,7 @@ class SourceColdSync(
                 .distinctUntilChanged()
                 .collectLatest { playlistId ->
                     if (playlistId == null) return@collectLatest
-                    Log.i(TAG, "watching playlist $playlistId for cold sync")
+                    log.i { "watching playlist $playlistId for cold sync" }
                     playlists.observePlaylist(playlistId).collect { pl ->
                         val songs = pl?.songs.orEmpty()
                         if (songs.isEmpty()) return@collect
@@ -55,6 +55,6 @@ class SourceColdSync(
     }
 
     companion object {
-        private const val TAG = "YuriPlayer.ColdSync"
+        private val log = yuriLog("ColdSync")
     }
 }

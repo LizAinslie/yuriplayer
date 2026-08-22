@@ -32,10 +32,8 @@ suspend fun resolveAlbumItem(
         extraSeedSongs = seedSongs
     )
     AlbumLog.songs(albumName, "resolve.expanded", expanded)
-
     val localSongs = library?.let { findLocalAlbum(it, albumName, artistName)?.songs }.orEmpty()
     AlbumLog.songs(albumName, "resolve.local", localSongs)
-
     val songs = dedupeAlbumPageTracks(expanded + seedSongs + localSongs)
     AlbumLog.i(albumName, "resolve done n=${songs.size} expanded=${expanded.size} seed=${seedSongs.size} local=${localSongs.size}")
     if (songs.size < seedSongs.size && seedSongs.size > 1) {

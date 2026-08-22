@@ -1,6 +1,6 @@
 package capital.yuri.yuriplayer.player
 
-import android.util.Log
+import capital.yuri.yuriplayer.core.log.yuriLog
 import capital.yuri.yuriplayer.data.Song
 import capital.yuri.yuriplayer.player.radio.RadioSession
 import capital.yuri.yuriplayer.player.radio.RadioSourcePrefs
@@ -245,7 +245,7 @@ class QueueManager {
         val pick = helper.maybePick(seed, source, repeatMode) ?: return null
         val songs = pick.songs
         if (songs.isEmpty()) return null
-        Log.i(TAG, "radio/auto-play rescue → ${songs.size} tracks (${pick.source.title})")
+        log.i { "radio/auto-play rescue → ${songs.size} tracks (${pick.source.title})" }
         if (pick.session != null) {
             radioSession = pick.session
             shuffleEnabled = pick.session.prefs.shuffle
@@ -280,11 +280,8 @@ class QueueManager {
         if (add.isEmpty()) return
         coldQueue.addAll(add)
         coldOriginal = coldOriginal + add
-        Log.i(
-            TAG,
-            "radio stock +${add.size} cold=${coldQueue.size} " +
-                "shuffle=${sess.prefs.shuffle} unit=${sess.prefs.shuffleUnit}"
-        )
+        log.i { "radio stock +${add.size} cold=${coldQueue.size} " +
+                "shuffle=${sess.prefs.shuffle} unit=${sess.prefs.shuffleUnit}" }
         publish()
     }
 
@@ -325,7 +322,7 @@ class QueueManager {
         keepRadio: Boolean = false
     ) {
         if (songs.isEmpty()) return
-        Log.i(TAG, "playSource size=${songs.size} start=$startIndex source=$source keepRadio=$keepRadio")
+        log.i { "playSource size=${songs.size} start=$startIndex source=$source keepRadio=$keepRadio" }
         floatingCurrent = null
         playedStack.clear()
         coldSource = source
@@ -417,11 +414,8 @@ class QueueManager {
             }
         }
 
-        Log.i(
-            TAG,
-            "updateColdFromSource id=$sourceId size=${songs.size} " +
-                "cold=${coldQueue.size} shuffle=$shuffleEnabled (overrides reset)"
-        )
+        log.i { "updateColdFromSource id=$sourceId size=${songs.size} " +
+                "cold=${coldQueue.size} shuffle=$shuffleEnabled (overrides reset)" }
         publish()
         return true
     }
@@ -466,7 +460,7 @@ class QueueManager {
             }
         }
         radioUpcoming = emptyList()
-        Log.i(TAG, "replaceColdKeepingCurrent cold=${coldQueue.size}")
+        log.i { "replaceColdKeepingCurrent cold=${coldQueue.size}" }
         publish()
         if (radioSession?.active == true) ensureRadioStock()
     }
@@ -856,7 +850,7 @@ class QueueManager {
         linearPrevious()?.let { prev ->
             indexInLane -= 1
             publish()
-            Log.i(TAG, "skipPrevious linear → '${prev.displayTitle}' idx=$indexInLane")
+            log.i { "skipPrevious linear → '${prev.displayTitle}' idx=$indexInLane" }
             return AdvanceResult(song = prev)
         }
 
@@ -894,7 +888,7 @@ class QueueManager {
         floatingCurrent = null
 
         publish()
-        Log.i(TAG, "skipPrevious history → '${prev.displayTitle}'")
+        log.i { "skipPrevious history → '${prev.displayTitle}'" }
         return AdvanceResult(song = prev)
     }
 
@@ -931,7 +925,7 @@ class QueueManager {
     )
 
     companion object {
-        private const val TAG = "YuriPlayer.Queue"
+        private val log = yuriLog("Queue")
         const val PREV_RESTART_MS = 3_000L
         private const val MAX_PLAYED_STACK = 200
     }

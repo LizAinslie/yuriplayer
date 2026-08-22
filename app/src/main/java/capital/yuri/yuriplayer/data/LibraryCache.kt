@@ -1,7 +1,7 @@
 package capital.yuri.yuriplayer.data
 
 import android.content.Context
-import android.util.Log
+import capital.yuri.yuriplayer.core.log.yuriLog
 import capital.yuri.yuriplayer.data.json.AppJson
 import kotlinx.serialization.Serializable
 import java.io.File
@@ -20,7 +20,7 @@ class LibraryCache(context: Context) {
             val songs = dto.songs.map { it.cleaned() }
             CachedLibrary(songs, dto.scannedAt)
         } catch (e: Exception) {
-            Log.w(TAG, "Failed to load library cache", e)
+            log.w(e) { "Failed to load library cache" }
             null
         }
     }
@@ -39,7 +39,7 @@ class LibraryCache(context: Context) {
                 tmpFile.delete()
             }
         } catch (e: Exception) {
-            Log.e(TAG, "Failed to save library cache", e)
+            log.e(e) { "Failed to save library cache" }
             try { tmpFile.delete() } catch (_: Exception) {}
         }
     }
@@ -54,7 +54,7 @@ class LibraryCache(context: Context) {
     fun cacheFilePath(): String = file.absolutePath
 
     companion object {
-        private const val TAG = "LibraryCache"
+        private val log = yuriLog("LibraryCache")
         private const val FILE_NAME = "library_index.json"
         private const val CACHE_VERSION = 3
     }

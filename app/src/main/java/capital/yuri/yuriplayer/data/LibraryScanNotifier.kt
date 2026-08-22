@@ -1,5 +1,7 @@
 package capital.yuri.yuriplayer.data
 
+import capital.yuri.yuriplayer.core.log.yuriLog
+
 import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
@@ -95,7 +97,7 @@ class LibraryScanNotifier(
             nm.notify(NOTIFICATION_ID, build(title, text, progress, max))
         } catch (e: SecurityException) {
             // POST_NOTIFICATIONS denied — FGS may still hold the service notification
-            android.util.Log.w(TAG, "notify blocked: ${e.message}")
+            log.w { "notify blocked: ${e.message}" }
         }
     }
 
@@ -121,7 +123,7 @@ class LibraryScanNotifier(
                 .build()
             nm.notify(NOTIFICATION_ID, done)
         } catch (e: SecurityException) {
-            android.util.Log.w(TAG, "finish notify blocked: ${e.message}")
+            log.w { "finish notify blocked: ${e.message}" }
         }
     }
 
@@ -130,7 +132,7 @@ class LibraryScanNotifier(
     }
 
     companion object {
-        private const val TAG = "LibraryScanNotifier"
+        private val log = yuriLog("LibraryScanNotifier")
         const val CHANNEL_ID = "yuri_library_scan"
         const val NOTIFICATION_ID = 4201
     }

@@ -1,6 +1,6 @@
 package capital.yuri.yuriplayer.data.source
 
-import android.util.Log
+import capital.yuri.yuriplayer.core.log.yuriLog
 import capital.yuri.yuriplayer.data.artistKey
 import capital.yuri.yuriplayer.http.url
 import io.ktor.client.HttpClient
@@ -100,7 +100,7 @@ class WikidataArtistImageSource(
                 hits
             }
         } catch (e: Exception) {
-            Log.w(TAG, "search failed", e)
+            log.w(e) { "search failed" }
             emptyList()
         }
 
@@ -291,7 +291,7 @@ class WikidataArtistImageSource(
                     ?.takeIf { it.isNotBlank() }
             }
         } catch (e: Exception) {
-            Log.w(TAG, "labels failed", e)
+            log.w(e) { "labels failed" }
             emptyList()
         }
     }
@@ -301,13 +301,13 @@ class WikidataArtistImageSource(
             val response = http.get(url)
             if (!response.status.isSuccess()) null else response.bodyAsText()
         } catch (e: Exception) {
-            Log.w(TAG, "GET $url", e)
+            log.w(e) { "GET $url" }
             null
         }
     }
 
     companion object {
-        private const val TAG = "WikidataArtistImg"
+        private val log = yuriLog("WikidataArtistImg")
 
         private val MUSIC_INSTANCE_QIDS = setOf(
             "Q215380", "Q5741069", "Q1058743", "Q2088357", "Q588750",

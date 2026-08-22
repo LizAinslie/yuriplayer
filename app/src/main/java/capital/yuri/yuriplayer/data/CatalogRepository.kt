@@ -1,6 +1,6 @@
 package capital.yuri.yuriplayer.data
 
-import android.util.Log
+import capital.yuri.yuriplayer.core.log.yuriLog
 import capital.yuri.yuriplayer.data.db.ArtistAliasEntity
 import capital.yuri.yuriplayer.data.db.CatalogAlbumEntity
 import capital.yuri.yuriplayer.data.db.CatalogArtistEntity
@@ -362,7 +362,7 @@ class CatalogRepository(
                 updatedAtMs = System.currentTimeMillis()
             )
         )
-        Log.i(TAG, "patchTrackTags $songKey")
+        log.i { "patchTrackTags $songKey" }
     }
 
     suspend fun syncLocalLibrary(): List<Song> = withContext(Dispatchers.IO) {
@@ -376,7 +376,7 @@ class CatalogRepository(
         rebuildRollupsLocked()
 
         val local = dao.getTracksBySource(CatalogSources.LOCAL).map { it.toSong() }
-        Log.i(TAG, "local sync: ${local.size} local tracks")
+        log.i { "local sync: ${local.size} local tracks" }
         local
     }
 
@@ -495,7 +495,7 @@ class CatalogRepository(
         if (deleted > 0) {
             dao.deleteOrphanAlbums()
             dao.deleteOrphanArtists()
-            Log.i(TAG, "pruned $deleted missing $sourceType rows (live=${liveIds.size})")
+            log.i { "pruned $deleted missing $sourceType rows (live=${liveIds.size})" }
         }
         deleted
     }
@@ -522,7 +522,7 @@ class CatalogRepository(
             )
         }
         dao.upsertTracks(entities)
-        Log.i(TAG, "ensureTracksPresent: upserted ${entities.size}")
+        log.i { "ensureTracksPresent: upserted ${entities.size}" }
     }
 
     suspend fun rebuildRollups() = withContext(Dispatchers.IO) {
@@ -581,7 +581,7 @@ class CatalogRepository(
 
         dao.deleteOrphanAlbums()
         dao.deleteOrphanArtists()
-        Log.i(TAG, "rollups rebuilt (SQL): albums=${albums.size} artists=${artists.size}")
+        log.i { "rollups rebuilt (SQL): albums=${albums.size} artists=${artists.size}" }
     }
 
     suspend fun loadAliases() = withContext(Dispatchers.IO) {
@@ -680,7 +680,7 @@ class CatalogRepository(
         if (deleted > 0) {
             dao.deleteOrphanAlbums()
             dao.deleteOrphanArtists()
-            Log.i(TAG, "pruned $deleted stale $sourceType rows (kept ${keepSongKeys.size} My Stuff keys)")
+            log.i { "pruned $deleted stale $sourceType rows (kept ${keepSongKeys.size} My Stuff keys)" }
         }
     }
 
@@ -705,7 +705,7 @@ class CatalogRepository(
                     seenAt = now
                 )
             )
-            Log.i(TAG, "imported to My Stuff: ${song.songKey} from $sourceType")
+            log.i { "imported to My Stuff: ${song.songKey} from $sourceType" }
         }
 
     suspend fun applyAlbumYear(albumKey: String, year: Int) = withContext(Dispatchers.IO) {
@@ -828,7 +828,7 @@ class CatalogRepository(
         }
         if (changed.isEmpty()) return
         changed.chunked(400).forEach { dao.upsertTracks(it) }
-        Log.i(TAG, "normalized identity on ${changed.size} tracks")
+        log.i { "normalized identity on ${changed.size} tracks" }
     }
 
     /**
@@ -1015,8 +1015,7 @@ class CatalogRepository(
     )
 
     companion object {
-        private const val TAG = "CatalogRepo"
-
+        private val log = yuriLog("CatalogRepo")
         fun sourceTypeForSong(song: Song): SourceType {
             val p = song.path.orEmpty()
             return when {

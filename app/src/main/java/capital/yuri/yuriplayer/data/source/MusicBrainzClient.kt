@@ -1,6 +1,6 @@
 package capital.yuri.yuriplayer.data.source
 
-import android.util.Log
+import capital.yuri.yuriplayer.core.log.yuriLog
 import capital.yuri.yuriplayer.http.url
 import io.ktor.client.HttpClient
 import io.ktor.client.request.get
@@ -168,7 +168,7 @@ class MusicBrainzClient(
                 }
             }
         } catch (e: Exception) {
-            Log.w(TAG, "allWikidataP18 $qid", e)
+            log.w(e) { "allWikidataP18 $qid" }
             emptyList()
         }
     }
@@ -229,7 +229,7 @@ class MusicBrainzClient(
                 else -> exactId ?: bestId?.takeIf { bestScore >= 50 }
             }
         } catch (e: Exception) {
-            Log.w(TAG, "pickBestArtistMbid failed", e)
+            log.w(e) { "pickBestArtistMbid failed" }
             null
         }
     }
@@ -258,7 +258,7 @@ class MusicBrainzClient(
             root.optJSONObject("originalimage")?.optString("source")?.takeIf { it.isNotBlank() }
                 ?: root.optJSONObject("thumbnail")?.optString("source")?.takeIf { it.isNotBlank() }
         } catch (e: Exception) {
-            Log.w(TAG, "Wikipedia image failed", e)
+            log.w(e) { "Wikipedia image failed" }
             null
         }
     }
@@ -379,7 +379,7 @@ class MusicBrainzClient(
                 genres = parseTags(json)
             )
         } catch (e: Exception) {
-            Log.w(TAG, "parse artist detail failed", e)
+            log.w(e) { "parse artist detail failed" }
             ArtistHit(mbid, "")
         }
     }
@@ -405,7 +405,7 @@ class MusicBrainzClient(
             }
             best
         } catch (e: Exception) {
-            Log.w(TAG, "parse release search failed", e)
+            log.w(e) { "parse release search failed" }
             null
         }
     }
@@ -415,12 +415,12 @@ class MusicBrainzClient(
         try {
             val response = http.get(url)
             if (!response.status.isSuccess()) {
-                Log.w(TAG, "GET $url → ${response.status}")
+                log.w { "GET $url → ${response.status}" }
                 return@withLock null
             }
             response.bodyAsText()
         } catch (e: Exception) {
-            Log.w(TAG, "GET failed $url", e)
+            log.w(e) { "GET failed $url" }
             null
         }
     }
@@ -442,7 +442,7 @@ class MusicBrainzClient(
                 dest.isFile && dest.length() > 0L
             }
         } catch (e: Exception) {
-            Log.w(TAG, "download failed $url", e)
+            log.w(e) { "download failed $url" }
             false
         }
     }
@@ -461,7 +461,7 @@ class MusicBrainzClient(
             .replace(")", "\\)")
 
     companion object {
-        private const val TAG = "MusicBrainz"
+        private val log = yuriLog("MusicBrainz")
         /** Anonymous MB guideline ≈ 1 req/s. */
         private const val MIN_INTERVAL_MS = 1_100L
     }

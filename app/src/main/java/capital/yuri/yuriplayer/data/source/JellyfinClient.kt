@@ -2,7 +2,7 @@ package capital.yuri.yuriplayer.data.source
 
 import android.content.Context
 import android.net.Uri
-import android.util.Log
+import capital.yuri.yuriplayer.core.log.yuriLog
 import capital.yuri.yuriplayer.data.Song
 import capital.yuri.yuriplayer.http.url
 import org.jellyfin.sdk.Jellyfin
@@ -44,7 +44,7 @@ class JellyfinClient(
         val user = username.trim()
         require(user.isNotEmpty()) { "Username is empty" }
 
-        Log.i(TAG, "authenticate → $root user=$user (official SDK)")
+        log.i { "authenticate → $root user=$user (official SDK)" }
 
         val api = jellyfin.createApi(baseUrl = root)
         try {
@@ -59,10 +59,7 @@ class JellyfinClient(
 
             api.update(accessToken = token)
 
-            Log.i(
-                TAG,
-                "auth ok server=${authenticationResult.serverId} userId=${userId.take(8)}…"
-            )
+            log.i { "auth ok server=${authenticationResult.serverId} userId=${userId.take(8)}…" }
             Session(
                 baseUrl = root,
                 userId = userId,
@@ -78,7 +75,7 @@ class JellyfinClient(
         } catch (e: ApiClientException) {
             error(e.message ?: "Jellyfin API error")
         }
-    }.onFailure { Log.w(TAG, "authenticate failed: ${it.message}") }
+    }.onFailure { log.w { "authenticate failed: ${it.message}" } }
 
     suspend fun listAudioItems(session: Session, limit: Int = 50_000): Result<List<Song>> =
         runCatching {
@@ -87,7 +84,7 @@ class JellyfinClient(
                 out += page
             }.getOrThrow()
             out
-        }.onFailure { Log.w(TAG, "listAudioItems failed: ${it.message}") }
+        }.onFailure { log.w { "listAudioItems failed: ${it.message}" } }
 
     enum class ListingMode { FULL, LIGHT }
 
@@ -105,7 +102,7 @@ class JellyfinClient(
             startIndex = 0
         )
         result.totalRecordCount ?: 0
-    }.onFailure { Log.w(TAG, "audioItemCount failed: ${it.message}") }
+    }.onFailure { log.w { "audioItemCount failed: ${it.message}" } }
 
     suspend fun listAudioItemsPaged(
         session: Session,
@@ -127,7 +124,7 @@ class JellyfinClient(
         val wantImages = true
 
         if (start > 0) {
-            Log.i(TAG, "resume paging from startIndex=$start mode=$mode")
+            log.i { "resume paging from startIndex=$start mode=$mode" }
         }
 
         while (delivered < maxItems) {
@@ -149,24 +146,21 @@ class JellyfinClient(
             totalHint = result.totalRecordCount ?: totalHint
             val raw = result.items.orEmpty()
             if (raw.isEmpty()) {
-                Log.i(TAG, "empty page start=$start totalHint=$totalHint page=$pageNum")
+                log.i { "empty page start=$start totalHint=$totalHint page=$pageNum" }
                 break
             }
 
             val page = raw.mapNotNull { item ->
                 runCatching { item.toSong(session) }
-                    .onFailure { e -> Log.w(TAG, "toSong failed for '${item.name}': ${e.message}") }
+                    .onFailure { e -> log.w { "toSong failed for '${item.name}': ${e.message}" } }
                     .getOrNull()
             }
             val liveIds = raw.mapNotNull { item ->
                 item.id?.toString()?.let { "jellyfin:$it" }
             }
             pageNum++
-            Log.i(
-                TAG,
-                "page#$pageNum start=$start raw=${raw.size} mapped=${page.size} " +
-                    "delivered=$delivered totalHint=$totalHint mode=$mode sort=$sortBy"
-            )
+            log.i { "page#$pageNum start=$start raw=${raw.size} mapped=${page.size} " +
+                    "delivered=$delivered totalHint=$totalHint mode=$mode sort=$sortBy" }
             onPage(page, start, totalHint, liveIds)
             delivered += raw.size
 
@@ -175,9 +169,9 @@ class JellyfinClient(
             if (totalHint != null && start >= totalHint) break
         }
 
-        Log.i(TAG, "listAudioItemsPaged done delivered=$delivered totalHint=$totalHint pages=$pageNum")
+        log.i { "listAudioItemsPaged done delivered=$delivered totalHint=$totalHint pages=$pageNum" }
         delivered
-    }.onFailure { Log.w(TAG, "listAudioItemsPaged failed: ${it.message}") }
+    }.onFailure { log.w { "listAudioItemsPaged failed: ${it.message}" } }
 
     /**
      * Jellyfin Instant Mix — similar tracks from a seed item (song / album / artist id).
@@ -202,7 +196,7 @@ class JellyfinClient(
             enableImageTypes = listOf(ImageType.PRIMARY)
         )
         result.items.orEmpty().mapNotNull { it.toSong(session) }
-    }.onFailure { Log.w(TAG, "instantMixFromItem failed: ${it.message}") }
+    }.onFailure { log.w { "instantMixFromItem failed: ${it.message}" } }
 
     data class PlaylistRef(
         val id: String,
@@ -237,7 +231,7 @@ class JellyfinClient(
                 owned = item.canDelete == true
             )
         }
-    }.onFailure { Log.w(TAG, "listPlaylists failed: ${it.message}") }
+    }.onFailure { log.w { "listPlaylists failed: ${it.message}" } }
 
     suspend fun playlistSongs(session: Session, playlistId: String): Result<List<Song>> =
         runCatching {
@@ -257,7 +251,7 @@ class JellyfinClient(
                 limit = 2_000
             )
             result.items.orEmpty().mapNotNull { it.toSong(session) }
-        }.onFailure { Log.w(TAG, "playlistSongs failed: ${it.message}") }
+        }.onFailure { log.w { "playlistSongs failed: ${it.message}" } }
 
     suspend fun searchAudio(
         session: Session,
@@ -327,7 +321,7 @@ class JellyfinClient(
             limit = limit.coerceIn(1, 100)
         )
         result.items.orEmpty().mapNotNull(map)
-    }.onFailure { Log.w(TAG, "search $kind failed: ${it.message}") }
+    }.onFailure { log.w { "search $kind failed: ${it.message}" } }
 
     fun streamUrl(session: Session, itemId: String, container: String? = null): String =
         url(session.baseUrl) {
@@ -421,7 +415,7 @@ class JellyfinClient(
     }
 
     companion object {
-        private const val TAG = "JellyfinClient"
+        private val log = yuriLog("JellyfinClient")
         private const val PREFS = "jellyfin_client"
         private const val KEY_DEVICE_ID = "device_id"
 

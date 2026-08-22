@@ -1,7 +1,7 @@
 package capital.yuri.yuriplayer.data.source
 
 import android.content.Context
-import android.util.Log
+import capital.yuri.yuriplayer.core.log.yuriLog
 import capital.yuri.yuriplayer.data.artistKey
 import capital.yuri.yuriplayer.data.db.CatalogDao
 import kotlinx.coroutines.Dispatchers
@@ -42,7 +42,7 @@ class MusicBrainzArtistProfileProvider(
             if (ok && dest.isFile && dest.length() > 0L) {
                 imagePath = dest.absolutePath
             } else {
-                Log.w(TAG, "Failed to download artist image for $artistName from $imageUrl")
+                log.w { "Failed to download artist image for $artistName from $imageUrl" }
             }
         }
 
@@ -74,6 +74,6 @@ class MusicBrainzArtistProfileProvider(
     }
 
     companion object {
-        private const val TAG = "MBArtist"
+        private val log = yuriLog("MBArtist")
     }
 }

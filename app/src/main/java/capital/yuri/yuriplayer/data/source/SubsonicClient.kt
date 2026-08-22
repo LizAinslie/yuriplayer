@@ -1,7 +1,7 @@
 package capital.yuri.yuriplayer.data.source
 
 import android.net.Uri
-import android.util.Log
+import capital.yuri.yuriplayer.core.log.yuriLog
 import capital.yuri.yuriplayer.data.Song
 import capital.yuri.yuriplayer.http.UrlScope
 import capital.yuri.yuriplayer.http.url
@@ -65,7 +65,7 @@ class SubsonicClient(
             openSubsonic = open,
             serverVersion = resp.version ?: resp.serverVersion
         )
-    }.onFailure { Log.w(TAG, "ping failed: ${it.message}") }
+    }.onFailure { log.w { "ping failed: ${it.message}" } }
 
     /**
      * Paged album index via getAlbumList2 (alphabeticalByName).
@@ -100,7 +100,7 @@ class SubsonicClient(
             offset = offset,
             exhausted = refs.size < pageSize
         )
-    }.onFailure { Log.w(TAG, "listAlbumsPage failed: ${it.message}") }
+    }.onFailure { log.w { "listAlbumsPage failed: ${it.message}" } }
 
     suspend fun listSongsForAlbum(session: Session, albumId: String): Result<List<Song>> =
         runCatching {
@@ -117,7 +117,7 @@ class SubsonicClient(
                     albumArtistFallback = album.resolvedAlbumArtist()
                 )
             }
-        }.onFailure { Log.w(TAG, "listSongsForAlbum($albumId) failed: ${it.message}") }
+        }.onFailure { log.w { "listSongsForAlbum($albumId) failed: ${it.message}" } }
 
     /**
      * Streams all songs via album list paging. Prefer this for large Navidrome libraries.
@@ -148,7 +148,7 @@ class SubsonicClient(
             var albumFetchFailed = false
             for (album in page.albums) {
                 val songs = listSongsForAlbum(session, album.id).getOrElse {
-                    Log.w(TAG, "getAlbum failed ${album.id}: ${it.message}")
+                    log.w { "getAlbum failed ${album.id}: ${it.message}" }
                     albumFetchFailed = true
                     emptyList()
                 }
@@ -164,7 +164,7 @@ class SubsonicClient(
             if (page.exhausted) break
         }
         delivered
-    }.onFailure { Log.w(TAG, "listSongsPaged failed: ${it.message}") }
+    }.onFailure { log.w { "listSongsPaged failed: ${it.message}" } }
 
     /**
      * Legacy full walk via indexes (small libraries / servers without albumList2).
@@ -208,7 +208,7 @@ class SubsonicClient(
             ?: resp.similarSongs?.song
             ?: emptyList()
         children.mapNotNull { it.toSong(session) }
-    }.onFailure { Log.w(TAG, "similarSongs failed: ${it.message}") }
+    }.onFailure { log.w { "similarSongs failed: ${it.message}" } }
 
     data class LibraryHits(
         val songs: List<Song>,
@@ -250,7 +250,7 @@ class SubsonicClient(
             ArtistHit(id = id, name = name, coverArt = a.coverArt)
         }
         LibraryHits(songs = songs, albums = albums, artists = artists)
-    }.onFailure { Log.w(TAG, "searchLibrary failed: ${it.message}") }
+    }.onFailure { log.w { "searchLibrary failed: ${it.message}" } }
 
     suspend fun searchArtists(
         session: Session,
@@ -260,7 +260,7 @@ class SubsonicClient(
         searchLibrary(session, query, songCount = 0, albumCount = 0, artistCount = count)
             .getOrThrow()
             .artists
-    }.onFailure { Log.w(TAG, "searchArtists failed: ${it.message}") }
+    }.onFailure { log.w { "searchArtists failed: ${it.message}" } }
 
     data class ArtistHit(
         val id: String,
@@ -291,7 +291,7 @@ class SubsonicClient(
                 owner = p.owner
             )
         }
-    }.onFailure { Log.w(TAG, "listPlaylists failed: ${it.message}") }
+    }.onFailure { log.w { "listPlaylists failed: ${it.message}" } }
 
     suspend fun playlistSongs(session: Session, playlistId: String): Result<List<Song>> =
         runCatching {
@@ -300,7 +300,7 @@ class SubsonicClient(
             }
             val detail = json.decodeFromString<SubsonicResponse>(body).subsonicResponse.playlist
             detail?.entry.orEmpty().mapNotNull { it.toSong(session, albumCoverArt = detail?.coverArt) }
-        }.onFailure { Log.w(TAG, "playlistSongs failed: ${it.message}") }
+        }.onFailure { log.w { "playlistSongs failed: ${it.message}" } }
 
     fun streamUrl(session: Session, id: String): String =
         restUrl(session, "stream") {
@@ -570,7 +570,7 @@ class SubsonicClient(
     )
 
     companion object {
-        private const val TAG = "SubsonicClient"
+        private val log = yuriLog("SubsonicClient")
         /** 1.16.1 is widely implemented; OpenSubsonic servers accept it. */
         private const val API_VERSION = "1.16.1"
     }

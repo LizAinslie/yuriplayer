@@ -1,6 +1,6 @@
 package capital.yuri.yuriplayer.data.source
 
-import android.util.Log
+import capital.yuri.yuriplayer.core.log.yuriLog
 import capital.yuri.yuriplayer.data.Playlist
 import capital.yuri.yuriplayer.data.PlaylistRepository
 import capital.yuri.yuriplayer.data.Song
@@ -65,7 +65,7 @@ class RemotePlaylistService(
             if (playlists.get(remote.stableId) != null) continue
             if (importToLocal(remote) != null) imported++
         }
-        if (imported > 0) Log.i(TAG, "imported $imported owned remote playlists")
+        if (imported > 0) log.i { "imported $imported owned remote playlists" }
         return imported
     }
 
@@ -125,7 +125,7 @@ class RemotePlaylistService(
         val user = row.username ?: return null
         val secret = row.secret ?: return null
         return jellyfin.authenticate(url, user, secret).getOrElse {
-            Log.w(TAG, "jellyfin auth for playlists failed: ${it.message}")
+            log.w { "jellyfin auth for playlists failed: ${it.message}" }
             null
         }
     }
@@ -142,6 +142,6 @@ class RemotePlaylistService(
     }
 
     companion object {
-        private const val TAG = "RemotePlaylists"
+        private val log = yuriLog("RemotePlaylists")
     }
 }

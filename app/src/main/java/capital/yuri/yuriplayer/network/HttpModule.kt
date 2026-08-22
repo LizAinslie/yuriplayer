@@ -1,5 +1,6 @@
 package capital.yuri.yuriplayer.network
 
+import capital.yuri.yuriplayer.core.log.yuriLog
 import io.ktor.client.HttpClient
 import io.ktor.client.engine.cio.CIO
 import io.ktor.client.plugins.HttpTimeout
@@ -48,7 +49,7 @@ val httpModule = module {
             install(Logging) {
                 logger = object : Logger {
                     override fun log(message: String) {
-                        android.util.Log.d("Ktor", redactSecrets(omitBinaryDump(message)))
+                        yuriLog("Ktor").d { redactSecrets(omitBinaryDump(message)) }
                     }
                 }
                 // BODY so auth failures are diagnosable; secrets stripped in [redactSecrets].

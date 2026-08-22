@@ -1,6 +1,7 @@
 package capital.yuri.yuriplayer.desktop.os.mac
 
 import capital.yuri.yuriplayer.core.library.Track
+import capital.yuri.yuriplayer.core.log.yuriLog
 import capital.yuri.yuriplayer.core.os.OsMediaControls
 import com.sun.jna.Library
 import com.sun.jna.Native
@@ -16,12 +17,14 @@ import java.util.concurrent.atomic.AtomicReference
  * accessibility is granted; otherwise the Compose window handles them.
  */
 class MacNowPlayingControls : OsMediaControls {
+    private val log = yuriLog("MacMedia")
+
     private val callbacks = AtomicReference<OsMediaControls.Callbacks?>(null)
 
     override fun attach(callbacks: OsMediaControls.Callbacks) {
         this.callbacks.set(callbacks)
         runCatching { MacMediaKeys.install(callbacks) }
-            .onFailure { System.err.println("macOS media keys: ${it.message}") }
+            .onFailure { log.w { "macOS media keys: ${it.message}" } }
     }
 
     override fun update(track: Track?, playing: Boolean, positionMs: Long, durationMs: Long, volume: Float) {

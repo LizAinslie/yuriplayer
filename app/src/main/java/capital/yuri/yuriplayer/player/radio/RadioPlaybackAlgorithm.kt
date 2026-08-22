@@ -1,6 +1,6 @@
 package capital.yuri.yuriplayer.player.radio
 
-import android.util.Log
+import capital.yuri.yuriplayer.core.log.yuriLog
 import capital.yuri.yuriplayer.data.AlbumItem
 import capital.yuri.yuriplayer.data.artistKey
 import capital.yuri.yuriplayer.player.ColdSource
@@ -34,14 +34,14 @@ class RadioPlaybackAlgorithm(
     ): RadioPick? {
         val focus = context.focusArtistKeys
         if (focus.isEmpty()) {
-            Log.i(TAG, "no focus artists")
+            log.i { "no focus artists" }
             return null
         }
 
         val all = catalog.albums().filter { it.songs.isNotEmpty() }
         val sameArtist = all.filter { albumMatchesFocus(it, focus) }
         if (sameArtist.isEmpty()) {
-            Log.i(TAG, "no albums for focus=$focus")
+            log.i { "no albums for focus=$focus" }
             return null
         }
 
@@ -139,6 +139,6 @@ class RadioPlaybackAlgorithm(
     }
 
     companion object {
-        private const val TAG = "YuriPlayer.RadioPlay"
+        private val log = yuriLog("RadioPlay")
     }
 }

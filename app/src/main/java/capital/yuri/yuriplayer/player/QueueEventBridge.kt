@@ -1,6 +1,6 @@
 package capital.yuri.yuriplayer.player
 
-import android.util.Log
+import capital.yuri.yuriplayer.core.log.yuriLog
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -23,15 +23,12 @@ class QueueEventBridge(
                 when (event) {
                     is QueueEvent.SourceChanged -> {
                         autoPlay.noteSource(event.source)
-                        Log.d(TAG, "SourceChanged ${event.source}")
+                        log.d { "SourceChanged ${event.source}" }
                     }
                     is QueueEvent.Exhausted -> {
-                        Log.i(
-                            TAG,
-                            "Exhausted seed=${event.seed?.displayTitle} " +
+                        log.i { "Exhausted seed=${event.seed?.displayTitle} " +
                                 "source=${event.source} repeat=${event.repeatMode} " +
-                                "(MusicService starts auto-play if enabled)"
-                        )
+                                "(MusicService starts auto-play if enabled)" }
                     }
                     is QueueEvent.RepeatModeChanged,
                     is QueueEvent.ShuffleChanged -> Unit
@@ -41,6 +38,6 @@ class QueueEventBridge(
     }
 
     companion object {
-        private const val TAG = "YuriPlayer.QueueEvents"
+        private val log = yuriLog("QueueEvents")
     }
 }

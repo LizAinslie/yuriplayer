@@ -2,7 +2,7 @@ package capital.yuri.yuriplayer.data
 
 import android.content.Context
 import android.media.MediaMetadataRetriever
-import android.util.Log
+import capital.yuri.yuriplayer.core.log.yuriLog
 import capital.yuri.yuriplayer.data.db.AlbumMetadataDao
 import capital.yuri.yuriplayer.data.db.AlbumMetadataEntity
 import capital.yuri.yuriplayer.data.source.MusicBrainzClient
@@ -59,7 +59,7 @@ class MetadataEnrichmentService(
 
     fun enrichLibraryAsync(maxAlbums: Int = 80) {
         if (!settings.isAutomaticMetadataEnabled()) {
-            Log.i(TAG, "skip auto enrich — automatic metadata disabled")
+            log.i { "skip auto enrich — automatic metadata disabled" }
             return
         }
         scope.launch {
@@ -71,11 +71,11 @@ class MetadataEnrichmentService(
                     val albums = library.albums(taggedOnly = false)
                         .filter { needsWorkCheap(it) }
                         .take(maxAlbums)
-                    Log.i(TAG, "auto enrich queue size=${albums.size}")
+                    log.i { "auto enrich queue size=${albums.size}" }
                     var done = 0
                     for (album in albums) {
                         if (!settings.isAutomaticMetadataEnabled()) {
-                            Log.i(TAG, "auto enrich cancelled mid-run")
+                            log.i { "auto enrich cancelled mid-run" }
                             break
                         }
                         enrichAlbum(album, force = false, probeEmbeddedArt = false)
@@ -86,7 +86,7 @@ class MetadataEnrichmentService(
                     }
                     _statusMessage.value = if (done > 0) "Updated $done albums" else null
                 } catch (e: Exception) {
-                    Log.e(TAG, "enrichLibrary failed", e)
+                    log.e(e) { "enrichLibrary failed" }
                     _statusMessage.value = "Couldn't look up artwork"
                 } finally {
                     _busy.value = false
@@ -103,7 +103,7 @@ class MetadataEnrichmentService(
                 enrichAlbum(album, force = force, probeEmbeddedArt = true)
                 _statusMessage.value = "Updated ${album.displayName}"
             } catch (e: Exception) {
-                Log.w(TAG, "enrichAlbum failed ${album.displayName}", e)
+                log.w(e) { "enrichAlbum failed ${album.displayName}" }
                 _statusMessage.value = "Couldn't update ${album.displayName}"
             } finally {
                 _busy.value = false
@@ -123,7 +123,7 @@ class MetadataEnrichmentService(
                     }
                     _statusMessage.value = "Updated ${albums.size} albums"
                 } catch (e: Exception) {
-                    Log.e(TAG, "enrichAlbums failed", e)
+                    log.e(e) { "enrichAlbums failed" }
                     _statusMessage.value = "Couldn't look up artwork"
                 } finally {
                     _busy.value = false
@@ -176,7 +176,7 @@ class MetadataEnrichmentService(
                 return
             }
 
-            Log.i(TAG, "lookup \"${album.displayName}\" / \"${album.displayArtist}\" force=$force")
+            log.i { "lookup \"${album.displayName}\" / \"${album.displayArtist}\" force=$force" }
             var hit = client.searchRelease(
                 artist = album.artist,
                 album = album.name,
@@ -204,7 +204,7 @@ class MetadataEnrichmentService(
                         updatedAtMs = System.currentTimeMillis()
                     )
                 )
-                Log.w(TAG, "no MB hit for $key")
+                log.w { "no MB hit for $key" }
                 return
             }
 
@@ -229,9 +229,9 @@ class MetadataEnrichmentService(
             if (client.downloadFrontCover(hit.mbid, dest)) {
                 coverPath = dest.absolutePath
                 coverChanged = true
-                Log.i(TAG, "cover saved $coverPath for ${album.displayName}")
+                log.i { "cover saved $coverPath for ${album.displayName}" }
             } else {
-                Log.w(TAG, "cover download failed mbid=${hit.mbid}")
+                log.w { "cover download failed mbid=${hit.mbid}" }
             }
         }
 
@@ -291,8 +291,7 @@ class MetadataEnrichmentService(
     }
 
     companion object {
-        private const val TAG = "MetaEnrich"
-
+        private val log = yuriLog("MetaEnrich")
         fun sanitizeFileName(key: String): String =
             key.lowercase()
                 .replace(Regex("[^a-z0-9._-]+"), "_")

@@ -1,7 +1,7 @@
 package capital.yuri.yuriplayer.data
 
 import android.content.Context
-import android.util.Log
+import capital.yuri.yuriplayer.core.log.yuriLog
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -65,7 +65,7 @@ class LibraryIndex(
             if (hadCache) {
                 _songs.value = cached!!.songs
                 _lastScannedAt.value = cached.scannedAt
-                Log.i(TAG, "bootstrap from cache: ${cached.songs.size} tracks")
+                log.i { "bootstrap from cache: ${cached.songs.size} tracks" }
             }
 
             // 2) Room only when cache missed — avoid loading large local tables
@@ -75,7 +75,7 @@ class LibraryIndex(
                 if (fromDb.isNotEmpty()) {
                     _songs.value = fromDb
                     _lastScannedAt.value = System.currentTimeMillis()
-                    Log.i(TAG, "bootstrap from Room local: ${fromDb.size} tracks")
+                    log.i { "bootstrap from Room local: ${fromDb.size} tracks" }
                 }
             }
 
@@ -85,7 +85,7 @@ class LibraryIndex(
                 _songs.value.isEmpty() -> {
                     delay(COLD_EMPTY_RESCAN_DELAY_MS)
                     if (_songs.value.isEmpty() && !_isLoading.value) {
-                        Log.i(TAG, "bootstrap: empty after delay → local rescan")
+                        log.i { "bootstrap: empty after delay → local rescan" }
                         refresh()
                     }
                 }
@@ -98,7 +98,7 @@ class LibraryIndex(
                         if (stillStale && !_isLoading.value) {
                             delay(STALE_RESCAN_DELAY_MS)
                             if (!_isLoading.value) {
-                                Log.i(TAG, "bootstrap: stale after reconcile → deferred local rescan")
+                                log.i { "bootstrap: stale after reconcile → deferred local rescan" }
                                 refresh()
                             }
                         }
@@ -108,11 +108,11 @@ class LibraryIndex(
                 age > staleAfterMs -> {
                     delay(STALE_RESCAN_DELAY_MS)
                     if (!_isLoading.value) {
-                        Log.i(TAG, "bootstrap: stale (${age}ms) → deferred local rescan")
+                        log.i { "bootstrap: stale (${age}ms) → deferred local rescan" }
                         refresh()
                     }
                 }
-                else -> Log.i(TAG, "bootstrap: warm local index, skip auto-rescan")
+                else -> log.i { "bootstrap: warm local index, skip auto-rescan" }
             }
         }
     }
@@ -122,7 +122,7 @@ class LibraryIndex(
         val local = withContext(Dispatchers.IO) { catalog.getLocalSongs() }
         _songs.value = local
         _lastScannedAt.value = System.currentTimeMillis()
-        Log.i(TAG, "reloadFromCatalog (local): ${local.size} tracks")
+        log.i { "reloadFromCatalog (local): ${local.size} tracks" }
     }
 
     fun refresh() {
@@ -150,7 +150,7 @@ class LibraryIndex(
             notifier.finish("Library scan", "Storage permission required")
         } catch (e: Exception) {
             _error.value = e.message ?: "Scan failed"
-            Log.e(TAG, "Refresh failed", e)
+            log.e(e) { "Refresh failed" }
             _events.tryEmit(LibraryEvent.ScanFailed(e.message ?: "Scan failed"))
             notifier.finish("Library scan", e.message ?: "Scan failed")
         } finally {
@@ -174,7 +174,7 @@ class LibraryIndex(
         }
         if (changed) {
             _songs.value = next
-            Log.i(TAG, "applied year $year to albumKey=$albumKey")
+            log.i { "applied year $year to albumKey=$albumKey" }
         }
     }
 
@@ -304,7 +304,7 @@ class LibraryIndex(
     fun untaggedCount(): Int = _songs.value.count { !it.isTagged }
 
     companion object {
-        private const val TAG = "LibraryIndex"
+        private val log = yuriLog("LibraryIndex")
         const val DEFAULT_STALE_MS = 12L * 60 * 60 * 1000
         /** Wait so MusicService can restore + user can hit Play first. */
         private const val COLD_EMPTY_RESCAN_DELAY_MS = 5_000L

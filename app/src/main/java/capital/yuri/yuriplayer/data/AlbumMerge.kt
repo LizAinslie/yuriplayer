@@ -10,11 +10,8 @@ fun mergeAlbumSources(
     fromLocal: AlbumItem?
 ): AlbumItem {
     val album = seed.name ?: fromCatalog?.name ?: fromLocal?.name
-    AlbumLog.i(
-        album,
-        "merge seed=${seed.songs.size} catalog=${fromCatalog?.songs?.size ?: 0} local=${fromLocal?.songs?.size ?: 0} " +
-            "seedName='${seed.name}' catName='${fromCatalog?.name}' localName='${fromLocal?.name}'"
-    )
+    AlbumLog.i(album, "merge seed=${seed.songs.size} catalog=${fromCatalog?.songs?.size ?: 0} local=${fromLocal?.songs?.size ?: 0} " +
+            "seedName='${seed.name}' catName='${fromCatalog?.name}' localName='${fromLocal?.name}'")
     AlbumLog.songs(album, "merge.seed", seed.songs)
     AlbumLog.songs(album, "merge.catalog", fromCatalog?.songs.orEmpty())
     AlbumLog.songs(album, "merge.local", fromLocal?.songs.orEmpty())

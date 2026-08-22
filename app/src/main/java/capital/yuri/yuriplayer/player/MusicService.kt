@@ -14,7 +14,7 @@ import android.os.Build
 import android.os.IBinder
 import android.os.PowerManager
 import android.os.SystemClock
-import android.util.Log
+import capital.yuri.yuriplayer.core.log.yuriLog
 import androidx.core.app.NotificationCompat
 import capital.yuri.yuriplayer.activities.MainActivity
 import capital.yuri.yuriplayer.data.LibrarySettings
@@ -123,7 +123,7 @@ class MusicService : Service() {
             sessionActivity = openPlayerPendingIntent(),
             onPlay = {
                 if (SystemClock.elapsedRealtime() < ignoreSessionPlayUntilElapsed) {
-                    Log.i(TAG, "session onPlay ignored — startup")
+                    log.i { "session onPlay ignored — startup" }
                     return@MusicServiceEngineHooks
                 }
                 play()
@@ -141,20 +141,20 @@ class MusicService : Service() {
                 else if (!userWantsPlay) releaseSleepLocks()
             },
             onError = { message, recoverable ->
-                Log.e(TAG, "engine error: $message recoverable=$recoverable")
+                log.e { "engine error: $message recoverable=$recoverable" }
                 if (recoverable && userWantsPlay && !recoveringAudio && !advancing) {
                     recoverFromAudioGlitch()
                 }
             }
         )
 
-        Log.i(TAG, "engine=${engineHooks?.engineId}")
+        log.i { "engine=${engineHooks?.engineId}" }
         restorePlaybackState()
         startPeriodicPersist()
         startStallWatchdog()
         serviceScope.launch {
             librarySettings.streamQuality.drop(1).collect { q ->
-                Log.i(TAG, "stream quality → ${q.id} — rebuffer next")
+                log.i { "stream quality → ${q.id} — rebuffer next" }
                 syncPreparedNext()
             }
         }
@@ -197,7 +197,7 @@ class MusicService : Service() {
     private fun flushPendingRemoteRestore(autoPlay: Boolean): Boolean {
         val pending = pendingRemoteRestore ?: return false
         pendingRemoteRestore = null
-        Log.i(TAG, "flushPendingRemoteRestore pos=${pending.positionMs} autoPlay=$autoPlay")
+        log.i { "flushPendingRemoteRestore pos=${pending.positionMs} autoPlay=$autoPlay" }
         rebufferWindow(pending.positionMs, autoPlay = autoPlay, forceReload = true)
         return true
     }
@@ -206,7 +206,7 @@ class MusicService : Service() {
         val current = queueManager.currentSong() ?: return
         clearStickySeek()
         pendingRemoteRestore = null
-        Log.i(TAG, "hardRestartCurrent '${current.displayTitle}' pos=$startPositionMs")
+        log.i { "hardRestartCurrent '${current.displayTitle}' pos=$startPositionMs" }
         rebufferWindow(startPositionMs.coerceAtLeast(0L), autoPlay = autoPlay, forceReload = true)
     }
 
@@ -247,13 +247,10 @@ class MusicService : Service() {
             return
         }
 
-        Log.i(
-            TAG,
-            "rebufferWindow engine=${hooks.engineId} current='${current.displayTitle}' " +
+        log.i { "rebufferWindow engine=${hooks.engineId} current='${current.displayTitle}' " +
                 "peekNext='${if (repeatOne) "(repeat-one)" else nextSong?.displayTitle}' " +
                 "startMs=$startPositionMs autoPlay=$autoPlay force=$forceReload " +
-                "remote=${isRemoteSong(current)}"
-        )
+                "remote=${isRemoteSong(current)}" }
 
         try {
             windowGeneration += 1
@@ -274,7 +271,7 @@ class MusicService : Service() {
                 autoPlay = autoPlay
             )
         } catch (e: Exception) {
-            Log.e(TAG, "rebufferWindow failed", e)
+            log.e(e) { "rebufferWindow failed" }
         }
 
         _nowPlaying.value = current
@@ -361,7 +358,7 @@ class MusicService : Service() {
         }
         val upcoming = queueManager.upcoming(WARM_AHEAD)
         val next = upcoming.firstOrNull()
-        Log.i(TAG, "syncPreparedNext '${next?.displayTitle}' warm=${upcoming.size}")
+        log.i { "syncPreparedNext '${next?.displayTitle}' warm=${upcoming.size}" }
         hooks.setNext(next)
         warmUpcoming(upcoming)
     }
@@ -406,7 +403,7 @@ class MusicService : Service() {
         val now = SystemClock.elapsedRealtime()
         if (now < ignoreAutoAdvancedUntilElapsed) {
             ignoreAutoAdvancedUntilElapsed = 0L
-            Log.i(TAG, "autoAdvanced ignored — queue already moved")
+            log.i { "autoAdvanced ignored — queue already moved" }
             return
         }
         if (advancing) return
@@ -414,7 +411,7 @@ class MusicService : Service() {
         advancing = true
         try {
             val result = queueManager.advance(userInitiated = false)
-            Log.i(TAG, "autoAdvanced → '${result.song?.displayTitle}'")
+            log.i { "autoAdvanced → '${result.song?.displayTitle}'" }
             applyAdvanceKeepEngine(result)
         } finally {
             advancing = false
@@ -432,10 +429,7 @@ class MusicService : Service() {
         val preparedId = hooks.preparedNextId()
         val expectedId = expected.toPlaybackMedia(quality = librarySettings.getStreamQuality()).mediaId
         if (preparedId == null || preparedId != expectedId) {
-            Log.i(
-                TAG,
-                "skip prepared mismatch want='${expected.displayTitle}' have=$preparedId"
-            )
+            log.i { "skip prepared mismatch want='${expected.displayTitle}' have=$preparedId" }
             syncPreparedNext()
             return false
         }
@@ -460,7 +454,7 @@ class MusicService : Service() {
         if (inUserSeekGuard()) {
             val target = stickySeekTargetMs.takeIf { it >= 0L }
                 ?: engineHooks?.getPositionMs() ?: 0L
-            Log.i(TAG, "ENDED suppressed after user seek → reseek $target")
+            log.i { "ENDED suppressed after user seek → reseek $target" }
             rebufferWindow(target, autoPlay = true, forceReload = true)
             return
         }
@@ -474,7 +468,7 @@ class MusicService : Service() {
         advancing = true
         try {
             if (advanceUsingPreparedNext(userInitiated = false)) {
-                Log.i(TAG, "onEnded → playPreparedNext")
+                log.i { "onEnded → playPreparedNext" }
                 return
             }
             if (!claimEndOfWindow(fromUser = false)) return
@@ -688,9 +682,9 @@ class MusicService : Service() {
         try {
             hooks.seekTo(target)
             if (hooks.getPlayWhenReady() && !hooks.isPlaying()) hooks.play()
-            Log.i(TAG, "seekTo target=$target (raw=$positionMs) duration=$duration")
+            log.i { "seekTo target=$target (raw=$positionMs) duration=$duration" }
         } catch (e: Exception) {
-            Log.w(TAG, "seekTo failed", e)
+            log.w(e) { "seekTo failed" }
             clearStickySeek()
         }
         persistState()
@@ -735,10 +729,7 @@ class MusicService : Service() {
                         positionMs = saved.positionMs,
                         wasPlayWhenReady = false
                     )
-                    Log.i(
-                        TAG,
-                        "restore deferred remote '${current?.displayTitle}' pos=${saved.positionMs}"
-                    )
+                    log.i { "restore deferred remote '${current?.displayTitle}' pos=${saved.positionMs}" }
                 } else {
                     delay(RESTORE_PREPARE_DELAY_MS)
                     rebufferWindow(
@@ -756,7 +747,7 @@ class MusicService : Service() {
                 ignoreSessionPlayUntilElapsed =
                     SystemClock.elapsedRealtime() + STARTUP_IGNORE_SESSION_PLAY_MS
                 engineHooks?.setSessionActive(true)
-                Log.i(TAG, "restore complete — paused until user plays")
+                log.i { "restore complete — paused until user plays" }
             }
         }
     }
@@ -830,11 +821,8 @@ class MusicService : Service() {
                 if (nearEnd && userWantsPlay && frozenFor >= NEAR_END_ADVANCE_MS &&
                     (wantPlay || buffering)
                 ) {
-                    Log.i(
-                        TAG,
-                        "near-end freeze ${frozenFor}ms pos=$pos/$duration " +
-                            "playing=$playing buffering=$buffering wantPlay=$wantPlay → onEnded"
-                    )
+                    log.i { "near-end freeze ${frozenFor}ms pos=$pos/$duration " +
+                            "playing=$playing buffering=$buffering wantPlay=$wantPlay → onEnded" }
                     onEngineEnded()
                     stallSamplePos = -1L
                     continue
@@ -845,7 +833,7 @@ class MusicService : Service() {
                 if (wantPlay && !playing && !buffering && pos > 1_000L &&
                     frozenFor >= ENDED_SILENCE_MS && remaining <= 5_000L
                 ) {
-                    Log.i(TAG, "silent near end ${frozenFor}ms pos=$pos/$duration → onEnded")
+                    log.i { "silent near end ${frozenFor}ms pos=$pos/$duration → onEnded" }
                     onEngineEnded()
                     stallSamplePos = -1L
                     continue
@@ -858,7 +846,7 @@ class MusicService : Service() {
                     if (userWantsPlay && !playing && !buffering && !inCall &&
                         frozenFor >= UNEXPECTED_PAUSE_MS && !nearEnd
                     ) {
-                        Log.i(TAG, "unexpected pause ${frozenFor}ms pos=$pos — resume")
+                        log.i { "unexpected pause ${frozenFor}ms pos=$pos — resume" }
                         acquireSleepLocks()
                         hooks.play()
                     }
@@ -870,17 +858,14 @@ class MusicService : Service() {
                 val threshold = if (remote) NETWORK_STALL_MS else STALL_MS
 
                 if (userWantsPlay && !playing && !isInCall() && frozenFor >= UNEXPECTED_PAUSE_MS) {
-                    Log.i(TAG, "unexpected pause ${frozenFor}ms pos=$pos — resume")
+                    log.i { "unexpected pause ${frozenFor}ms pos=$pos — resume" }
                     acquireSleepLocks()
                     hooks.play()
                     continue
                 }
 
                 if (frozenFor >= threshold) {
-                    Log.w(
-                        TAG,
-                        "stall watchdog: pos frozen at $pos for ${frozenFor}ms remote=$remote — recovering"
-                    )
+                    log.w { "stall watchdog: pos frozen at $pos for ${frozenFor}ms remote=$remote — recovering" }
                     recoverFromAudioGlitch(atPositionMs = pos)
                 }
             }
@@ -925,7 +910,7 @@ class MusicService : Service() {
                 }
             if (!lock.isHeld) lock.acquire()
         } catch (e: Exception) {
-            Log.w(TAG, "wakeLock", e)
+            log.w(e) { "wakeLock" }
         }
         if (!isRemoteSong(_nowPlaying.value)) return
         try {
@@ -938,7 +923,7 @@ class MusicService : Service() {
                 }
             if (!lock.isHeld) lock.acquire()
         } catch (e: Exception) {
-            Log.w(TAG, "wifiLock", e)
+            log.w(e) { "wifiLock" }
         }
     }
 
@@ -946,12 +931,12 @@ class MusicService : Service() {
         try {
             if (wakeLock?.isHeld == true) wakeLock?.release()
         } catch (e: Exception) {
-            Log.w(TAG, "wakeLock release", e)
+            log.w(e) { "wakeLock release" }
         }
         try {
             if (wifiLock?.isHeld == true) wifiLock?.release()
         } catch (e: Exception) {
-            Log.w(TAG, "wifiLock release", e)
+            log.w(e) { "wifiLock release" }
         }
     }
 
@@ -965,7 +950,7 @@ class MusicService : Service() {
                 val wasPlaying = userWantsPlay ||
                     hooks?.getPlayWhenReady() == true ||
                     hooks?.isPlaying() == true
-                Log.w(TAG, "audio glitch → rebuffer at $pos autoPlay=$wasPlaying")
+                log.w { "audio glitch → rebuffer at $pos autoPlay=$wasPlaying" }
                 rebufferWindow(pos, autoPlay = wasPlaying, forceReload = true)
             } finally {
                 delay(600)
@@ -1071,7 +1056,7 @@ class MusicService : Service() {
                         .setShowActionsInCompactView(0, 1, 2)
                 )
             } catch (e: Throwable) {
-                Log.d(TAG, "MediaStyle skipped: ${e.message}")
+                log.d { "MediaStyle skipped: ${e.message}" }
             }
         }
         return builder.build()
@@ -1118,7 +1103,7 @@ class MusicService : Service() {
     }
 
     override fun onTaskRemoved(rootIntent: Intent?) {
-        Log.i(TAG, "onTaskRemoved — stopping playback")
+        log.i { "onTaskRemoved — stopping playback" }
         stopForAppClosed()
         super.onTaskRemoved(rootIntent)
     }
@@ -1134,7 +1119,7 @@ class MusicService : Service() {
         try {
             stateStore.save(snap, pos, playWhenReady = false)
         } catch (e: Exception) {
-            Log.w(TAG, "persist on close", e)
+            log.w(e) { "persist on close" }
         }
         if (historyStore.clearOnClose) {
             historyStore.clear()
@@ -1156,7 +1141,7 @@ class MusicService : Service() {
     }
 
     companion object {
-        private const val TAG = "YuriPlayer"
+        private val log = yuriLog("MusicService")
         const val CHANNEL_ID = "yuri_playback"
         const val NOTIFICATION_ID = 42
         const val ACTION_PLAY = "capital.yuri.yuriplayer.action.PLAY"

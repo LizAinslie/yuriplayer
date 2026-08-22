@@ -1,7 +1,7 @@
 package capital.yuri.yuriplayer.player
 
 import android.content.Context
-import android.util.Log
+import capital.yuri.yuriplayer.core.log.yuriLog
 import capital.yuri.yuriplayer.data.LibrarySettings
 import capital.yuri.yuriplayer.data.Song
 import capital.yuri.yuriplayer.player.engine.AudioPipeline
@@ -54,14 +54,14 @@ class MusicServiceLocalEngine(
         override fun onIsPlayingChanged(playing: Boolean) = playingChanged(playing)
 
         override fun onError(message: String, recoverable: Boolean) {
-            Log.e(TAG, "engine($engineId) error: $message recoverable=$recoverable")
+            log.e { "engine($engineId) error: $message recoverable=$recoverable" }
             onEngineError(message, recoverable)
         }
     }
 
     init {
         engine.addListener(listener)
-        Log.i(TAG, "active engine=$engineId")
+        log.i { "active engine=$engineId" }
     }
 
     /**
@@ -78,13 +78,10 @@ class MusicServiceLocalEngine(
             quality = quality.id,
             uri = current.uri.toString()
         )
-        Log.i(
-            TAG,
-            "load engine=$engineId '${song.displayTitle}' " +
+        log.i { "load engine=$engineId '${song.displayTitle}' " +
                 "uri=${current.uri} scheme=${current.uri.scheme} quality=${quality.id} " +
                 "mime=${song.mimeType} live=${current.live} autoPlay=$autoPlay pos=$startPositionMs " +
-                "successor=${successor?.title}"
-        )
+                "successor=${successor?.title}" }
         engine.setPlayWhenReady(autoPlay)
         engine.load(current, successor, startPositionMs)
         if (autoPlay) engine.play()
@@ -125,6 +122,6 @@ class MusicServiceLocalEngine(
     }
 
     companion object {
-        private const val TAG = "SelectedEngine"
+        private val log = yuriLog("SelectedEngine")
     }
 }

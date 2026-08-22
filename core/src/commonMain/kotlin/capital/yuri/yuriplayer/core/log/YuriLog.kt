@@ -7,13 +7,17 @@ package capital.yuri.yuriplayer.core.log
  *
  * ```
  * val log = yuriLog("Vlcj")
- * log.i { "play ${redactUrl(mrl)}" }
+ * log.i { "play ${redactSecrets(mrl)}" }
  * log.e(t) { "stream failed" }
  *
  * yuriLog("Index") {
  *     d { "merge +$n" }
  * }
  * ```
+ *
+ * Tags are short (`Vlcj`, `Queue`). Platforms prefix `YuriPlayer.`, so logcat is
+ * `YuriPlayer.Vlcj`. `YuriPlayer.` on the caller's tag is stripped so
+ * `yuriLog("YuriPlayer.Radio")` and `yuriLog("Radio")` log the same.
  */
 enum class LogLevel { TRACE, DEBUG, INFO, WARN, ERROR }
 
@@ -30,9 +34,14 @@ class YuriLogger(val tag: String) {
     }
 }
 
-fun yuriLog(tag: String): YuriLogger = YuriLogger(tag)
+fun yuriLog(tag: String): YuriLogger = YuriLogger(normalizeLogTag(tag))
 
-inline fun yuriLog(tag: String, block: YuriLogger.() -> Unit) = YuriLogger(tag).block()
+inline fun yuriLog(tag: String, block: YuriLogger.() -> Unit) = yuriLog(tag).block()
+
+fun normalizeLogTag(tag: String): String {
+    val t = tag.removePrefix("YuriPlayer.")
+    return if (t.isBlank() || t == "YuriPlayer") "App" else t
+}
 
 expect fun platformLog(level: LogLevel, tag: String, message: String, throwable: Throwable?)
 

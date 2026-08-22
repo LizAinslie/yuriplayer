@@ -2,7 +2,7 @@ package capital.yuri.yuriplayer.data.organize
 
 import android.content.Context
 import android.net.Uri
-import android.util.Log
+import capital.yuri.yuriplayer.core.log.yuriLog
 import androidx.documentfile.provider.DocumentFile
 import capital.yuri.yuriplayer.data.LibraryIndex
 import capital.yuri.yuriplayer.data.Song
@@ -122,7 +122,7 @@ class LibraryOrganizeService(
             _status.value = msg
             ApplyResult(moved, skipped, failed, msg)
         } catch (e: Exception) {
-            Log.e(TAG, "apply failed", e)
+            log.e(e) { "apply failed" }
             _status.value = e.message
             ApplyResult(0, 0, 1, e.message ?: "Organize failed")
         } finally {
@@ -177,7 +177,7 @@ class LibraryOrganizeService(
                 dir = when {
                     existing != null && existing.isDirectory -> existing
                     existing != null && existing.isFile -> {
-                        Log.w(TAG, "path collision with file $seg")
+                        log.w { "path collision with file $seg" }
                         return false
                     }
                     else -> dir.createDirectory(seg) ?: return false
@@ -220,7 +220,7 @@ class LibraryOrganizeService(
             src.delete()
             true
         } catch (e: Exception) {
-            Log.w(TAG, "move failed ${song.songKey}: ${e.message}")
+            log.w { "move failed ${song.songKey}: ${e.message}" }
             false
         }
     }
@@ -238,6 +238,6 @@ class LibraryOrganizeService(
     }
 
     companion object {
-        private const val TAG = "LibraryOrganize"
+        private val log = yuriLog("LibraryOrganize")
     }
 }

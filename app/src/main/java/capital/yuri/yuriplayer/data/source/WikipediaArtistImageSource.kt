@@ -1,6 +1,6 @@
 package capital.yuri.yuriplayer.data.source
 
-import android.util.Log
+import capital.yuri.yuriplayer.core.log.yuriLog
 import capital.yuri.yuriplayer.data.artistKey
 import capital.yuri.yuriplayer.http.url
 import io.ktor.client.HttpClient
@@ -172,7 +172,7 @@ class WikipediaArtistImageSource(
                     }
                 }
             } catch (e: Exception) {
-                Log.w(TAG, "search failed for $qRaw", e)
+                log.w(e) { "search failed for $qRaw" }
             }
             if (seen.size >= 6) break
         }
@@ -235,7 +235,7 @@ class WikipediaArtistImageSource(
             }
             out.distinct()
         } catch (e: Exception) {
-            Log.w(TAG, "pageImages failed", e)
+            log.w(e) { "pageImages failed" }
             emptyList()
         }
     }
@@ -245,13 +245,13 @@ class WikipediaArtistImageSource(
             val response = http.get(url)
             if (!response.status.isSuccess()) null else response.bodyAsText()
         } catch (e: Exception) {
-            Log.w(TAG, "GET $url", e)
+            log.w(e) { "GET $url" }
             null
         }
     }
 
     companion object {
-        private const val TAG = "WikiArtistImg"
+        private val log = yuriLog("WikiArtistImg")
 
         /** Person / group signals. */
         private val ARTIST_HINTS = listOf(

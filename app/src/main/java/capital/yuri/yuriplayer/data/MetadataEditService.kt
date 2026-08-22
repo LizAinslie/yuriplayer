@@ -7,7 +7,7 @@ import android.net.Uri
 import android.os.Build
 import android.os.ParcelFileDescriptor
 import android.provider.MediaStore
-import android.util.Log
+import capital.yuri.yuriplayer.core.log.yuriLog
 import capital.yuri.yuriplayer.data.source.SourceType
 import capital.yuri.yuriplayer.player.engine.isNetworkUri
 import capital.yuri.yuriplayer.player.engine.isVirtualLibraryPath
@@ -47,7 +47,7 @@ class MetadataEditService(
         runCatching {
             TagOptionSingleton.getInstance().isAndroid = true
         }.onFailure {
-            Log.w(TAG, "Could not set TagOptionSingleton.isAndroid", it)
+            log.w(it) { "Could not set TagOptionSingleton.isAndroid" }
         }
     }
 
@@ -123,7 +123,7 @@ class MetadataEditService(
             libraryIndex.reloadFromCatalog()
             Result(1, 0, "Saved")
         } catch (e: Exception) {
-            Log.e(TAG, "saveSong failed key=${song.songKey}", e)
+            log.e(e) { "saveSong failed key=${song.songKey}" }
             Result(0, 1, e.message ?: "Write failed — need storage permission?")
         }
     }
@@ -160,7 +160,7 @@ class MetadataEditService(
                     mbid = null
                 )
             }
-            Log.i(TAG, "app cover cached $appCoverPath")
+            log.i { "app cover cached $appCoverPath" }
         }
 
         val coverFile = edit.coverBytes?.let { bytes ->
@@ -175,7 +175,7 @@ class MetadataEditService(
                     scanned += out.absolutePath
                     out
                 } catch (e: Exception) {
-                    Log.d(TAG, "folder cover.jpg write skipped: ${e.message}")
+                    log.d { "folder cover.jpg write skipped: ${e.message}" }
                     null
                 }
             } else null
@@ -208,7 +208,7 @@ class MetadataEditService(
                 )
                 ok++
             } catch (e: Exception) {
-                Log.e(TAG, "saveAlbum track failed key=${song.songKey}", e)
+                log.e(e) { "saveAlbum track failed key=${song.songKey}" }
                 failed++
             }
         }
@@ -247,7 +247,7 @@ class MetadataEditService(
             }
             if (dest.isFile && dest.length() > 0L) dest.absolutePath else null
         } catch (e: Exception) {
-            Log.w(TAG, "persistAppCover failed", e)
+            log.w(e) { "persistAppCover failed" }
             null
         }
     }
@@ -313,7 +313,7 @@ class MetadataEditService(
                 c.getString(idx)?.takeIf { it.isNotBlank() && File(it).isFile }
             }
         } catch (e: Exception) {
-            Log.d(TAG, "DATA query failed for $uri: ${e.message}")
+            log.d { "DATA query failed for $uri: ${e.message}" }
             null
         }
 
@@ -358,7 +358,7 @@ class MetadataEditService(
                 return true
             }
         } catch (e: Exception) {
-            Log.d(TAG, "openOutputStream wt failed for $uri: ${e.message}")
+            log.d { "openOutputStream wt failed for $uri: ${e.message}" }
         }
         try {
             context.contentResolver.openFileDescriptor(uri, "rwt")?.use { pfd ->
@@ -368,7 +368,7 @@ class MetadataEditService(
                 return true
             }
         } catch (e: Exception) {
-            Log.d(TAG, "openFileDescriptor rwt failed for $uri: ${e.message}")
+            log.d { "openFileDescriptor rwt failed for $uri: ${e.message}" }
         }
         try {
             context.contentResolver.openFileDescriptor(uri, "rw")?.use { pfd ->
@@ -378,7 +378,7 @@ class MetadataEditService(
                 return true
             }
         } catch (e: Exception) {
-            Log.d(TAG, "openFileDescriptor rw failed for $uri: ${e.message}")
+            log.d { "openFileDescriptor rw failed for $uri: ${e.message}" }
         }
         return false
     }
@@ -433,10 +433,7 @@ class MetadataEditService(
                 tag.setField(art)
             } catch (t: Throwable) {
                 // FLAC embed often fails on Android; app cover cache still holds the image.
-                Log.d(
-                    TAG,
-                    "embedded art skipped for ${file.name}: ${t.javaClass.simpleName}: ${t.message}"
-                )
+                log.d { "embedded art skipped for ${file.name}: ${t.javaClass.simpleName}: ${t.message}" }
             }
         }
         audio.commit()
@@ -495,7 +492,7 @@ class MetadataEditService(
         runCatching {
             context.contentResolver.update(song.contentUri, values, null, null)
         }.onFailure {
-            Log.d(TAG, "MediaStore song update skipped: ${it.message}")
+            log.d { "MediaStore song update skipped: ${it.message}" }
         }
     }
 
@@ -512,7 +509,7 @@ class MetadataEditService(
         runCatching {
             context.contentResolver.update(song.contentUri, values, null, null)
         }.onFailure {
-            Log.d(TAG, "MediaStore album update skipped: ${it.message}")
+            log.d { "MediaStore album update skipped: ${it.message}" }
         }
     }
 
@@ -533,13 +530,13 @@ class MetadataEditService(
                 ?: return@withContext null
             bytes to mime
         } catch (e: Exception) {
-            Log.e(TAG, "readImageBytes failed", e)
+            log.e(e) { "readImageBytes failed" }
             null
         }
     }
 
     companion object {
-        private const val TAG = "MetadataEdit"
+        private val log = yuriLog("MetadataEdit")
         private const val FRONT_COVER_PICTURE_TYPE = 3
     }
 }

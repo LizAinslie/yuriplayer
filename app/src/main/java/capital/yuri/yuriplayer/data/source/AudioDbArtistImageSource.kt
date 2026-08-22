@@ -1,6 +1,6 @@
 package capital.yuri.yuriplayer.data.source
 
-import android.util.Log
+import capital.yuri.yuriplayer.core.log.yuriLog
 import capital.yuri.yuriplayer.data.artistKey
 import capital.yuri.yuriplayer.http.url
 import io.ktor.client.HttpClient
@@ -95,7 +95,7 @@ class AudioDbArtistImageSource(
         return try {
             JSONObject(body).optJSONArray("artists")?.optJSONObject(0)
         } catch (e: Exception) {
-            Log.w(TAG, "parse failed", e)
+            log.w(e) { "parse failed" }
             null
         }
     }
@@ -105,13 +105,13 @@ class AudioDbArtistImageSource(
             val response = http.get(url)
             if (!response.status.isSuccess()) null else response.bodyAsText()
         } catch (e: Exception) {
-            Log.w(TAG, "GET $url", e)
+            log.w(e) { "GET $url" }
             null
         }
     }
 
     companion object {
-        private const val TAG = "AudioDbArtist"
+        private val log = yuriLog("AudioDbArtist")
         private const val API_KEY = "2"
     }
 }

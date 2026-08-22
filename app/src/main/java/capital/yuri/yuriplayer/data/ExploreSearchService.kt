@@ -1,7 +1,7 @@
 package capital.yuri.yuriplayer.data
 
 import android.content.Context
-import android.util.Log
+import capital.yuri.yuriplayer.core.log.yuriLog
 import capital.yuri.yuriplayer.data.db.CatalogSources
 import capital.yuri.yuriplayer.data.source.JellyfinClient
 import capital.yuri.yuriplayer.data.source.LibrarySourceFactory
@@ -102,24 +102,24 @@ class ExploreSearchService(
 
     fun requestPauseAll() {
         pauseAll.set(true)
-        Log.i(TAG, "pause all requested")
+        log.i { "pause all requested" }
     }
 
     fun requestStopAll() {
         stopAll.set(true)
         pauseAll.set(true)
-        Log.i(TAG, "stop all requested")
+        log.i { "stop all requested" }
     }
 
     fun requestPauseSource(sourceInstanceId: Long) {
         pausedSources.add(sourceInstanceId)
-        Log.i(TAG, "pause source $sourceInstanceId")
+        log.i { "pause source $sourceInstanceId" }
     }
 
     fun requestStopSource(sourceInstanceId: Long) {
         stoppedSources.add(sourceInstanceId)
         pausedSources.add(sourceInstanceId)
-        Log.i(TAG, "stop source $sourceInstanceId")
+        log.i { "stop source $sourceInstanceId" }
     }
 
     fun clearControlFlags() {
@@ -145,13 +145,13 @@ class ExploreSearchService(
             hydrated = true
             if (count > 0) cacheAtMs = System.currentTimeMillis()
             refreshCheckpointSnapshot()
-            Log.i(TAG, "hydrated remote count=$count (no full list loaded)")
+            log.i { "hydrated remote count=$count (no full list loaded)" }
         }
     }
 
     fun requestRemoteScan(force: Boolean = false, sourceId: Long? = null) {
         if (!force && _isScanning.value) {
-            Log.i(TAG, "requestRemoteScan ignored — already scanning")
+            log.i { "requestRemoteScan ignored — already scanning" }
             return
         }
         val age = System.currentTimeMillis() - cacheAtMs
@@ -160,7 +160,7 @@ class ExploreSearchService(
                 it.status == SourceScanStatus.PAUSED || it.status == SourceScanStatus.STOPPED
             }
             if (!hasPaused) {
-                Log.i(TAG, "requestRemoteScan skipped — cache warm (${_indexedCount.value})")
+                log.i { "requestRemoteScan skipped — cache warm (${_indexedCount.value})" }
                 return
             }
         }
@@ -168,13 +168,13 @@ class ExploreSearchService(
         if (!NetworkPolicy.allowsRemoteSync(context, settings)) {
             val reason = NetworkPolicy.blockedReason(context, settings)
                 ?: "Remote sync blocked on this network"
-            Log.i(TAG, "requestRemoteScan blocked: $reason")
+            log.i { "requestRemoteScan blocked: $reason" }
             _lastError.value = reason
             return
         }
 
         if (force) clearControlFlags()
-        Log.i(TAG, "requestRemoteScan force=$force sourceId=$sourceId indexed=${_indexedCount.value}")
+        log.i { "requestRemoteScan force=$force sourceId=$sourceId indexed=${_indexedCount.value}" }
         LibraryScanService.startRemote(context.applicationContext, force, sourceId)
     }
 
@@ -291,7 +291,7 @@ class ExploreSearchService(
             ?: "Remote sync blocked on this network"
         _lastError.value = reason
         progress(reason)
-        Log.i(TAG, "sync paused: $reason")
+        log.i { "sync paused: $reason" }
         return false
     }
 
@@ -308,15 +308,15 @@ class ExploreSearchService(
         progress("Building album / artist index…")
         runCatching {
             catalog.rebuildRollups()
-            Log.i(TAG, "rollups rebuilt ($reason)")
+            log.i { "rollups rebuilt ($reason)" }
         }.onFailure {
-            Log.w(TAG, "rollups failed ($reason): ${it.message}")
+            log.w { "rollups failed ($reason): ${it.message}" }
         }
     }
 
     private suspend fun runRemoteScan(force: Boolean, onlySourceId: Long? = null) {
         if (!mutex.tryLock()) {
-            Log.i(TAG, "scan already running — skip")
+            log.i { "scan already running — skip" }
             return
         }
         try {
@@ -330,7 +330,7 @@ class ExploreSearchService(
             _lastError.value = null
             pageCounter.set(0)
             notifier.update("Syncing libraries", "Connecting…")
-            Log.i(TAG, "remote scan start force=$force sourceId=$onlySourceId")
+            log.i { "remote scan start force=$force sourceId=$onlySourceId" }
 
             val rows = instances.getAll().filter { it.enabled }
                 .filter { onlySourceId == null || it.id == onlySourceId }
@@ -499,13 +499,13 @@ class ExploreSearchService(
                 }
             }
 
-            Log.i(TAG, "remote index ready: count=$finalCount")
+            log.i { "remote index ready: count=$finalCount" }
         } catch (e: CancellationException) {
-            Log.i(TAG, "remote scan cancelled")
+            log.i { "remote scan cancelled" }
             throw e
         } catch (e: Exception) {
             _lastError.value = e.message ?: "Scan failed"
-            Log.e(TAG, "remote index failed", e)
+            log.e(e) { "remote index failed" }
         } finally {
             _isScanning.value = false
             _scanProgress.value = null
@@ -532,7 +532,7 @@ class ExploreSearchService(
         totalHint: Int?
     ): RemoteScanResult {
         val remoteTotal = jellyfinClient.audioItemCount(session).getOrElse {
-            Log.w(TAG, "delta count failed $sourceName: ${it.message}")
+            log.w { "delta count failed $sourceName: ${it.message}" }
             _lastError.value = "$sourceName: ${it.message}"
             return RemoteScanResult()
         }
@@ -541,13 +541,13 @@ class ExploreSearchService(
             checkpoints.markDone(rowId, sourceName, known, remoteTotal)
             refreshCheckpointSnapshot()
             progress("$sourceName: up to date ($remoteTotal)")
-            Log.i(TAG, "jellyfin delta skip $sourceName known=$known remote=$remoteTotal")
+            log.i { "jellyfin delta skip $sourceName known=$known remote=$remoteTotal" }
             return RemoteScanResult(delivered = 0)
         }
         val grow = remoteTotal - known
         val cap = (grow + 64).coerceIn(1, 2_000)
         progress("$sourceName: $grow new tracks")
-        Log.i(TAG, "jellyfin delta $sourceName +$grow known=$known remote=$remoteTotal cap=$cap")
+        log.i { "jellyfin delta $sourceName +$grow known=$known remote=$remoteTotal cap=$cap" }
 
         var inserted = 0
         var updated = 0
@@ -575,13 +575,13 @@ class ExploreSearchService(
             val n = total ?: remoteTotal
             progress("$sourceName: +$inserted new · $n on server")
         }.onFailure {
-            Log.w(TAG, "jellyfin delta fetch failed $sourceName: ${it.message}")
+            log.w { "jellyfin delta fetch failed $sourceName: ${it.message}" }
             _lastError.value = "$sourceName: ${it.message}"
         }
 
         checkpoints.markDone(rowId, sourceName, knownCount + delivered, remoteTotal)
         refreshCheckpointSnapshot()
-        Log.i(TAG, "jellyfin delta done $sourceName +$inserted ~$updated of $grow")
+        log.i { "jellyfin delta done $sourceName +$inserted ~$updated of $grow" }
         return RemoteScanResult(
             delivered = delivered,
             inserted = inserted,
@@ -609,7 +609,7 @@ class ExploreSearchService(
         val session = jellyfinSessions[rowId] ?: jellyfinClient.authenticate(url, user, pass)
             .getOrElse {
                 if (it is CancellationException) throw it
-                Log.w(TAG, "jellyfin auth failed: ${it.message}")
+                log.w { "jellyfin auth failed: ${it.message}" }
                 _lastError.value = "$sourceName: ${it.message}"
                 return RemoteScanResult()
             }.also { jellyfinSessions[rowId] = it }
@@ -701,16 +701,16 @@ class ExploreSearchService(
             when {
                 it is CancellationException && paused -> {
                     checkpoints.markPaused(rowId, sourceName, cursor, delivered, totalHint)
-                    Log.i(TAG, "jellyfin paused $sourceName at cursor=$cursor delivered=$delivered")
+                    log.i { "jellyfin paused $sourceName at cursor=$cursor delivered=$delivered" }
                 }
                 it is CancellationException && aborted -> {
                     checkpoints.markStopped(rowId, sourceName, cursor, delivered, totalHint)
-                    Log.i(TAG, "jellyfin stopped $sourceName at cursor=$cursor")
+                    log.i { "jellyfin stopped $sourceName at cursor=$cursor" }
                 }
                 it is CancellationException -> throw it
                 else -> {
                     jellyfinSessions.remove(rowId)
-                    Log.w(TAG, "jellyfin scan failed: ${it.message}")
+                    log.w { "jellyfin scan failed: ${it.message}" }
                     _lastError.value = "$sourceName: ${it.message}"
                 }
             }
@@ -732,10 +732,7 @@ class ExploreSearchService(
         }
         checkpoints.markDone(rowId, sourceName, delivered, totalHint)
         refreshCheckpointSnapshot()
-        Log.i(
-            TAG,
-            "jellyfin $sourceName done delivered=$delivered +$inserted ~$updated -$removed incremental=$incremental"
-        )
+        log.i { "jellyfin $sourceName done delivered=$delivered +$inserted ~$updated -$removed incremental=$incremental" }
         return RemoteScanResult(
             delivered = delivered,
             inserted = inserted,
@@ -775,7 +772,7 @@ class ExploreSearchService(
             attempted++
             budget.yieldBetweenArt()
         }
-        Log.i(TAG, "passive art pass: attempted=$attempted cached=${cachedAlbumArtKeys.size}")
+        log.i { "passive art pass: attempted=$attempted cached=${cachedAlbumArtKeys.size}" }
     }
 
     private suspend fun scanSubsonicNewest(
@@ -792,7 +789,7 @@ class ExploreSearchService(
             pageSize = 20,
             type = "newest"
         ).getOrElse {
-            Log.w(TAG, "subsonic newest failed $sourceName: ${it.message}")
+            log.w { "subsonic newest failed $sourceName: ${it.message}" }
             return RemoteScanResult()
         }
         var inserted = 0
@@ -813,7 +810,7 @@ class ExploreSearchService(
         }
         checkpoints.markDone(instanceId, sourceName, delivered, null)
         refreshCheckpointSnapshot()
-        Log.i(TAG, "subsonic newest $sourceName albums=${page.albums.size} +$inserted ~$updated")
+        log.i { "subsonic newest $sourceName albums=${page.albums.size} +$inserted ~$updated" }
         progress("$sourceName: +$inserted new")
         return RemoteScanResult(delivered = delivered, inserted = inserted, updated = updated)
     }
@@ -848,7 +845,7 @@ class ExploreSearchService(
 
         val session = subsonicClient.ping(baseSession).getOrElse {
             if (it is CancellationException) throw it
-            Log.w(TAG, "subsonic ping failed: ${it.message}")
+            log.w { "subsonic ping failed: ${it.message}" }
             _lastError.value = "$sourceName: ${it.message}"
             return RemoteScanResult()
         }
@@ -931,15 +928,15 @@ class ExploreSearchService(
             when {
                 it is CancellationException && paused -> {
                     checkpoints.markPaused(instanceId, sourceName, albumOffset, delivered, null)
-                    Log.i(TAG, "subsonic paused $sourceName at albumOffset=$albumOffset delivered=$delivered")
+                    log.i { "subsonic paused $sourceName at albumOffset=$albumOffset delivered=$delivered" }
                 }
                 it is CancellationException && aborted -> {
                     checkpoints.markStopped(instanceId, sourceName, albumOffset, delivered, null)
-                    Log.i(TAG, "subsonic stopped $sourceName at albumOffset=$albumOffset")
+                    log.i { "subsonic stopped $sourceName at albumOffset=$albumOffset" }
                 }
                 it is CancellationException -> throw it
                 else -> {
-                    Log.w(TAG, "subsonic scan failed: ${it.message}")
+                    log.w { "subsonic scan failed: ${it.message}" }
                     _lastError.value = "$sourceName: ${it.message}"
                 }
             }
@@ -961,10 +958,7 @@ class ExploreSearchService(
         }
         checkpoints.markDone(instanceId, sourceName, delivered, delivered)
         refreshCheckpointSnapshot()
-        Log.i(
-            TAG,
-            "subsonic $sourceName done delivered=$delivered +$inserted ~$updated -$removed"
-        )
+        log.i { "subsonic $sourceName done delivered=$delivered +$inserted ~$updated -$removed" }
         return RemoteScanResult(
             delivered = delivered,
             inserted = inserted,
@@ -991,7 +985,7 @@ class ExploreSearchService(
     }
 
     companion object {
-        private const val TAG = "ExploreSearch"
+        private val log = yuriLog("ExploreSearch")
         private const val SCOPE_TRACK = "track"
         private const val CACHE_TTL_MS = 15L * 60 * 1000
         private const val WARM_SOURCE_MIN_TRACKS = 50

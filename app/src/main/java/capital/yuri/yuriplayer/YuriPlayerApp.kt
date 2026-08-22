@@ -1,5 +1,7 @@
 package capital.yuri.yuriplayer
 
+import capital.yuri.yuriplayer.core.log.yuriLog
+
 import android.app.Application
 import android.content.Intent
 import android.os.Handler
@@ -61,7 +63,7 @@ class YuriPlayerApp : Application(), SingletonImageLoader.Factory {
         ImageLoader.Builder(context)
             .coroutineContext(
                 SupervisorJob() + Dispatchers.IO + CoroutineExceptionHandler { _, t ->
-                    android.util.Log.w("Coil", "image load cancelled", t)
+                    yuriLog("Coil").w(t) { "image load cancelled" }
                 }
             )
             .components {

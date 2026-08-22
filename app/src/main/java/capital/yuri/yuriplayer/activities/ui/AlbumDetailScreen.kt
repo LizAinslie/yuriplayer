@@ -184,10 +184,7 @@ fun AlbumDetailScreen(
         mutableIntStateOf(album.trackCount.coerceAtLeast(album.songs.size))
     }
     LaunchedEffect(stableKey) {
-        AlbumLog.i(
-            album.name,
-            "PAGE open stableKey='$stableKey' albumKey='$albumKeyStr' seed=${album.songs.size} artist='${album.artist}'"
-        )
+        AlbumLog.i(album.name, "PAGE open stableKey='$stableKey' albumKey='$albumKeyStr' seed=${album.songs.size} artist='${album.artist}'")
         var current = album
         fun publish(next: AlbumItem, stage: String) {
             val union = dedupeAlbumPageTracks(current.songs + next.songs + album.songs)

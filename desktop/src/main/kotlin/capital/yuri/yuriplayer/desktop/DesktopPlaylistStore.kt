@@ -1,6 +1,7 @@
 package capital.yuri.yuriplayer.desktop
 
 import capital.yuri.yuriplayer.core.library.Track
+import capital.yuri.yuriplayer.core.log.yuriLog
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -16,6 +17,8 @@ import javax.imageio.ImageIO
  * Secret covers stay in the file but are not the active slot after a cold start.
  */
 class DesktopPlaylistStore(configDir: String) {
+    private val log = yuriLog("Playlist")
+
     private val root = File(configDir, "playlists")
     private val jsonFile = File(root, "playlists.json")
     private val coversDir = File(root, "covers")
@@ -227,7 +230,7 @@ class DesktopPlaylistStore(configDir: String) {
             val file = json.decodeFromString<PlaylistFile>(jsonFile.readText())
             _playlists.value = file.playlists.map { it.withEntries(it.orderedEntries()) }
         }.onFailure {
-            System.err.println("YuriPlayer.Playlist load failed: ${it.message}")
+            log.w { "load failed: ${it.message}" }
         }
     }
 
@@ -236,7 +239,7 @@ class DesktopPlaylistStore(configDir: String) {
             root.mkdirs()
             jsonFile.writeText(json.encodeToString(PlaylistFile(_playlists.value)))
         }.onFailure {
-            System.err.println("YuriPlayer.Playlist save failed: ${it.message}")
+            log.w { "save failed: ${it.message}" }
         }
     }
 
