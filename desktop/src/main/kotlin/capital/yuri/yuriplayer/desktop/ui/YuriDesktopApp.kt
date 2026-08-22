@@ -150,7 +150,9 @@ fun YuriDesktopApp(session: DesktopSession) {
 
         fun playlistAddAlternate(songs: List<Track>): ContextMenuScope.() -> Unit = {
             val candidates = playlists
-                .filter { pl -> songs.any { t -> pl.trackIds.none { it in t.playlistKeys() } } }
+                .filter { pl ->
+                    songs.any { t -> pl.orderedEntries().none { e -> e.matches(t) } }
+                }
                 .sortedBy { it.name.lowercase() }
             if (candidates.isEmpty()) {
                 item("Already in every playlist", enabled = false) {}

@@ -13,6 +13,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.itemsIndexed
@@ -40,8 +41,11 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import kotlin.math.roundToInt
 import capital.yuri.yuriplayer.components.art.CoverArt
 import capital.yuri.yuriplayer.components.dialog.InWindowPanel
 import capital.yuri.yuriplayer.components.list.LikeHeart
@@ -171,6 +175,8 @@ fun PlaylistPage(
             }
         }
         Spacer(Modifier.height(16.dp))
+        val density = LocalDensity.current
+        val rowPx = with(density) { 64.dp.toPx() }
         LazyColumn(Modifier.weight(1f)) {
             itemsIndexed(tracks, key = { i, t -> "${t.id}#$i" }) { index, track ->
                 TrackRow(
@@ -181,7 +187,29 @@ fun PlaylistPage(
                     showAlbum = true,
                     liked = track.id in likedIds,
                     onToggleLike = { onToggleLike(track.id) },
-                    contextItems = songMenu(track)
+                    contextItems = songMenu(track),
+                    modifier = Modifier.pointerInput(tracks, playlist.id) {
+                        var from: Int? = null
+                        var dy = 0f
+                        detectDragGesturesAfterLongPress(
+                            onDragStart = {
+                                from = index
+                                dy = 0f
+                            },
+                            onDrag = { change, drag ->
+                                change.consume()
+                                dy += drag.y
+                            },
+                            onDragEnd = {
+                                val start = from ?: return@detectDragGesturesAfterLongPress
+                                val to = (start + (dy / rowPx).roundToInt())
+                                    .coerceIn(0, tracks.lastIndex)
+                                if (start != to) store.moveTrack(playlist.id, start, to)
+                                from = null
+                            },
+                            onDragCancel = { from = null }
+                        )
+                    }
                 )
             }
         }
