@@ -2,6 +2,7 @@ package capital.yuri.yuriplayer.desktop
 
 import capital.yuri.yuriplayer.core.library.Track
 import capital.yuri.yuriplayer.core.player.PlaybackSnapshot
+import capital.yuri.yuriplayer.core.player.QueueLane
 import capital.yuri.yuriplayer.core.player.RepeatMode
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.encodeToString
@@ -17,7 +18,7 @@ class DesktopPlaybackStore(configDir: String) {
     private val json = Json { ignoreUnknownKeys = true; encodeDefaults = true }
 
     fun save(snap: PlaybackSnapshot) {
-        if (snap.queue.isEmpty()) {
+        if (snap.queue.isEmpty() && snap.coldQueue.isEmpty() && snap.hotQueue.isEmpty()) {
             clear()
             return
         }
@@ -32,6 +33,11 @@ class DesktopPlaybackStore(configDir: String) {
                 queue = snap.queue,
                 linear = snap.linear,
                 history = snap.history,
+                hotQueue = snap.hotQueue,
+                coldQueue = snap.coldQueue,
+                coldOriginal = snap.coldOriginal,
+                lane = snap.lane.name,
+                indexInLane = snap.indexInLane,
                 savedAt = System.currentTimeMillis()
             )
             val tmp = File(file.parentFile, "playback_state.json.tmp")
@@ -47,16 +53,23 @@ class DesktopPlaybackStore(configDir: String) {
         if (!file.isFile) return null
         return runCatching {
             val dto = json.decodeFromString<Dto>(file.readText())
-            if (dto.queue.isEmpty()) return@runCatching null
+            if (dto.queue.isEmpty() && dto.coldQueue.isEmpty() && dto.hotQueue.isEmpty()) {
+                return@runCatching null
+            }
             PlaybackSnapshot(
                 queue = dto.queue,
-                linear = dto.linear.ifEmpty { dto.queue },
+                linear = dto.linear.ifEmpty { dto.coldOriginal.ifEmpty { dto.queue } },
                 index = dto.index,
                 history = dto.history,
                 shuffle = dto.shuffle,
                 repeat = runCatching { RepeatMode.valueOf(dto.repeat) }.getOrDefault(RepeatMode.OFF),
                 volume = dto.volume.coerceIn(0f, 1f),
-                positionMs = dto.positionMs
+                positionMs = dto.positionMs,
+                hotQueue = dto.hotQueue,
+                coldQueue = dto.coldQueue.ifEmpty { dto.linear.ifEmpty { dto.queue } },
+                coldOriginal = dto.coldOriginal.ifEmpty { dto.linear.ifEmpty { dto.queue } },
+                lane = runCatching { QueueLane.valueOf(dto.lane) }.getOrDefault(QueueLane.COLD),
+                indexInLane = dto.indexInLane
             )
         }.getOrNull()
     }
@@ -75,6 +88,11 @@ class DesktopPlaybackStore(configDir: String) {
         val queue: List<Track> = emptyList(),
         val linear: List<Track> = emptyList(),
         val history: List<Track> = emptyList(),
+        val hotQueue: List<Track> = emptyList(),
+        val coldQueue: List<Track> = emptyList(),
+        val coldOriginal: List<Track> = emptyList(),
+        val lane: String = "COLD",
+        val indexInLane: Int = 0,
         val savedAt: Long = 0L
     )
 }

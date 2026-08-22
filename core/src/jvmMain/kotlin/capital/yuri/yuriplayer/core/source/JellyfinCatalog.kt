@@ -216,12 +216,7 @@ class JellyfinCatalog(
                 param("api_key", token)
             }
         }
-        val stream = url(account.baseUrl) {
-            path("Audio", id, "stream")
-            param("static", true)
-            param("api_key", token)
-            item.container?.let { param("Container", it) }
-        }
+        val stream = streamUrl(account, id, item.container)
         return Track(
             id = "jellyfin:$id",
             uri = stream,
@@ -236,6 +231,16 @@ class JellyfinCatalog(
             artworkUri = art,
             sourceId = account.id
         )
+    }
+
+    fun streamUrl(account: RemoteAccount, itemId: String, container: String? = null): String {
+        val token = account.accessToken.orEmpty()
+        return url(account.baseUrl) {
+            path("Audio", itemId, "stream")
+            param("static", true)
+            if (token.isNotBlank()) param("api_key", token)
+            container?.let { param("Container", it) }
+        }
     }
 
     private fun authHeader(token: String?): String {

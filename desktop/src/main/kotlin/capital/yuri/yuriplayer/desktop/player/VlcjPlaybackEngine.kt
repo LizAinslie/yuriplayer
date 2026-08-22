@@ -37,7 +37,9 @@ class VlcjPlaybackEngine : PlaybackEngine {
     private val durationMs = AtomicLong(0)
     private val volumePercent = AtomicInteger(100)
     private val pendingStartMs = AtomicLong(-1L)
+    private val pendingMedia = AtomicReference<PlaybackMedia?>(null)
     private val preparedNext = AtomicReference<PlaybackMedia?>(null)
+    private val ignoreFinishedUntil = AtomicLong(0)
     val nativeError: String?
 
     override val isPlaying: StateFlow<Boolean> = _isPlaying.asStateFlow()
@@ -99,6 +101,7 @@ class VlcjPlaybackEngine : PlaybackEngine {
             }
 
             override fun finished(mediaPlayer: MediaPlayer) {
+                if (System.currentTimeMillis() < ignoreFinishedUntil.get()) return
                 _isPlaying.value = false
                 listeners.forEach { it.onEnded() }
             }
@@ -115,44 +118,55 @@ class VlcjPlaybackEngine : PlaybackEngine {
     }
 
     override fun load(current: PlaybackMedia, successor: PlaybackMedia?, startPositionMs: Long) {
+        pendingMedia.set(current)
         preparedNext.set(successor)
         pendingStartMs.set(if (startPositionMs > 0) startPositionMs else -1L)
         positionMs.set(startPositionMs.coerceAtLeast(0L))
+        _currentUri.value = current.uri
+        _isPlaying.value = false
+        ignoreFinishedUntil.set(System.currentTimeMillis() + 750)
+    }
+
+    override fun play() {
         onVlc {
             val p = player ?: run {
                 listeners.forEach { it.onError(nativeError ?: "No audio engine", false) }
                 return@onVlc
             }
-            val mrl = toMrl(current.uri)
-            System.err.println("Vlcj load $mrl")
-            val extra = if (startPositionMs > 0) {
-                arrayOf(":start-time=${startPositionMs / 1000.0}")
-            } else {
-                emptyArray()
-            }
-            val ok = p.media().prepare(mrl, *(mediaOptions(current) + extra))
-            if (!ok) {
-                listeners.forEach { it.onError("Could not open ${current.title}", recoverable = true) }
-                return@onVlc
-            }
-            p.audio().setVolume(volumePercent.get())
+            val media = pendingMedia.getAndSet(null)
             p.audio().setMute(false)
-            if (startPositionMs > 0) p.controls().setTime(startPositionMs)
-            p.controls().setPause(true)
-            _currentUri.value = current.uri
-            _isPlaying.value = false
-        }
-    }
-
-    override fun play() {
-        onVlc {
-            player?.audio()?.setMute(false)
-            player?.controls()?.play()
+            p.audio().setVolume(volumePercent.get())
+            ignoreFinishedUntil.set(System.currentTimeMillis() + 750)
+            if (media != null) {
+                val mrl = toMrl(media.uri)
+                System.err.println("Vlcj play $mrl")
+                val extra = pendingStartMs.get().takeIf { it > 0 }?.let {
+                    arrayOf(":start-time=${it / 1000.0}")
+                } ?: emptyArray()
+                val ok = p.media().play(mrl, *(mediaOptions(media) + extra))
+                if (!ok) {
+                    listeners.forEach { it.onError("Could not open ${media.title}", recoverable = true) }
+                    return@onVlc
+                }
+                _currentUri.value = media.uri
+            } else {
+                p.controls().play()
+            }
         }
     }
 
     override fun pause() {
-        onVlc { player?.controls()?.setPause(true) }
+        onVlc {
+            val media = pendingMedia.get()
+            val p = player ?: return@onVlc
+            if (media != null && p.status()?.isPlaying != true) {
+                val mrl = toMrl(media.uri)
+                p.media().prepare(mrl, *mediaOptions(media))
+                p.controls().setPause(true)
+            } else {
+                p.controls().setPause(true)
+            }
+        }
     }
 
     override fun stop() {
@@ -193,7 +207,8 @@ class VlcjPlaybackEngine : PlaybackEngine {
 
     override fun playPreparedNext(): Boolean {
         val next = preparedNext.getAndSet(null) ?: return false
-        load(next, null, 0L)
+        pendingMedia.set(next)
+        pendingStartMs.set(-1L)
         play()
         return true
     }

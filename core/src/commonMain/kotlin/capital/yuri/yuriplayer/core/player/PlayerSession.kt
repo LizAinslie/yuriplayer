@@ -16,6 +16,11 @@ enum class QueueLane { HOT, COLD }
 class PlayerSession(
     private val engine: PlaybackEngine
 ) {
+    /**
+     * Refresh network stream URLs (Navidrome/Jellyfin tokens) right before
+     * the engine opens them. Identity stays on the original [Track].
+     */
+    var mediaFor: (Track) -> Track = { it }
     private val _hot = MutableStateFlow<List<Track>>(emptyList())
     val hotQueue: StateFlow<List<Track>> = _hot.asStateFlow()
 
@@ -390,7 +395,19 @@ class PlayerSession(
         return null
     }
 
+    private var advancing = false
+
     private fun advance(fromUser: Boolean, engineAlreadyMoved: Boolean = false) {
+        if (advancing) return
+        advancing = true
+        try {
+            advanceBody(fromUser, engineAlreadyMoved)
+        } finally {
+            advancing = false
+        }
+    }
+
+    private fun advanceBody(fromUser: Boolean, engineAlreadyMoved: Boolean) {
         val nextTrack = peekNextTrack()
         if (nextTrack == null && fromUser && _repeat.value != RepeatMode.ALL) {
             return
@@ -416,7 +433,6 @@ class PlayerSession(
             return
         }
         if (engine.hasPreparedNext() && engine.playPreparedNext()) {
-            engine.play()
             warmSuccessor()
             return
         }
@@ -438,8 +454,9 @@ class PlayerSession(
     private fun loadCurrent(startMs: Long, play: Boolean) {
         val track = currentTrack() ?: return
         _current.value = track
-        val next = peekNextTrack()?.takeIf { it.id != track.id }
-        engine.load(track.toPlaybackMedia(), next?.toPlaybackMedia(), startMs)
+        val playable = mediaFor(track)
+        val next = peekNextTrack()?.takeIf { it.id != track.id }?.let { mediaFor(it) }
+        engine.load(playable.toPlaybackMedia(), next?.toPlaybackMedia(), startMs)
         if (play) engine.play() else engine.pause()
         warmSuccessor()
     }
@@ -456,7 +473,7 @@ class PlayerSession(
             engine.setNext(null)
             return
         }
-        engine.setNext(next.toPlaybackMedia())
+        engine.setNext(mediaFor(next).toPlaybackMedia())
         engine.warmupNext()
     }
 

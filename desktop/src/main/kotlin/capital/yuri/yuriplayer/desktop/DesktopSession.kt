@@ -157,6 +157,7 @@ class DesktopSession {
         scope.launch {
             sources.remotes.collect { refreshScanSources() }
         }
+        player.mediaFor = ::freshMedia
         hydrateIndex()
         restorePlayback()
         startPersist()
@@ -197,21 +198,37 @@ class DesktopSession {
         _durationMs.value = player.durationMs()
     }
 
+    private fun freshMedia(track: Track): Track {
+        val remote = sources.remotes.value.firstOrNull { it.id == track.sourceId && it.enabled }
+            ?: return track
+        val raw = track.rawSourceId() ?: return track
+        return when (remote.kind) {
+            SourceKind.SUBSONIC -> track.copy(
+                uri = subsonic.streamUrl(remote, raw),
+                artworkUri = track.artworkUri ?: subsonic.coverUrl(remote, raw)
+            )
+            SourceKind.JELLYFIN -> track.copy(uri = jellyfin.streamUrl(remote, raw))
+            SourceKind.LOCAL -> track
+        }
+    }
+
     private fun resolveSnap(snap: PlaybackSnapshot): PlaybackSnapshot {
         val lib = _tracks.value
         if (lib.isEmpty()) return snap
         val byKey = HashMap<String, Track>(lib.size * 2)
         for (t in lib) {
-            byKey.putIfAbsent(t.id, t)
-            byKey.putIfAbsent(t.catalogKey(), t)
+            t.indexKeys().forEach { byKey.putIfAbsent(it, t) }
         }
         fun resolve(list: List<Track>) = list.map { t ->
-            byKey[t.id] ?: byKey[t.catalogKey()] ?: t
+            t.indexKeys().firstNotNullOfOrNull { byKey[it] } ?: t
         }
         return snap.copy(
             queue = resolve(snap.queue),
             linear = resolve(snap.linear),
-            history = resolve(snap.history)
+            history = resolve(snap.history),
+            hotQueue = resolve(snap.hotQueue),
+            coldQueue = resolve(snap.coldQueue),
+            coldOriginal = resolve(snap.coldOriginal.ifEmpty { snap.linear })
         )
     }
 

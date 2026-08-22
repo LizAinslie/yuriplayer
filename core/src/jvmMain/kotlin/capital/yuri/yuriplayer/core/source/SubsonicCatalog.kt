@@ -187,6 +187,12 @@ class SubsonicCatalog(
             }
         }
 
+    fun streamUrl(account: RemoteAccount, songId: String): String =
+        streamUrl(sessionOf(account), songId)
+
+    fun coverUrl(account: RemoteAccount, coverArtId: String?, size: Int = 600): String? =
+        coverUrl(sessionOf(account), coverArtId, size)
+
     fun streamUrl(session: Session, id: String): String =
         restUrl(session, "stream") {
             param("id", id)
