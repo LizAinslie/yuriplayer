@@ -55,6 +55,7 @@ import capital.yuri.yuriplayer.components.menu.ContextMenuScope
 import capital.yuri.yuriplayer.components.menu.MenuEntry
 import capital.yuri.yuriplayer.components.menu.buildContextMenu
 import capital.yuri.yuriplayer.components.model.AlbumPageModel
+import capital.yuri.yuriplayer.components.model.TrackRowModel
 import capital.yuri.yuriplayer.components.model.albums
 import capital.yuri.yuriplayer.components.model.artistPage
 import capital.yuri.yuriplayer.components.model.toCover
@@ -204,6 +205,19 @@ fun YuriDesktopApp(session: DesktopSession) {
                     session.playlists.removeTracks(playlistId, listOf(track))
                 }
             }
+        }
+
+        fun menuForQueueRow(row: TrackRowModel, pool: List<Track>): List<MenuEntry> {
+            val track = pool.firstOrNull { it.id == row.id } ?: Track(
+                id = row.id,
+                uri = "",
+                title = row.title,
+                artist = row.artist,
+                album = row.album,
+                durationMs = row.durationMs,
+                artworkUri = row.artworkUri
+            )
+            return songMenu(track)
         }
 
         fun pinTracks(item: LibraryRailItem): List<Track> = when {
@@ -438,7 +452,8 @@ fun YuriDesktopApp(session: DesktopSession) {
                         session.collection.toggleLike(t.id)
                     },
                     queueVisible = showSidebar,
-                    onToggleQueue = { showSidebar = !showSidebar }
+                    onToggleQueue = { showSidebar = !showSidebar },
+                    songMenu = current?.let { songMenu(it) }.orEmpty()
                 )
             },
             sidebar = {
@@ -475,10 +490,9 @@ fun YuriDesktopApp(session: DesktopSession) {
                         likedIds = liked,
                         onToggleTrackLike = session.collection::toggleLike,
                         songMenu = { row ->
-                            (hotQueue + coldQueue + tracks).firstOrNull { it.id == row.id }
-                                ?.let { songMenu(it) }
-                                .orEmpty()
-                        }
+                            menuForQueueRow(row, hotQueue + coldQueue + history + tracks)
+                        },
+                        nowPlayingMenu = current?.let { songMenu(it) }.orEmpty()
                     )
                 }
             }

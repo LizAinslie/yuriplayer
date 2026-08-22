@@ -37,6 +37,7 @@ fun NowPlayingSidebar(
     likedIds: Set<String> = emptySet(),
     onToggleTrackLike: (String) -> Unit = {},
     songMenu: (TrackRowModel) -> List<out MenuEntry> = { emptyList() },
+    nowPlayingMenu: List<out MenuEntry> = emptyList(),
     modifier: Modifier = Modifier
 ) {
     var artExpanded by remember { mutableStateOf(false) }
@@ -69,6 +70,7 @@ fun NowPlayingSidebar(
             likedIds = likedIds,
             onToggleLike = onToggleTrackLike,
             songMenu = songMenu,
+            nowPlayingMenu = nowPlayingMenu,
             artExpanded = artExpanded,
             onToggleArt = { artExpanded = !artExpanded },
             modifier = Modifier.weight(1f)

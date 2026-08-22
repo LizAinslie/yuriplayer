@@ -41,7 +41,9 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import capital.yuri.yuriplayer.components.art.CoverArt
+import capital.yuri.yuriplayer.components.list.ContextMenuAnchor
 import capital.yuri.yuriplayer.components.list.formatTime
+import capital.yuri.yuriplayer.components.menu.MenuEntry
 import capital.yuri.yuriplayer.components.model.CoverRef
 import capital.yuri.yuriplayer.core.player.RepeatMode
 
@@ -66,7 +68,8 @@ fun BottomPlayerBar(
     liked: Boolean = false,
     onToggleLike: () -> Unit = {},
     queueVisible: Boolean = true,
-    onToggleQueue: () -> Unit = {}
+    onToggleQueue: () -> Unit = {},
+    songMenu: List<out MenuEntry> = emptyList()
 ) {
     val onAccent = MaterialTheme.colorScheme.onPrimary
     val muted = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.55f)
@@ -82,36 +85,38 @@ fun BottomPlayerBar(
                 .padding(horizontal = 12.dp, vertical = 10.dp)
                 .height(84.dp)
         ) {
-            Row(
-                Modifier.align(Alignment.CenterStart).widthIn(max = 360.dp),
-                verticalAlignment = Alignment.CenterVertically
+            ContextMenuAnchor(
+                items = if (track != null) songMenu else emptyList(),
+                modifier = Modifier.align(Alignment.CenterStart).widthIn(max = 360.dp)
             ) {
-                CoverArt(model = track?.artworkUri, size = 56.dp, corner = 6.dp)
-                Spacer(Modifier.width(12.dp))
-                Column(Modifier.weight(1f, fill = false).widthIn(max = 220.dp)) {
-                    Text(
-                        track?.title ?: "Nothing playing",
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                        fontWeight = FontWeight.SemiBold,
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurface
-                    )
-                    Text(
-                        track?.subtitle ?: " ",
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                        style = MaterialTheme.typography.bodySmall,
-                        color = muted
-                    )
-                }
-                if (track != null) {
-                    IconButton(onClick = onToggleLike) {
-                        Icon(
-                            if (liked) Icons.Filled.Favorite else Icons.Outlined.FavoriteBorder,
-                            contentDescription = if (liked) "Unlike" else "Like",
-                            tint = if (liked) accent else muted
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    CoverArt(model = track?.artworkUri, size = 56.dp, corner = 6.dp)
+                    Spacer(Modifier.width(12.dp))
+                    Column(Modifier.weight(1f, fill = false).widthIn(max = 220.dp)) {
+                        Text(
+                            track?.title ?: "Nothing playing",
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            fontWeight = FontWeight.SemiBold,
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurface
                         )
+                        Text(
+                            track?.subtitle ?: " ",
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = muted
+                        )
+                    }
+                    if (track != null) {
+                        IconButton(onClick = onToggleLike) {
+                            Icon(
+                                if (liked) Icons.Filled.Favorite else Icons.Outlined.FavoriteBorder,
+                                contentDescription = if (liked) "Unlike" else "Like",
+                                tint = if (liked) accent else muted
+                            )
+                        }
                     }
                 }
             }

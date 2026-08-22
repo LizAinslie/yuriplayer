@@ -9,6 +9,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.PointerEventType
 import androidx.compose.ui.input.pointer.isSecondaryPressed
 import androidx.compose.ui.input.pointer.pointerInput
@@ -44,7 +45,7 @@ fun ContextMenuAnchor(
             if (items.isEmpty()) return@pointerInput
             awaitPointerEventScope {
                 while (true) {
-                    val event = awaitPointerEvent()
+                    val event = awaitPointerEvent(PointerEventPass.Initial)
                     if (event.type != PointerEventType.Press) continue
                     if (!event.buttons.isSecondaryPressed) continue
                     val change = event.changes.firstOrNull() ?: continue

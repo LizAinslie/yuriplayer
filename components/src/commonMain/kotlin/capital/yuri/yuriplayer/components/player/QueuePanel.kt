@@ -47,6 +47,7 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import capital.yuri.yuriplayer.components.art.CoverArt
+import capital.yuri.yuriplayer.components.list.ContextMenuAnchor
 import capital.yuri.yuriplayer.components.list.TrackRow
 import capital.yuri.yuriplayer.components.menu.MenuEntry
 import capital.yuri.yuriplayer.components.model.CoverRef
@@ -76,6 +77,7 @@ fun QueuePanel(
     likedIds: Set<String> = emptySet(),
     onToggleLike: (String) -> Unit = {},
     songMenu: (TrackRowModel) -> List<out MenuEntry> = { emptyList() },
+    nowPlayingMenu: List<out MenuEntry> = emptyList(),
     artExpanded: Boolean = false,
     onToggleArt: (() -> Unit)? = null,
     modifier: Modifier = Modifier
@@ -136,7 +138,8 @@ fun QueuePanel(
                     NowPlayingQueueCard(
                         track = np,
                         showCover = !artExpanded,
-                        onToggleArt = onToggleArt
+                        onToggleArt = onToggleArt,
+                        menu = nowPlayingMenu
                     )
                 }
                 Box(Modifier.weight(1f)) {
@@ -279,14 +282,16 @@ private fun LazyListScope.queueRows(
 private fun NowPlayingQueueCard(
     track: CoverRef,
     showCover: Boolean,
-    onToggleArt: (() -> Unit)?
+    onToggleArt: (() -> Unit)?,
+    menu: List<out MenuEntry> = emptyList()
 ) {
-    Row(
-        Modifier
-            .fillMaxWidth()
-            .padding(horizontal = 12.dp, vertical = 8.dp),
-        verticalAlignment = Alignment.CenterVertically
-    ) {
+    ContextMenuAnchor(items = menu) {
+        Row(
+            Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 12.dp, vertical = 8.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
         if (showCover) {
             ExpandableCover(
                 artworkUri = track.artworkUri,
@@ -309,6 +314,7 @@ private fun NowPlayingQueueCard(
                 color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
                 maxLines = 1
             )
+        }
         }
     }
 }
