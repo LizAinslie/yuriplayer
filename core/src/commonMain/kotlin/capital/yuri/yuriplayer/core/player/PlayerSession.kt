@@ -97,7 +97,11 @@ class PlayerSession(
             if (activeList().isNotEmpty()) loadCurrent(0L, play = true)
             return
         }
-        if (engine.isPlaying.value) engine.pause() else engine.play()
+        if (engine.isPlaying.value) {
+            engine.pause()
+        } else {
+            loadCurrent(engine.getPositionMs().coerceAtLeast(0L), play = true)
+        }
     }
 
     fun pause() = engine.pause()
@@ -315,7 +319,6 @@ class PlayerSession(
         }
         publish()
         loadCurrent(snap.positionMs.coerceAtLeast(0L), play = play)
-        if (!play) engine.pause()
     }
 
     fun release() {
@@ -429,10 +432,6 @@ class PlayerSession(
         indexInLane = target.second
         publish()
         if (engineAlreadyMoved) {
-            warmSuccessor()
-            return
-        }
-        if (engine.hasPreparedNext() && engine.playPreparedNext()) {
             warmSuccessor()
             return
         }
