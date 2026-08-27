@@ -24,14 +24,21 @@ jobs:
           distribution: temurin
           java-version: 21
 
-      - name: Set up Android SDK
+      # compileSdk 37 is currently only published on the Android SDK beta/canary
+      # channel, so we install it manually instead of via setup-android's stable
+      # `packages` list (which fails with "Failed to find package platforms;android-37").
+      - name: Set up Android SDK (stable packages)
         uses: android-actions/setup-android@v3
         with:
           packages: >
             tools
             platform-tools
-            platforms;android-37
             build-tools;36.0.0
+
+      - name: Install compileSdk 37 (beta channel)
+        run: |
+          sdkmanager --channel=3 "platforms;android-37" "build-tools;37.0.0"
+          yes | sdkmanager --licenses > /dev/null
 
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
