@@ -2,7 +2,7 @@ package capital.yuri.yuriplayer.core.source
 
 import capital.yuri.yuriplayer.core.http.normalizeBaseUrl
 import capital.yuri.yuriplayer.core.http.url
-import capital.yuri.yuriplayer.core.library.Track
+import capital.yuri.yuriplayer.data.Song
 import io.ktor.client.HttpClient
 import io.ktor.client.request.header
 import io.ktor.client.request.post
@@ -75,13 +75,13 @@ class JellyfinCatalog(
         sortBy: String = "Album,SortName",
         sortOrder: String = "Ascending",
         startFrom: Int = 0,
-        onPage: suspend (page: List<Track>, cursor: Int, total: Int?) -> Unit = { _, _, _ -> }
-    ): Result<List<Track>> =
+        onPage: suspend (page: List<Song>, cursor: Int, total: Int?) -> Unit = { _, _, _ -> }
+    ): Result<List<Song>> =
         runCatching {
             val token = account.accessToken ?: error("Not signed in")
             val userId = account.userId ?: error("Not signed in")
             val root = normalizeBaseUrl(account.baseUrl)
-            val out = ArrayList<Track>(512)
+            val out = ArrayList<Song>(512)
             var start = startFrom.coerceAtLeast(0)
             val pageSize = 400
             while (out.size < maxItems) {
@@ -107,7 +107,7 @@ class JellyfinCatalog(
                 val page = json.decodeFromString<ItemsResponse>(response.bodyAsText())
                 val items = page.items
                 if (items.isEmpty()) break
-                val mapped = items.mapNotNull { toTrack(account.copy(baseUrl = root), it) }
+                val mapped = items.mapNotNull { toSong(account.copy(baseUrl = root), it) }
                 out += mapped
                 start += items.size
                 onPage(mapped, start, page.total)
@@ -118,7 +118,7 @@ class JellyfinCatalog(
             out
         }
 
-    suspend fun searchTracks(account: RemoteAccount, query: String, limit: Int = 80): Result<List<Track>> =
+    suspend fun searchTracks(account: RemoteAccount, query: String, limit: Int = 80): Result<List<Song>> =
         runCatching {
             val token = account.accessToken ?: error("Not signed in")
             val userId = account.userId ?: error("Not signed in")
@@ -139,7 +139,7 @@ class JellyfinCatalog(
             }
             if (!response.status.isSuccess()) error("Search HTTP ${response.status.value}")
             val page = json.decodeFromString<ItemsResponse>(response.bodyAsText())
-            page.items.mapNotNull { toTrack(account.copy(baseUrl = root), it) }
+            page.items.mapNotNull { toSong(account.copy(baseUrl = root), it) }
         }
 
     suspend fun searchArtistImages(account: RemoteAccount, query: String): Result<List<capital.yuri.yuriplayer.core.artist.ArtistImageCandidate>> =
@@ -199,7 +199,7 @@ class JellyfinCatalog(
             out
         }
 
-    private fun toTrack(account: RemoteAccount, item: JfItem): Track? {
+    private fun toSong(account: RemoteAccount, item: JfItem): Song? {
         val id = item.id ?: return null
         val token = account.accessToken ?: return null
         val artist = item.artists.firstOrNull()?.takeIf { it.isNotBlank() } ?: item.albumArtist
@@ -217,18 +217,20 @@ class JellyfinCatalog(
             }
         }
         val stream = streamUrl(account, id, item.container)
-        return Track(
-            id = "jellyfin:$id",
-            uri = stream,
+        val path = "jellyfin:$id"
+        return Song(
+            id = id.hashCode().toLong(),
             title = item.name,
             artist = artist,
             albumArtist = item.albumArtist ?: artist,
             album = item.album,
             durationMs = item.runTimeTicks?.div(10_000L)?.takeIf { it > 0 },
+            contentUri = stream,
+            albumArtUri = art,
             trackNumber = item.indexNumber,
             discNumber = item.parentIndexNumber,
             year = item.year,
-            artworkUri = art,
+            path = path,
             sourceId = account.id
         )
     }

@@ -1,6 +1,6 @@
 package capital.yuri.yuriplayer.desktop
 
-import capital.yuri.yuriplayer.core.library.Track
+import capital.yuri.yuriplayer.data.Song
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
@@ -16,14 +16,14 @@ class DesktopIndexStore(cacheDir: String) {
     private val tracksFile = File(cacheDir, "index-tracks.json")
     private val cpFile = File(cacheDir, "index-checkpoints.json")
 
-    fun loadTracks(): List<Track> {
+    fun loadTracks(): List<Song> {
         if (!tracksFile.isFile) return emptyList()
         return runCatching {
-            json.decodeFromString<List<Track>>(tracksFile.readText())
+            json.decodeFromString<List<Song>>(tracksFile.readText())
         }.getOrDefault(emptyList())
     }
 
-    fun saveTracks(tracks: List<Track>) {
+    fun saveTracks(tracks: List<Song>) {
         runCatching {
             tracksFile.parentFile?.mkdirs()
             val tmp = File(tracksFile.parentFile, "${tracksFile.name}.tmp")

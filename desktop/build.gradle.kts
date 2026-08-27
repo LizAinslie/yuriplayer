@@ -26,9 +26,10 @@ dependencies {
     implementation(compose.materialIconsExtended)
     implementation(libs.kotlinx.coroutines.swing)
     implementation(libs.kotlinx.serialization.json)
+    implementation(libs.koin.core)
     implementation(libs.vlcj)
-    implementation(libs.dbus.java.core)
-    implementation(libs.dbus.java.transport.native.unix)
+//    implementation(libs.dbus.java.core)
+//    implementation(libs.dbus.java.transport.native.unix)
     implementation(libs.junixsocket.core)
     implementation(libs.jna)
     implementation(libs.jna.platform)
@@ -37,6 +38,7 @@ dependencies {
     implementation(libs.coil.network.ktor3)
     implementation(libs.ktor.client.cio)
     implementation(libs.jaudiotagger)
+    implementation(project(":mediasession"))
 }
 
 val libvlcRoot = layout.buildDirectory.dir("libvlc")
@@ -189,48 +191,28 @@ fun hostLibVlcPlatform(): String {
 }
 
 fun hasLibvlc(dir: File): Boolean {
-    if (!dir.isDirectory) return false
-    return dir.walkTopDown().any { f ->
-        val n = f.name
-        n.startsWith("libvlc") && (
-            n.endsWith(".dll") || n.endsWith(".so") || n.endsWith(".dylib") || n.contains(".so.")
-        )
-    }
+    val names = dir.list()?.toList().orEmpty()
+    return names.any { it.startsWith("libvlc") && (it.endsWith(".dll") || it.endsWith(".so") || it.endsWith(".dylib") || it.contains(".so.")) }
 }
 
-fun unpackNuget(url: String, dest: File, marker: String) {
-    val tmp = dest.resolveSibling("${dest.name}.nupkg")
-    download(url, tmp)
-    val unzip = dest.resolveSibling("${dest.name}-unpack")
-    unzip.deleteRecursively()
-    unzip.mkdirs()
-    unzipFile(tmp, unzip)
-    val found = unzip.walkTopDown().firstOrNull { it.name.equals(marker, ignoreCase = true) }
-        ?: error("NuGet package did not contain $marker")
-    found.parentFile.copyRecursively(dest, overwrite = true)
-    tmp.delete()
-    unzip.deleteRecursively()
-}
-
-fun unzipFile(zip: File, dest: File) {
-    ZipInputStream(zip.inputStream().buffered()).use { zis ->
-        var entry = zis.nextEntry
+fun unpackNuget(url: String, dest: File, nativeLib: String) {
+    dest.mkdirs()
+    val zip = ZipInputStream(URI(url).toURL().openStream())
+    zip.use { input ->
+        var entry = input.nextEntry
         while (entry != null) {
-            val out = dest.resolve(entry.name)
-            if (entry.isDirectory) {
-                out.mkdirs()
-            } else {
-                out.parentFile.mkdirs()
-                out.outputStream().use { zis.copyTo(it) }
+            val name = entry.name
+            if (!entry.isDirectory &&
+                (name.contains("libvlc") || name.contains("/plugins/") || name.endsWith(".dll") || name.endsWith(".dylib") || name.endsWith(".so"))
+            ) {
+                val target = File(dest, File(name).name)
+                if (target.name == nativeLib || name.contains("/plugins/")) {
+                    target.parentFile?.mkdirs()
+                    target.outputStream().use { out -> input.copyTo(out) }
+                }
             }
-            entry = zis.nextEntry
+            input.closeEntry()
+            entry = input.nextEntry
         }
-    }
-}
-
-fun download(url: String, dest: File) {
-    dest.parentFile.mkdirs()
-    dest.outputStream().use { out ->
-        URI(url).toURL().openStream().use { it.copyTo(out) }
     }
 }

@@ -2,6 +2,7 @@ package capital.yuri.yuriplayer.core.library
 
 import capital.yuri.yuriplayer.core.platform.appDirectories
 import capital.yuri.yuriplayer.core.platform.coverCacheDir
+import capital.yuri.yuriplayer.data.Song
 import org.jaudiotagger.audio.AudioFileIO
 import org.jaudiotagger.tag.FieldKey
 import java.io.File
@@ -29,9 +30,11 @@ object LocalLibraryScanner {
     fun defaultRoots(): List<File> =
         appDirectories().defaultMusicRoots.map { File(it) }.filter { it.isDirectory }
 
-    fun scan(roots: List<File> = defaultRoots()): List<Track> {
+    fun scan(roots: List<File> = defaultRoots()): List<Song> = scanSongs(roots)
+
+    fun scanSongs(roots: List<File> = defaultRoots()): List<Song> {
         if (roots.isEmpty()) return emptyList()
-        val out = ArrayList<Track>(512)
+        val out = ArrayList<Song>(512)
         val seen = HashSet<String>()
         val coverByDir = HashMap<String, String?>()
         File(coverCacheDir()).mkdirs()
@@ -44,11 +47,11 @@ object LocalLibraryScanner {
                 .forEach { file ->
                     val path = file.absolutePath
                     if (!seen.add(path)) return@forEach
-                    out += readTrack(file, coverByDir)
+                    out += readSong(file, coverByDir)
                 }
         }
         out.sortWith(
-            compareBy<Track> { it.displayAlbum.lowercase() }
+            compareBy<Song> { it.displayAlbum.lowercase() }
                 .thenBy { it.discNumber ?: 1 }
                 .thenBy { it.trackNumber ?: Int.MAX_VALUE }
                 .thenBy { it.displayTitle.lowercase() }
@@ -56,7 +59,7 @@ object LocalLibraryScanner {
         return out
     }
 
-    private fun readTrack(file: File, coverByDir: MutableMap<String, String?>): Track {
+    private fun readSong(file: File, coverByDir: MutableMap<String, String?>): Song {
         val fallbackTitle = file.nameWithoutExtension
         return try {
             val audio = AudioFileIO.read(file)
@@ -64,38 +67,34 @@ object LocalLibraryScanner {
             val header = audio.audioHeader
             fun field(key: FieldKey): String? =
                 tag?.getFirst(key)?.trim()?.takeIf { it.isNotEmpty() }
-            Track(
-                id = file.absolutePath,
-                uri = file.toURI().toString(),
+            Song(
+                id = file.absolutePath.hashCode().toLong(),
                 title = field(FieldKey.TITLE) ?: fallbackTitle,
                 artist = field(FieldKey.ARTIST),
                 albumArtist = field(FieldKey.ALBUM_ARTIST),
                 album = field(FieldKey.ALBUM),
                 durationMs = header?.trackLength?.toLong()?.times(1000),
+                contentUri = file.toURI().toString(),
+                albumArtUri = resolveCover(file, audio, coverByDir),
                 trackNumber = field(FieldKey.TRACK)?.substringBefore('/')?.toIntOrNull(),
                 discNumber = field(FieldKey.DISC_NO)?.substringBefore('/')?.toIntOrNull(),
                 year = field(FieldKey.YEAR)?.take(4)?.toIntOrNull(),
                 genre = field(FieldKey.GENRE),
-                artworkUri = resolveCover(file, audio, coverByDir),
                 path = file.absolutePath,
                 sourceId = SOURCE_LOCAL
             )
         } catch (_: Exception) {
-            Track(
-                id = file.absolutePath,
-                uri = file.toURI().toString(),
+            Song(
+                id = file.absolutePath.hashCode().toLong(),
                 title = fallbackTitle,
-                artworkUri = resolveCover(file, null, coverByDir),
+                contentUri = file.toURI().toString(),
+                albumArtUri = resolveCover(file, null, coverByDir),
                 path = file.absolutePath,
                 sourceId = SOURCE_LOCAL
             )
         }
     }
 
-    /**
-     * Folder `cover.jpg` / `folder.jpg` first (this dir, then parent), then any
-     * image in the folder, then embedded tag art extracted into the cover cache.
-     */
     private fun resolveCover(
         file: File,
         audio: org.jaudiotagger.audio.AudioFile?,

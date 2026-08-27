@@ -281,11 +281,12 @@ class MusicService : Service() {
         syncPreparedNext()
     }
 
-    private fun maybeRecordHistory(song: Song) {
-        val key = song.path ?: song.contentUri.toString()
+    private fun maybeRecordHistory(song: Song?) {
+        val s = song ?: return
+        val key = s.path ?: s.contentUri
         if (key == lastHistoryKey) return
         lastHistoryKey = key
-        historyStore.record(song)
+        historyStore.record(s)
     }
 
     private fun applyAdvance(result: QueueManager.AdvanceResult, autoPlay: Boolean = true) {
@@ -316,7 +317,7 @@ class MusicService : Service() {
             }
             result.reload -> hardRestartCurrent(autoPlay = autoPlay)
             result.song != null -> {
-                val target = result.song
+                val target = result.song ?: return
                 _nowPlaying.value = target
                 maybeRecordHistory(target)
                 updateForegroundNotification()
@@ -339,8 +340,9 @@ class MusicService : Service() {
             result.seekToStart -> engineHooks?.seekTo(0L)
             result.reload -> hardRestartCurrent(autoPlay = true)
             result.song != null -> {
-                _nowPlaying.value = result.song
-                maybeRecordHistory(result.song)
+                val song = result.song ?: return
+                _nowPlaying.value = song
+                maybeRecordHistory(song)
                 syncPreparedNext()
             }
         }

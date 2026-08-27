@@ -1,11 +1,12 @@
 package capital.yuri.yuriplayer.core.player
 
-import capital.yuri.yuriplayer.core.library.Track
+import capital.yuri.yuriplayer.data.Song
 import kotlinx.coroutines.flow.StateFlow
 
 /**
  * Audio backend only. Queue / radio / now-playing identity live in the host
- * ([PlayerSession]). Same contract on Android, desktop, and later iOS.
+ * ([capital.yuri.yuriplayer.player.QueueManager]).
+ * Same contract on Android, desktop, and later iOS.
  */
 interface PlaybackEngine {
     val isPlaying: StateFlow<Boolean>
@@ -58,13 +59,17 @@ data class PlaybackMedia(
     val live: Boolean = false
 )
 
-fun Track.toPlaybackMedia(): PlaybackMedia = PlaybackMedia(
-    mediaId = id,
-    uri = uri,
+/**
+ * Core [Song] → [PlaybackMedia]. [Song.contentUri] carries the actual playable
+ * URI (file path or http(s) URL); [Song.path] is the stable identity key.
+ */
+fun Song.toPlaybackMedia(): PlaybackMedia = PlaybackMedia(
+    mediaId = songKey,
+    uri = contentUri,
     title = displayTitle,
     artist = displayArtist,
     album = displayAlbum,
-    artworkUri = artworkUri,
-    isNetwork = uri.startsWith("http://") || uri.startsWith("https://"),
+    artworkUri = albumArtUri,
+    isNetwork = contentUri.startsWith("http://") || contentUri.startsWith("https://"),
     live = false
 )

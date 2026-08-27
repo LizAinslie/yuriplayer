@@ -43,8 +43,8 @@ data class PlaylistCoverSlot(
  * 4. else empty (placeholder in UI)
  */
 data class PlaylistCover(
-    val customUri: Uri? = null,
-    val artUris: List<Uri> = emptyList()
+    val customUri: String? = null,
+    val artUris: List<String> = emptyList()
 ) {
     val mode: CoverMode
         get() = when {
@@ -435,9 +435,9 @@ class PlaylistRepository(
     companion object {
         fun coverFor(playlist: Playlist): PlaylistCover {
             playlist.customImageUri?.let {
-                return PlaylistCover(customUri = Uri.parse(it))
+                return PlaylistCover(customUri = it)
             }
-            val unique = LinkedHashMap<String, Uri>()
+            val unique = LinkedHashMap<String, String>()
             for (song in playlist.songs) {
                 val art = song.albumArtUri ?: continue
                 val key = albumKey(song.album, song.effectiveAlbumArtist)

@@ -27,13 +27,15 @@ class LibraryIndex(
     private val cache: LibraryCache,
     private val catalog: CatalogRepository,
     private val notifier: LibraryScanNotifier
-) {
+) : LocalLibrary {
 
     // Default dispatcher: never block Main while loading large lists
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
 
     private val _songs = MutableStateFlow<List<Song>>(emptyList())
     val songs: StateFlow<List<Song>> = _songs.asStateFlow()
+
+    override fun songs(): List<Song> = _songs.value
 
     private val _isLoading = MutableStateFlow(false)
     val isLoading: StateFlow<Boolean> = _isLoading.asStateFlow()
@@ -150,7 +152,6 @@ class LibraryIndex(
             notifier.finish("Library scan", "Storage permission required")
         } catch (e: Exception) {
             _error.value = e.message ?: "Scan failed"
-            log.e(e) { "Refresh failed" }
             _events.tryEmit(LibraryEvent.ScanFailed(e.message ?: "Scan failed"))
             notifier.finish("Library scan", e.message ?: "Scan failed")
         } finally {
@@ -167,7 +168,7 @@ class LibraryIndex(
         var changed = false
         val next = current.map { song ->
             val key = albumKey(song.album, song.effectiveAlbumArtist)
-            if (key == albumKey && (song.year == null || song.year <= 0)) {
+            if (key == albumKey && (song.year ?: 0) <= 0) {
                 changed = true
                 song.copy(year = year)
             } else song
@@ -193,6 +194,9 @@ class LibraryIndex(
         if (q.isEmpty()) return base
         return base.filter { songMatches(it, q) }
     }
+
+    override fun albums(taggedOnly: Boolean): List<AlbumItem> =
+        albums(query = "", taggedOnly = taggedOnly)
 
     fun albums(query: String = "", taggedOnly: Boolean = true): List<AlbumItem> {
         val q = query.trim()
@@ -241,7 +245,7 @@ class LibraryIndex(
                     ?: tracks.firstOrNull()?.album
 
                 val deduped = tracks.distinctBy {
-                    it.path?.lowercase() ?: it.contentUri.toString()
+                    it.path?.lowercase() ?: it.contentUri
                 }
 
                 AlbumItem(
@@ -283,7 +287,7 @@ class LibraryIndex(
                     ?.key
                 if (isCombinedArtistName(displayName)) return@mapNotNull null
                 val deduped = tracks.distinctBy {
-                    it.path?.lowercase() ?: it.contentUri.toString()
+                    it.path?.lowercase() ?: it.contentUri
                 }
                 val albumKeys = deduped.mapNotNull { albumKey(it.album, it.effectiveAlbumArtist) }.toSet()
                 ArtistItem(
@@ -313,8 +317,7 @@ class LibraryIndex(
         private const val ROOM_RECONCILE_DELAY_MS = 8_000L
 
         fun normalizeKey(value: String?): String? {
-            if (value == null) return null
-            val t = value.trim().replace(Regex("\\s+"), " ").lowercase()
+            val t = value.orEmpty().trim().replace(Regex("\\s+"), " ").lowercase()
             return t.takeIf { it.isNotEmpty() }
         }
 
@@ -354,24 +357,4 @@ class LibraryIndex(
             }
         }
     }
-}
-
-data class AlbumItem(
-    val name: String?,
-    val artist: String?,
-    val trackCount: Int,
-    val songs: List<Song>
-) {
-    val displayName: String get() = name ?: "Unknown Album"
-    val displayArtist: String
-        get() = primaryArtistName(artist) ?: artist ?: "Unknown Artist"
-}
-
-data class ArtistItem(
-    val name: String?,
-    val trackCount: Int,
-    val albumCount: Int,
-    val songs: List<Song>
-) {
-    val displayName: String get() = primaryArtistName(name) ?: name ?: "Unknown Artist"
 }

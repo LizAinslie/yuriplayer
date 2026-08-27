@@ -51,8 +51,9 @@ class MetadataEnrichmentService(
     suspend fun applyCachedToLibrary() = withContext(Dispatchers.IO) {
         val all = dao.getAll()
         for (row in all) {
-            if (row.year != null) {
-                library.applyAlbumYear(row.albumKey, row.year)
+            val y = row.year
+            if (y != null) {
+                library.applyAlbumYear(row.albumKey, y)
             }
         }
     }

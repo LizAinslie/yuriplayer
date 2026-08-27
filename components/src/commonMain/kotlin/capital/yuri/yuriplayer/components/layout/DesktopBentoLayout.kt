@@ -1,5 +1,6 @@
 package capital.yuri.yuriplayer.components.layout
 
+import capital.yuri.yuriplayer.components.OfflineBanner
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.Orientation
@@ -31,6 +32,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.ArrowForward
+import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.PushPin
 import androidx.compose.material.icons.filled.Search
@@ -54,6 +56,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.input.pointer.PointerIcon
 import androidx.compose.ui.input.pointer.pointerHoverIcon
@@ -76,7 +79,8 @@ data class LibraryRailItem(
     val subtitle: String,
     val artworkUri: String?,
     val circular: Boolean = false,
-    val pinned: Boolean = false
+    val pinned: Boolean = false,
+    val heart: Boolean = false
 )
 
 @Composable
@@ -105,6 +109,7 @@ fun DesktopBentoLayout(
     rightFraction: Float = 0.26f,
     onLeftFraction: (Float, persist: Boolean) -> Unit = { _, _ -> },
     onRightFraction: (Float, persist: Boolean) -> Unit = { _, _ -> },
+    offline: Boolean = false,
     content: @Composable () -> Unit
 ) {
     val bg = MaterialTheme.colorScheme.background
@@ -121,6 +126,9 @@ fun DesktopBentoLayout(
             onSettings = onSettings,
             scanMenu = scanMenu
         )
+        if (offline) {
+            OfflineBanner()
+        }
         BoxWithConstraints(
             Modifier
                 .weight(1f)
@@ -378,6 +386,10 @@ private fun LibraryRail(
     itemMenu: (LibraryRailItem) -> List<out MenuEntry> = { emptyList() },
     modifier: Modifier = Modifier
 ) {
+    val heartItems = items.filter { it.heart }
+    val pinned = items.filter { it.pinned }
+    val regular = items.filter { !it.pinned && !it.heart }
+
     Surface(
         modifier = modifier,
         shape = MaterialTheme.shapes.large,
@@ -397,6 +409,24 @@ private fun LibraryRail(
                     fontWeight = FontWeight.Bold
                 )
             }
+
+            // "My Stuff" (heart) sits above the pins.
+            heartItems.forEach { item ->
+                RailRow(item, item.id == selectedId, onItem, itemMenu)
+            }
+
+            // Pins sit above the filter chips so they read as pinned items.
+            if (pinned.isNotEmpty()) {
+                LazyRow(
+                    modifier = Modifier.fillMaxWidth().padding(top = 12.dp, bottom = 4.dp),
+                    horizontalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    items(pinned, key = { it.id }) { item ->
+                        PinCard(item, item.id == selectedId, onItem, itemMenu)
+                    }
+                }
+            }
+
             LazyRow(
                 modifier = Modifier.fillMaxWidth().padding(top = 12.dp, bottom = 8.dp),
                 horizontalArrangement = Arrangement.spacedBy(6.dp)
@@ -430,57 +460,137 @@ private fun LibraryRail(
                     )
                 }
             }
+
             LazyColumn(Modifier.weight(1f)) {
-                items(items, key = { it.id }) { item ->
-                    val selected = item.id == selectedId
-                    ContextMenuAnchor(items = itemMenu(item)) { openMenu ->
-                    Row(
-                        Modifier
-                            .fillMaxWidth()
-                            .clip(RoundedCornerShape(12.dp))
-                            .background(
-                                if (selected) MaterialTheme.colorScheme.primary.copy(alpha = 0.14f)
-                                else MaterialTheme.colorScheme.surface
-                            )
-                            .clickable { onItem(item) }
-                            .padding(8.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        CoverArt(
-                            model = item.artworkUri,
-                            size = 48.dp,
-                            corner = if (item.circular) 24.dp else 8.dp,
-                            contentScale = if (item.circular) ContentScale.Crop else ContentScale.Fit
-                        )
-                        Spacer(Modifier.width(12.dp))
-                        Column(Modifier.weight(1f)) {
-                            Text(
-                                item.title,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis,
-                                fontWeight = FontWeight.Medium,
-                                color = MaterialTheme.colorScheme.onSurface
-                            )
-                            Text(
-                                item.subtitle,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis,
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.55f)
-                            )
-                        }
-                        if (item.pinned) {
-                            Icon(
-                                Icons.Default.PushPin,
-                                contentDescription = "Pinned",
-                                modifier = Modifier.size(14.dp),
-                                tint = MaterialTheme.colorScheme.primary
-                            )
-                        }
-                    }
-                    }
+                items(regular, key = { it.id }) { item ->
+                    RailRow(item, item.id == selectedId, onItem, itemMenu)
                 }
             }
+        }
+    }
+}
+
+@Composable
+private fun RailRow(
+    item: LibraryRailItem,
+    selected: Boolean,
+    onItem: (LibraryRailItem) -> Unit,
+    itemMenu: (LibraryRailItem) -> List<out MenuEntry>
+) {
+    ContextMenuAnchor(items = itemMenu(item)) {
+        Row(
+            Modifier
+                .fillMaxWidth()
+                .clip(RoundedCornerShape(12.dp))
+                .background(
+                    if (selected) MaterialTheme.colorScheme.primary.copy(alpha = 0.14f)
+                    else MaterialTheme.colorScheme.surface
+                )
+                .clickable { onItem(item) }
+                .padding(8.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            if (item.heart) {
+                Box(
+                    Modifier
+                        .size(48.dp)
+                        .clip(RoundedCornerShape(8.dp))
+                        .background(Color(0xFFE91E63)),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Icon(
+                        Icons.Filled.Favorite,
+                        contentDescription = null,
+                        tint = Color.White
+                    )
+                }
+            } else {
+                CoverArt(
+                    model = item.artworkUri,
+                    size = 48.dp,
+                    corner = if (item.circular) 24.dp else 8.dp,
+                    contentScale = if (item.circular) ContentScale.Crop else ContentScale.Fit
+                )
+            }
+            Spacer(Modifier.width(12.dp))
+            Column(Modifier.weight(1f)) {
+                Text(
+                    item.title,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    fontWeight = FontWeight.Medium,
+                    color = MaterialTheme.colorScheme.onSurface
+                )
+                Text(
+                    item.subtitle,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.55f)
+                )
+            }
+            if (item.pinned) {
+                Icon(
+                    Icons.Default.PushPin,
+                    contentDescription = "Pinned",
+                    modifier = Modifier.size(14.dp),
+                    tint = MaterialTheme.colorScheme.primary
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun PinCard(
+    item: LibraryRailItem,
+    selected: Boolean,
+    onItem: (LibraryRailItem) -> Unit,
+    itemMenu: (LibraryRailItem) -> List<out MenuEntry>
+) {
+    ContextMenuAnchor(items = itemMenu(item)) {
+        Column(
+            horizontalAlignment = Alignment.CenterHorizontally,
+            modifier = Modifier
+                .width(68.dp)
+                .clip(RoundedCornerShape(10.dp))
+                .background(
+                    if (selected) MaterialTheme.colorScheme.primary.copy(alpha = 0.14f)
+                    else Color.Transparent
+                )
+                .clickable { onItem(item) }
+                .padding(6.dp)
+        ) {
+            Box {
+                CoverArt(
+                    model = item.artworkUri,
+                    size = 44.dp,
+                    corner = if (item.circular) 22.dp else 8.dp,
+                    contentScale = if (item.circular) ContentScale.Crop else ContentScale.Fit
+                )
+                Box(
+                    Modifier
+                        .align(Alignment.BottomEnd)
+                        .size(16.dp)
+                        .background(MaterialTheme.colorScheme.primary, CircleShape),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Icon(
+                        Icons.Default.PushPin,
+                        contentDescription = "Pinned",
+                        modifier = Modifier.size(10.dp),
+                        tint = MaterialTheme.colorScheme.onPrimary
+                    )
+                }
+            }
+            Text(
+                item.title,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurface,
+                modifier = Modifier.padding(top = 4.dp)
+            )
         }
     }
 }

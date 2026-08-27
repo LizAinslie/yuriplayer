@@ -23,21 +23,21 @@ import androidx.compose.ui.unit.dp
 import capital.yuri.yuriplayer.components.art.CoverArt
 import capital.yuri.yuriplayer.components.dialog.InWindowPanel
 import capital.yuri.yuriplayer.components.model.AlbumPageModel
-import capital.yuri.yuriplayer.core.library.Track
+import capital.yuri.yuriplayer.data.Song
 import capital.yuri.yuriplayer.desktop.TagWriter
 import java.io.File
 
 @Composable
 fun EditSongDialog(
-    track: Track,
+    track: Song,
     onDismiss: () -> Unit,
-    onSaved: (Track) -> Unit
+    onSaved: (Song) -> Unit
 ) {
     val file = track.path?.let { File(it) }
     val writable = file != null && file.isFile && file.canWrite()
-    var title by remember(track.id) { mutableStateOf(track.title.orEmpty()) }
-    var artist by remember(track.id) { mutableStateOf(track.artist.orEmpty()) }
-    var genre by remember(track.id) { mutableStateOf(track.genre.orEmpty()) }
+    var title by remember(track.songKey) { mutableStateOf(track.title.orEmpty()) }
+    var artist by remember(track.songKey) { mutableStateOf(track.artist.orEmpty()) }
+    var genre by remember(track.songKey) { mutableStateOf(track.genre.orEmpty()) }
     var coverFile by remember { mutableStateOf<File?>(null) }
     var cropSource by remember { mutableStateOf<File?>(null) }
     var error by remember { mutableStateOf<String?>(null) }
@@ -67,7 +67,7 @@ fun EditSongDialog(
                     )
                 }
                 CoverArt(
-                    model = coverFile?.toURI()?.toString() ?: track.artworkUri,
+                    model = coverFile?.toURI()?.toString() ?: track.albumArtUri,
                     size = 96.dp,
                     corner = 8.dp,
                     modifier = Modifier.padding(vertical = 12.dp)
@@ -108,7 +108,7 @@ fun EditSongDialog(
                                             title = title.ifBlank { track.title },
                                             artist = artist.ifBlank { track.artist },
                                             genre = genre.ifBlank { track.genre },
-                                            artworkUri = coverFile?.toURI()?.toString() ?: track.artworkUri
+                                            albumArtUri = coverFile?.toURI()?.toString() ?: track.albumArtUri
                                         )
                                     )
                                     onDismiss()
@@ -126,9 +126,9 @@ fun EditSongDialog(
 @Composable
 fun EditAlbumDialog(
     album: AlbumPageModel,
-    tracks: List<Track>,
+    tracks: List<Song>,
     onDismiss: () -> Unit,
-    onSaved: (List<Track>) -> Unit
+    onSaved: (List<Song>) -> Unit
 ) {
     val writable = tracks.mapNotNull { it.path?.let { p -> File(p) } }.any { it.isFile && it.canWrite() }
     var title by remember(album.id) { mutableStateOf(album.title) }
@@ -183,7 +183,7 @@ fun EditAlbumDialog(
                         onClick = {
                             val coverBytes = coverFile?.readBytes()
                             val yearInt = year.toIntOrNull()
-                            val updated = ArrayList<Track>()
+                            val updated = ArrayList<Song>()
                             var failed = 0
                             tracks.forEach { t ->
                                 val f = t.path?.let { File(it) }
@@ -208,7 +208,7 @@ fun EditAlbumDialog(
                                     albumArtist = artist.ifBlank { t.albumArtist },
                                     year = yearInt ?: t.year,
                                     genre = genre.ifBlank { t.genre },
-                                    artworkUri = coverFile?.toURI()?.toString() ?: t.artworkUri
+                                    albumArtUri = coverFile?.toURI()?.toString() ?: t.albumArtUri
                                 )
                             }
                             if (failed == tracks.size) {

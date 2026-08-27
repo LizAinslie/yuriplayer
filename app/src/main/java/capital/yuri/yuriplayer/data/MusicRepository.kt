@@ -56,7 +56,7 @@ class MusicRepository(
 
         val byKey = LinkedHashMap<String, Song>()
         queryMediaStore().forEach { song ->
-            val key = song.path?.lowercase() ?: song.contentUri.toString()
+            val key = song.path?.lowercase() ?: song.contentUri
             byKey[key] = song
         }
         scanFilesystem().forEach { song ->
@@ -102,8 +102,8 @@ class MusicRepository(
                     albumArtist = tags.albumArtist,
                     album = tags.album,
                     durationMs = tags.durationMs,
-                    contentUri = uri,
-                    albumArtUri = coverUri,
+                    contentUri = uri.toString(),
+                    albumArtUri = coverUri?.toString(),
                     trackNumber = tags.trackNumber,
                     discNumber = tags.discNumber,
                     year = tags.year,
@@ -320,8 +320,8 @@ class MusicRepository(
                     albumArtist = albumArtist,
                     album = album,
                     durationMs = duration,
-                    contentUri = contentUri,
-                    albumArtUri = albumArtUri,
+                    contentUri = contentUri.toString(),
+                    albumArtUri = albumArtUri?.toString(),
                     trackNumber = track,
                     discNumber = disc,
                     year = year,
@@ -361,7 +361,7 @@ class MusicRepository(
                             albumArtist = tags.albumArtist,
                             album = tags.album,
                             durationMs = tags.durationMs,
-                            contentUri = Uri.fromFile(file),
+                            contentUri = Uri.fromFile(file).toString(),
                             trackNumber = tags.trackNumber,
                             discNumber = tags.discNumber,
                             year = tags.year,

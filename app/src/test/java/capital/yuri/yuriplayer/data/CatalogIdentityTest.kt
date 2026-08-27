@@ -1,6 +1,5 @@
 package capital.yuri.yuriplayer.data
 
-import android.net.Uri
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -221,7 +220,7 @@ private fun song(
     artist = artist,
     albumArtist = artist,
     album = album,
-    contentUri = Uri.parse("file:///$key"),
+    contentUri = "file:///$key",
     trackNumber = tn,
     discNumber = disc,
     path = path ?: "/music/$key/$album/${tn ?: 0}. $title.flac"

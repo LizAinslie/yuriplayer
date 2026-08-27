@@ -23,6 +23,7 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Lock
+import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.FilledIconButton
@@ -52,8 +53,9 @@ import capital.yuri.yuriplayer.components.list.LikeHeart
 import capital.yuri.yuriplayer.components.list.TrackRow
 import capital.yuri.yuriplayer.components.menu.MenuEntry
 import capital.yuri.yuriplayer.components.model.toRow
-import capital.yuri.yuriplayer.core.library.Track
 import capital.yuri.yuriplayer.core.library.matchesQuery
+import capital.yuri.yuriplayer.core.library.playlistKeys
+import capital.yuri.yuriplayer.data.Song
 import capital.yuri.yuriplayer.desktop.DesktopCover
 import capital.yuri.yuriplayer.desktop.DesktopPlaylist
 import capital.yuri.yuriplayer.desktop.DesktopPlaylistStore
@@ -62,18 +64,19 @@ import java.io.File
 @Composable
 fun PlaylistPage(
     playlist: DesktopPlaylist,
-    tracks: List<Track>,
-    library: List<Track>,
+    tracks: List<Song>,
+    library: List<Song>,
     currentId: String?,
+    playing: Boolean = false,
     store: DesktopPlaylistStore,
     onBack: () -> Unit,
-    onPlay: (List<Track>, Int) -> Unit,
-    onEditTrack: (Track) -> Unit,
+    onPlay: (List<Song>, Int) -> Unit,
+    onEditTrack: (Song) -> Unit,
     likedIds: Set<String> = emptySet(),
     onToggleLike: (String) -> Unit = {},
     playlistLiked: Boolean = false,
     onTogglePlaylistLike: () -> Unit = {},
-    songMenu: (Track) -> List<out MenuEntry> = { emptyList() }
+    songMenu: (Song) -> List<out MenuEntry> = { emptyList() }
 ) {
     var name by remember(playlist.id, playlist.updatedAtMs) { mutableStateOf(playlist.name) }
     var description by remember(playlist.id, playlist.updatedAtMs) {
@@ -167,7 +170,10 @@ fun PlaylistPage(
                     FilledIconButton(
                         onClick = { if (tracks.isNotEmpty()) onPlay(tracks, 0) }
                     ) {
-                        Icon(Icons.Default.PlayArrow, contentDescription = "Play")
+                        Icon(
+                            if (playing) Icons.Default.Pause else Icons.Default.PlayArrow,
+                            contentDescription = if (playing) "Pause" else "Play"
+                        )
                     }
                     LikeHeart(liked = playlistLiked, onToggle = onTogglePlaylistLike)
                     TextButton(onClick = { showAdd = true }) { Text("Add songs") }
@@ -178,15 +184,15 @@ fun PlaylistPage(
         val density = LocalDensity.current
         val rowPx = with(density) { 64.dp.toPx() }
         LazyColumn(Modifier.weight(1f)) {
-            itemsIndexed(tracks, key = { i, t -> "${t.id}#$i" }) { index, track ->
+            itemsIndexed(tracks, key = { i, t -> "${t.songKey}#$i" }) { index, track ->
                 TrackRow(
-                    track = track.toRow(highlighted = track.id == currentId),
+                    track = track.toRow(highlighted = track.songKey == currentId),
                     onClick = { onPlay(tracks, index) },
                     onLongClick = { onEditTrack(track) },
                     showCover = true,
                     showAlbum = true,
-                    liked = track.id in likedIds,
-                    onToggleLike = { onToggleLike(track.id) },
+                    liked = track.songKey in likedIds,
+                    onToggleLike = { onToggleLike(track.songKey) },
                     contextItems = songMenu(track),
                     modifier = Modifier.pointerInput(tracks, playlist.id) {
                         var from: Int? = null
@@ -246,10 +252,10 @@ fun PlaylistPage(
 
 @Composable
 private fun AddSongsDialog(
-    library: List<Track>,
+    library: List<Song>,
     existing: Set<String>,
     onDismiss: () -> Unit,
-    onAdd: (List<Track>) -> Unit
+    onAdd: (List<Song>) -> Unit
 ) {
     var query by remember { mutableStateOf("") }
     val hits = remember(query, library) {
@@ -268,7 +274,7 @@ private fun AddSongsDialog(
                     singleLine = true
                 )
                 LazyColumn(Modifier.weight(1f).padding(top = 8.dp)) {
-                    itemsIndexed(hits, key = { _, t -> t.id }) { _, track ->
+                    itemsIndexed(hits, key = { _, t -> t.songKey }) { _, track ->
                         val inPl = track.playlistKeys().any { it in existing }
                         TrackRow(
                             track = track.toRow(),

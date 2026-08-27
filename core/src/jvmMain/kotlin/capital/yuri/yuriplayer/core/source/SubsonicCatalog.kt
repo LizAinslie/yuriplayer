@@ -3,7 +3,7 @@ package capital.yuri.yuriplayer.core.source
 import capital.yuri.yuriplayer.core.http.UrlScope
 import capital.yuri.yuriplayer.core.http.normalizeBaseUrl
 import capital.yuri.yuriplayer.core.http.url
-import capital.yuri.yuriplayer.core.library.Track
+import capital.yuri.yuriplayer.data.Song
 import io.ktor.client.HttpClient
 import io.ktor.client.request.get
 import io.ktor.client.statement.bodyAsText
@@ -43,18 +43,18 @@ class SubsonicCatalog(
         account: RemoteAccount,
         maxSongs: Int = 80_000,
         startAlbumOffset: Int = 0,
-        onPage: suspend (page: List<Track>, albumOffset: Int, complete: Boolean) -> Unit = { _, _, _ -> }
-    ): Result<List<Track>> =
+        onPage: suspend (page: List<Song>, albumOffset: Int, complete: Boolean) -> Unit = { _, _, _ -> }
+    ): Result<List<Song>> =
         runCatching {
             val session = sessionOf(account)
-            val out = ArrayList<Track>(512)
+            val out = ArrayList<Song>(512)
             var offset = startAlbumOffset.coerceAtLeast(0)
             val pageSize = 100
             while (out.size < maxSongs) {
                 kotlinx.coroutines.currentCoroutineContext().ensureActive()
                 val page = listAlbums(session, offset, pageSize, type = "alphabeticalByName")
                 if (page.isEmpty()) break
-                val batch = ArrayList<Track>()
+                val batch = ArrayList<Song>()
                 for (album in page) {
                     kotlinx.coroutines.currentCoroutineContext().ensureActive()
                     val id = album.id ?: continue
@@ -70,11 +70,11 @@ class SubsonicCatalog(
             out
         }
 
-    suspend fun listNewestTracks(account: RemoteAccount, maxAlbums: Int = 40): Result<List<Track>> =
+    suspend fun listNewestTracks(account: RemoteAccount, maxAlbums: Int = 40): Result<List<Song>> =
         runCatching {
             val session = sessionOf(account)
             val albums = listAlbums(session, offset = 0, size = maxAlbums, type = "newest")
-            val out = ArrayList<Track>(albums.size * 12)
+            val out = ArrayList<Song>(albums.size * 12)
             for (album in albums) {
                 kotlinx.coroutines.currentCoroutineContext().ensureActive()
                 val id = album.id ?: continue
@@ -103,7 +103,7 @@ class SubsonicCatalog(
         albumId: String,
         albumRef: SubsonicAlbum,
         sourceId: String
-    ): List<Track> {
+    ): List<Song> {
         val body = apiGet(session, "getAlbum") { param("id", albumId) }
         val album = json.decodeFromString<SubsonicResponse>(body).subsonicResponse.album
             ?: return emptyList()
@@ -113,25 +113,27 @@ class SubsonicCatalog(
         return album.song.orEmpty().mapNotNull { child ->
             val sid = child.id ?: return@mapNotNull null
             if (child.isDir == true) return@mapNotNull null
-            Track(
-                id = "subsonic:$sid",
-                uri = streamUrl(session, sid),
+            val path = "subsonic:$sid"
+            Song(
+                id = sid.hashCode().toLong(),
                 title = child.title ?: child.name,
                 artist = child.artist ?: albumArtist,
                 albumArtist = albumArtist,
                 album = child.album ?: albumName,
                 durationMs = child.duration?.times(1000L),
+                contentUri = streamUrl(session, sid),
+                albumArtUri = coverUrl(session, child.coverArt) ?: cover,
                 trackNumber = child.track,
                 discNumber = child.discNumber,
                 year = child.year ?: album.year,
                 genre = child.genre,
-                artworkUri = coverUrl(session, child.coverArt) ?: cover,
+                path = path,
                 sourceId = sourceId
             )
         }
     }
 
-    suspend fun searchTracks(account: RemoteAccount, query: String, limit: Int = 80): Result<List<Track>> =
+    suspend fun searchTracks(account: RemoteAccount, query: String, limit: Int = 80): Result<List<Song>> =
         runCatching {
             val session = sessionOf(account)
             val body = apiGet(session, "search3") {
@@ -145,19 +147,21 @@ class SubsonicCatalog(
             songs.mapNotNull { child ->
                 if (child.isDir == true) return@mapNotNull null
                 val sid = child.id ?: return@mapNotNull null
-                Track(
-                    id = "subsonic:$sid",
-                    uri = streamUrl(session, sid),
+                val path = "subsonic:$sid"
+                Song(
+                    id = sid.hashCode().toLong(),
                     title = child.title ?: child.name,
                     artist = child.artist,
                     albumArtist = child.artist,
                     album = child.album,
                     durationMs = child.duration?.times(1000L),
+                    contentUri = streamUrl(session, sid),
+                    albumArtUri = coverUrl(session, child.coverArt),
                     trackNumber = child.track,
                     discNumber = child.discNumber,
                     year = child.year,
                     genre = child.genre,
-                    artworkUri = coverUrl(session, child.coverArt),
+                    path = path,
                     sourceId = account.id
                 )
             }

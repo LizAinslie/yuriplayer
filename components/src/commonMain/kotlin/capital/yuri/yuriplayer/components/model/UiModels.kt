@@ -1,10 +1,10 @@
 package capital.yuri.yuriplayer.components.model
 
-import capital.yuri.yuriplayer.core.library.Track
 import capital.yuri.yuriplayer.core.library.albumGroupKey
+import capital.yuri.yuriplayer.core.library.catalogKey
 import capital.yuri.yuriplayer.core.library.collapseAlbumTracks
-import capital.yuri.yuriplayer.core.library.isExplicit
 import capital.yuri.yuriplayer.core.library.matchesSearch
+import capital.yuri.yuriplayer.data.Song
 
 data class CoverRef(
     val id: String,
@@ -52,64 +52,64 @@ data class ArtistPageModel(
     val genres: List<String> = emptyList()
 )
 
-fun Track.toRow(highlighted: Boolean = false) = TrackRowModel(
-    id = id,
+fun Song.toRow(highlighted: Boolean = false) = TrackRowModel(
+    id = songKey,
     title = displayTitle,
     artist = displayArtist,
     album = displayAlbum,
     durationMs = durationMs,
     trackNumber = trackNumber,
     discNumber = discNumber,
-    artworkUri = artworkUri,
+    artworkUri = albumArtUri,
     highlighted = highlighted,
-    explicit = isExplicit(),
+    explicit = isExplicit,
     multiSource = false,
-    sourceIds = listOf(id)
+    sourceIds = listOf(songKey)
 )
 
-fun Track.toCover() = CoverRef(
-    id = id,
+fun Song.toCover() = CoverRef(
+    id = songKey,
     title = displayTitle,
     subtitle = displayArtist,
-    artworkUri = artworkUri
+    artworkUri = albumArtUri
 )
 
-fun List<Track>.albums(
+fun List<Song>.albums(
     preferredIds: Map<String, String> = emptyMap()
 ): List<AlbumPageModel> =
     groupBy { albumGroupKey(it) }
-        .mapNotNull { (_, tracks) ->
-            val collapsed = collapseAlbumTracks(tracks, preferredIds)
+        .mapNotNull { (_, songs) ->
+            val collapsed = collapseAlbumTracks(songs, preferredIds)
             val first = collapsed.firstOrNull()?.preferred ?: return@mapNotNull null
             AlbumPageModel(
                 id = albumGroupKey(first),
                 title = first.displayAlbum,
                 artist = first.albumArtist?.takeIf { it.isNotBlank() } ?: first.displayArtist,
-                artworkUri = collapsed.firstNotNullOfOrNull { it.preferred.artworkUri },
+                artworkUri = collapsed.firstNotNullOfOrNull { it.preferred.albumArtUri },
                 year = collapsed.mapNotNull { it.preferred.year }.maxOrNull(),
                 tracks = collapsed.map { it.toRow() }
             )
         }
         .sortedBy { it.title.lowercase() }
 
-private fun capital.yuri.yuriplayer.core.library.CollapsedTrack.toRow() = TrackRowModel(
-    id = preferred.id,
+private fun capital.yuri.yuriplayer.core.library.CollapsedSong.toRow() = TrackRowModel(
+    id = preferred.songKey,
     title = preferred.displayTitle,
     artist = preferred.displayArtist,
     album = preferred.displayAlbum,
     durationMs = preferred.durationMs,
     trackNumber = preferred.trackNumber,
     discNumber = preferred.discNumber,
-    artworkUri = preferred.artworkUri,
+    artworkUri = preferred.albumArtUri,
     explicit = explicit,
     multiSource = multiSource,
-    sourceIds = sources.map { it.id }
+    sourceIds = sources.map { it.songKey }
 )
 
-fun List<Track>.artistPage(
+fun List<Song>.artistPage(
     name: String,
     likedIds: Set<String> = emptySet(),
-    recents: List<Track> = emptyList()
+    recents: List<Song> = emptyList()
 ): ArtistPageModel {
     val allAlbums = albums()
     val discography = allAlbums.filter { it.artist.matchesSearch(name) }
@@ -120,21 +120,28 @@ fun List<Track>.artistPage(
                 row.artist.matchesSearch(name)
             }
     }.sortedByDescending { it.year ?: Int.MIN_VALUE }
-    val ofArtist = filter { it.displayArtist.matchesSearch(name) || (it.albumArtist?.matchesSearch(name) == true) }
-    val recentRank = recents.mapIndexed { i, t -> t.id to i }.toMap()
+
+    // One logical track per recording: local + Jellyfin + Subsonic copies of the
+    // same song collapse onto a single entry, so track counts / popular / liked
+    // don't inflate for multi-source discographies (e.g. Lemon Demon).
+    val ofArtist = filter {
+        it.displayArtist.matchesSearch(name) || (it.albumArtist?.matchesSearch(name) == true)
+    }.distinctBy { it.catalogKey() }
+
+    val recentRank = recents.mapIndexed { i, t -> t.songKey to i }.toMap()
     val popular = ofArtist
         .sortedWith(
-            compareBy<Track> { recentRank[it.id] ?: Int.MAX_VALUE }
+            compareBy<Song> { recentRank[it.songKey] ?: Int.MAX_VALUE }
                 .thenBy { it.displayAlbum }
                 .thenBy { it.trackNumber ?: Int.MAX_VALUE }
         )
         .distinctBy { it.displayTitle.lowercase() }
         .take(5)
         .map { it.toRow() }
-    val likedTracks = ofArtist.filter { it.id in likedIds }
+    val likedTracks = ofArtist.filter { it.songKey in likedIds }
     return ArtistPageModel(
         name = name,
-        artworkUri = ofArtist.firstNotNullOfOrNull { it.artworkUri } ?: discography.firstOrNull()?.artworkUri,
+        artworkUri = ofArtist.firstNotNullOfOrNull { it.albumArtUri } ?: discography.firstOrNull()?.artworkUri,
         bannerUri = null,
         stats = "${discography.size} albums · ${ofArtist.size} tracks",
         about = null,

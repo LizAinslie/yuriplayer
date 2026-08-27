@@ -19,7 +19,9 @@ import capital.yuri.yuriplayer.data.PlaylistRepository
 import capital.yuri.yuriplayer.data.ScanCheckpointStore
 import capital.yuri.yuriplayer.data.SecretCoverPrivacy
 import capital.yuri.yuriplayer.data.UserImageStore
+import capital.yuri.yuriplayer.data.androidCatalogRepository
 import capital.yuri.yuriplayer.data.db.YuriDatabase
+import capital.yuri.yuriplayer.data.db.createYuriDatabase
 import capital.yuri.yuriplayer.data.organize.LibraryOrganizeService
 import capital.yuri.yuriplayer.data.organize.OrganizeLayoutPrefs
 import capital.yuri.yuriplayer.data.source.ArtistInfoService
@@ -50,7 +52,9 @@ import capital.yuri.yuriplayer.data.source.WikidataArtistImageSource
 import capital.yuri.yuriplayer.data.storage.StorageRootRegistry
 import capital.yuri.yuriplayer.data.storage.StorageRoots
 import capital.yuri.yuriplayer.data.theme.ThemeService
+import capital.yuri.yuriplayer.core.network.NetworkMonitor
 import capital.yuri.yuriplayer.media.FfmpegService
+import capital.yuri.yuriplayer.network.AndroidNetworkMonitor
 import capital.yuri.yuriplayer.player.MusicServiceAutoPlay
 import capital.yuri.yuriplayer.player.PlaybackHistoryStore
 import capital.yuri.yuriplayer.player.PlaybackStateStore
@@ -60,6 +64,7 @@ import capital.yuri.yuriplayer.player.QueueManager
 import capital.yuri.yuriplayer.player.SourceColdSync
 import capital.yuri.yuriplayer.player.radio.RadioEngine
 import capital.yuri.yuriplayer.player.radio.RadioPlaybackAlgorithm
+import capital.yuri.yuriplayer.player.radio.ReleaseCatalog
 import capital.yuri.yuriplayer.player.radio.ReleasePoolAlgorithm
 import io.ktor.client.HttpClient
 import kotlinx.coroutines.CoroutineScope
@@ -85,7 +90,10 @@ val appModule = module {
     single { LibraryScanNotifier(androidContext()) }
     single { ScanCheckpointStore(androidContext()) }
 
-    single { YuriDatabase.create(androidContext()) }
+    // Cross-platform reachability signal (drives the "No internet" banner).
+    single<NetworkMonitor> { AndroidNetworkMonitor(androidContext()) }
+
+    single { createYuriDatabase(androidContext()) }
     single { get<YuriDatabase>().albumPrefs() }
     single { get<YuriDatabase>().albumMetadata() }
     single { get<YuriDatabase>().catalog() }
@@ -97,7 +105,7 @@ val appModule = module {
     single { get<YuriDatabase>().sources() }
     single { get<YuriDatabase>().scrobblers() }
 
-    single { CatalogRepository(get(), get(), get()) }
+    single { androidCatalogRepository(get(), get(), get()) }
     single {
         LibraryIndex(
             context = androidContext(),
@@ -147,6 +155,7 @@ val appModule = module {
     single { LibrarySourceRegistry(get()) }
 
     single { SourceResolver(get()) }
+
     single {
         ExploreSearchService(
             context = androidContext(),
@@ -241,8 +250,8 @@ val appModule = module {
     single { ReleasePoolAlgorithm() }
     single {
         RadioEngine(
-            library = get(),
-            settings = get(),
+            catalog = ReleaseCatalog { get<LibraryIndex>().albums(taggedOnly = true) },
+            autoPlayEnabled = { get<LibrarySettings>().isAutoPlayRecommendedEnabled() },
             playbackAlgo = get(),
             poolAlgo = get()
         )

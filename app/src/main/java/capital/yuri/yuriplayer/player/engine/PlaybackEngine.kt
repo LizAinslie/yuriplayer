@@ -160,7 +160,7 @@ fun Song.toPlaybackMedia(
         artist = displayArtist,
         album = displayAlbum,
         albumArtist = displayAlbumArtist,
-        artworkUri = albumArtUri,
+        artworkUri = albumArtUri?.let { Uri.parse(it) },
         headers = headers,
         isNetwork = network,
         live = live
@@ -176,7 +176,7 @@ fun Song.isLiveAudio(): Boolean {
     ) {
         return true
     }
-    return contentUri.getBooleanQueryParameter("live", false)
+    return Uri.parse(contentUri).getBooleanQueryParameter("live", false)
 }
 
 fun resolvePlayableUri(
@@ -190,14 +190,14 @@ fun resolvePlayableUri(
         if (file.exists() && file.canRead()) return Uri.fromFile(file)
     }
     if (!path.isNullOrBlank() && path.startsWith("jellyfin:")) {
-        return jellyfinPlayableUri(song.contentUri, path.removePrefix("jellyfin:"), quality)
+        return jellyfinPlayableUri(Uri.parse(song.contentUri), path.removePrefix("jellyfin:"), quality)
     }
     if (!path.isNullOrBlank() &&
         (path.startsWith("subsonic:") || path.startsWith("navidrome:"))
     ) {
-        return subsonicPlayableUri(song.contentUri, quality)
+        return subsonicPlayableUri(Uri.parse(song.contentUri), quality)
     }
-    return song.contentUri
+    return Uri.parse(song.contentUri)
 }
 
 /**
@@ -294,7 +294,7 @@ fun isNetworkUri(uri: Uri): Boolean {
 
 /** Pull token headers from a stream URI when present (Jellyfin api_key query). */
 fun extractStreamHeaders(song: Song): Map<String, String> {
-    val uri = song.contentUri
+    val uri = Uri.parse(song.contentUri)
     val apiKey = uri.getQueryParameter("api_key")
         ?: uri.getQueryParameter("ApiKey")
         ?: return emptyMap()

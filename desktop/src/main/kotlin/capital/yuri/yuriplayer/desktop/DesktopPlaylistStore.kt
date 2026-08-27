@@ -1,7 +1,9 @@
 package capital.yuri.yuriplayer.desktop
 
-import capital.yuri.yuriplayer.core.library.Track
+import capital.yuri.yuriplayer.core.library.indexKeys
+import capital.yuri.yuriplayer.core.library.playlistKeys
 import capital.yuri.yuriplayer.core.log.yuriLog
+import capital.yuri.yuriplayer.data.Song
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -64,7 +66,7 @@ class DesktopPlaylistStore(configDir: String) {
 
     fun setTracks(id: String, trackIds: List<String>) {
         update(id) { pl ->
-            val byId = pl.orderedEntries().associateBy { it.snapshot.id }
+            val byId = pl.orderedEntries().associateBy { it.snapshot.songKey }
             val next = trackIds.mapIndexedNotNull { i, key ->
                 byId[key]?.copy(ordinal = i)
             }
@@ -72,7 +74,7 @@ class DesktopPlaylistStore(configDir: String) {
         }
     }
 
-    fun addTracks(id: String, tracks: List<Track>) {
+    fun addTracks(id: String, tracks: List<Song>) {
         if (tracks.isEmpty()) return
         update(id) { pl ->
             val current = pl.orderedEntries().toMutableList()
@@ -97,7 +99,7 @@ class DesktopPlaylistStore(configDir: String) {
         }
     }
 
-    fun remember(tracks: List<Track>) {
+    fun remember(tracks: List<Song>) {
         if (tracks.isEmpty()) return
         var any = false
         val next = _playlists.value.map { pl ->
@@ -121,16 +123,16 @@ class DesktopPlaylistStore(configDir: String) {
     }
 
     fun playlistsContaining(trackId: String): Set<String> =
-        playlistsContaining(Track(id = trackId, uri = ""))
+        playlistsContaining(Song(id = 0, contentUri = "", path = trackId))
 
-    fun playlistsContaining(track: Track): Set<String> {
+    fun playlistsContaining(track: Song): Set<String> {
         val keys = track.indexKeys()
         return _playlists.value.filter { pl ->
             pl.orderedEntries().any { e -> e.allKeys().any { it in keys } }
         }.map { it.id }.toSet()
     }
 
-    fun removeTracks(id: String, tracks: List<Track>) {
+    fun removeTracks(id: String, tracks: List<Song>) {
         val drop = tracks.flatMap { it.indexKeys() }.toHashSet()
         update(id) { pl ->
             pl.withEntries(
@@ -267,13 +269,13 @@ data class DesktopPlaylist(
     val activeCoverId: String? = null,
     val createdAtMs: Long = 0L,
     val updatedAtMs: Long = 0L,
-    val snapshots: List<Track> = emptyList(),
+    val snapshots: List<Song> = emptyList(),
     val entries: List<PlaylistEntry> = emptyList()
 ) {
-    fun artworkUri(library: List<Track>): String? {
+    fun artworkUri(library: List<Song>): String? {
         val active = covers.firstOrNull { it.id == activeCoverId } ?: covers.firstOrNull { !it.isSecret }
         if (active != null) return File(active.path).toURI().toString()
-        return tracks(library).firstOrNull()?.artworkUri
+        return tracks(library).firstOrNull()?.albumArtUri
     }
 
     fun orderedEntries(): List<PlaylistEntry> {
@@ -287,19 +289,19 @@ data class DesktopPlaylist(
         }
         return copy(
             entries = compact,
-            trackIds = compact.map { it.snapshot.id },
+            trackIds = compact.map { it.snapshot.songKey },
             snapshots = compact.map { it.snapshot }
         )
     }
 
-    fun tracks(library: List<Track>): List<Track> {
-        val index = HashMap<String, Track>()
+    fun tracks(library: List<Song>): List<Song> {
+        val index = HashMap<String, Song>()
         for (t in library) {
             for (k in t.indexKeys()) index.putIfAbsent(k, t)
         }
         val ordered = orderedEntries()
         val seen = HashSet<String>()
-        val out = ArrayList<Track>(ordered.size)
+        val out = ArrayList<Song>(ordered.size)
         for (entry in ordered) {
             val live = entry.allKeys().firstNotNullOfOrNull { index[it] } ?: entry.snapshot
             if (live.indexKeys().any { it in seen }) continue
@@ -310,13 +312,13 @@ data class DesktopPlaylist(
     }
 
     private fun migrateLegacyEntries(): List<PlaylistEntry> {
-        val byKey = HashMap<String, Track>()
+        val byKey = HashMap<String, Song>()
         for (t in snapshots) {
             for (k in t.indexKeys()) byKey.putIfAbsent(k, t)
         }
         val used = HashSet<String>()
         val out = ArrayList<PlaylistEntry>()
-        fun take(t: Track) {
+        fun take(t: Song) {
             if (t.indexKeys().any { it in used }) return
             used += t.indexKeys()
             out += PlaylistEntry(
@@ -337,7 +339,7 @@ data class DesktopPlaylist(
 @Serializable
 data class PlaylistEntry(
     val ordinal: Int,
-    val snapshot: Track,
+    val snapshot: Song,
     val keys: List<String> = emptyList()
 ) {
     fun allKeys(): Set<String> = buildSet {
@@ -345,7 +347,7 @@ data class PlaylistEntry(
         addAll(snapshot.indexKeys())
     }
 
-    fun matches(track: Track): Boolean {
+    fun matches(track: Song): Boolean {
         val theirs = track.indexKeys()
         return allKeys().any { it in theirs }
     }

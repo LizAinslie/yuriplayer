@@ -1,8 +1,8 @@
 package capital.yuri.yuriplayer.desktop.os.mac
 
-import capital.yuri.yuriplayer.core.library.Track
 import capital.yuri.yuriplayer.core.log.yuriLog
 import capital.yuri.yuriplayer.core.os.OsMediaControls
+import capital.yuri.yuriplayer.data.Song
 import com.sun.jna.Library
 import com.sun.jna.Native
 import java.util.concurrent.atomic.AtomicReference
@@ -27,7 +27,7 @@ class MacNowPlayingControls : OsMediaControls {
             .onFailure { log.w { "macOS media keys: ${it.message}" } }
     }
 
-    override fun update(track: Track?, playing: Boolean, positionMs: Long, durationMs: Long, volume: Float) {
+    override fun update(track: Song?, playing: Boolean, positionMs: Long, durationMs: Long, volume: Float) {
         MacNowPlayingStore.track = track
         MacNowPlayingStore.playing = playing
         MacNowPlayingStore.positionMs = positionMs
@@ -44,7 +44,7 @@ class MacNowPlayingControls : OsMediaControls {
 }
 
 internal object MacNowPlayingStore {
-    @Volatile var track: Track? = null
+    @Volatile var track: Song? = null
     @Volatile var playing: Boolean = false
     @Volatile var positionMs: Long = 0
     @Volatile var durationMs: Long = 0

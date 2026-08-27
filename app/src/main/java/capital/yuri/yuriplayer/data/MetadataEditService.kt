@@ -255,7 +255,7 @@ class MetadataEditService(
     private fun notWritableMessage(song: Song): String {
         val path = song.path.orEmpty()
         return when {
-            isVirtualLibraryPath(path) || isNetworkUri(song.contentUri) ->
+            isVirtualLibraryPath(path) || isNetworkUri(Uri.parse(song.contentUri)) ->
                 "This track is from a streaming server (e.g. Jellyfin). " +
                     "Edit metadata on a local or cloud file copy."
             else ->
@@ -267,28 +267,28 @@ class MetadataEditService(
     fun resolveWritableTarget(song: Song): WritableTarget? {
         val path = song.path
         if (isVirtualLibraryPath(path)) return null
-        if (isNetworkUri(song.contentUri)) return null
+        if (isNetworkUri(Uri.parse(song.contentUri))) return null
 
         if (!path.isNullOrBlank() && !path.contains("://")) {
             val f = File(path)
             if (f.isFile) return WritableTarget.FilePath(f)
         }
 
-        if (song.contentUri.scheme.equals("file", ignoreCase = true)) {
-            val p = song.contentUri.path
+        if (Uri.parse(song.contentUri).scheme.equals("file", ignoreCase = true)) {
+            val p = Uri.parse(song.contentUri).path
             if (!p.isNullOrBlank()) {
                 val f = File(p)
                 if (f.isFile) return WritableTarget.FilePath(f)
             }
         }
 
-        if (song.contentUri.scheme.equals("content", ignoreCase = true)) {
-            queryMediaStorePath(song.contentUri)?.let { dataPath ->
+        if (Uri.parse(song.contentUri).scheme.equals("content", ignoreCase = true)) {
+            queryMediaStorePath(Uri.parse(song.contentUri))?.let { dataPath ->
                 val f = File(dataPath)
                 if (f.isFile) return WritableTarget.FilePath(f)
             }
-            if (canOpenContent(song.contentUri)) {
-                return WritableTarget.ContentUri(song.contentUri)
+            if (canOpenContent(Uri.parse(song.contentUri))) {
+                return WritableTarget.ContentUri(Uri.parse(song.contentUri))
             }
         }
 
@@ -480,7 +480,7 @@ class MetadataEditService(
     }
 
     private fun updateMediaStoreSong(song: Song, edit: SongEdit) {
-        if (!isMediaStoreAudioUri(song.contentUri)) return
+        if (!isMediaStoreAudioUri(Uri.parse(song.contentUri))) return
         val values = ContentValues().apply {
             edit.title?.let { put(MediaStore.Audio.Media.TITLE, it) }
             edit.artist?.let { put(MediaStore.Audio.Media.ARTIST, it) }
@@ -490,14 +490,14 @@ class MetadataEditService(
         }
         if (values.size() == 0) return
         runCatching {
-            context.contentResolver.update(song.contentUri, values, null, null)
+            context.contentResolver.update(Uri.parse(song.contentUri), values, null, null)
         }.onFailure {
             log.d { "MediaStore song update skipped: ${it.message}" }
         }
     }
 
     private fun updateMediaStoreAlbumFields(song: Song, edit: AlbumEdit) {
-        if (!isMediaStoreAudioUri(song.contentUri)) return
+        if (!isMediaStoreAudioUri(Uri.parse(song.contentUri))) return
         val values = ContentValues().apply {
             edit.albumName?.let { put(MediaStore.Audio.Media.ALBUM, it) }
             edit.year?.let { put(MediaStore.Audio.Media.YEAR, it) }
@@ -507,7 +507,7 @@ class MetadataEditService(
         }
         if (values.size() == 0) return
         runCatching {
-            context.contentResolver.update(song.contentUri, values, null, null)
+            context.contentResolver.update(Uri.parse(song.contentUri), values, null, null)
         }.onFailure {
             log.d { "MediaStore album update skipped: ${it.message}" }
         }

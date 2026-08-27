@@ -122,8 +122,8 @@ private fun RadioSettingsIcon(
 private fun radioSessionForSettings(snapshot: QueueSnapshot): RadioSession? {
     snapshot.radioSession?.takeIf { it.active || snapshot.coldSource?.type == ColdSourceType.RADIO }
         ?.let { return it }
-    if (snapshot.coldSource?.type != ColdSourceType.RADIO) return null
-    val src = snapshot.coldSource
+    val src = snapshot.coldSource ?: return null
+    if (src.type != ColdSourceType.RADIO) return null
     return RadioSession(
         kind = RadioSessionKind.CUSTOM,
         displayName = src.title?.takeIf { it.isNotBlank() } ?: "Radio",

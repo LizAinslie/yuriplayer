@@ -15,9 +15,11 @@ import androidx.compose.ui.window.Window
 import androidx.compose.ui.window.application
 import androidx.compose.ui.window.rememberWindowState
 import capital.yuri.yuriplayer.components.theme.isDark
+import capital.yuri.yuriplayer.core.log.yuriLog
 import capital.yuri.yuriplayer.core.platform.HostOs
 import capital.yuri.yuriplayer.core.platform.appDirectories
 import capital.yuri.yuriplayer.core.platform.hostOs
+import capital.yuri.yuriplayer.desktop.di.desktopModule
 import capital.yuri.yuriplayer.desktop.os.linux.LinuxDesktopIntegration
 import capital.yuri.yuriplayer.desktop.player.LibVlcBootstrap
 import capital.yuri.yuriplayer.desktop.ui.YuriDesktopApp
@@ -28,13 +30,28 @@ import coil3.network.ktor3.KtorNetworkFetcherFactory
 import io.ktor.client.HttpClient
 import io.ktor.client.engine.cio.CIO
 import okio.Path.Companion.toOkioPath
+import org.koin.core.context.GlobalContext
+import org.koin.core.context.startKoin
 import java.io.File
 
+private val log = yuriLog("Main")
+
 fun main() {
+    // Capture any uncaught throwable so crashes are visible in the log instead
+    // of being swallowed by the Swing/AWT event loop.
+    Thread.setDefaultUncaughtExceptionHandler { t, e ->
+        log.e(e) { "uncaught exception on ${t.name}" }
+    }
+
     if (hostOs() == HostOs.LINUX) LinuxDesktopIntegration.install()
     val dirs = appDirectories()
     System.setProperty("LOG_DIR", dirs.cacheDir)
     LibVlcBootstrap.install()
+
+    startKoin {
+        modules(desktopModule)
+    }
+
     application {
         val dirs = appDirectories()
         setSingletonImageLoaderFactory { context ->
@@ -47,7 +64,7 @@ fun main() {
                 }
                 .build()
         }
-        val session = remember { DesktopSession() }
+        val session = remember { GlobalContext.get().get<DesktopSession>() }
         val state = rememberWindowState(width = 1280.dp, height = 800.dp)
         Window(
             onCloseRequest = {

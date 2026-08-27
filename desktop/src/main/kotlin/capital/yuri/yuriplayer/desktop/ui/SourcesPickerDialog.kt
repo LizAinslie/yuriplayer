@@ -28,13 +28,13 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import capital.yuri.yuriplayer.components.dialog.InWindowPanel
-import capital.yuri.yuriplayer.core.library.Track
 import capital.yuri.yuriplayer.core.source.RemoteAccount
 import capital.yuri.yuriplayer.core.source.SourceKind
 import capital.yuri.yuriplayer.core.library.LocalLibraryScanner
+import capital.yuri.yuriplayer.data.Song
 
 data class SourceChoice(
-    val track: Track,
+    val track: Song,
     val label: String,
     val typeLabel: String,
     val writable: Boolean,
@@ -42,21 +42,21 @@ data class SourceChoice(
 )
 
 fun sourceChoices(
-    sources: List<Track>,
+    sources: List<Song>,
     remotes: List<RemoteAccount>,
     preferredId: String?
 ): List<SourceChoice> {
     val byId = remotes.associateBy { it.id }
     return sources.map { t ->
         val remote = t.sourceId?.let { byId[it] }
-        val local = t.sourceId == LocalLibraryScanner.SOURCE_LOCAL || t.uri.startsWith("file:")
+        val local = t.sourceId == LocalLibraryScanner.SOURCE_LOCAL || t.contentUri.startsWith("file:")
         val writable = local
         val typeLabel = when {
             local -> "Local"
             remote?.kind == SourceKind.JELLYFIN -> "Jellyfin"
             remote?.kind == SourceKind.SUBSONIC -> "Navidrome"
-            t.id.startsWith("jellyfin:") -> "Jellyfin"
-            t.id.startsWith("subsonic:") -> "Subsonic"
+            t.songKey.startsWith("jellyfin:") -> "Jellyfin"
+            t.songKey.startsWith("subsonic:") || t.songKey.startsWith("navidrome:") -> "Subsonic"
             else -> "Source"
         }
         val label = when {
@@ -69,7 +69,7 @@ fun sourceChoices(
             label = label,
             typeLabel = typeLabel,
             writable = writable,
-            preferred = preferredId != null && (t.id == preferredId || t.sourceId == preferredId)
+            preferred = preferredId != null && (t.songKey == preferredId || t.sourceId == preferredId)
         )
     }
 }
@@ -79,7 +79,7 @@ fun SourcesPickerDialog(
     title: String,
     choices: List<SourceChoice>,
     onDismiss: () -> Unit,
-    onPick: (Track) -> Unit
+    onPick: (Song) -> Unit
 ) {
     InWindowPanel(onDismiss = onDismiss, modifier = Modifier.width(420.dp).height(480.dp)) {
         Column(Modifier.fillMaxSize().padding(20.dp)) {
@@ -98,7 +98,7 @@ fun SourcesPickerDialog(
             )
             HorizontalDivider()
             LazyColumn(Modifier.weight(1f).padding(top = 8.dp)) {
-                items(choices, key = { it.track.id }) { c ->
+                items(choices, key = { it.track.songKey }) { c ->
                     Row(
                         Modifier
                             .fillMaxWidth()

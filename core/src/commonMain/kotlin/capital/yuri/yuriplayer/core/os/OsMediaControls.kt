@@ -1,6 +1,7 @@
 package capital.yuri.yuriplayer.core.os
 
-import capital.yuri.yuriplayer.core.library.Track
+import capital.yuri.yuriplayer.core.player.RepeatMode
+import capital.yuri.yuriplayer.data.Song
 
 /**
  * System playback integration: MPRIS (`playerctl`) on Linux, Now Playing on
@@ -8,13 +9,21 @@ import capital.yuri.yuriplayer.core.library.Track
  */
 interface OsMediaControls {
     fun attach(callbacks: Callbacks)
+
     fun update(
-        track: Track?,
+        track: Song?,
         playing: Boolean,
         positionMs: Long,
         durationMs: Long,
         volume: Float = 1f
     )
+
+    /** Push repeat mode to the system media session (app -> OS). */
+    fun setLoop(mode: RepeatMode) {}
+
+    /** Push shuffle state to the system media session (app -> OS). */
+    fun setShuffle(enabled: Boolean) {}
+
     fun release()
 
     interface Callbacks {
@@ -26,6 +35,8 @@ interface OsMediaControls {
         fun onPrevious()
         fun onSeek(positionMs: Long)
         fun onVolume(value: Float) {}
+        fun onLoop(mode: RepeatMode) {}
+        fun onShuffle(enabled: Boolean) {}
         fun onRaise() {}
         fun onQuit() {}
     }
@@ -34,7 +45,7 @@ interface OsMediaControls {
 object NoOpMediaControls : OsMediaControls {
     override fun attach(callbacks: OsMediaControls.Callbacks) {}
     override fun update(
-        track: Track?,
+        track: Song?,
         playing: Boolean,
         positionMs: Long,
         durationMs: Long,

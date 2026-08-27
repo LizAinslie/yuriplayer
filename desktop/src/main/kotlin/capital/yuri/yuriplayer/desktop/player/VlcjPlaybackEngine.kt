@@ -22,9 +22,6 @@ import java.util.concurrent.atomic.AtomicReference
 
 /**
  * LibVLC via vlcj. Same job as Android's VlcPlaybackEngine: decode + output.
- *
- * HTTPS streams (Navidrome/Jellyfin) must use HTTP/1.1 — VLC's h2 stack
- * dies with "peer stream 1 error: Protocol error" and poisons later plays.
  */
 class VlcjPlaybackEngine : PlaybackEngine {
     private val log = yuriLog("Vlcj")
@@ -45,6 +42,7 @@ class VlcjPlaybackEngine : PlaybackEngine {
     private val openedMrl = AtomicReference<String?>(null)
     private val ignoreFinishedUntil = AtomicLong(0)
     private val recreating = AtomicBoolean(false)
+    private val released = AtomicBoolean(false)
     val nativeError: String?
 
     override val isPlaying: StateFlow<Boolean> = _isPlaying.asStateFlow()
@@ -52,29 +50,42 @@ class VlcjPlaybackEngine : PlaybackEngine {
 
     init {
         val discovered = NativeDiscovery().discover()
-        val created = runCatching {
-            MediaPlayerFactory(*FACTORY_ARGS)
+        var created: Result<MediaPlayerFactory> = Result.failure(IllegalStateException("not attempted"))
+        repeat(FACTORY_RETRIES) { attempt ->
+            created = runCatching { MediaPlayerFactory(*FACTORY_ARGS) }
+            if (created.isSuccess) return@repeat
+            if (attempt < FACTORY_RETRIES - 1) {
+                Thread.sleep(FACTORY_RETRY_DELAY_MS)
+            }
         }
         factory = created.getOrNull()
         player = factory?.mediaPlayers()?.newMediaPlayer()
         nativeError = when {
-            factory == null ->
-                created.exceptionOrNull()?.message
-                    ?: if (!discovered) "LibVLC not found. Install VLC (libvlc) and restart."
-                    else "Could not start LibVLC."
+            factory == null -> {
+                val cause = created.exceptionOrNull()
+                val detail = cause?.message ?: cause?.cause?.message
+                when {
+                    detail != null -> "LibVLC failed to start: $detail"
+                    !discovered -> "LibVLC not found. Install VLC (libvlc) and restart."
+                    else -> "Could not start LibVLC."
+                }
+            }
             player == null -> "LibVLC opened but could not create a player."
             else -> null
         }
         if (nativeError != null) {
             log.e { nativeError }
         } else {
-            log.i { "libvlc ready http1.1" }
+            log.i { "libvlc ready" }
         }
         bindEvents(player)
         onVlc {
             player?.audio()?.setVolume(volumePercent.get())
             player?.audio()?.setMute(false)
         }
+        Runtime.getRuntime().addShutdownHook(Thread {
+            runCatching { release() }
+        })
     }
 
     override fun load(current: PlaybackMedia, successor: PlaybackMedia?, startPositionMs: Long) {
@@ -84,10 +95,20 @@ class VlcjPlaybackEngine : PlaybackEngine {
         positionMs.set(startPositionMs.coerceAtLeast(0L))
         _currentUri.value = current.uri
         _isPlaying.value = false
+        openedMrl.set(null)
     }
 
     override fun play() {
-        val media = loadedMedia.get()
+        val opened = openedMrl.get()
+        val loaded = loadedMedia.get()
+        if (opened != null && loaded != null && toMrl(loaded.uri) == opened) {
+            onVlc {
+                player?.audio()?.setMute(false)
+                player?.controls()?.play()
+            }
+            return
+        }
+        val media = loaded
         if (media == null) {
             onVlc {
                 player?.audio()?.setMute(false)
@@ -99,6 +120,7 @@ class VlcjPlaybackEngine : PlaybackEngine {
     }
 
     override fun pause() {
+        if (openedMrl.get() == null) return
         onVlc { player?.controls()?.setPause(true) }
     }
 
@@ -113,6 +135,7 @@ class VlcjPlaybackEngine : PlaybackEngine {
 
     override fun seekTo(positionMs: Long) {
         val ms = positionMs.coerceAtLeast(0L)
+        log.i { "seek $ms (dur=${durationMs.get()})" }
         this.positionMs.set(ms)
         pendingStartMs.set(-1L)
         onVlc { player?.controls()?.setTime(ms) }
@@ -121,6 +144,16 @@ class VlcjPlaybackEngine : PlaybackEngine {
     override fun getPositionMs(): Long {
         val pending = pendingStartMs.get()
         if (pending > 0L && !_isPlaying.value) return pending
+        // Poll VLC's actual time rather than trusting only the `timeChanged`
+        // event (which is flaky on some distro VLC builds). Called by the ticker
+        // every ~250ms, so this keeps position authoritative and seekable.
+        val p = player
+        if (p != null && openedMrl.get() != null) {
+            runCatching { p.status().time() }
+                .getOrNull()
+                ?.takeIf { it > 0L }
+                ?.let { positionMs.set(it) }
+        }
         return positionMs.get()
     }
 
@@ -142,12 +175,14 @@ class VlcjPlaybackEngine : PlaybackEngine {
     override fun playPreparedNext(): Boolean = false
 
     override fun release() {
+        if (!released.compareAndSet(false, true)) return
         onVlc {
-            runCatching { player?.release() }
+            runCatching { player?.controls()?.stop() }
             runCatching { factory?.release() }
         }
         vlc.shutdown()
         listeners.clear()
+        player = null
     }
 
     override fun addListener(listener: PlaybackEngine.Listener) {
@@ -165,23 +200,32 @@ class VlcjPlaybackEngine : PlaybackEngine {
                 return@onVlc
             }
             val mrl = toMrl(media.uri)
+            val isHttp = mrl.startsWith("http")
             log.i { "play ${redactSecrets(mrl)}" }
             ignoreFinishedUntil.set(System.currentTimeMillis() + 1_200)
             silentStop()
             p.audio().setMute(false)
             p.audio().setVolume(volumePercent.get())
+            val pending = if (isHttp) {
+                pendingStartMs.set(-1L)
+                -1L
+            } else {
+                pendingStartMs.get()
+            }
             val extra = buildList {
                 addAll(mediaOptions(media))
-                pendingStartMs.get().takeIf { it > 0 }?.let {
-                    add(":start-time=${it / 1000.0}")
+                if (pending > 0L) {
+                    add(":start-time=${pending / 1000.0}")
                 }
-                if (mrl.startsWith("http")) {
+                if (isHttp) {
                     add(":http-reconnect")
                     add(":http-user-agent=YuriPlayer/1.0")
                 }
             }.toTypedArray()
             val ok = p.media().play(mrl, *extra)
+            log.i { "play result ok=$ok ${redactSecrets(mrl)}" }
             if (!ok) {
+                log.e { "play failed (ok=false): ${redactSecrets(mrl)}" }
                 listeners.forEach { it.onError("Could not open ${media.title}", recoverable = true) }
                 return@onVlc
             }
@@ -229,8 +273,13 @@ class VlcjPlaybackEngine : PlaybackEngine {
                 if (pending > 0L) {
                     mediaPlayer.controls().setTime(pending)
                     positionMs.set(pending)
-                } else {
-                    positionMs.set(mediaPlayer.status().time().coerceAtLeast(0L))
+                }
+                // Seed duration from status if lengthChanged hasn't fired yet.
+                if (durationMs.get() <= 0L) {
+                    runCatching { mediaPlayer.status().length() }
+                        .getOrNull()
+                        ?.takeIf { it > 0L }
+                        ?.let { durationMs.set(it) }
                 }
                 _isPlaying.value = true
                 log.d { "playing pos=${positionMs.get()} dur=${durationMs.get()}" }
@@ -239,11 +288,13 @@ class VlcjPlaybackEngine : PlaybackEngine {
 
             override fun paused(mediaPlayer: MediaPlayer) {
                 _isPlaying.value = false
+                log.d { "paused" }
                 listeners.forEach { it.onIsPlayingChanged(false) }
             }
 
             override fun stopped(mediaPlayer: MediaPlayer) {
                 _isPlaying.value = false
+                log.d { "stopped" }
                 listeners.forEach { it.onIsPlayingChanged(false) }
             }
 
@@ -277,7 +328,6 @@ class VlcjPlaybackEngine : PlaybackEngine {
             try {
                 val old = player
                 runCatching { old?.controls()?.stop() }
-                runCatching { old?.release() }
                 val next = factory?.mediaPlayers()?.newMediaPlayer()
                 player = next
                 bindEvents(next)
@@ -303,9 +353,10 @@ class VlcjPlaybackEngine : PlaybackEngine {
             "--network-caching=4000",
             "--file-caching=300",
             "--http-reconnect",
-            "--no-http-h2",
             "--http-user-agent=YuriPlayer/1.0",
             "--aout=any"
         )
+        private const val FACTORY_RETRIES = 3
+        private const val FACTORY_RETRY_DELAY_MS = 300L
     }
 }

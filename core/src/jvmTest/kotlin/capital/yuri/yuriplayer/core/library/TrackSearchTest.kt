@@ -1,14 +1,15 @@
 package capital.yuri.yuriplayer.core.library
 
+import capital.yuri.yuriplayer.data.Song
 import kotlin.test.Test
 import kotlin.test.assertTrue
 
 class TrackSearchTest {
     @Test
     fun matchesStylizedTwentyOnePilots() {
-        val track = Track(
-            id = "1",
-            uri = "file:///music/Twenty Øne Piløts/Clancy/01.flac",
+        val track = Song(
+            id = 1L,
+            contentUri = "file:///music/Twenty Øne Piløts/Clancy/01.flac",
             title = "Overcompensate",
             artist = "Twenty Øne Piløts",
             album = "Clancy",
@@ -22,9 +23,9 @@ class TrackSearchTest {
 
     @Test
     fun matchesFolderWhenTagsMissing() {
-        val track = Track(
-            id = "2",
-            uri = "file:///data/Twenty One Pilots/Vessel/02.flac",
+        val track = Song(
+            id = 2L,
+            contentUri = "file:///data/Twenty One Pilots/Vessel/02.flac",
             title = "02",
             path = "/data/Twenty One Pilots/Vessel/02.flac"
         )

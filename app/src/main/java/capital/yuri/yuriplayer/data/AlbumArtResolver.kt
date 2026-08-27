@@ -64,7 +64,7 @@ object AlbumArtResolver {
                 return@withContext scaleDown(it, maxSize)
             }
 
-            loadImageUri(context, song.albumArtUri, maxSize)?.also {
+            loadImageUri(context, song.albumArtUri?.let { Uri.parse(it) }, maxSize)?.also {
                 cacheToDisk(context, song, it)
                 return@withContext scaleDown(it, maxSize)
             }
@@ -301,8 +301,8 @@ object AlbumArtResolver {
         }
 
         val uri = when {
-            song.contentUri.scheme.equals("content", true) -> song.contentUri
-            song.contentUri.scheme.equals("file", true) -> song.contentUri
+            Uri.parse(song.contentUri).scheme.equals("content", true) -> Uri.parse(song.contentUri)
+            Uri.parse(song.contentUri).scheme.equals("file", true) -> Uri.parse(song.contentUri)
             !path.isNullOrBlank() && path.contains("://") -> Uri.parse(path)
             else -> null
         } ?: return null
@@ -517,7 +517,7 @@ object AlbumArtResolver {
             } catch (_: Exception) {
             }
         }
-        val uri = song.contentUri
+        val uri = Uri.parse(song.contentUri)
         val scheme = uri.scheme?.lowercase()
         if (scheme == "content" || scheme == "file") {
             try {
@@ -540,8 +540,8 @@ object AlbumArtResolver {
             }
         }
 
-        if (song.contentUri.scheme.equals("file", true)) {
-            val p = song.contentUri.path
+        if (Uri.parse(song.contentUri).scheme.equals("file", true)) {
+            val p = Uri.parse(song.contentUri).path
             if (!p.isNullOrBlank()) {
                 val f = File(p)
                 if (f.isFile && f.canRead()) {
@@ -550,8 +550,8 @@ object AlbumArtResolver {
             }
         }
 
-        if (song.contentUri.scheme.equals("content", true)) {
-            return extractJaudioFromContentUri(context, song.contentUri, maxSize)
+        if (Uri.parse(song.contentUri).scheme.equals("content", true)) {
+            return extractJaudioFromContentUri(context, Uri.parse(song.contentUri), maxSize)
         }
 
         return null
@@ -648,7 +648,7 @@ object AlbumArtResolver {
     }
 
     private fun loadSafFolderCover(context: Context, song: Song, maxSize: Int): Bitmap? {
-        val uri = song.contentUri
+        val uri = Uri.parse(song.contentUri)
         if (!uri.scheme.equals("content", true)) return null
         return try {
             val doc = DocumentFile.fromSingleUri(context, uri) ?: return null

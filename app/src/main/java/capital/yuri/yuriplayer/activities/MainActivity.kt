@@ -106,6 +106,8 @@ import capital.yuri.yuriplayer.activities.ui.SettingsScreen
 import capital.yuri.yuriplayer.activities.ui.SongNavActions
 import capital.yuri.yuriplayer.activities.ui.StatusBarColorStack
 import capital.yuri.yuriplayer.activities.ui.theme.YuriPlayerTheme
+import capital.yuri.yuriplayer.components.OfflineBanner
+import capital.yuri.yuriplayer.core.network.NetworkMonitor
 import capital.yuri.yuriplayer.ui.TestTags
 import capital.yuri.yuriplayer.data.ActivityTitleFormat
 import capital.yuri.yuriplayer.data.AlbumItem
@@ -139,6 +141,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.koin.android.ext.android.inject
 import org.koin.compose.koinInject
+import androidx.core.net.toUri
 
 class MainActivity : ComponentActivity() {
 
@@ -208,7 +211,7 @@ class MainActivity : ComponentActivity() {
         try {
             val intent = Intent(
                 Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION,
-                Uri.parse("package:$packageName")
+                "package:$packageName".toUri()
             )
             startActivity(intent)
         } catch (_: Exception) {
@@ -346,6 +349,7 @@ fun YuriApp(
     val playlistRepo: PlaylistRepository = koinInject()
     val pinStore: MyStuffPinStore = koinInject()
     val catalog: CatalogRepository = koinInject()
+    val networkMonitor: NetworkMonitor = koinInject()
     val scope = rememberCoroutineScope()
     val baseScheme = MaterialTheme.colorScheme
 
@@ -363,6 +367,7 @@ fun YuriApp(
     val songCount by library.songs.collectAsState()
     val loading by library.isLoading.collectAsState()
     val colorRev by settings.colorPrefsRevision.collectAsState()
+    val online by networkMonitor.isOnline.collectAsState()
 
     LaunchedEffect(songCount.size, loading, showNetworkPrompt) {
         if (!showNetworkPrompt &&
@@ -768,6 +773,9 @@ fun YuriApp(
                         LocalTabBackEnabled provides currentStack.isEmpty()
                     ) {
                         Column(Modifier.fillMaxSize()) {
+                            if (!online) {
+                                OfflineBanner()
+                            }
                             if (topTab == TopTab.Explore) {
                                 ExploreSearchTopBar(
                                     query = exploreQuery,

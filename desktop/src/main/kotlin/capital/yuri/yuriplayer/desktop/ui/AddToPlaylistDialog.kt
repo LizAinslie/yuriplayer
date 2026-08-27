@@ -34,20 +34,20 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import capital.yuri.yuriplayer.components.art.CoverArt
 import capital.yuri.yuriplayer.components.dialog.InWindowPanel
-import capital.yuri.yuriplayer.core.library.Track
+import capital.yuri.yuriplayer.core.library.playlistKeys
+import capital.yuri.yuriplayer.data.Song
 import capital.yuri.yuriplayer.desktop.DesktopPlaylistStore
 
 @Composable
 fun AddToPlaylistDialog(
-    tracks: List<Track>,
+    tracks: List<Song>,
     store: DesktopPlaylistStore,
-    library: List<Track>,
+    library: List<Song>,
     onDismiss: () -> Unit,
-    onEnsureTracks: (List<Track>) -> Unit = {}
+    onEnsureTracks: (List<Song>) -> Unit = {}
 ) {
     val playlists by store.playlists.collectAsState()
     var initiallyIn by remember { mutableStateOf(emptySet<String>()) }
@@ -56,7 +56,7 @@ fun AddToPlaylistDialog(
     var creating by remember { mutableStateOf(false) }
     var newName by remember { mutableStateOf("") }
 
-    LaunchedEffect(tracks.map { it.id }) {
+    LaunchedEffect(tracks.map { it.songKey }) {
         val containing = if (tracks.size == 1) {
             store.playlistsContaining(tracks.first())
         } else {
@@ -151,44 +151,43 @@ fun AddToPlaylistDialog(
                                 .clickable {
                                     selected = if (checked) selected - pl.id else selected + pl.id
                                 }
-                                .padding(vertical = 6.dp),
+                                .padding(vertical = 10.dp),
                             verticalAlignment = Alignment.CenterVertically
                         ) {
-                            Checkbox(
-                                checked = checked,
-                                onCheckedChange = {
-                                    selected = if (it) selected + pl.id else selected - pl.id
-                                }
-                            )
-                            CoverArt(
-                                model = pl.artworkUri(library),
-                                size = 40.dp,
-                                corner = 6.dp
-                            )
+                            CoverArt(model = pl.artworkUri(library), size = 40.dp, corner = 4.dp)
                             Spacer(Modifier.width(12.dp))
                             Column(Modifier.weight(1f)) {
-                                Text(pl.name, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                Text(pl.name, fontWeight = FontWeight.Medium, maxLines = 1)
                                 Text(
-                                    "${pl.tracks(library).size.coerceAtLeast(pl.trackIds.size)} songs",
+                                    "${pl.trackIds.size} songs",
                                     style = MaterialTheme.typography.bodySmall,
                                     color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.55f)
                                 )
                             }
+                            Checkbox(checked = checked, onCheckedChange = {
+                                selected = if (checked) selected - pl.id else selected + pl.id
+                            })
                         }
                     }
                 }
             }
-            Button(
-                onClick = {
-                    val toRemove = initiallyIn - selected
-                    onEnsureTracks(tracks)
-                    selected.forEach { store.addTracks(it, tracks) }
-                    toRemove.forEach { store.removeTracks(it, tracks) }
-                    onDismiss()
-                },
-                modifier = Modifier.fillMaxWidth().padding(top = 12.dp)
-            ) {
-                Text("Done")
+            Row(Modifier.fillMaxWidth().padding(top = 8.dp), horizontalArrangement = Arrangement.End) {
+                TextButton(onClick = onDismiss) { Text("Cancel") }
+                Button(
+                    enabled = selected != initiallyIn,
+                    onClick = {
+                        val added = selected - initiallyIn
+                        val removed = initiallyIn - selected
+                        for (pl in playlists) {
+                            when (pl.id) {
+                                in added -> store.addTracks(pl.id, tracks)
+                                in removed -> store.removeTracks(pl.id, tracks)
+                            }
+                        }
+                        if (added.isNotEmpty()) onEnsureTracks(tracks)
+                        onDismiss()
+                    }
+                ) { Text("Save") }
             }
         }
     }

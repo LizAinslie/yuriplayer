@@ -44,9 +44,9 @@ import capital.yuri.yuriplayer.components.model.AlbumPageModel
 import capital.yuri.yuriplayer.components.model.albums
 import capital.yuri.yuriplayer.components.model.toRow
 import capital.yuri.yuriplayer.core.library.LocalLibraryScanner
-import capital.yuri.yuriplayer.core.library.Track
 import capital.yuri.yuriplayer.core.library.matchesQuery
 import capital.yuri.yuriplayer.core.library.matchesSearch
+import capital.yuri.yuriplayer.data.Song
 import capital.yuri.yuriplayer.desktop.DesktopPlaylist
 import capital.yuri.yuriplayer.desktop.DesktopSession
 import kotlinx.coroutines.Dispatchers
@@ -62,16 +62,16 @@ private const val ARTIST_HIT_LIMIT = 12
 fun DesktopExplore(
     session: DesktopSession,
     query: String,
-    tracks: List<Track>,
+    tracks: List<Song>,
     albums: List<AlbumPageModel>,
     playlists: List<DesktopPlaylist>,
     onOpenAlbum: (AlbumPageModel) -> Unit,
     onOpenPlaylist: (DesktopPlaylist) -> Unit,
     onOpenArtist: (String) -> Unit,
-    onPlaySongs: (List<Track>, Int) -> Unit,
+    onPlaySongs: (List<Song>, Int) -> Unit,
     likedIds: Set<String> = emptySet(),
     onToggleLike: (String) -> Unit = {},
-    songMenu: (Track) -> List<out MenuEntry> = { emptyList() }
+    songMenu: (Song) -> List<out MenuEntry> = { emptyList() }
 ) {
     val remotes by session.sources.remotes.collectAsState()
     val enabled = remember(remotes) { remotes.filter { it.enabled } }
@@ -84,11 +84,15 @@ fun DesktopExplore(
     var selectedKeys by remember { mutableStateOf(emptySet<String>()) }
     val effective = if (selectedKeys.isEmpty()) allKeys else selectedKeys
 
-    var songHits by remember { mutableStateOf<List<Track>>(emptyList()) }
+    var songHits by remember { mutableStateOf<List<Song>>(emptyList()) }
     var albumHits by remember { mutableStateOf<List<AlbumPageModel>>(emptyList()) }
     var artistHits by remember { mutableStateOf<List<ArtistHit>>(emptyList()) }
     var playlistHits by remember { mutableStateOf<List<DesktopPlaylist>>(emptyList()) }
     var busy by remember { mutableStateOf(false) }
+
+    // Cache the artist→tracks grouping across keystrokes (it only changes when
+    // the library changes, not when the query changes).
+    val tracksByArtist = remember(tracks) { tracks.groupBy { it.displayArtist.lowercase() } }
 
     LaunchedEffect(query, selectedKeys, tracks, albums, playlists, enabled) {
         val q = query.trim()
@@ -111,36 +115,45 @@ fun DesktopExplore(
             val sid = track.sourceId ?: LocalLibraryScanner.SOURCE_LOCAL
             sid in effective
         }
-        val localMatches = withContext(Dispatchers.Default) {
-            indexed.filter { it.matchesQuery(q) }.take(SONG_HIT_LIMIT)
+
+        // Compute the full matching set once. The previous code re-ran
+        // matchesQuery() inside the album loop (O(albums × tracks)), which was
+        // the source of the lag; now it runs once per track.
+        val matching = withContext(Dispatchers.Default) {
+            indexed.filter { it.matchesQuery(q) }
         }
         if (query.trim() != q) return@LaunchedEffect
 
-        fun applyHits(songs: List<Track>) {
-            val unique = songs.distinctBy { it.id }.take(SONG_HIT_LIMIT)
+        val matchingAlbumTitles = matching.mapTo(HashSet()) { it.displayAlbum.lowercase() }
+
+        fun applyHits(songs: List<Song>) {
+            val unique = songs.distinctBy { it.songKey }.take(SONG_HIT_LIMIT)
             songHits = unique
+            val uniqueIds = unique.mapTo(HashSet()) { it.songKey }
+
             albumHits = albums.filter { album ->
                 album.title.matchesSearch(q) ||
                     album.artist.matchesSearch(q) ||
-                    album.tracks.any { row -> unique.any { it.id == row.id } } ||
-                    indexed.any {
-                        it.displayAlbum.equals(album.title, true) && it.matchesQuery(q)
-                    }
+                    album.tracks.any { row -> row.id in uniqueIds } ||
+                    album.title.lowercase() in matchingAlbumTitles
             }.take(ALBUM_HIT_LIMIT).ifEmpty { unique.albums().take(ALBUM_HIT_LIMIT) }
+
             artistHits = indexed
                 .map { it.displayArtist }
                 .distinct()
                 .filter { it.matchesSearch(q) }
                 .take(ARTIST_HIT_LIMIT)
-                .map { name ->
-                    val ofArtist = tracks.filter { it.displayArtist.equals(name, true) }
-                    ArtistHit(
+                .mapNotNull { name ->
+                    val ofArtist = tracksByArtist[name.lowercase()].orEmpty()
+                    if (ofArtist.isEmpty()) null
+                    else ArtistHit(
                         name = name,
-                        artworkUri = ofArtist.firstNotNullOfOrNull { it.artworkUri },
+                        artworkUri = ofArtist.firstNotNullOfOrNull { it.albumArtUri },
                         trackCount = ofArtist.size,
                         albumCount = ofArtist.map { it.displayAlbum }.distinct().size
                     )
                 }
+
             playlistHits = if (includeLocal) {
                 playlists.filter { it.name.matchesSearch(q) }.take(12)
             } else {
@@ -149,7 +162,7 @@ fun DesktopExplore(
             busy = false
         }
 
-        applyHits(localMatches)
+        applyHits(matching)
 
         val remoteMatches = if (remoteIds == null || remoteIds.isNotEmpty()) {
             runCatching {
@@ -159,7 +172,7 @@ fun DesktopExplore(
             emptyList()
         }
         if (query.trim() != q) return@LaunchedEffect
-        applyHits(localMatches + remoteMatches)
+        applyHits(matching + remoteMatches)
     }
 
     Column(Modifier.fillMaxSize()) {
@@ -348,12 +361,12 @@ fun DesktopExplore(
                     }
                     if (songHits.isNotEmpty()) {
                         item { ExploreSection("Songs") }
-                        itemsIndexed(songHits, key = { _, t -> t.id }) { index, track ->
+                        itemsIndexed(songHits, key = { _, t -> t.songKey }) { index, track ->
                             TrackRow(
                                 track = track.toRow(),
                                 onClick = { onPlaySongs(songHits, index) },
-                                liked = track.id in likedIds,
-                                onToggleLike = { onToggleLike(track.id) },
+                                liked = track.songKey in likedIds,
+                                onToggleLike = { onToggleLike(track.songKey) },
                                 contextItems = songMenu(track)
                             )
                         }

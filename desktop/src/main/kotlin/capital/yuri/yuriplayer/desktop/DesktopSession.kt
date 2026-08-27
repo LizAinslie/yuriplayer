@@ -5,18 +5,20 @@ import capital.yuri.yuriplayer.core.artist.ArtistInfoClient
 import capital.yuri.yuriplayer.core.artist.ArtistProfileStore
 import capital.yuri.yuriplayer.core.library.CoverPixels
 import capital.yuri.yuriplayer.core.library.LocalLibraryScanner
-import capital.yuri.yuriplayer.core.library.Track
+import capital.yuri.yuriplayer.core.library.indexKeys
+import capital.yuri.yuriplayer.core.library.rawSourceId
+import capital.yuri.yuriplayer.core.network.NetworkMonitor
 import capital.yuri.yuriplayer.core.os.OsMediaControls
 import capital.yuri.yuriplayer.core.platform.appDirectories
-import capital.yuri.yuriplayer.core.player.PlayerSession
 import capital.yuri.yuriplayer.core.player.PlaybackSnapshot
+import capital.yuri.yuriplayer.core.player.RepeatMode
 import capital.yuri.yuriplayer.core.source.JellyfinCatalog
 import capital.yuri.yuriplayer.core.source.LibrarySourceStore
 import capital.yuri.yuriplayer.core.source.RemoteAccount
 import capital.yuri.yuriplayer.core.source.SourceKind
 import capital.yuri.yuriplayer.core.source.SubsonicCatalog
-import capital.yuri.yuriplayer.desktop.os.createOsMediaControls
-import capital.yuri.yuriplayer.desktop.player.VlcjPlaybackEngine
+import capital.yuri.yuriplayer.data.Song
+import capital.yuri.yuriplayer.desktop.player.DesktopPlayerHost
 import io.ktor.client.HttpClient
 import io.ktor.client.engine.cio.CIO
 import kotlinx.coroutines.async
@@ -55,18 +57,19 @@ data class DesktopScanSource(
     val totalHint: Int? = null
 )
 
-class DesktopSession {
+class DesktopSession(
+    val player: DesktopPlayerHost,
+    private val media: OsMediaControls
+) {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Swing)
-    private val engine = VlcjPlaybackEngine()
-    val player = PlayerSession(engine)
-    private val media: OsMediaControls = createOsMediaControls()
     private val http = HttpClient(CIO)
+    val network: NetworkMonitor = DesktopNetworkMonitor()
 
-    private val _engineMessage = MutableStateFlow(engine.nativeError)
+    private val _engineMessage = MutableStateFlow<String?>(null)
     val engineMessage: StateFlow<String?> = _engineMessage.asStateFlow()
 
-    private val _tracks = MutableStateFlow<List<Track>>(emptyList())
-    val tracks: StateFlow<List<Track>> = _tracks.asStateFlow()
+    private val _tracks = MutableStateFlow<List<Song>>(emptyList())
+    val tracks: StateFlow<List<Song>> = _tracks.asStateFlow()
 
     private val _scanMessage = MutableStateFlow("Scanning…")
     val scanMessage: StateFlow<String> = _scanMessage.asStateFlow()
@@ -116,11 +119,6 @@ class DesktopSession {
     var onRaise: (() -> Unit)? = null
 
     init {
-        engine.addListener(object : capital.yuri.yuriplayer.core.player.PlaybackEngine.Listener {
-            override fun onError(message: String, recoverable: Boolean) {
-                _engineMessage.value = message
-            }
-        })
         media.attach(object : OsMediaControls.Callbacks {
             override fun onPlay() {
                 if (!player.isPlaying.value) player.togglePlay()
@@ -132,6 +130,8 @@ class DesktopSession {
             override fun onPrevious() = player.previous()
             override fun onSeek(positionMs: Long) = player.seekTo(positionMs)
             override fun onVolume(value: Float) = player.setVolume(value)
+            override fun onLoop(mode: RepeatMode) = player.setRepeat(mode)
+            override fun onShuffle(enabled: Boolean) = player.setShuffle(enabled)
             override fun onRaise() { onRaise?.invoke() }
             override fun onQuit() = release()
         })
@@ -146,12 +146,14 @@ class DesktopSession {
                     durationMs = _durationMs.value,
                     volume = player.volume.value
                 )
+                media.setLoop(player.repeat.value)
+                media.setShuffle(player.shuffle.value)
                 delay(250)
             }
         }
         scope.launch(Dispatchers.IO) {
             player.current.collect { track ->
-                _coverPixels.value = CoverPixels.argb(track?.artworkUri, track?.path)
+                _coverPixels.value = CoverPixels.argb(track?.albumArtUri, track?.path)
             }
         }
         scope.launch {
@@ -167,6 +169,8 @@ class DesktopSession {
             durationMs = player.durationMs(),
             volume = player.volume.value
         )
+        media.setLoop(player.repeat.value)
+        media.setShuffle(player.shuffle.value)
         startPersist()
     }
 
@@ -205,16 +209,16 @@ class DesktopSession {
         _durationMs.value = player.durationMs()
     }
 
-    private fun freshMedia(track: Track): Track {
+    private fun freshMedia(track: Song): Song {
         val remote = sources.remotes.value.firstOrNull { it.id == track.sourceId && it.enabled }
             ?: return track
         val raw = track.rawSourceId() ?: return track
         return when (remote.kind) {
             SourceKind.SUBSONIC -> track.copy(
-                uri = subsonic.streamUrl(remote, raw),
-                artworkUri = track.artworkUri ?: subsonic.coverUrl(remote, raw)
+                contentUri = subsonic.streamUrl(remote, raw),
+                albumArtUri = track.albumArtUri ?: subsonic.coverUrl(remote, raw)
             )
-            SourceKind.JELLYFIN -> track.copy(uri = jellyfin.streamUrl(remote, raw))
+            SourceKind.JELLYFIN -> track.copy(contentUri = jellyfin.streamUrl(remote, raw))
             SourceKind.LOCAL -> track
         }
     }
@@ -222,11 +226,11 @@ class DesktopSession {
     private fun resolveSnap(snap: PlaybackSnapshot): PlaybackSnapshot {
         val lib = _tracks.value
         if (lib.isEmpty()) return snap
-        val byKey = HashMap<String, Track>(lib.size * 2)
+        val byKey = HashMap<String, Song>(lib.size * 2)
         for (t in lib) {
             t.indexKeys().forEach { byKey.putIfAbsent(it, t) }
         }
-        fun resolve(list: List<Track>) = list.map { t ->
+        fun resolve(list: List<Song>) = list.map { t ->
             t.indexKeys().firstNotNullOfOrNull { byKey[it] } ?: t
         }
         return snap.copy(
@@ -252,16 +256,16 @@ class DesktopSession {
         playbackStore.save(player.snapshot())
     }
 
-    fun playTrack(track: Track) {
+    fun playTrack(track: Song) {
         val list = _tracks.value
-        val i = list.indexOfFirst { it.id == track.id }.coerceAtLeast(0)
+        val i = list.indexOfFirst { it.songKey == track.songKey }.coerceAtLeast(0)
         player.play(if (list.isNotEmpty()) list else listOf(track), i)
     }
 
-    fun replaceTracks(updated: List<Track>) {
+    fun replaceTracks(updated: List<Song>) {
         if (updated.isEmpty()) return
-        val byId = updated.associateBy { it.id }
-        _tracks.value = _tracks.value.map { byId[it.id] ?: it }
+        val byId = updated.associateBy { it.songKey }
+        _tracks.value = _tracks.value.map { byId[it.songKey] ?: it }
     }
 
     fun addFolder(path: String) {
@@ -392,16 +396,16 @@ class DesktopSession {
         requestScan(force = true, sourceId = account.id)
     }
 
-    private fun mergeTracks(incoming: List<Track>) {
+    private fun mergeTracks(incoming: List<Song>) {
         if (incoming.isEmpty()) return
         val before = _tracks.value.size
-        _tracks.value = (_tracks.value + incoming).distinctBy { it.id }
+        _tracks.value = (_tracks.value + incoming).distinctBy { it.songKey }
         PlaylistLog.index("merge +${incoming.size} $before→${_tracks.value.size}")
     }
 
-    fun ensureTracks(incoming: List<Track>) {
+    fun ensureTracks(incoming: List<Song>) {
         if (incoming.isEmpty()) return
-        PlaylistLog.index("ensure ${incoming.map { "${it.displayTitle}/${it.id}" }}")
+        PlaylistLog.index("ensure ${incoming.map { "${it.displayTitle}/${it.songKey}" }}")
         mergeTracks(incoming)
         persistIndex()
         playlists.remember(incoming)
@@ -412,25 +416,25 @@ class DesktopSession {
             pl.trackIds + pl.snapshots.flatMap { it.indexKeys() }
         }.toHashSet()
 
-    private fun replaceSourceTracks(sourceId: String, incoming: List<Track>) {
+    private fun replaceSourceTracks(sourceId: String, incoming: List<Song>) {
         val referenced = playlistRefs()
         val existing = _tracks.value
-        val incomingIds = incoming.map { it.id }.toHashSet()
+        val incomingIds = incoming.map { it.songKey }.toHashSet()
         val orphans = existing.filter { t ->
             (t.sourceId ?: LOCAL_SCAN_ID) == sourceId &&
-                t.id !in incomingIds &&
+                t.songKey !in incomingIds &&
                 t.indexKeys().any { it in referenced }
         }
         val rest = existing.filterNot { (it.sourceId ?: LOCAL_SCAN_ID) == sourceId }
         val dropped = existing.count {
             (it.sourceId ?: LOCAL_SCAN_ID) == sourceId &&
-                it.id !in incomingIds &&
+                it.songKey !in incomingIds &&
                 it.indexKeys().none { k -> k in referenced }
         }
         PlaylistLog.index(
             "replace source=$sourceId incoming=${incoming.size} orphans=${orphans.size} dropped=$dropped refs=${referenced.size}"
         )
-        _tracks.value = (rest + incoming + orphans).distinctBy { it.id }
+        _tracks.value = (rest + incoming + orphans).distinctBy { it.songKey }
         val snaps = playlists.playlists.value.flatMap { it.snapshots }
         if (snaps.isNotEmpty()) mergeTracks(snaps)
     }
@@ -537,7 +541,7 @@ class DesktopSession {
                 }
                 if (halted()) return@coroutineScope
 
-                val remoteTracks = mutableListOf<Track>()
+                val remoteTracks = mutableListOf<Song>()
                 for (remote in remotes) {
                     if (halted()) break
                     val got = scanOneSource(remote.id, remote.name, force, onlySourceId) {
@@ -556,7 +560,7 @@ class DesktopSession {
                     val leftovers = _tracks.value.filterNot {
                         (it.sourceId ?: LOCAL_SCAN_ID) in keepIds
                     }
-                    _tracks.value = (leftovers + localTracks + remoteTracks).distinctBy { it.id }
+                    _tracks.value = (leftovers + localTracks + remoteTracks).distinctBy { it.songKey }
                 } else if (onlySourceId != null && force) {
                     replaceSourceTracks(onlySourceId, localTracks + remoteTracks)
                 } else {
@@ -581,9 +585,6 @@ class DesktopSession {
         } finally {
             currentSourceId.set(null)
             sourceJob = null
-            if (!pauseAll.get()) {
-                // keep isScanning true only while a source child is in flight
-            }
             _isScanning.value = false
         }
     }
@@ -615,8 +616,8 @@ class DesktopSession {
         name: String,
         force: Boolean,
         onlySourceId: String?,
-        block: suspend () -> List<Track>
-    ): List<Track> {
+        block: suspend () -> List<Song>
+    ): List<Song> {
         if (!shouldScan(id, force, onlySourceId)) {
             val src = _scanSources.value.firstOrNull { it.id == id }
             if (src?.status == DesktopScanStatus.DONE) {
@@ -679,7 +680,7 @@ class DesktopSession {
         }
     }
 
-    private fun scanLocalLibrary(): List<Track> {
+    private fun scanLocalLibrary(): List<Song> {
         val defaultRoots = LocalLibraryScanner.defaultRoots()
         val extra = sources.extraFolders.value.map { File(it) }.filter { it.isDirectory }
         val roots = (defaultRoots + extra).distinctBy { it.absolutePath }
@@ -691,7 +692,7 @@ class DesktopSession {
         return if (roots.isEmpty()) emptyList() else LocalLibraryScanner.scan(roots)
     }
 
-    private suspend fun fetchRemote(remote: RemoteAccount, force: Boolean): List<Track> {
+    private suspend fun fetchRemote(remote: RemoteAccount, force: Boolean): List<Song> {
         val src = _scanSources.value.firstOrNull { it.id == remote.id }
         val known = src?.count ?: _tracks.value.count { it.sourceId == remote.id }
         val already = known > 0 && src?.status == DesktopScanStatus.DONE
@@ -735,10 +736,10 @@ class DesktopSession {
         remote: RemoteAccount,
         startFrom: Int,
         priorDelivered: Int
-    ): List<Track> {
+    ): List<Song> {
         var cursor = startFrom
         var delivered = priorDelivered
-        val collected = ArrayList<Track>()
+        val collected = ArrayList<Song>()
         val result = jellyfin.listTracks(authed, startFrom = startFrom) { page, next, total ->
             collected += page
             cursor = next
@@ -768,10 +769,10 @@ class DesktopSession {
         remote: RemoteAccount,
         startAlbumOffset: Int,
         priorDelivered: Int
-    ): List<Track> {
+    ): List<Song> {
         var cursor = startAlbumOffset
         var delivered = priorDelivered
-        val collected = ArrayList<Track>()
+        val collected = ArrayList<Song>()
         val result = subsonic.listTracks(remote, startAlbumOffset = startAlbumOffset) { page, next, _ ->
             collected += page
             cursor = next
@@ -856,12 +857,12 @@ class DesktopSession {
         return out
     }
 
-    suspend fun searchRemotes(query: String, sourceIds: Set<String>?): List<Track> {
+    suspend fun searchRemotes(query: String, sourceIds: Set<String>?): List<Song> {
         val q = query.trim()
         if (q.isEmpty()) return emptyList()
         val remotes = sources.remotes.value.filter { it.enabled }
             .filter { sourceIds == null || it.id in sourceIds }
-        val out = ArrayList<Track>()
+        val out = ArrayList<Song>()
         for (remote in remotes) {
             val result = when (remote.kind) {
                 SourceKind.JELLYFIN -> jellyfin.searchTracks(remote, q)

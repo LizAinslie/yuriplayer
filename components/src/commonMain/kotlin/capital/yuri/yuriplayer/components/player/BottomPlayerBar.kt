@@ -71,7 +71,6 @@ fun BottomPlayerBar(
     onToggleQueue: () -> Unit = {},
     songMenu: List<out MenuEntry> = emptyList()
 ) {
-    val onAccent = MaterialTheme.colorScheme.onPrimary
     val muted = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.55f)
     Surface(
         modifier = modifier.fillMaxWidth(),
@@ -172,7 +171,7 @@ fun BottomPlayerBar(
                             if (repeat == RepeatMode.ONE) Icons.Default.RepeatOne else Icons.Default.Repeat,
                             contentDescription = when (repeat) {
                                 RepeatMode.OFF -> "Repeat off"
-                                RepeatMode.ALL -> "Repeat all"
+                                RepeatMode.COLD -> "Repeat all"
                                 RepeatMode.ONE -> "Repeat one"
                             },
                             modifier = Modifier.size(18.dp),
@@ -190,18 +189,19 @@ fun BottomPlayerBar(
                         style = MaterialTheme.typography.labelSmall,
                         color = muted
                     )
-                    Slider(
-                        value = if (durationMs > 0) {
+                    Spacer(Modifier.width(10.dp))
+                    WavySeekBar(
+                        progress = if (durationMs > 0) {
                             (positionMs.toFloat() / durationMs).coerceIn(0f, 1f)
                         } else 0f,
-                        onValueChange = { if (durationMs > 0) onSeek((it * durationMs).toLong()) },
-                        modifier = Modifier.weight(1f).height(20.dp).padding(horizontal = 8.dp),
-                        colors = SliderDefaults.colors(
-                            thumbColor = MaterialTheme.colorScheme.onSurface,
-                            activeTrackColor = MaterialTheme.colorScheme.onSurface,
-                            inactiveTrackColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.22f)
-                        )
+                        playing = playing,
+                        onProgressChange = { if (durationMs > 0) onSeek((it * durationMs).toLong()) },
+                        onProgressChangeFinished = { if (durationMs > 0) onSeek((it * durationMs).toLong()) },
+                        activeColor = MaterialTheme.colorScheme.onSurface,
+                        inactiveColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.22f),
+                        modifier = Modifier.weight(1f)
                     )
+                    Spacer(Modifier.width(10.dp))
                     Text(
                         formatTime(durationMs),
                         style = MaterialTheme.typography.labelSmall,

@@ -1,7 +1,7 @@
 package capital.yuri.yuriplayer.desktop.os.win
 
-import capital.yuri.yuriplayer.core.library.Track
 import capital.yuri.yuriplayer.core.os.OsMediaControls
+import capital.yuri.yuriplayer.data.Song
 import com.sun.jna.platform.win32.User32
 import com.sun.jna.platform.win32.WinDef.HWND
 import com.sun.jna.platform.win32.WinUser
@@ -29,7 +29,7 @@ class WindowsSmtcControls : OsMediaControls {
         }
     }
 
-    override fun update(track: Track?, playing: Boolean, positionMs: Long, durationMs: Long, volume: Float) {
+    override fun update(track: Song?, playing: Boolean, positionMs: Long, durationMs: Long, volume: Float) {
         WindowsNowPlaying.track = track
         WindowsNowPlaying.playing = playing
         WindowsNowPlaying.positionMs = positionMs
@@ -85,7 +85,7 @@ class WindowsSmtcControls : OsMediaControls {
 }
 
 internal object WindowsNowPlaying {
-    @Volatile var track: Track? = null
+    @Volatile var track: Song? = null
     @Volatile var playing: Boolean = false
     @Volatile var positionMs: Long = 0
     @Volatile var durationMs: Long = 0

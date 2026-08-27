@@ -34,13 +34,4 @@ class AlbumCoverPrefs(context: Context) {
     }
 }
 
-/** One selectable cover for an album (local tags, folder, remote HTTP, etc.). */
-data class CoverCandidate(
-    val id: String,
-    val label: String,
-    /** Content/file/http URI used for decode + preference storage. */
-    val uri: String,
-    /** Optional local song used to pull embedded/folder art. */
-    val seedSong: Song? = null,
-    val isLocal: Boolean = false
-)
+// CoverCandidate moved to :core (commonMain), same package.

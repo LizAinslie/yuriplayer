@@ -993,8 +993,8 @@ class ExploreSearchService(
         fun trackIdentity(song: Song): String = TrackIdentity.of(song)
 
         fun isLocalFilesystemSong(song: Song): Boolean {
-            val p = song.path ?: return song.contentUri.scheme == "content" ||
-                song.contentUri.scheme == "file"
+            val p = song.path ?: return android.net.Uri.parse(song.contentUri).scheme == "content" ||
+                android.net.Uri.parse(song.contentUri).scheme == "file"
             if (p.startsWith("jellyfin:", ignoreCase = true)) return false
             if (p.startsWith("subsonic:", ignoreCase = true)) return false
             if (p.startsWith("navidrome:", ignoreCase = true)) return false

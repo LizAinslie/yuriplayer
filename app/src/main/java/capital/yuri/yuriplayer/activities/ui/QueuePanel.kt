@@ -248,9 +248,9 @@ private fun QueueTabContent(
     val autoScroll = rememberListDragAutoScroll(listState)
     var listTopInRoot by remember { mutableFloatStateOf(0f) }
 
-    val currentKey = nowPlaying?.let { it.path ?: it.contentUri.toString() }
+    val currentKey = nowPlaying?.let { it.path ?: it.contentUri }
     fun isCurrent(song: Song): Boolean {
-        val k = song.path ?: song.contentUri.toString()
+        val k = song.path ?: song.contentUri
         return currentKey != null && k == currentKey
     }
 
@@ -289,14 +289,14 @@ private fun QueueTabContent(
 
     Column(modifier = modifier) {
         AnimatedContent(
-            targetState = nowPlaying?.let { it.path ?: it.contentUri.toString() },
+            targetState = nowPlaying?.let { it.path ?: it.contentUri },
             transitionSpec = {
                 fadeIn(tween(220)) togetherWith fadeOut(tween(160))
             },
             label = "nowPlayingCard"
         ) { key ->
             val song = nowPlaying?.takeIf {
-                (it.path ?: it.contentUri.toString()) == key
+                (it.path ?: it.contentUri) == key
             }
             if (song != null) {
                 NowPlayingQueueCard(
@@ -479,7 +479,10 @@ private fun QueueTabContent(
 }
 
 @Composable
-private fun NowPlayingQueueCard(song: Song, radioLabel: String? = null) {
+private fun NowPlayingQueueCard(
+    song: Song,
+    radioLabel: String?
+) {
     Surface(
         modifier = Modifier
             .fillMaxWidth()
@@ -670,8 +673,7 @@ private fun SwipeableQueueRow(
                         },
                         onDragCancel = { swipeX = 0f },
                         onHorizontalDrag = { _, amount ->
-                            val max = swipeThreshold * 1.4f
-                            swipeX = (swipeX + amount).coerceIn(-max, max)
+                            swipeX = (swipeX + amount).coerceIn(-swipeThreshold * 2f, swipeThreshold * 2f)
                         }
                     )
                 }

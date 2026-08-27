@@ -41,8 +41,8 @@ object CoverCandidates {
                     )
                 }
                 // SAF / content:// — embedded art only available via seedSong
-                isContentPath || song.contentUri.scheme.equals("content", true) -> {
-                    val key = song.contentUri.toString()
+                isContentPath || android.net.Uri.parse(song.contentUri).scheme.equals("content", true) -> {
+                    val key = song.contentUri
                     add(
                         CoverCandidate(
                             id = "saf:$key",
