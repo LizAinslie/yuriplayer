@@ -62,13 +62,13 @@ val gitDirty: Provider<Boolean> = gitStatus.map { it != "unknown" && it.isNotBla
 android {
     namespace = "capital.yuri.yuriplayer"
     compileSdk {
-        version = release(37)
+        version = release(36)
     }
 
     defaultConfig {
         applicationId = "capital.yuri.yuriplayer"
         minSdk = 27
-        targetSdk = 37
+        targetSdk = 36
         versionCode = 1
         versionName = "0.1.0-local"
 

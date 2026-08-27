@@ -7,7 +7,7 @@ plugins {
 kotlin {
     android {
         namespace = "capital.yuri.yuriplayer.components"
-        compileSdk = 37
+        compileSdk = 36
         minSdk = 27
         compilerOptions {
             jvmTarget.set(org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_11)
