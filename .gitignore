@@ -21,3 +21,5 @@ keystore.properties
 *.jks
 *.keystore
 .aider*
+
+hs_err_pid*.log
