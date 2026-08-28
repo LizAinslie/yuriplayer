@@ -30,17 +30,18 @@ fun pointInTriangle(p: Offset, a: Offset, b: Offset, c: Offset): Boolean {
     return u >= -0.02f && v >= -0.02f && u + v <= 1.02f
 }
 
-fun predictionCone(origin: Offset, submenu: Rect): Triple<Offset, Offset, Offset>? {
+fun predictionCone(origin: Offset, submenu: Rect, openLeft: Boolean = false): Triple<Offset, Offset, Offset>? {
     if (!finite(origin) || submenu.isEmpty) return null
+    val edge = if (openLeft) submenu.right else submenu.left
     return Triple(
         origin,
-        Offset(submenu.left, submenu.top),
-        Offset(submenu.left, submenu.bottom)
+        Offset(edge, submenu.top),
+        Offset(edge, submenu.bottom)
     )
 }
 
-fun pointerInPredictionCone(current: Offset, origin: Offset, submenu: Rect): Boolean {
-    val cone = predictionCone(origin, submenu) ?: return false
+fun pointerInPredictionCone(current: Offset, origin: Offset, submenu: Rect, openLeft: Boolean = false): Boolean {
+    val cone = predictionCone(origin, submenu, openLeft) ?: return false
     return pointInTriangle(current, cone.first, cone.second, cone.third)
 }
 

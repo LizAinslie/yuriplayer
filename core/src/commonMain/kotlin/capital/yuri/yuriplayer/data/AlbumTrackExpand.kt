@@ -79,8 +79,7 @@ suspend fun fastExpandAlbumTracks(
             primaryArtistName(row.albumArtist ?: row.artist) ?: row.albumArtist ?: row.artist ?: ""
         )
         val ta = foldTagToken(primaryArtistName(row.artist) ?: row.artist ?: "")
-        aa.isEmpty() || aa == artistFolded || ta == artistFolded ||
-            aa.contains(artistFolded) || artistFolded.contains(aa)
+        aa.isEmpty() || aa == artistFolded || ta == artistFolded
     }.map { it.toSong() }
 
     val deduped = dedupeAlbumPageTracks(songs + extraSeedSongs)
@@ -183,9 +182,7 @@ suspend fun expandAlbumTracksByName(
         )
         val ta = foldTagToken(primaryArtistName(t.artist) ?: t.artist ?: "")
         if (aa.isEmpty() && ta.isEmpty()) return true
-        if (aa == artistFolded || ta == artistFolded) return true
-        return aa.contains(artistFolded) || artistFolded.contains(aa) ||
-            ta.contains(artistFolded) || artistFolded.contains(ta)
+        return aa == artistFolded || ta == artistFolded
     }
 
     fun albumOk(t: CatalogTrackEntity): Boolean {

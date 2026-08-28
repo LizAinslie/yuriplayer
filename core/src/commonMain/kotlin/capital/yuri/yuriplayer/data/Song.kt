@@ -353,14 +353,27 @@ object TrackIdentity {
     /**
      * Loose album-artist comparison: ignores `feat.` credits and ordering of
      * multiple (comma/slash/ampersand-separated) artists.
+     *
+     * Whole-name only — never substring — so "Rav" does NOT match
+     * "Ravenna Golden".
      */
     fun albumArtistsMatch(a: String?, b: String?): Boolean {
         if (a.isNullOrBlank() || b.isNullOrBlank()) return false
-        val fa = normalizeToken(a)
-        val fb = normalizeToken(b)
-        if (fa == fb) return true
-        return fa.contains(fb) || fb.contains(fa)
+        val na = primaryArtistNames(a)
+        val nb = primaryArtistNames(b)
+        return na.isNotEmpty() && nb.isNotEmpty() && na.intersect(nb).isNotEmpty()
     }
+
+    /**
+     * Folded set of PRIMARY artist names in a tag blob, splitting on the same
+     * separators [parseArtistCreditList] understands (comma/slash/ampersand,
+     * `feat.`), but without featured credits.
+     */
+    private fun primaryArtistNames(raw: String): Set<String> =
+        parseArtistCreditList(raw)
+            .filter { it.role == ArtistRole.PRIMARY }
+            .mapNotNull { foldTagToken(it.name).takeIf { n -> n.isNotEmpty() } }
+            .toSet()
 
     fun matches(a: Song, b: Song): Boolean =
         titlesNearlyMatch(a.title, b.title) &&

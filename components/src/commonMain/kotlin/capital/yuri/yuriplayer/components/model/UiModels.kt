@@ -3,7 +3,8 @@ package capital.yuri.yuriplayer.components.model
 import capital.yuri.yuriplayer.core.library.albumGroupKey
 import capital.yuri.yuriplayer.core.library.catalogKey
 import capital.yuri.yuriplayer.core.library.collapseAlbumTracks
-import capital.yuri.yuriplayer.core.library.matchesSearch
+import capital.yuri.yuriplayer.core.library.matchesArtistName
+import capital.yuri.yuriplayer.core.library.matchesCreditedArtist
 import capital.yuri.yuriplayer.data.Song
 
 data class CoverRef(
@@ -112,12 +113,12 @@ fun List<Song>.artistPage(
     recents: List<Song> = emptyList()
 ): ArtistPageModel {
     val allAlbums = albums()
-    val discography = allAlbums.filter { it.artist.matchesSearch(name) }
+    val discography = allAlbums.filter { it.artist.matchesArtistName(name) }
         .sortedByDescending { it.year ?: Int.MIN_VALUE }
     val appearsOn = allAlbums.filter { album ->
-        !album.artist.matchesSearch(name) &&
+        !album.artist.matchesArtistName(name) &&
             album.tracks.any { row ->
-                row.artist.matchesSearch(name)
+                row.artist.matchesCreditedArtist(name)
             }
     }.sortedByDescending { it.year ?: Int.MIN_VALUE }
 
@@ -125,7 +126,7 @@ fun List<Song>.artistPage(
     // same song collapse onto a single entry, so track counts / popular / liked
     // don't inflate for multi-source discographies (e.g. Lemon Demon).
     val ofArtist = filter {
-        it.displayArtist.matchesSearch(name) || (it.albumArtist?.matchesSearch(name) == true)
+        it.displayArtist.matchesArtistName(name) || (it.albumArtist?.matchesArtistName(name) == true)
     }.distinctBy { it.catalogKey() }
 
     val recentRank = recents.mapIndexed { i, t -> t.songKey to i }.toMap()

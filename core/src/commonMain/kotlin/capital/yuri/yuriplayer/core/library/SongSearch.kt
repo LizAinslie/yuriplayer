@@ -1,6 +1,10 @@
 package capital.yuri.yuriplayer.core.library
 
 import capital.yuri.yuriplayer.data.Song
+import capital.yuri.yuriplayer.data.TrackIdentity
+import capital.yuri.yuriplayer.data.foldTagToken
+import capital.yuri.yuriplayer.data.parseArtistCredits
+import capital.yuri.yuriplayer.data.primaryArtistName
 
 /**
  * Library search matching used by desktop Explore (and shared later).
@@ -23,6 +27,26 @@ fun String.matchesSearch(query: String): Boolean {
     if (tokens.isEmpty()) return false
     val hay = foldSearch(this)
     return tokens.all { hay.contains(it) }
+}
+
+/**
+ * Precise artist-identity comparison for artist pages: does the primary artist
+ * of [this] equal the primary artist of [name] (case/accent folded)? This is
+ * whole-name equality, NOT substring — "Rav" must not match "Ravenna Golden".
+ */
+fun String.matchesArtistName(name: String): Boolean =
+    TrackIdentity.albumArtistsMatch(this, name)
+
+/**
+ * Precise "appears on" check: is [name] credited (primary OR featured) on [this]
+ * tag blob? Whole-name only, so it never matches a shorter prefix like "Rav"
+ * against "Ravenna Golden".
+ */
+fun String.matchesCreditedArtist(name: String): Boolean {
+    if (isBlank()) return false
+    val target = foldTagToken(primaryArtistName(name) ?: name)
+    if (target.isEmpty()) return false
+    return parseArtistCredits(this).any { foldTagToken(it) == target }
 }
 
 fun searchTokens(query: String): List<String> =

@@ -106,15 +106,14 @@ fun findLocalAlbum(
     }
 
     val nameFolded = TrackIdentity.normalizeToken(name)
-    val artistFolded = TrackIdentity.normalizeToken(artist)
     val matches = library.songs().filter { song ->
         TrackIdentity.albumsMatch(song.album, name) ||
             TrackIdentity.normalizeToken(song.album) == nameFolded
     }.filter { song ->
-        if (artistFolded.isEmpty()) return@filter true
-        val aa = TrackIdentity.normalizeToken(song.effectiveAlbumArtist)
-        if (aa.isEmpty()) return@filter true
-        aa == artistFolded || aa.contains(artistFolded) || artistFolded.contains(aa)
+        if (artist.isNullOrBlank()) return@filter true
+        val aa = song.effectiveAlbumArtist
+        if (aa.isNullOrBlank()) return@filter true
+        TrackIdentity.albumArtistsMatch(aa, artist)
     }
     if (matches.isEmpty()) return null
     AlbumLog.i(name, "findLocalAlbum matches=${matches.size} key='$key'")
