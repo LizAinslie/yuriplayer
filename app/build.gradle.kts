@@ -11,6 +11,7 @@ plugins {
     alias(libs.plugins.kotlin.compose)
     alias(libs.plugins.kotlin.serialization)
     alias(libs.plugins.ksp)
+    alias(libs.plugins.androidx.room)
     alias(libs.plugins.aboutlibraries)
     alias(libs.plugins.aboutlibraries.android)
 }
@@ -61,13 +62,13 @@ val gitDirty: Provider<Boolean> = gitStatus.map { it != "unknown" && it.isNotBla
 android {
     namespace = "capital.yuri.yuriplayer"
     compileSdk {
-        version = release(37)
+        version = release(36)
     }
 
     defaultConfig {
         applicationId = "capital.yuri.yuriplayer"
         minSdk = 27
-        targetSdk = 37
+        targetSdk = 36
         versionCode = 1
         versionName = "0.1.0-local"
 
@@ -160,6 +161,10 @@ android {
     }
 }
 
+room {
+    schemaDirectory(layout.projectDirectory.dir("schemas").asFile.absolutePath)
+}
+
 aboutLibraries {
     library {
         duplicationMode.set(com.mikepenz.aboutlibraries.plugin.DuplicateMode.MERGE)
@@ -232,6 +237,8 @@ tasks.register<Exec>("buildFfmpeg") {
 }
 
 dependencies {
+    implementation(project(":core"))
+    implementation(project(":components"))
     implementation(platform(libs.androidx.compose.bom))
     implementation(libs.androidx.activity.compose)
     implementation(libs.androidx.appcompat)
@@ -266,6 +273,7 @@ dependencies {
 
     implementation(libs.androidx.room.runtime)
     implementation(libs.androidx.room.ktx)
+    implementation(libs.androidx.sqlite.bundled)
     ksp(libs.androidx.room.compiler)
 
     implementation(libs.jaudiotagger)

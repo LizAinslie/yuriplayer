@@ -1,6 +1,6 @@
 package capital.yuri.yuriplayer.data.source
 
-import android.util.Log
+import capital.yuri.yuriplayer.core.log.yuriLog
 import capital.yuri.yuriplayer.http.url
 import io.ktor.client.HttpClient
 import io.ktor.client.request.get
@@ -95,7 +95,7 @@ class DeezerArtistImageSource(
                 )
             }
         } catch (e: Exception) {
-            Log.w(TAG, "parse failed", e)
+            log.w(e) { "parse failed" }
             emptyList()
         }
     }
@@ -105,12 +105,12 @@ class DeezerArtistImageSource(
             val response = http.get(url)
             if (!response.status.isSuccess()) null else response.bodyAsText()
         } catch (e: Exception) {
-            Log.w(TAG, "GET $url", e)
+            log.w(e) { "GET $url" }
             null
         }
     }
 
     companion object {
-        private const val TAG = "DeezerArtistImg"
+        private val log = yuriLog("DeezerArtistImg")
     }
 }

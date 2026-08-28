@@ -1,0 +1,8 @@
+<component name="ArtifactManager">
+  <artifact type="jar" name="mediasession-jvm">
+    <output-path>$PROJECT_DIR$/mediasession/build/libs</output-path>
+    <root id="archive" name="mediasession-jvm.jar">
+      <element id="module-output" name="Yuri_Player.mediasession.jvmMain" />
+    </root>
+  </artifact>
+</component>

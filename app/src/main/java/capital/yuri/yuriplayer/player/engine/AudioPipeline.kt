@@ -1,16 +1,17 @@
 package capital.yuri.yuriplayer.player.engine
 
-import android.util.Log
+import capital.yuri.yuriplayer.core.log.yuriLog
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 
 /**
  * What we asked the server for vs what actually arrived.
- * Filter logcat: `adb logcat YuriAudio:I *:S`
+ * Filter logcat: `adb logcat YuriPlayer.YuriAudio:I *:S`
  */
 object AudioPipeline {
     const val TAG = "YuriAudio"
+    private val log = yuriLog(TAG)
 
     data class Snapshot(
         val title: String,
@@ -42,7 +43,7 @@ object AudioPipeline {
     private val _last = MutableStateFlow<Snapshot?>(null)
     val last: StateFlow<Snapshot?> = _last.asStateFlow()
 
-    fun i(msg: String) = Log.i(TAG, msg)
+    fun i(msg: String) = log.i { msg }
 
     fun notePlay(
         title: String,

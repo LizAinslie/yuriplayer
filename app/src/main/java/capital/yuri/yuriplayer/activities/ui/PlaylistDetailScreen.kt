@@ -171,7 +171,7 @@ fun PlaylistDetailScreen(
             themeService.themeFromUri(
                 context = context,
                 key = "playlist:${pl.id}:${uri}",
-                uri = uri,
+                uri = android.net.Uri.parse(uri),
                 base = base,
                 surface = ArtColorSurface.COVER,
                 loadBitmap = false

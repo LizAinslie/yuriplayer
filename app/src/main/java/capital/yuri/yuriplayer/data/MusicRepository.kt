@@ -6,7 +6,7 @@ import android.media.MediaMetadataRetriever
 import android.media.MediaScannerConnection
 import android.net.Uri
 import android.provider.MediaStore
-import android.util.Log
+import capital.yuri.yuriplayer.core.log.yuriLog
 import android.webkit.MimeTypeMap
 import androidx.documentfile.provider.DocumentFile
 import kotlinx.coroutines.Dispatchers
@@ -25,7 +25,7 @@ class MusicRepository(
 ) {
 
     companion object {
-        private const val TAG = "YuriPlayer.Library"
+        private val log = yuriLog("Library")
         private val AUDIO_EXTENSIONS = setOf(
             "flac", "mp3", "ogg", "opus", "m4a", "mp4", "aac",
             "wav", "aiff", "aif", "wma", "alac"
@@ -56,7 +56,7 @@ class MusicRepository(
 
         val byKey = LinkedHashMap<String, Song>()
         queryMediaStore().forEach { song ->
-            val key = song.path?.lowercase() ?: song.contentUri.toString()
+            val key = song.path?.lowercase() ?: song.contentUri
             byKey[key] = song
         }
         scanFilesystem().forEach { song ->
@@ -64,7 +64,7 @@ class MusicRepository(
             if (!byKey.containsKey(key)) byKey[key] = song
         }
         val withYear = byKey.values.count { it.year != null }
-        Log.i(TAG, "mediastore scan: ${byKey.size} tracks ($withYear with year)")
+        log.i { "mediastore scan: ${byKey.size} tracks ($withYear with year)" }
         return byKey.values.toList()
     }
 
@@ -75,7 +75,7 @@ class MusicRepository(
     private fun scanManualTrees(): List<Song> {
         val trees = settings.getManualTreeUris()
         if (trees.isEmpty()) {
-            Log.w(TAG, "manual scan: no SAF trees configured")
+            log.w { "manual scan: no SAF trees configured" }
             return emptyList()
         }
         val byKey = LinkedHashMap<String, Song>()
@@ -83,10 +83,10 @@ class MusicRepository(
             val treeUri = runCatching { Uri.parse(uriString) }.getOrNull() ?: continue
             val root = DocumentFile.fromTreeUri(context, treeUri)
             if (root == null || !root.isDirectory) {
-                Log.w(TAG, "manual scan: invalid tree $uriString")
+                log.w { "manual scan: invalid tree $uriString" }
                 continue
             }
-            Log.i(TAG, "manual scan tree $uriString")
+            log.i { "manual scan tree $uriString" }
             walkDocumentTree(root, depth = 0, maxDepth = 12) { doc, parent ->
                 val name = doc.name ?: return@walkDocumentTree
                 if (!isAudioFileName(name)) return@walkDocumentTree
@@ -102,8 +102,8 @@ class MusicRepository(
                     albumArtist = tags.albumArtist,
                     album = tags.album,
                     durationMs = tags.durationMs,
-                    contentUri = uri,
-                    albumArtUri = coverUri,
+                    contentUri = uri.toString(),
+                    albumArtUri = coverUri?.toString(),
                     trackNumber = tags.trackNumber,
                     discNumber = tags.discNumber,
                     year = tags.year,
@@ -113,7 +113,7 @@ class MusicRepository(
                 )
             }
         }
-        Log.i(TAG, "manual scan complete: ${byKey.size} tracks")
+        log.i { "manual scan complete: ${byKey.size} tracks" }
         return byKey.values.toList()
     }
 
@@ -142,7 +142,7 @@ class MusicRepository(
         val children = try {
             dir.listFiles()
         } catch (e: Exception) {
-            Log.w(TAG, "listFiles failed for ${dir.uri}: ${e.message}")
+            log.w { "listFiles failed for ${dir.uri}: ${e.message}" }
             return
         }
         for (child in children) {
@@ -170,13 +170,13 @@ class MusicRepository(
                     .filter { it.isFile && isAudioPath(it.absolutePath) }
                     .forEach { paths += it.absolutePath }
             } catch (e: Exception) {
-                Log.w(TAG, "walk failed ${root.absolutePath}", e)
+                log.w(e) { "walk failed ${root.absolutePath}" }
             }
         }
         if (paths.isEmpty()) return
 
         val unique = paths.distinct()
-        Log.i(TAG, "media-scan ${unique.size} paths")
+        log.i { "media-scan ${unique.size} paths" }
         suspendCancellableCoroutine { cont ->
             val left = AtomicInteger(unique.size)
             fun done() {
@@ -188,11 +188,11 @@ class MusicRepository(
                     unique.toTypedArray(),
                     null
                 ) { path, uri ->
-                    Log.d(TAG, "scanned $path → $uri")
+                    log.d { "scanned $path → $uri" }
                     done()
                 }
             } catch (e: Exception) {
-                Log.w(TAG, "media-scan failed", e)
+                log.w(e) { "media-scan failed" }
                 if (cont.isActive) cont.resume(Unit)
             }
         }
@@ -320,8 +320,8 @@ class MusicRepository(
                     albumArtist = albumArtist,
                     album = album,
                     durationMs = duration,
-                    contentUri = contentUri,
-                    albumArtUri = albumArtUri,
+                    contentUri = contentUri.toString(),
+                    albumArtUri = albumArtUri?.toString(),
                     trackNumber = track,
                     discNumber = disc,
                     year = year,
@@ -340,13 +340,13 @@ class MusicRepository(
         val seen = HashSet<String>()
         roots.forEach { root ->
             if (!root.exists()) {
-                Log.w(TAG, "scan root missing: ${root.absolutePath}")
+                log.w { "scan root missing: ${root.absolutePath}" }
                 return@forEach
             }
-            Log.i(TAG, "fs-scan ${root.absolutePath}")
+            log.i { "fs-scan ${root.absolutePath}" }
             try {
                 root.walkTopDown().maxDepth(8).onFail { f, e ->
-                    Log.w(TAG, "walk fail $f: ${e.message}")
+                    log.w { "walk fail $f: ${e.message}" }
                 }
                     .filter { it.isFile && isAudioPath(it.absolutePath) }
                     .forEach { file ->
@@ -361,7 +361,7 @@ class MusicRepository(
                             albumArtist = tags.albumArtist,
                             album = tags.album,
                             durationMs = tags.durationMs,
-                            contentUri = Uri.fromFile(file),
+                            contentUri = Uri.fromFile(file).toString(),
                             trackNumber = tags.trackNumber,
                             discNumber = tags.discNumber,
                             year = tags.year,
@@ -371,9 +371,9 @@ class MusicRepository(
                         )
                     }
             } catch (e: SecurityException) {
-                Log.e(TAG, "fs-scan permission denied for ${root.absolutePath}", e)
+                log.e(e) { "fs-scan permission denied for ${root.absolutePath}" }
             } catch (e: Exception) {
-                Log.e(TAG, "fs-scan failed ${root.absolutePath}", e)
+                log.e(e) { "fs-scan failed ${root.absolutePath}" }
             }
         }
         return songs
@@ -549,7 +549,7 @@ class MusicRepository(
                 pathHint = path
             )
         } catch (e: Exception) {
-            Log.d(TAG, "jaudio tags failed for $path: ${e.message}")
+            log.d { "jaudio tags failed for $path: ${e.message}" }
             FileTags()
         }
     }
@@ -573,9 +573,9 @@ class MusicRepository(
             if (disc != null) tag.setField(FieldKey.DISC_NO, disc.toString())
             if (!title.isNullOrBlank()) tag.setField(FieldKey.TITLE, title)
             audio.commit()
-            Log.i(TAG, "wrote inferred tags track=$track disc=$disc title='$title' for ${file.name}")
+            log.i { "wrote inferred tags track=$track disc=$disc title='$title' for ${file.name}" }
         } catch (e: Exception) {
-            Log.d(TAG, "inferred tag write skipped for $path: ${e.message}")
+            log.d { "inferred tag write skipped for $path: ${e.message}" }
         }
     }
 

@@ -21,8 +21,7 @@ fun MyStuffPinsTabWired(
     allSongs: List<Song>,
     onOpenPin: (StuffPin) -> Unit,
     onUnpin: (StuffPin) -> Unit,
-    onAddPinSlot: () -> Unit,
-    onPlayAll: () -> Unit
+    onAddPinSlot: () -> Unit
 ) = MyStuffPinsHost(
     pins = pins,
     library = library,
@@ -30,6 +29,5 @@ fun MyStuffPinsTabWired(
     allSongs = allSongs,
     onOpenPin = onOpenPin,
     onUnpin = onUnpin,
-    onAddPinSlot = onAddPinSlot,
-    onPlayAll = onPlayAll
+    onAddPinSlot = onAddPinSlot
 )

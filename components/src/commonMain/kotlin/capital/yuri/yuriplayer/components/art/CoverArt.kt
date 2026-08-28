@@ -1,0 +1,64 @@
+package capital.yuri.yuriplayer.components.art
+
+import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.aspectRatio
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Album
+import androidx.compose.material3.Icon
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.runtime.Composable
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.unit.dp
+import coil3.compose.AsyncImage
+
+/**
+ * Shared cover. The frame is always 1:1. Non-square art keeps its ratio and
+ * is centered in that square (contain), sitting on [surfaceVariant].
+ */
+@Composable
+fun CoverArt(
+    model: Any?,
+    modifier: Modifier = Modifier,
+    size: Dp? = null,
+    corner: Dp = 8.dp,
+    contentDescription: String? = null,
+    contentScale: ContentScale = ContentScale.Fit,
+    square: Boolean = true
+) {
+    val shape = RoundedCornerShape(corner)
+    val frame = when {
+        size != null -> modifier.size(size)
+        square -> modifier.aspectRatio(1f)
+        else -> modifier
+    }
+    Box(
+        modifier = frame
+            .clip(shape)
+            .background(MaterialTheme.colorScheme.surfaceVariant),
+        contentAlignment = Alignment.Center
+    ) {
+        if (model == null || (model is String && model.isBlank())) {
+            Icon(
+                Icons.Default.Album,
+                contentDescription = contentDescription,
+                tint = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.35f)
+            )
+        } else {
+            AsyncImage(
+                model = model,
+                contentDescription = contentDescription,
+                modifier = Modifier.fillMaxSize(),
+                contentScale = contentScale,
+                alignment = Alignment.Center
+            )
+        }
+    }
+}

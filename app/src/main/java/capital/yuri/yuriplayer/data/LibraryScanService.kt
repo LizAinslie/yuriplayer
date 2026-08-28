@@ -7,7 +7,7 @@ import android.content.pm.ServiceInfo
 import android.os.Build
 import android.os.IBinder
 import android.os.Process
-import android.util.Log
+import capital.yuri.yuriplayer.core.log.yuriLog
 import androidx.core.app.ServiceCompat
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -33,6 +33,8 @@ class LibraryScanService : Service() {
     private val scanDispatcher = Dispatchers.IO.limitedParallelism(1)
     private val scope = CoroutineScope(SupervisorJob() + scanDispatcher)
     private var work: Job? = null
+    @Volatile private var queuedForce = false
+    @Volatile private var queuedSourceId: Long? = null
 
     override fun onBind(intent: Intent?): IBinder? = null
 
@@ -43,14 +45,14 @@ class LibraryScanService : Service() {
 
         when (action) {
             ACTION_STOP -> {
-                Log.i(TAG, "stop requested sourceId=$sourceId")
+                log.i { "stop requested sourceId=$sourceId" }
                 if (sourceId != null) explore.requestStopSource(sourceId)
                 else explore.requestStopAll()
                 // Let the worker finish cleanly via cooperative cancel flags
                 return START_NOT_STICKY
             }
             ACTION_PAUSE -> {
-                Log.i(TAG, "pause requested sourceId=$sourceId")
+                log.i { "pause requested sourceId=$sourceId" }
                 if (sourceId != null) explore.requestPauseSource(sourceId)
                 else explore.requestPauseAll()
                 return START_NOT_STICKY
@@ -58,9 +60,17 @@ class LibraryScanService : Service() {
         }
 
         // Already scanning — do not cancel unless this is an explicit full force-rescan.
+        // A newly added source always queues so its first index still runs.
         if (action == ACTION_REMOTE && work?.isActive == true) {
-            if (!force || sourceId != null) {
-                Log.i(TAG, "remote scan already active — ignore duplicate start")
+            if (sourceId != null) {
+                queuedForce = true
+                queuedSourceId = sourceId
+                log.i { "queue initial index sourceId=$sourceId" }
+                startAsForeground("Syncing libraries", explore.scanProgress.value ?: "Working…")
+                return START_NOT_STICKY
+            }
+            if (!force) {
+                log.i { "remote scan already active — ignore duplicate start" }
                 startAsForeground("Syncing libraries", explore.scanProgress.value ?: "Working…")
                 return START_NOT_STICKY
             }
@@ -95,11 +105,20 @@ class LibraryScanService : Service() {
                     }
                 }
             } catch (e: Exception) {
-                Log.e(TAG, "scan service failed", e)
+                log.e(e) { "scan service failed" }
                 notifier.finish("Scan failed", e.message ?: "Unknown error")
             } finally {
-                stopForegroundCompat()
-                stopSelf(startId)
+                val nextId = queuedSourceId
+                val nextForce = queuedForce
+                queuedSourceId = null
+                queuedForce = false
+                if (nextId != null) {
+                    log.i { "start queued index sourceId=$nextId" }
+                    startRemote(applicationContext, nextForce, nextId)
+                } else {
+                    stopForegroundCompat()
+                    stopSelf(startId)
+                }
             }
         }
         return START_NOT_STICKY
@@ -136,7 +155,7 @@ class LibraryScanService : Service() {
     }
 
     companion object {
-        private const val TAG = "LibraryScanService"
+        private val log = yuriLog("LibraryScanService")
         const val ACTION_REMOTE = "capital.yuri.yuriplayer.action.SCAN_REMOTE"
         const val ACTION_LOCAL = "capital.yuri.yuriplayer.action.SCAN_LOCAL"
         const val ACTION_STOP = "capital.yuri.yuriplayer.action.SCAN_STOP"

@@ -2,7 +2,7 @@ package capital.yuri.yuriplayer.player
 
 import android.app.PendingIntent
 import android.content.Context
-import android.util.Log
+import capital.yuri.yuriplayer.core.log.yuriLog
 import capital.yuri.yuriplayer.data.LibrarySettings
 import capital.yuri.yuriplayer.data.Song
 
@@ -51,7 +51,7 @@ internal class MusicServiceEngineHooks(
     fun playWindow(song: Song, next: Song?, startPositionMs: Long, autoPlay: Boolean) {
         active = true
         host.playWindow(song, next, startPositionMs, autoPlay)
-        Log.i(TAG, "window via ${host.engineId} '${song.displayTitle}' next=${next?.displayTitle}")
+        log.i { "window via ${host.engineId} '${song.displayTitle}' next=${next?.displayTitle}" }
     }
 
     fun setNext(song: Song?) {
@@ -115,6 +115,6 @@ internal class MusicServiceEngineHooks(
     }
 
     companion object {
-        private const val TAG = "EngineHooks"
+        private val log = yuriLog("EngineHooks")
     }
 }

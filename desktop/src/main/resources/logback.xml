@@ -1,0 +1,31 @@
+<configuration>
+    <property name="LOG_DIR" value="${LOG_DIR:-${user.home}/.cache/yuriplayer}"/>
+
+    <appender name="CONSOLE" class="ch.qos.logback.core.ConsoleAppender">
+        <encoder>
+            <pattern>%d{HH:mm:ss.SSS} %-5level %logger{28} — %msg%n</pattern>
+        </encoder>
+    </appender>
+
+    <appender name="FILE" class="ch.qos.logback.core.rolling.RollingFileAppender">
+        <file>${LOG_DIR}/yuriplayer.log</file>
+        <rollingPolicy class="ch.qos.logback.core.rolling.SizeAndTimeBasedRollingPolicy">
+            <fileNamePattern>${LOG_DIR}/yuriplayer.%d{yyyy-MM-dd}.%i.log</fileNamePattern>
+            <maxFileSize>8MB</maxFileSize>
+            <maxHistory>7</maxHistory>
+            <totalSizeCap>40MB</totalSizeCap>
+        </rollingPolicy>
+        <encoder>
+            <pattern>%d{yyyy-MM-dd HH:mm:ss.SSS} %-5level %logger — %msg%n</pattern>
+        </encoder>
+    </appender>
+
+    <logger name="YuriPlayer" level="DEBUG"/>
+    <logger name="uk.co.caprica.vlcj" level="WARN"/>
+    <logger name="org.freedesktop.dbus" level="WARN"/>
+
+    <root level="INFO">
+        <appender-ref ref="CONSOLE"/>
+        <appender-ref ref="FILE"/>
+    </root>
+</configuration>

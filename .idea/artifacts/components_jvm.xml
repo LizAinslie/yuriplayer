@@ -1,0 +1,8 @@
+<component name="ArtifactManager">
+  <artifact type="jar" name="components-jvm">
+    <output-path>$PROJECT_DIR$/components/build/libs</output-path>
+    <root id="archive" name="components-jvm.jar">
+      <element id="module-output" name="Yuri_Player.components.jvmMain" />
+    </root>
+  </artifact>
+</component>

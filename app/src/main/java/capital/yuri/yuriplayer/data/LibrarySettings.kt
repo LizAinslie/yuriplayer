@@ -2,6 +2,8 @@ package capital.yuri.yuriplayer.data
 
 import android.content.Context
 import android.os.Environment
+import capital.yuri.yuriplayer.components.theme.AccentCatalog
+import capital.yuri.yuriplayer.components.theme.ThemeMode
 import capital.yuri.yuriplayer.data.theme.ArtColorSurface
 import capital.yuri.yuriplayer.data.theme.ArtColorVariant
 import capital.yuri.yuriplayer.player.engine.PlaybackEngineId
@@ -38,6 +40,14 @@ class LibrarySettings(context: Context) {
     private val _colorPrefsRevision = MutableStateFlow(0L)
     /** Ticks when cover/banner color variants change so themed pages re-resolve once. */
     val colorPrefsRevision: StateFlow<Long> = _colorPrefsRevision.asStateFlow()
+
+    fun useSystemColors(): Boolean = prefs.getBoolean(KEY_SYSTEM_COLORS, true)
+
+    fun setUseSystemColors(enabled: Boolean) {
+        if (enabled == useSystemColors()) return
+        prefs.edit().putBoolean(KEY_SYSTEM_COLORS, enabled).apply()
+        bumpColorPrefs()
+    }
 
     // ── local scan mode ───────────────────────────────────────────────────
 
@@ -241,6 +251,49 @@ class LibrarySettings(context: Context) {
             ArtColorSurface.BANNER -> getBannerColorVariant()
         }
 
+    fun getThemeMode(): ThemeMode = ThemeMode.fromId(prefs.getString(KEY_THEME_MODE, ThemeMode.DARK.id))
+
+    fun setThemeMode(mode: ThemeMode) {
+        if (mode == getThemeMode()) return
+        prefs.edit().putString(KEY_THEME_MODE, mode.id).apply()
+        bumpColorPrefs()
+    }
+
+    fun getAccentId(): String = prefs.getString(KEY_ACCENT, AccentCatalog.yuri.id) ?: AccentCatalog.yuri.id
+
+    fun setAccentId(id: String) {
+        val next = AccentCatalog.byId(id).id
+        if (next == getAccentId()) return
+        prefs.edit().putString(KEY_ACCENT, next).apply()
+        bumpColorPrefs()
+    }
+
+    fun enabledHomeRows(): Set<HomeRowId> {
+        val raw = prefs.getString(KEY_HOME_ROWS, null)
+        if (raw.isNullOrBlank()) return HomeRowId.entries.toSet()
+        val ids = raw.split(',').map { it.trim() }.toSet()
+        val parsed = HomeRowId.entries.filter { it.id in ids }.toSet()
+        return parsed.ifEmpty { HomeRowId.entries.toSet() }
+    }
+
+    fun setHomeRowEnabled(id: HomeRowId, enabled: Boolean) {
+        val next = enabledHomeRows().toMutableSet()
+        if (enabled) next.add(id) else next.remove(id)
+        prefs.edit().putString(KEY_HOME_ROWS, next.joinToString(",") { it.id }).apply()
+        bumpColorPrefs()
+    }
+
+    /**
+     * Explore library filter keys. Empty means every library.
+     * `local` = on this device; `i:{id}` = a [SourceInstanceEntity] id.
+     */
+    fun getExploreLibraryKeys(): Set<String> =
+        prefs.getStringSet(KEY_EXPLORE_LIBS, emptySet())?.toSet().orEmpty()
+
+    fun setExploreLibraryKeys(keys: Set<String>) {
+        prefs.edit().putStringSet(KEY_EXPLORE_LIBS, keys).apply()
+    }
+
     private fun bumpColorPrefs() {
         _colorPrefsRevision.value = System.currentTimeMillis()
     }
@@ -284,6 +337,11 @@ class LibrarySettings(context: Context) {
         private const val KEY_STREAM_QUALITY = "stream_quality"
         private const val KEY_COVER_COLOR_VARIANT = "cover_color_variant"
         private const val KEY_BANNER_COLOR_VARIANT = "banner_color_variant"
+        private const val KEY_SYSTEM_COLORS = "system_colors"
+        private const val KEY_THEME_MODE = "theme_mode"
+        private const val KEY_ACCENT = "accent_id"
+        private const val KEY_HOME_ROWS = "home_rows"
+        private const val KEY_EXPLORE_LIBS = "explore_library_keys"
 
         val DEFAULT_ROOTS = listOf(
             "Music",

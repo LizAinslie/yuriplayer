@@ -4,7 +4,7 @@ import android.content.Context
 import android.net.Uri
 import android.os.Handler
 import android.os.HandlerThread
-import android.util.Log
+import capital.yuri.yuriplayer.core.log.yuriLog
 import java.io.File
 import java.io.FileOutputStream
 import java.net.HttpURLConnection
@@ -91,7 +91,7 @@ class StreamPrefetcher private constructor(cacheDir: File) {
                 return
             }
             tmp.delete()
-            Log.i(TAG, "prefetch start '${item.title}'")
+            log.i { "prefetch start '${item.title}'" }
             conn = (URL(item.uri.toString()).openConnection() as HttpURLConnection).apply {
                 instanceFollowRedirects = true
                 connectTimeout = 15_000
@@ -101,13 +101,13 @@ class StreamPrefetcher private constructor(cacheDir: File) {
             }
             val code = conn.responseCode
             if (code !in 200..299) {
-                Log.w(TAG, "prefetch HTTP $code '${item.title}'")
+                log.w { "prefetch HTTP $code '${item.title}'" }
                 return
             }
             val total = conn.contentLengthLong.takeIf { it > 0 } ?: -1L
             AudioPipeline.noteHttp(conn.contentType, total.takeIf { it > 0 }, item.title)
             if (total > MAX_BYTES) {
-                Log.w(TAG, "prefetch skip '${item.title}' too large $total")
+                log.w { "prefetch skip '${item.title}' too large $total" }
                 return
             }
             FileOutputStream(tmp).use { out ->
@@ -120,7 +120,7 @@ class StreamPrefetcher private constructor(cacheDir: File) {
                         out.write(buf, 0, n)
                         written += n
                         if (written > MAX_BYTES) {
-                            Log.w(TAG, "prefetch abort '${item.title}' over cap")
+                            log.w { "prefetch abort '${item.title}' over cap" }
                             tmp.delete()
                             return
                         }
@@ -141,9 +141,9 @@ class StreamPrefetcher private constructor(cacheDir: File) {
                 tmp.delete()
             }
             synchronized(ready) { ready[item.mediaId] = dest }
-            Log.i(TAG, "prefetch ready '${item.title}' ${dest.length()}B of $total")
+            log.i { "prefetch ready '${item.title}' ${dest.length()}B of $total" }
         } catch (e: Exception) {
-            Log.w(TAG, "prefetch failed '${item.title}': ${e.message}")
+            log.w { "prefetch failed '${item.title}': ${e.message}" }
             tmp.delete()
         } finally {
             runCatching { conn?.disconnect() }
@@ -162,7 +162,7 @@ class StreamPrefetcher private constructor(cacheDir: File) {
     }
 
     companion object {
-        private const val TAG = "StreamPrefetch"
+        private val log = yuriLog("StreamPrefetch")
         private const val MIN_BYTES = 256 * 1024L
         private const val MAX_BYTES = 256L * 1024L * 1024L
         private const val MAX_FILES = 8

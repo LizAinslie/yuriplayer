@@ -54,7 +54,7 @@ object PathTemplate {
     fun expand(pattern: String, song: Song, extOverride: String? = null): String {
         val ext = extOverride
             ?: song.path?.substringAfterLast('.', "")?.lowercase(Locale.US)
-            ?: song.contentUri.lastPathSegment
+            ?: android.net.Uri.parse(song.contentUri).lastPathSegment
                 ?.substringAfterLast('.', "")
                 ?.substringAfterLast('%')
                 ?.lowercase(Locale.US)

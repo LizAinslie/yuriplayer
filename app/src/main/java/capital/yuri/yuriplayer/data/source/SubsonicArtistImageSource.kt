@@ -1,6 +1,6 @@
 package capital.yuri.yuriplayer.data.source
 
-import android.util.Log
+import capital.yuri.yuriplayer.core.log.yuriLog
 import capital.yuri.yuriplayer.data.db.SourceInstanceEntity
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -67,12 +67,12 @@ class SubsonicArtistImageSource(
             password = secret
         )
         return client.ping(base).getOrElse {
-            Log.w(TAG, "ping failed for ${server.name}: ${it.message}")
+            log.w { "ping failed for ${server.name}: ${it.message}" }
             null
         }
     }
 
     companion object {
-        private const val TAG = "SubsonicArtistImg"
+        private val log = yuriLog("SubsonicArtistImg")
     }
 }

@@ -1,6 +1,6 @@
 package capital.yuri.yuriplayer.player
 
-import android.util.Log
+import capital.yuri.yuriplayer.core.log.yuriLog
 import capital.yuri.yuriplayer.data.AlbumItem
 import capital.yuri.yuriplayer.data.LibraryIndex
 import capital.yuri.yuriplayer.data.Song
@@ -14,8 +14,7 @@ import kotlin.random.Random
  */
 object ArtistRadio {
 
-    private const val TAG = "YuriPlayer.Radio"
-
+    private val log = yuriLog("Radio")
     data class Pick(
         val album: AlbumItem,
         val source: ColdSource
@@ -29,7 +28,7 @@ object ArtistRadio {
     ): Pick? {
         val artistName = resolveArtistName(seedSong, finishedSource)
         if (artistName == null) {
-            Log.i(TAG, "no artist from seed=${seedSong?.displayTitle} source=$finishedSource")
+            log.i { "no artist from seed=${seedSong?.displayTitle} source=$finishedSource" }
             return null
         }
         val artistNorm = artistKey(artistName) ?: return null
@@ -42,21 +41,15 @@ object ArtistRadio {
         }
 
         if (candidates.isEmpty()) {
-            Log.i(
-                TAG,
-                "no candidates for artist='$artistName' (norm=$artistNorm) " +
-                    "exclude=$excludeAlbumKeys libraryAlbums=${library.albums(taggedOnly = true).size}"
-            )
+            log.i { "no candidates for artist='$artistName' (norm=$artistNorm) " +
+                    "exclude=$excludeAlbumKeys libraryAlbums=${library.albums(taggedOnly = true).size}" }
             return null
         }
 
         val pick = candidates[Random.nextInt(candidates.size)]
         val key = albumKey(pick.name, pick.artist)
-        Log.i(
-            TAG,
-            "picked '${pick.displayName}' by ${pick.displayArtist} " +
-                "(${pick.trackCount} tracks) from ${candidates.size} candidates"
-        )
+        log.i { "picked '${pick.displayName}' by ${pick.displayArtist} " +
+                "(${pick.trackCount} tracks) from ${candidates.size} candidates" }
         return Pick(
             album = pick,
             source = ColdSource(

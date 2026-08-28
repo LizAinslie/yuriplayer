@@ -2,7 +2,7 @@ package capital.yuri.yuriplayer.data.organize
 
 import android.content.Context
 import android.net.Uri
-import android.util.Log
+import capital.yuri.yuriplayer.core.log.yuriLog
 import androidx.documentfile.provider.DocumentFile
 import capital.yuri.yuriplayer.data.LibraryIndex
 import capital.yuri.yuriplayer.data.Song
@@ -64,7 +64,7 @@ class LibraryOrganizeService(
             if (!songBelongsToRoot(song, rootKey)) continue
             val rel = PathTemplate.relativePathFor(layout, song)
             val fromLabel = song.path?.substringAfterLast('/')
-                ?: song.contentUri.lastPathSegment
+                ?: Uri.parse(song.contentUri).lastPathSegment
                 ?: song.displayTitle
             val currentRel = relativeUnderRoot(song, rootKey)
             val already = currentRel != null && currentRel.equals(rel, ignoreCase = true)
@@ -122,7 +122,7 @@ class LibraryOrganizeService(
             _status.value = msg
             ApplyResult(moved, skipped, failed, msg)
         } catch (e: Exception) {
-            Log.e(TAG, "apply failed", e)
+            log.e(e) { "apply failed" }
             _status.value = e.message
             ApplyResult(0, 0, 1, e.message ?: "Organize failed")
         } finally {
@@ -131,7 +131,7 @@ class LibraryOrganizeService(
     }
 
     private fun songBelongsToRoot(song: Song, rootKey: String): Boolean {
-        val uri = song.contentUri.toString()
+        val uri = song.contentUri
         if (uri.startsWith(rootKey) || rootKey in uri) return true
         val path = song.path.orEmpty()
         // Document path form: /tree/primary:Music/document/...
@@ -143,7 +143,7 @@ class LibraryOrganizeService(
     }
 
     private fun relativeUnderRoot(song: Song, rootKey: String): String? {
-        val decoded = Uri.decode(song.contentUri.toString())
+        val decoded = Uri.decode(song.contentUri)
         val marker = "/document/"
         val idx = decoded.indexOf(marker)
         if (idx < 0) return null
@@ -163,7 +163,7 @@ class LibraryOrganizeService(
         collision: OrganizeLayout.CollisionPolicy
     ): Boolean {
         return try {
-            val src = DocumentFile.fromSingleUri(context, song.contentUri) ?: return false
+            val src = DocumentFile.fromSingleUri(context, Uri.parse(song.contentUri)) ?: return false
             if (!src.isFile) return false
 
             val segments = relative.split('/').filter { it.isNotEmpty() }
@@ -177,7 +177,7 @@ class LibraryOrganizeService(
                 dir = when {
                     existing != null && existing.isDirectory -> existing
                     existing != null && existing.isFile -> {
-                        Log.w(TAG, "path collision with file $seg")
+                        log.w { "path collision with file $seg" }
                         return false
                     }
                     else -> dir.createDirectory(seg) ?: return false
@@ -220,7 +220,7 @@ class LibraryOrganizeService(
             src.delete()
             true
         } catch (e: Exception) {
-            Log.w(TAG, "move failed ${song.songKey}: ${e.message}")
+            log.w { "move failed ${song.songKey}: ${e.message}" }
             false
         }
     }
@@ -238,6 +238,6 @@ class LibraryOrganizeService(
     }
 
     companion object {
-        private const val TAG = "LibraryOrganize"
+        private val log = yuriLog("LibraryOrganize")
     }
 }

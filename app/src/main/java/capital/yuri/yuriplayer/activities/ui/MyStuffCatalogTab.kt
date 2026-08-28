@@ -41,7 +41,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -65,7 +64,6 @@ import capital.yuri.yuriplayer.ui.AlbumRowSkeleton
 import capital.yuri.yuriplayer.ui.ArtistRowSkeleton
 import capital.yuri.yuriplayer.ui.LoadingEstimates
 import capital.yuri.yuriplayer.ui.SongListSkeleton
-import capital.yuri.yuriplayer.ui.TestTags
 import capital.yuri.yuriplayer.ui.formatTrackCount
 import coil3.compose.AsyncImage
 import coil3.request.ImageRequest
@@ -149,7 +147,9 @@ fun MyStuffCatalogTab(
         withContext(Dispatchers.IO) { remotePlaylists.syncOwnedToMyStuff() }
     }
 
-    BackHandler(enabled = page !is CatalogPage.Hub) { page = CatalogPage.Hub }
+    BackHandler(enabled = LocalTabBackEnabled.current && page !is CatalogPage.Hub) {
+        page = CatalogPage.Hub
+    }
 
     when (val p = page) {
         CatalogPage.Hub -> CatalogHub(
@@ -300,18 +300,8 @@ private fun CatalogHub(
 ) {
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
-        contentPadding = PaddingValues(bottom = 24.dp)
+        contentPadding = PaddingValues(top = 8.dp, bottom = 24.dp)
     ) {
-        item {
-            Text(
-                "Catalog",
-                style = MaterialTheme.typography.headlineMedium,
-                fontWeight = FontWeight.Bold,
-                modifier = Modifier
-                    .padding(horizontal = 16.dp, vertical = 12.dp)
-                    .testTag(TestTags.CATALOG_TITLE)
-            )
-        }
         item {
             LibraryChipsRow(
                 sources = sources,

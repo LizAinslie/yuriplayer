@@ -4,7 +4,7 @@ import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.net.Uri
-import android.util.Log
+import capital.yuri.yuriplayer.core.log.yuriLog
 import androidx.compose.material3.ColorScheme
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.luminance
@@ -191,7 +191,7 @@ class ThemeService(
             } ?: return null
             scaleTo(decoded, maxSize)
         } catch (e: Exception) {
-            Log.w(TAG, "uri decode failed $uri", e)
+            log.w(e) { "uri decode failed $uri" }
             null
         }
     }
@@ -218,7 +218,7 @@ class ThemeService(
     }
 
     companion object {
-        private const val TAG = "YuriPlayer.Theme"
+        private val log = yuriLog("Theme")
         private const val DISK_PREFS = "theme_color_cache"
         private const val DISK_ORDER = "__order"
         private const val MAX_DISK = 256

@@ -8,13 +8,18 @@
 /.idea/navEditor.xml
 /.idea/assetWizardSettings.xml
 .DS_Store
+build/
 /build
 /captures
 .externalNativeBuild
 .cxx
 local.properties
+.kotlin/
 
 # Signing (never commit secrets or keystores)
 keystore.properties
 *.jks
 *.keystore
+.aider*
+
+hs_err_pid*.log

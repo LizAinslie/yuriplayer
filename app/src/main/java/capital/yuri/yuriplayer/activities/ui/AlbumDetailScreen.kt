@@ -52,10 +52,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.clipToBounds
-import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.geometry.Size
-import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
@@ -76,6 +73,7 @@ import capital.yuri.yuriplayer.data.MetadataEnrichmentService
 import capital.yuri.yuriplayer.data.MyStuffPinStore
 import capital.yuri.yuriplayer.data.Song
 import capital.yuri.yuriplayer.data.StuffPinKind
+import capital.yuri.yuriplayer.components.theme.AlbumArtBackdrop
 import capital.yuri.yuriplayer.data.albumKey
 import capital.yuri.yuriplayer.data.albumTrackOrder
 import capital.yuri.yuriplayer.data.AlbumLog
@@ -94,7 +92,6 @@ import kotlin.math.sqrt
 
 private val ExpandedHeaderBody = 420.dp
 private val CollapsedBarHeight = 56.dp
-private val GradientFadeLength = 220.dp
 
 @Composable
 private fun CircularPlayButton(
@@ -187,10 +184,7 @@ fun AlbumDetailScreen(
         mutableIntStateOf(album.trackCount.coerceAtLeast(album.songs.size))
     }
     LaunchedEffect(stableKey) {
-        AlbumLog.i(
-            album.name,
-            "PAGE open stableKey='$stableKey' albumKey='$albumKeyStr' seed=${album.songs.size} artist='${album.artist}'"
-        )
+        AlbumLog.i(album.name, "PAGE open stableKey='$stableKey' albumKey='$albumKeyStr' seed=${album.songs.size} artist='${album.artist}'")
         var current = album
         fun publish(next: AlbumItem, stage: String) {
             val union = dedupeAlbumPageTracks(current.songs + next.songs + album.songs)
@@ -326,49 +320,107 @@ fun AlbumDetailScreen(
         else onPlayAlbum(liveAlbum.songs, 0)
     }
 
-    val fadePx = with(density) { GradientFadeLength.toPx() }
-
     ThemedStatusBar(color = albumBg, enabled = true)
 
     MaterialTheme(colorScheme = scheme) {
-        BoxWithConstraints(
+        AlbumArtBackdrop(
+            wash = albumBg,
+            accent = themeColors.accent,
             modifier = Modifier
                 .fillMaxSize()
                 .nestedScroll(nestedScroll)
                 .background(defaultBg)
-                .drawBehind {
-                    val headerEnd = headerBodyH.toPx()
-                    val solidEnd = headerEnd + with(density) { 48.dp.toPx() }
-                    val fadeEnd = solidEnd + fadePx
-
-                    drawRect(
-                        color = albumBg,
-                        topLeft = Offset.Zero,
-                        size = Size(size.width, solidEnd.coerceAtMost(size.height))
-                    )
-
-                    if (fadeEnd > solidEnd) {
-                        drawRect(
-                            brush = Brush.verticalGradient(
-                                colors = listOf(
-                                    albumBg,
-                                    albumBg.copy(alpha = 0.85f),
-                                    albumBg.copy(alpha = 0.45f),
-                                    albumBg.copy(alpha = 0.15f),
-                                    Color.Transparent
-                                ),
-                                startY = solidEnd,
-                                endY = fadeEnd
-                            ),
-                            topLeft = Offset(0f, solidEnd),
-                            size = Size(
-                                size.width,
-                                (fadeEnd - solidEnd).coerceAtMost(size.height - solidEnd)
+        ) {
+            BoxWithConstraints(Modifier.fillMaxSize()) {
+            val compact = maxWidth < 600.dp
+            if (!compact) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .statusBarsPadding()
+                        .padding(start = 12.dp, end = 8.dp, top = 8.dp)
+                ) {
+                    Column(
+                        modifier = Modifier
+                            .width(300.dp)
+                            .padding(end = 16.dp)
+                    ) {
+                        IconButton(onClick = onBack) {
+                            Icon(
+                                Icons.AutoMirrored.Filled.ArrowBack,
+                                contentDescription = "Back",
+                                tint = scheme.onBackground
                             )
+                        }
+                        SpotifyAlbumHero(
+                            album = liveAlbum,
+                            metaLine = metaLine,
+                            showPause = showPause,
+                            shuffleEnabled = shuffleEnabled,
+                            albumSaved = albumSaved,
+                            onPrimary = onPrimary,
+                            onToggleShuffle = onToggleShuffle,
+                            onFavorite = {
+                                val now = pinStore.toggleAlbum(liveAlbum)
+                                Toast.makeText(
+                                    context,
+                                    if (now) "Album + tracks added to My Stuff"
+                                    else "Album removed from My Stuff",
+                                    Toast.LENGTH_SHORT
+                                ).show()
+                                onFavorite()
+                            },
+                            onMore = { showMenu = true },
+                            onOpenArtist = onOpenArtist,
+                            onCoverLongPress = { showCoverPicker = true }
                         )
                     }
+                    LazyColumn(
+                        state = listState,
+                        modifier = Modifier.weight(1f).fillMaxSize(),
+                        contentPadding = PaddingValues(top = 8.dp, bottom = 96.dp)
+                    ) {
+                        discs.forEach { (disc, tracks) ->
+                            if (multiDisc) {
+                                item(key = "disc-$disc") {
+                                    DiscSectionHeader(discNumber = disc ?: 1)
+                                }
+                            }
+                            itemsIndexed(
+                                tracks,
+                                key = { i, s -> "${s.songKey}#$i#${s.trackNumber}" }
+                            ) { _, song ->
+                                val globalIndex = liveAlbum.songs.indexOfFirst {
+                                    it.songKey == song.songKey ||
+                                        (it.path != null && it.path == song.path) ||
+                                        it.id == song.id
+                                }.coerceAtLeast(0)
+                                SwipeAddSongRow(
+                                    song = song,
+                                    onClick = { onPlayAlbum(liveAlbum.songs, globalIndex) },
+                                    onSwipeAdd = {
+                                        onAddSongToQueue(song)
+                                        Toast.makeText(context, "Added to queue", Toast.LENGTH_SHORT).show()
+                                    },
+                                    showTrackNumber = true,
+                                    isPlaying = song.isSameAs(nowPlaying),
+                                    isPlaybackActive = isPlaying,
+                                    isHighlighted = highlightSongKey != null &&
+                                        (song.songKey == highlightSongKey),
+                                    transparentSurface = true,
+                                    showHeart = true,
+                                    hideGoToAlbum = true,
+                                    onEditMetadata = { onEditSong(song) }
+                                )
+                            }
+                        }
+                        if (expanding && liveAlbum.songs.size < expectedTrackCount) {
+                            val extra = (expectedTrackCount - liveAlbum.songs.size).coerceIn(1, 16)
+                            items(extra) { SongRowSkeleton() }
+                        }
+                    }
                 }
-        ) {
+            } else {
             Column(modifier = Modifier.fillMaxSize()) {
                 Box(
                     modifier = Modifier
@@ -492,6 +544,7 @@ fun AlbumDetailScreen(
                     }
                 }
             }
+            }
 
             if (showMenu) {
                 AlbumContextSheet(
@@ -518,6 +571,7 @@ fun AlbumDetailScreen(
                     onDismiss = { showCoverPicker = false }
                 )
             }
+        }
         }
     }
 }

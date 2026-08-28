@@ -3,7 +3,7 @@ package capital.yuri.yuriplayer.data
 import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
-import android.util.Log
+import capital.yuri.yuriplayer.core.log.yuriLog
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -32,7 +32,7 @@ class AlbumArtCache(
     private val thumbs = object : LinkedHashMap<String, Bitmap>(MAX_THUMB_MEMORY + 1, 0.75f, true) {
         override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, Bitmap>?): Boolean {
             val drop = size > MAX_THUMB_MEMORY
-            if (drop) Log.d(TAG, "thumb-evict ${eldest?.key}")
+            if (drop) log.d { "thumb-evict ${eldest?.key}" }
             return drop
         }
     }
@@ -40,7 +40,7 @@ class AlbumArtCache(
     private val heroes = object : LinkedHashMap<String, Bitmap>(MAX_HERO_MEMORY + 1, 0.75f, true) {
         override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, Bitmap>?): Boolean {
             val drop = size > MAX_HERO_MEMORY
-            if (drop) Log.d(TAG, "hero-evict ${eldest?.key}")
+            if (drop) log.d { "hero-evict ${eldest?.key}" }
             return drop
         }
     }
@@ -48,7 +48,7 @@ class AlbumArtCache(
     private val hq = object : LinkedHashMap<String, Bitmap>(MAX_HQ_MEMORY + 1, 0.75f, true) {
         override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, Bitmap>?): Boolean {
             val drop = size > MAX_HQ_MEMORY
-            if (drop) Log.d(TAG, "hq-evict ${eldest?.key}")
+            if (drop) log.d { "hq-evict ${eldest?.key}" }
             return drop
         }
     }
@@ -151,7 +151,7 @@ class AlbumArtCache(
                     markers.any { m -> k.contains(m, ignoreCase = true) }
                 }
                 keys.forEach { map.remove(it) }
-                if (keys.isNotEmpty()) Log.d(TAG, "invalidate album=$albumKeyStr keys=$keys")
+                if (keys.isNotEmpty()) log.d { "invalidate album=$albumKeyStr keys=$keys" }
             }
             purge(thumbs)
             purge(heroes)
@@ -163,7 +163,7 @@ class AlbumArtCache(
         thumbs.clear()
         heroes.clear()
         hq.clear()
-        Log.d(TAG, "mem-clear")
+        log.d { "mem-clear" }
     }
 
     private fun diskFile(key: String): File {
@@ -181,14 +181,14 @@ class AlbumArtCache(
             val bmp = BitmapFactory.decodeFile(f.absolutePath)?.takeIf { !it.isRecycled }
             if (bmp == null) return null
             if (minDim > 0 && maxOf(bmp.width, bmp.height) < minDim) {
-                Log.d(TAG, "disk-stale $key ${bmp.width}x${bmp.height} < $minDim")
+                log.d { "disk-stale $key ${bmp.width}x${bmp.height} < $minDim" }
                 f.delete()
                 null
             } else {
                 bmp
             }
         } catch (e: Exception) {
-            Log.w(TAG, "disk-read failed $key", e)
+            log.w(e) { "disk-read failed $key" }
             null
         }
     }
@@ -208,7 +208,7 @@ class AlbumArtCache(
             }
             trimDiskIfNeeded()
         } catch (e: Exception) {
-            Log.w(TAG, "disk-write failed $key", e)
+            log.w(e) { "disk-write failed $key" }
         }
     }
 
@@ -242,7 +242,7 @@ class AlbumArtCache(
             lock.withLock {
                 map[key]?.takeIf { !it.isRecycled }?.let { return it }
                 map[key] = fromDisk
-                Log.d(TAG, "disk-hit $key mem=${map.size}")
+                log.d { "disk-hit $key mem=${map.size}" }
             }
             return fromDisk
         }
@@ -289,7 +289,7 @@ class AlbumArtCache(
         lock.withLock {
             map[key]?.takeIf { !it.isRecycled }?.let { return it }
             map[key] = bmp
-            Log.d(TAG, "decode-put $key mem=${map.size}")
+            log.d { "decode-put $key mem=${map.size}" }
         }
         return bmp
     }
@@ -314,7 +314,7 @@ class AlbumArtCache(
             try {
                 get(context, song, tier)
             } catch (e: Exception) {
-                Log.w(TAG, "prefetch failed $key", e)
+                log.w(e) { "prefetch failed $key" }
             }
         }
     }
@@ -337,7 +337,7 @@ class AlbumArtCache(
     }
 
     companion object {
-        private const val TAG = "YuriPlayer.ArtCache"
+        private val log = yuriLog("ArtCache")
         const val THUMB_DECODE_SIZE = 128
         const val HERO_DECODE_SIZE = 512
         /** Now-playing cover. Stylo 4 NP art is ~680px; 512 looked soft. */

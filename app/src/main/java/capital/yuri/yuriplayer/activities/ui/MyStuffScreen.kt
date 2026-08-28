@@ -80,8 +80,6 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import org.koin.compose.koinInject
 
-private enum class MyStuffTab { Pins, Collection, Playlists }
-
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun MyStuffScreen(
@@ -97,18 +95,10 @@ fun MyStuffScreen(
 ) {
     val pinStore: MyStuffPinStore = koinInject()
     val playlistsRepo: PlaylistRepository = koinInject()
-    val catalog: CatalogRepository = koinInject()
-    val player: PlayerController = koinInject()
-    val pins by pinStore.pins.collectAsState()
     val entries by pinStore.entries.collectAsState()
     val playlists by playlistsRepo.observePlaylistsResolved().collectAsState(initial = emptyList())
-    val allSongs by library.songs.collectAsState()
-    val scope = rememberCoroutineScope()
-    val context = LocalContext.current
 
-    var tab by remember { mutableStateOf(MyStuffTab.Pins) }
-    var showAddPin by remember { mutableStateOf(false) }
-    var showCreatePlaylist by remember { mutableStateOf(false) }
+    var showBrowseAll by remember { mutableStateOf(false) }
 
     LaunchedEffect(playlistsRepo) {
         playlistsRepo.observePlaylistsResolved().collect { list ->
@@ -116,121 +106,47 @@ fun MyStuffScreen(
         }
     }
 
-    Column(modifier = Modifier.fillMaxSize()) {
-        Box(modifier = Modifier.weight(1f)) {
-            when (tab) {
-                MyStuffTab.Pins -> MyStuffPinsHost(
-                    pins = pins,
-                    library = library,
-                    playlists = playlists,
-                    allSongs = allSongs,
-                    onOpenPin = { pin ->
-                        scope.launch {
-                            openPin(
-                                pin, library, playlists, allSongs, catalog,
-                                onOpenAlbum, onOpenArtist, onOpenPlaylist, onOpenSongAlbum, context
-                            )
-                        }
-                    },
-                    onUnpin = { pinStore.unpin(it) },
-                    onAddPinSlot = { showAddPin = true },
-                    onPlayAll = {
-                        scope.launch {
-                            val songs = resolveCollectionSongs(entries, library, playlistsRepo)
-                            if (songs.isEmpty()) {
-                                Toast.makeText(context, "Nothing in My Stuff yet", Toast.LENGTH_SHORT).show()
-                            } else {
-                                player.startPlaylistRadio(songs, "My Stuff")
-                                Toast.makeText(context, "Radio · My Stuff", Toast.LENGTH_SHORT).show()
-                            }
-                        }
-                    }
-                )
-                MyStuffTab.Collection -> MyStuffCatalogTab(
-                    entries = entries.filter { it.kind != StuffPinKind.PLAYLIST },
-                    library = library,
-                    playlists = playlists,
-                    nowPlaying = nowPlaying,
-                    isPlaybackActive = isPlaybackActive,
-                    onOpenAlbum = onOpenAlbum,
-                    onOpenArtist = onOpenArtist,
-                    onOpenPlaylist = onOpenPlaylist,
-                    onOpenSongAlbum = onOpenSongAlbum,
-                    onPlay = onPlay,
-                    onAddToQueue = onAddToQueue
-                )
-                MyStuffTab.Playlists -> MyStuffPlaylistsList(
-                    playlists = playlists,
-                    onOpen = onOpenPlaylist,
-                    onCreate = { showCreatePlaylist = true }
-                )
-            }
-        }
-
-        NavigationBar(windowInsets = WindowInsets(0, 0, 0, 0)) {
-            NavigationBarItem(
-                selected = tab == MyStuffTab.Pins,
-                onClick = { tab = MyStuffTab.Pins },
-                modifier = Modifier.testTag(TestTags.MYSTUFF_PINS),
-                icon = {
-                    Icon(
-                        if (tab == MyStuffTab.Pins) Icons.Filled.PushPin else Icons.Outlined.PushPin,
-                        contentDescription = null
-                    )
-                },
-                label = { Text("Pins") }
-            )
-            NavigationBarItem(
-                selected = tab == MyStuffTab.Collection,
-                onClick = { tab = MyStuffTab.Collection },
-                modifier = Modifier.testTag(TestTags.MYSTUFF_CATALOG),
-                icon = {
-                    Icon(
-                        if (tab == MyStuffTab.Collection) Icons.Filled.Favorite else Icons.Outlined.FavoriteBorder,
-                        contentDescription = null
-                    )
-                },
-                label = { Text("Catalog") }
-            )
-            NavigationBarItem(
-                selected = tab == MyStuffTab.Playlists,
-                onClick = { tab = MyStuffTab.Playlists },
-                modifier = Modifier.testTag(TestTags.MYSTUFF_PLAYLISTS),
-                icon = {
-                    Icon(
-                        if (tab == MyStuffTab.Playlists) Icons.Filled.QueueMusic else Icons.Outlined.QueueMusic,
-                        contentDescription = null
-                    )
-                },
-                label = { Text("Playlists") }
-            )
-        }
-    }
-
-    if (showAddPin) {
-        AddPinFromCollectionSheet(
-            entries = entries,
-            playlists = playlists,
-            alreadyPinned = pins.map { it.key }.toSet(),
+    if (showBrowseAll) {
+        BrowseAllLibraryScreen(
             library = library,
-            allSongs = allSongs,
-            onDismiss = { showAddPin = false },
-            onPick = { pin ->
-                pinStore.pin(pin)
-                showAddPin = false
-                Toast.makeText(context, "Pinned ${pin.title}", Toast.LENGTH_SHORT).show()
-            }
+            nowPlaying = nowPlaying,
+            onBack = { showBrowseAll = false },
+            onPlay = onPlay,
+            onAddToQueue = onAddToQueue,
+            onOpenAlbum = onOpenAlbum,
+            onOpenArtist = onOpenArtist,
+            onOpenPlaylist = onOpenPlaylist,
+            onOpenSongAlbum = onOpenSongAlbum
         )
+        return
     }
 
-    if (showCreatePlaylist) {
-        CreatePlaylistSheet(
-            onDismiss = { showCreatePlaylist = false },
-            onCreated = {
-                showCreatePlaylist = false
-                tab = MyStuffTab.Playlists
-            }
-        )
+    Column(modifier = Modifier.fillMaxSize().testTag(TestTags.MYSTUFF_CATALOG)) {
+        Box(modifier = Modifier.weight(1f)) {
+            MyStuffCatalogTab(
+                entries = entries.filter { it.kind != StuffPinKind.PLAYLIST },
+                library = library,
+                playlists = playlists,
+                nowPlaying = nowPlaying,
+                isPlaybackActive = isPlaybackActive,
+                onOpenAlbum = onOpenAlbum,
+                onOpenArtist = onOpenArtist,
+                onOpenPlaylist = onOpenPlaylist,
+                onOpenSongAlbum = onOpenSongAlbum,
+                onPlay = onPlay,
+                onAddToQueue = onAddToQueue
+            )
+        }
+        androidx.compose.material3.Button(
+            onClick = { showBrowseAll = true },
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 16.dp, vertical = 12.dp)
+                .height(52.dp),
+            shape = RoundedCornerShape(28.dp)
+        ) {
+            Text("All")
+        }
     }
 }
 
@@ -438,7 +354,7 @@ private fun BrowseEntryRow(
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun AddPinFromCollectionSheet(
+internal fun AddPinFromCollectionSheet(
     entries: List<StuffPin>,
     playlists: List<Playlist>,
     alreadyPinned: Set<String>,
@@ -542,7 +458,7 @@ private fun AddPinFromCollectionSheet(
     }
 }
 
-private suspend fun openPin(
+internal suspend fun openPin(
     pin: StuffPin,
     library: LibraryIndex,
     playlists: List<Playlist>,
@@ -583,7 +499,7 @@ private suspend fun openPin(
     }
 }
 
-private suspend fun resolveCollectionSongs(
+internal suspend fun resolveCollectionSongs(
     entries: List<StuffPin>,
     library: LibraryIndex,
     playlistsRepo: PlaylistRepository

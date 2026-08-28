@@ -10,7 +10,6 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.aspectRatio
@@ -19,15 +18,10 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.lazy.grid.GridCells
-import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
-import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -67,8 +61,7 @@ fun MyStuffPinsHost(
     allSongs: List<Song>,
     onOpenPin: (StuffPin) -> Unit,
     onUnpin: (StuffPin) -> Unit,
-    onAddPinSlot: () -> Unit,
-    onPlayAll: () -> Unit
+    onAddPinSlot: () -> Unit
 ) {
     var reorderMode by remember { mutableStateOf(false) }
     var pinForSheet by remember { mutableStateOf<StuffPin?>(null) }
@@ -89,60 +82,34 @@ fun MyStuffPinsHost(
         pins.map { HostPinCell.Filled(it) } + List(emptyCount) { HostPinCell.Empty }
     }
 
-    Column(modifier = Modifier.fillMaxSize()) {
-        Row(
+    Column(modifier = Modifier.fillMaxWidth()) {
+        Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(horizontal = 16.dp, vertical = 8.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Text(
-                text = "My Stuff",
-                style = MaterialTheme.typography.headlineMedium,
-                fontWeight = FontWeight.Bold,
-                modifier = Modifier.weight(1f)
-            )
-            IconButton(
-                onClick = onPlayAll,
-                modifier = Modifier
-                    .size(48.dp)
-                    .clip(CircleShape)
-                    .border(1.5.dp, MaterialTheme.colorScheme.onSurface.copy(alpha = 0.35f), CircleShape)
-            ) {
-                Icon(
-                    Icons.Default.PlayArrow,
-                    contentDescription = "Start radio from My Stuff",
-                    modifier = Modifier.size(28.dp)
-                )
-            }
-        }
-
-        LazyVerticalGrid(
-            columns = GridCells.Fixed(2),
-            modifier = Modifier.fillMaxSize(),
-            contentPadding = PaddingValues(start = 20.dp, end = 20.dp, bottom = 8.dp, top = 4.dp),
-            horizontalArrangement = Arrangement.spacedBy(12.dp),
+                .padding(start = 20.dp, end = 20.dp, bottom = 8.dp, top = 4.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
-            items(
-                cells.size,
-                key = { i ->
-                    when (val c = cells[i]) {
-                        is HostPinCell.Filled -> c.pin.key
-                        is HostPinCell.Empty -> "empty-$i"
+            cells.chunked(2).forEach { pair ->
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    pair.forEach { cell ->
+                        Box(Modifier.weight(1f)) {
+                            when (cell) {
+                                is HostPinCell.Filled -> HostPinCard(
+                                    pin = cell.pin,
+                                    library = library,
+                                    playlists = playlists,
+                                    allSongs = allSongs,
+                                    onClick = { onOpenPin(cell.pin) },
+                                    onLongClick = { pinForSheet = cell.pin }
+                                )
+                                is HostPinCell.Empty -> HostEmptyPin(onClick = onAddPinSlot)
+                            }
+                        }
                     }
-                }
-            ) { i ->
-                when (val cell = cells[i]) {
-                    is HostPinCell.Filled -> HostPinCard(
-                        pin = cell.pin,
-                        library = library,
-                        playlists = playlists,
-                        allSongs = allSongs,
-                        onClick = { onOpenPin(cell.pin) },
-                        onLongClick = { pinForSheet = cell.pin }
-                    )
-                    is HostPinCell.Empty -> HostEmptyPin(onClick = onAddPinSlot)
+                    if (pair.size == 1) Spacer(Modifier.weight(1f))
                 }
             }
         }

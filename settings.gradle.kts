@@ -19,9 +19,18 @@ dependencyResolutionManagement {
     repositories {
         google()
         mavenCentral()
-        maven { url = uri("https://jitpack.io") }
+        maven {
+            url = uri("https://jitpack.io")
+            content {
+                includeGroup("com.github.goxr3plus")
+            }
+        }
     }
 }
 
 rootProject.name = "Yuri Player"
+include(":core")
+include(":components")
 include(":app")
+include(":desktop")
+include(":mediasession")

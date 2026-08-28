@@ -1,7 +1,7 @@
 package capital.yuri.yuriplayer.player.engine
 
 import android.content.Context
-import android.util.Log
+import capital.yuri.yuriplayer.core.log.yuriLog
 
 /**
  * Which [PlaybackEngine] implementation plays **all** audio (local + remote).
@@ -43,22 +43,21 @@ object PlaybackEngineCatalog {
  * One selection plays everything — no per-URI hybrid routing.
  */
 object PlaybackEngineFactory {
-    private const val TAG = "EngineFactory"
-
+    private val log = yuriLog("EngineFactory")
     fun create(context: Context, id: PlaybackEngineId): PlaybackEngine {
         val app = context.applicationContext
         return when (id) {
             PlaybackEngineId.MEDIA3 -> {
-                Log.i(TAG, "create Media3PlaybackEngine")
+                log.i { "create Media3PlaybackEngine" }
                 Media3PlaybackEngine(app)
             }
             PlaybackEngineId.VLC -> {
-                Log.i(TAG, "create VlcPlaybackEngine")
+                log.i { "create VlcPlaybackEngine" }
                 VlcPlaybackEngine(app)
             }
             PlaybackEngineId.FFMPEG -> {
                 // Not implemented — fall back so playback still works.
-                Log.w(TAG, "FFmpeg engine not ready; falling back to VLC")
+                log.w { "FFmpeg engine not ready; falling back to VLC" }
                 VlcPlaybackEngine(app)
             }
         }

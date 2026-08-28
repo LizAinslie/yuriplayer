@@ -2,7 +2,7 @@ package capital.yuri.yuriplayer.media
 
 import android.content.Context
 import android.os.Build
-import android.util.Log
+import capital.yuri.yuriplayer.core.log.yuriLog
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -73,7 +73,7 @@ class FfmpegService(private val context: Context) {
                 true
             }.getOrDefault(false)
             if (!copied) {
-                Log.w(TAG, "No FFmpeg asset for abi=$abi ($assetPath). Build native/ffmpeg first.")
+                log.w { "No FFmpeg asset for abi=$abi ($assetPath). Build native/ffmpeg first." }
                 return null
             }
         }
@@ -81,7 +81,7 @@ class FfmpegService(private val context: Context) {
         dest.setReadable(true, true)
         dest.setExecutable(true, true)
         if (!dest.canExecute()) {
-            Log.w(TAG, "FFmpeg binary not executable: $dest")
+            log.w { "FFmpeg binary not executable: $dest" }
             return null
         }
         binary = dest
@@ -103,19 +103,19 @@ class FfmpegService(private val context: Context) {
                 .redirectErrorStream(true)
                 .directory(context.cacheDir)
             val proc = pb.start()
-            val log = proc.inputStream.bufferedReader().use { it.readText() }
+            val output = proc.inputStream.bufferedReader().use { it.readText() }
             val code = proc.waitFor()
             if (code != 0) {
-                Log.w(TAG, "ffmpeg exit=$code\n$log")
+                log.w { "ffmpeg exit=$code\n$output" }
             }
             code == 0
         } catch (e: Exception) {
-            Log.w(TAG, "ffmpeg exec failed", e)
+            log.w(e) { "ffmpeg exec failed" }
             false
         }
     }
 
     companion object {
-        private const val TAG = "FfmpegService"
+        private val log = yuriLog("FfmpegService")
     }
 }

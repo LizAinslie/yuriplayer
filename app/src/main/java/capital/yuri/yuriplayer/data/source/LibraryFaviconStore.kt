@@ -1,7 +1,7 @@
 package capital.yuri.yuriplayer.data.source
 
 import android.content.Context
-import android.util.Log
+import capital.yuri.yuriplayer.core.log.yuriLog
 import capital.yuri.yuriplayer.data.db.SourceInstanceEntity
 import capital.yuri.yuriplayer.http.url
 import io.ktor.client.HttpClient
@@ -41,7 +41,7 @@ class LibraryFaviconStore(
             }.getOrNull() ?: continue
             val dest = File(dir, "${instance.id}.bin")
             dest.writeBytes(bytes)
-            Log.i(TAG, "favicon ${instance.name} ← $url ${bytes.size}B")
+            log.i { "favicon ${instance.name} ← $url ${bytes.size}B" }
             return@withContext dest
         }
         null
@@ -53,6 +53,6 @@ class LibraryFaviconStore(
     }
 
     companion object {
-        private const val TAG = "LibraryFavicon"
+        private val log = yuriLog("LibraryFavicon")
     }
 }

@@ -4,7 +4,7 @@ import android.content.Context
 import android.net.Uri
 import android.os.Handler
 import android.os.Looper
-import android.util.Log
+import capital.yuri.yuriplayer.core.log.yuriLog
 import androidx.annotation.OptIn
 import androidx.media3.common.AudioAttributes
 import androidx.media3.common.C
@@ -133,7 +133,7 @@ class Media3PlaybackEngine(
         }
 
         override fun onPlayerError(error: PlaybackException) {
-            Log.e(TAG, "player error code=${error.errorCode} ${error.message}", error)
+            log.e(error) { "player error code=${error.errorCode} ${error.message}" }
             val recoverable =
                 error.errorCode == PlaybackException.ERROR_CODE_IO_NETWORK_CONNECTION_FAILED ||
                         error.errorCode == PlaybackException.ERROR_CODE_IO_NETWORK_CONNECTION_TIMEOUT ||
@@ -190,10 +190,7 @@ class Media3PlaybackEngine(
         player.setMediaItems(mediaItems, idx, startPositionMs.coerceAtLeast(0L))
         player.prepare()
         _currentUri.value = playable.getOrNull(idx)?.uri
-        Log.i(
-            TAG,
-            "setWindow size=${playable.size} start=$idx network=${playable[idx].isNetwork} live=${playable[idx].live}"
-        )
+        log.i { "setWindow size=${playable.size} start=$idx network=${playable[idx].isNetwork} live=${playable[idx].live}" }
     }
 
     private fun applyHeaders(items: List<PlaybackMedia>) {
@@ -299,7 +296,7 @@ class Media3PlaybackEngine(
         applyHeaders(listOf(playable))
         player.addMediaItem(playable.toMediaItem())
         if (player.playbackState == Player.STATE_IDLE) player.prepare()
-        Log.i(TAG, "setNext '${playable.title}' network=${playable.isNetwork}")
+        log.i { "setNext '${playable.title}' network=${playable.isNetwork}" }
     }
 
     override fun hasPreparedNext(): Boolean = player.hasNextMediaItem()
@@ -361,7 +358,7 @@ class Media3PlaybackEngine(
     }
 
     companion object {
-        private const val TAG = "Media3Engine"
+        private val log = yuriLog("Media3Engine")
         private const val NEXT_PRELOAD_US = 30_000_000L
 
         val DESCRIPTOR = PlaybackEngineDescriptor(

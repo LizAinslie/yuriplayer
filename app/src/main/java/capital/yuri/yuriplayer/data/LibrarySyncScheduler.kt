@@ -1,7 +1,7 @@
 package capital.yuri.yuriplayer.data
 
 import android.content.Context
-import android.util.Log
+import capital.yuri.yuriplayer.core.log.yuriLog
 import capital.yuri.yuriplayer.data.source.RemotePlaylistService
 import capital.yuri.yuriplayer.data.source.SourceInstanceRepository
 import capital.yuri.yuriplayer.data.source.SourceType
@@ -33,11 +33,11 @@ class LibrarySyncScheduler(
             delay(BOOT_DELAY_MS)
             while (isActive) {
                 runCatching { tick() }
-                    .onFailure { Log.w(TAG, "tick failed: ${it.message}") }
+                    .onFailure { log.w { "tick failed: ${it.message}" } }
                 delay(POLL_MS)
             }
         }
-        Log.i(TAG, "started")
+        log.i { "started" }
     }
 
     private suspend fun tick() = withContext(Dispatchers.IO) {
@@ -55,7 +55,7 @@ class LibrarySyncScheduler(
         if (last > 0L && now - last < interval.millis) return
         val n = playlists.syncOwnedToMyStuff()
         settings.markProfileSynced(now)
-        Log.i(TAG, "profile sync imported=$n interval=${interval.id}")
+        log.i { "profile sync imported=$n interval=${interval.id}" }
     }
 
     private suspend fun maybePartial(now: Long) {
@@ -72,7 +72,7 @@ class LibrarySyncScheduler(
             if (last > 0L && now - last < interval.millis) continue
             val cp = checkpoints.get(row.id)
             if (cp?.status == SourceScanStatus.RUNNING) {
-                Log.i(TAG, "skip partial ${row.name} — scan already running")
+                log.i { "skip partial ${row.name} — scan already running" }
                 continue
             }
             val type = when (SourceType.from(row.type)) {
@@ -83,10 +83,10 @@ class LibrarySyncScheduler(
             val indexed = catalog.countTracksForSource(type, row.id)
             val scanned = checkpoints.get(row.id)?.status == SourceScanStatus.DONE
             if (indexed <= 0 && !scanned) {
-                Log.i(TAG, "skip partial ${row.name} — no index yet")
+                log.i { "skip partial ${row.name} — no index yet" }
                 continue
             }
-            Log.i(TAG, "partial sync '${row.name}' interval=${interval.id} indexed=$indexed")
+            log.i { "partial sync '${row.name}' interval=${interval.id} indexed=$indexed" }
             LibraryScanService.startRemote(
                 context.applicationContext,
                 force = false,
@@ -98,7 +98,7 @@ class LibrarySyncScheduler(
     }
 
     companion object {
-        private const val TAG = "LibrarySync"
+        private val log = yuriLog("LibrarySync")
         private const val BOOT_DELAY_MS = 20_000L
         private const val POLL_MS = 60_000L
     }

@@ -7,7 +7,7 @@ import android.os.Handler
 import android.os.HandlerThread
 import android.os.Looper
 import android.os.ParcelFileDescriptor
-import android.util.Log
+import capital.yuri.yuriplayer.core.log.yuriLog
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -114,7 +114,7 @@ class VlcPlaybackEngine(
                         if (loadGeneration != eventGeneration) return@post
                         if (mp !== active()) return@post
                         if (!mp.isPlaying) {
-                            Log.i(TAG, "unexpected pause → resume")
+                            log.i { "unexpected pause → resume" }
                             runCatching { mp.play() }
                         }
                     }
@@ -127,11 +127,11 @@ class VlcPlaybackEngine(
                 dispatch { onPlaybackStateChanged(PlaybackEngine.PlaybackState.IDLE) }
                 if (!playWhenReady) return
                 if (!windowHasPlayed) {
-                    Log.i(TAG, "stopped before play — load, not EOF")
+                    log.i { "stopped before play — load, not EOF" }
                     return
                 }
                 if (currentIsLive()) {
-                    Log.i(TAG, "live stopped → reconnect")
+                    log.i { "live stopped → reconnect" }
                     runCatching { mp.play() }
                     return
                 }
@@ -148,7 +148,7 @@ class VlcPlaybackEngine(
                 if (loadGeneration != eventGeneration) return
                 if (currentIsLive()) {
                     if (playWhenReady) {
-                        Log.i(TAG, "live EOF → reconnect")
+                        log.i { "live EOF → reconnect" }
                         runCatching { mp.play() }
                     }
                     return
@@ -165,7 +165,7 @@ class VlcPlaybackEngine(
                 dispatch { onEnded() }
             }
             MediaPlayer.Event.EncounteredError -> {
-                Log.e(TAG, "VLC EncounteredError uri=${_currentUri.value}")
+                log.e { "VLC EncounteredError uri=${_currentUri.value}" }
                 _isPlaying.value = false
                 dispatch { onIsPlayingChanged(false) }
                 if (playWhenReady && swapToPreparedNext()) {
@@ -195,12 +195,12 @@ class VlcPlaybackEngine(
                     event.buffering >= 100f
                 if (!buffered) return
                 nextReady = true
-                Log.i(TAG, "standby ready '${nextItem?.title}' warming=$nextWarming")
+                log.i { "standby ready '${nextItem?.title}' warming=$nextWarming" }
                 // Stay playing at volume 0. Pause kills HTTP (`reading while
                 // paused`) and the swapped stream then dies at EOF.
             }
             MediaPlayer.Event.EncounteredError -> {
-                Log.w(TAG, "standby prepare failed '${nextItem?.title}'")
+                log.w { "standby prepare failed '${nextItem?.title}'" }
                 nextReady = false
                 nextPreparing = false
                 nextWarming = false
@@ -400,7 +400,7 @@ class VlcPlaybackEngine(
                 opened.fold(
                     onSuccess = { input -> attachAndMaybePlay(playable, input, gen) },
                     onFailure = { e ->
-                        Log.e(TAG, "open failed ${playable.uri}", e)
+                        log.e(e) { "open failed ${playable.uri}" }
                         dispatch { onError(e.message ?: "VLC open failed", recoverable = true) }
                     }
                 )
@@ -423,7 +423,7 @@ class VlcPlaybackEngine(
             mediaFromOpened(item, input)
         } catch (e: Exception) {
             input.close()
-            Log.e(TAG, "mediaFromOpened ${item.uri}", e)
+            log.e(e) { "mediaFromOpened ${item.uri}" }
             dispatch { onError(e.message ?: "VLC media failed", recoverable = true) }
             return
         }
@@ -435,10 +435,7 @@ class VlcPlaybackEngine(
         }
         bindMedia(active(), media, isNext = false)
         dispatch { onMediaTransition(PlaybackEngine.TransitionReason.PLAYLIST) }
-        Log.i(
-            TAG,
-            "attached uri=${item.uri} network=${item.isNetwork} autoPlay=$playWhenReady"
-        )
+        log.i { "attached uri=${item.uri} network=${item.isNetwork} autoPlay=$playWhenReady" }
         if (playWhenReady) active().play()
     }
 
@@ -450,7 +447,7 @@ class VlcPlaybackEngine(
         pendingSeekMs = -1L
         val max = (len - 1_000L).coerceAtLeast(0L)
         val target = seek.coerceIn(0L, max)
-        Log.i(TAG, "seek ${seek}ms → ${target}ms of ${len}ms")
+        log.i { "seek ${seek}ms → ${target}ms of ${len}ms" }
         runCatching { mp.time = target }
     }
 
@@ -471,7 +468,7 @@ class VlcPlaybackEngine(
                 opened.fold(
                     onSuccess = { input -> attachStandby(item, input, gen) },
                     onFailure = { e ->
-                        Log.w(TAG, "standby open failed ${item.uri}: ${e.message}")
+                        log.w { "standby open failed ${item.uri}: ${e.message}" }
                         if (gen == nextGeneration) {
                             nextReady = false
                             nextPreparing = false
@@ -497,7 +494,7 @@ class VlcPlaybackEngine(
             mediaFromOpened(item, input)
         } catch (e: Exception) {
             input.close()
-            Log.w(TAG, "standby media failed ${item.uri}", e)
+            log.w(e) { "standby media failed ${item.uri}" }
             nextReady = false
             nextPreparing = false
             return
@@ -511,7 +508,7 @@ class VlcPlaybackEngine(
         val sp = standby()
         runCatching { sp.stop() }
         bindMedia(sp, media, isNext = true)
-        Log.i(TAG, "standby attached '${item.title}' network=${item.isNetwork}")
+        log.i { "standby attached '${item.title}' network=${item.isNetwork}" }
         nextPreparing = false
         nextReady = true
     }
@@ -548,7 +545,7 @@ class VlcPlaybackEngine(
         np.play()
         _isPlaying.value = true
         buffering = false
-        Log.i(TAG, "swap → '${nxt.title}'")
+        log.i { "swap → '${nxt.title}'" }
 
         runCatching { old.stop() }
         runCatching { old.media = null }
@@ -573,7 +570,7 @@ class VlcPlaybackEngine(
 
     private fun openInput(item: PlaybackMedia): OpenedInput {
         prefetcher.fileIfReady(item.mediaId)?.let { f ->
-            Log.i(TAG, "open disk '${item.title}' ${f.length()}B")
+            log.i { "open disk '${item.title}' ${f.length()}B" }
             return OpenedInput.Path(f.absolutePath)
         }
         val uri = item.uri
@@ -598,12 +595,12 @@ class VlcPlaybackEngine(
         val resolver = appContext.contentResolver
         val afd = runCatching { resolver.openAssetFileDescriptor(uri, "r") }.getOrNull()
         if (afd != null) {
-            Log.i(TAG, "opened AFD uri=$uri offset=${afd.startOffset} len=${afd.length}")
+            log.i { "opened AFD uri=$uri offset=${afd.startOffset} len=${afd.length}" }
             return OpenedInput.ContentAfd(afd)
         }
         val pfd = resolver.openFileDescriptor(uri, "r")
             ?: throw IllegalStateException("Cannot open content uri: $uri")
-        Log.i(TAG, "opened PFD uri=$uri")
+        log.i { "opened PFD uri=$uri" }
         return OpenedInput.ContentPfd(pfd)
     }
 
@@ -690,7 +687,7 @@ class VlcPlaybackEngine(
     }
 
     companion object {
-        private const val TAG = "VlcEngine"
+        private val log = yuriLog("VlcEngine")
         private const val FILE_CACHE_MS = 800
         private const val NETWORK_CACHE_MS = 6_000
         private const val PREFETCH_BYTES = 16 * 1024 * 1024

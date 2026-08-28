@@ -1,7 +1,7 @@
 package capital.yuri.yuriplayer.player
 
 import android.content.Context
-import android.util.Log
+import capital.yuri.yuriplayer.core.log.yuriLog
 import capital.yuri.yuriplayer.data.Song
 import capital.yuri.yuriplayer.data.json.AppJson
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -63,7 +63,7 @@ class PlaybackHistoryStore(context: Context) {
         while (current.size > maxEntries) current.removeAt(current.lastIndex)
         _entries.value = current
         persist()
-        Log.d(TAG, "record '${song.displayTitle}' size=${current.size}")
+        log.d { "record '${song.displayTitle}' size=${current.size}" }
     }
 
     fun clear() {
@@ -72,7 +72,7 @@ class PlaybackHistoryStore(context: Context) {
             if (file.exists()) file.delete()
         } catch (_: Exception) {
         }
-        Log.i(TAG, "history cleared")
+        log.i { "history cleared" }
     }
 
     private fun trimToMax() {
@@ -96,7 +96,7 @@ class PlaybackHistoryStore(context: Context) {
                 tmp.delete()
             }
         } catch (e: Exception) {
-            Log.w(TAG, "persist failed", e)
+            log.w(e) { "persist failed" }
         }
     }
 
@@ -106,7 +106,7 @@ class PlaybackHistoryStore(context: Context) {
             val dto = json.decodeFromString(HistoryFileDto.serializer(), file.readText())
             dto.entries.take(maxEntries)
         } catch (e: Exception) {
-            Log.w(TAG, "load failed", e)
+            log.w(e) { "load failed" }
             emptyList()
         }
     }
@@ -117,7 +117,7 @@ class PlaybackHistoryStore(context: Context) {
     }
 
     companion object {
-        private const val TAG = "YuriPlayer.History"
+        private val log = yuriLog("History")
         private const val FILE_NAME = "playback_history.json"
         private const val PREFS = "yuri_history_prefs"
         private const val KEY_MAX = "max_entries"

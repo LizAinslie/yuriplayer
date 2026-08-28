@@ -11,8 +11,9 @@ import android.os.Environment
 import android.provider.Settings
 import android.view.WindowManager
 import android.widget.Toast
+import androidx.activity.BackEventCompat
 import androidx.activity.ComponentActivity
-import androidx.activity.compose.BackHandler
+import androidx.activity.compose.PredictiveBackHandler
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
@@ -24,24 +25,33 @@ import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.WindowInsetsSides
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.only
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.systemBars
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Favorite
+import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.outlined.FavoriteBorder
+import androidx.compose.material.icons.outlined.Home
+import androidx.compose.material.icons.outlined.Search
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.NavigationBar
+import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
@@ -50,14 +60,18 @@ import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.graphics.TransformOrigin
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.dp
@@ -73,11 +87,14 @@ import capital.yuri.yuriplayer.activities.ui.EditAlbumMetadataScreen
 import capital.yuri.yuriplayer.activities.ui.EditSongMetadataScreen
 import capital.yuri.yuriplayer.activities.ui.ExploreScanMenu
 import capital.yuri.yuriplayer.activities.ui.ExploreScreen
+import capital.yuri.yuriplayer.activities.ui.ExploreSearchTopBar
+import capital.yuri.yuriplayer.activities.ui.HomeFeedScreen
 import capital.yuri.yuriplayer.activities.ui.LocalAlbumNav
 import capital.yuri.yuriplayer.activities.ui.LocalArtistNav
 import capital.yuri.yuriplayer.activities.ui.LocalPlaylistNav
 import capital.yuri.yuriplayer.activities.ui.LocalSongNav
 import capital.yuri.yuriplayer.activities.ui.LocalStatusBarStack
+import capital.yuri.yuriplayer.activities.ui.LocalTabBackEnabled
 import capital.yuri.yuriplayer.activities.ui.MiniPlayerBar
 import capital.yuri.yuriplayer.activities.ui.MyStuffScreen
 import capital.yuri.yuriplayer.activities.ui.NowPlayingScreen
@@ -89,6 +106,8 @@ import capital.yuri.yuriplayer.activities.ui.SettingsScreen
 import capital.yuri.yuriplayer.activities.ui.SongNavActions
 import capital.yuri.yuriplayer.activities.ui.StatusBarColorStack
 import capital.yuri.yuriplayer.activities.ui.theme.YuriPlayerTheme
+import capital.yuri.yuriplayer.components.OfflineBanner
+import capital.yuri.yuriplayer.core.network.NetworkMonitor
 import capital.yuri.yuriplayer.ui.TestTags
 import capital.yuri.yuriplayer.data.ActivityTitleFormat
 import capital.yuri.yuriplayer.data.AlbumItem
@@ -122,6 +141,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.koin.android.ext.android.inject
 import org.koin.compose.koinInject
+import androidx.core.net.toUri
 
 class MainActivity : ComponentActivity() {
 
@@ -191,7 +211,7 @@ class MainActivity : ComponentActivity() {
         try {
             val intent = Intent(
                 Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION,
-                Uri.parse("package:$packageName")
+                "package:$packageName".toUri()
             )
             startActivity(intent)
         } catch (_: Exception) {
@@ -298,9 +318,10 @@ class MainActivity : ComponentActivity() {
     }
 }
 
-private enum class TopTab(val label: String, val icon: ImageVector) {
-    MyStuff("My Stuff", Icons.Default.Favorite),
-    Explore("Explore", Icons.Default.Search)
+private enum class TopTab(val label: String) {
+    Home("Home"),
+    MyStuff("My Stuff"),
+    Explore("Explore")
 }
 
 private sealed class DetailRoute {
@@ -328,6 +349,7 @@ fun YuriApp(
     val playlistRepo: PlaylistRepository = koinInject()
     val pinStore: MyStuffPinStore = koinInject()
     val catalog: CatalogRepository = koinInject()
+    val networkMonitor: NetworkMonitor = koinInject()
     val scope = rememberCoroutineScope()
     val baseScheme = MaterialTheme.colorScheme
 
@@ -345,6 +367,7 @@ fun YuriApp(
     val songCount by library.songs.collectAsState()
     val loading by library.isLoading.collectAsState()
     val colorRev by settings.colorPrefsRevision.collectAsState()
+    val online by networkMonitor.isOnline.collectAsState()
 
     LaunchedEffect(songCount.size, loading, showNetworkPrompt) {
         if (!showNetworkPrompt &&
@@ -390,20 +413,46 @@ fun YuriApp(
         )
     }
 
-    var topTab by remember { mutableStateOf(TopTab.MyStuff) }
+    var topTab by remember { mutableStateOf(TopTab.Home) }
+    var exploreQuery by rememberSaveable { mutableStateOf("") }
     var playerExpanded by remember { mutableStateOf(false) }
-    var detailStack by remember { mutableStateOf<List<DetailRoute>>(emptyList()) }
+    var tabStacks by remember {
+        mutableStateOf(
+            mapOf(
+                TopTab.Home to emptyList<DetailRoute>(),
+                TopTab.MyStuff to emptyList<DetailRoute>(),
+                TopTab.Explore to emptyList<DetailRoute>()
+            )
+        )
+    }
     var npPlaylistSong by remember { mutableStateOf<Song?>(null) }
 
+    fun stackOf(tab: TopTab) = tabStacks[tab].orEmpty()
+
     fun pushDetail(route: DetailRoute) {
-        detailStack = detailStack + route
+        val tab = topTab
+        tabStacks = tabStacks + (tab to stackOf(tab) + route)
     }
 
     fun popDetail() {
-        if (detailStack.isNotEmpty()) detailStack = detailStack.dropLast(1)
+        val tab = topTab
+        val stack = stackOf(tab)
+        if (stack.isNotEmpty()) tabStacks = tabStacks + (tab to stack.dropLast(1))
     }
 
-    val detail = detailStack.lastOrNull()
+    fun selectTab(tab: TopTab) {
+        if (topTab == tab) {
+            if (stackOf(tab).isNotEmpty()) {
+                tabStacks = tabStacks + (tab to emptyList())
+            }
+        } else {
+            topTab = tab
+        }
+    }
+
+    val currentStack = stackOf(topTab)
+    val detail = currentStack.lastOrNull()
+    val previousDetail = currentStack.getOrNull(currentStack.lastIndex - 1)
     val edgeToEdgeDetail = detail is DetailRoute.Album ||
         detail is DetailRoute.Artist ||
         detail is DetailRoute.Playlist
@@ -460,8 +509,24 @@ fun YuriApp(
         themeStore.updateNeighbors(context, peekNext, peekPrev, baseScheme)
     }
 
-    BackHandler(enabled = playerExpanded) { playerExpanded = false }
-    BackHandler(enabled = !playerExpanded && detailStack.isNotEmpty()) { popDetail() }
+    PredictiveBackHandler(enabled = playerExpanded) { events ->
+        events.collect { }
+        playerExpanded = false
+    }
+
+    var backProgress by remember { mutableFloatStateOf(0f) }
+    var backSwipeEdge by remember { mutableIntStateOf(BackEventCompat.EDGE_LEFT) }
+    PredictiveBackHandler(enabled = !playerExpanded && currentStack.isNotEmpty()) { events ->
+        try {
+            events.collect { event ->
+                backProgress = event.progress
+                backSwipeEdge = event.swipeEdge
+            }
+            popDetail()
+        } finally {
+            backProgress = 0f
+        }
+    }
 
     fun playAlbumFrom(album: AlbumItem, songs: List<Song>, index: Int) {
         val key = albumKey(album.name, album.artist)
@@ -648,75 +713,149 @@ fun YuriApp(
                 modifier = Modifier.fillMaxSize(),
                 containerColor = if (edgeToEdgeDetail) Color.Transparent
                 else MaterialTheme.colorScheme.background,
-                contentWindowInsets = if (edgeToEdgeDetail) {
-                    WindowInsets(0, 0, 0, 0)
-                } else {
-                    WindowInsets.systemBars.only(
-                        WindowInsetsSides.Horizontal + WindowInsetsSides.Top
-                    )
-                },
-                topBar = {
-                    if (detail == null) {
-                        TopAppBar(
-                            title = {
-                                Row(
-                                    horizontalArrangement = Arrangement.spacedBy(4.dp),
-                                    verticalAlignment = androidx.compose.ui.Alignment.CenterVertically
-                                ) {
-                                    TopTab.entries.forEach { tab ->
-                                        val selected = topTab == tab
-                                        val tag = when (tab) {
-                                            TopTab.MyStuff -> TestTags.TAB_MY_STUFF
-                                            TopTab.Explore -> TestTags.TAB_EXPLORE
-                                        }
-                                        IconButton(
-                                            onClick = { topTab = tab },
-                                            modifier = Modifier.testTag(tag)
-                                        ) {
-                                            Icon(
-                                                imageVector = tab.icon,
-                                                contentDescription = tab.label,
-                                                tint = if (selected) MaterialTheme.colorScheme.primary
-                                                else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.45f)
-                                            )
-                                        }
-                                    }
-                                }
-                            },
-                            actions = {
-                                if (topTab == TopTab.Explore) {
-                                    // TravelExplore dropdown: scan / pause / stop per source.
-                                    // Never auto-starts on tab enter — only explicit menu actions.
-                                    ExploreScanMenu()
-                                }
-                                IconButton(
-                                    onClick = { pushDetail(DetailRoute.Settings) },
-                                    modifier = Modifier.testTag(TestTags.SETTINGS)
-                                ) {
-                                    Icon(Icons.Default.Settings, contentDescription = "Settings")
-                                }
-                            }
-                        )
-                    }
-                },
+                contentWindowInsets = WindowInsets.systemBars.only(WindowInsetsSides.Horizontal),
                 bottomBar = {
-                    MiniPlayerBar(
-                        song = currentSong,
-                        playing = playing,
-                        positionMs = positionMs,
-                        durationMs = durationMs,
-                        onToggle = { player.togglePlayPause() },
-                        onExpand = { playerExpanded = true }
-                    )
+                    Column(Modifier.fillMaxWidth()) {
+                        MiniPlayerBar(
+                            song = currentSong,
+                            playing = playing,
+                            positionMs = positionMs,
+                            durationMs = durationMs,
+                            onToggle = { player.togglePlayPause() },
+                            onExpand = { playerExpanded = true }
+                        )
+                        NavigationBar {
+                            NavigationBarItem(
+                                selected = topTab == TopTab.Home,
+                                onClick = { selectTab(TopTab.Home) },
+                                modifier = Modifier.testTag(TestTags.TAB_HOME),
+                                icon = {
+                                    Icon(
+                                        if (topTab == TopTab.Home) Icons.Filled.Home else Icons.Outlined.Home,
+                                        contentDescription = "Home"
+                                    )
+                                },
+                                label = { Text("Home") }
+                            )
+                            NavigationBarItem(
+                                selected = topTab == TopTab.MyStuff,
+                                onClick = { selectTab(TopTab.MyStuff) },
+                                modifier = Modifier.testTag(TestTags.TAB_MY_STUFF),
+                                icon = {
+                                    Icon(
+                                        if (topTab == TopTab.MyStuff) Icons.Filled.Favorite else Icons.Outlined.FavoriteBorder,
+                                        contentDescription = "My Stuff"
+                                    )
+                                },
+                                label = { Text("My Stuff") }
+                            )
+                            NavigationBarItem(
+                                selected = topTab == TopTab.Explore,
+                                onClick = { selectTab(TopTab.Explore) },
+                                modifier = Modifier.testTag(TestTags.TAB_EXPLORE),
+                                icon = {
+                                    Icon(
+                                        if (topTab == TopTab.Explore) Icons.Filled.Search else Icons.Outlined.Search,
+                                        contentDescription = "Explore"
+                                    )
+                                },
+                                label = { Text("Explore") }
+                            )
+                        }
+                    }
                 }
             ) { innerPadding ->
-                val contentPadding = if (edgeToEdgeDetail) {
-                    PaddingValues(bottom = innerPadding.calculateBottomPadding())
-                } else {
-                    innerPadding
-                }
+                val contentPadding = PaddingValues(
+                    bottom = innerPadding.calculateBottomPadding()
+                )
                 Box(modifier = Modifier.fillMaxSize().padding(contentPadding)) {
-                    when (val d = detail) {
+                    CompositionLocalProvider(
+                        LocalTabBackEnabled provides currentStack.isEmpty()
+                    ) {
+                        Column(Modifier.fillMaxSize()) {
+                            if (!online) {
+                                OfflineBanner()
+                            }
+                            if (topTab == TopTab.Explore) {
+                                ExploreSearchTopBar(
+                                    query = exploreQuery,
+                                    onQueryChange = { exploreQuery = it }
+                                ) {
+                                    ExploreScanMenu()
+                                    IconButton(
+                                        onClick = { pushDetail(DetailRoute.Settings) },
+                                        modifier = Modifier.testTag(TestTags.SETTINGS)
+                                    ) {
+                                        Icon(Icons.Default.Settings, contentDescription = "Settings")
+                                    }
+                                }
+                            } else {
+                                TopAppBar(
+                                    title = {
+                                        Text(
+                                            topTab.label,
+                                            modifier = if (topTab == TopTab.MyStuff) {
+                                                Modifier.testTag(TestTags.CATALOG_TITLE)
+                                            } else {
+                                                Modifier
+                                            }
+                                        )
+                                    },
+                                    actions = {
+                                        IconButton(
+                                            onClick = { pushDetail(DetailRoute.Settings) },
+                                            modifier = Modifier.testTag(TestTags.SETTINGS)
+                                        ) {
+                                            Icon(Icons.Default.Settings, contentDescription = "Settings")
+                                        }
+                                    }
+                                )
+                            }
+                            Box(Modifier.weight(1f).fillMaxWidth()) {
+                        when (topTab) {
+                            TopTab.Home -> HomeFeedScreen(
+                                library = library,
+                                onPlay = { songs, index -> player.playSource(songs, index) },
+                                onOpenAlbum = { openAlbumResolved(it) },
+                                onOpenArtist = { openArtistResolved(it) },
+                                onOpenPlaylist = { pl: Playlist ->
+                                    pushDetail(DetailRoute.Playlist(pl.id))
+                                },
+                                onOpenSongAlbum = { openAlbumForSong(it) }
+                            )
+                            TopTab.MyStuff -> MyStuffScreen(
+                                library = library,
+                                nowPlaying = currentSong,
+                                isPlaybackActive = playing,
+                                onPlay = { songs, index -> player.playSource(songs, index) },
+                                onAddToQueue = { player.addToHotQueue(it) },
+                                onOpenAlbum = { openAlbumResolved(it) },
+                                onOpenArtist = { openArtistResolved(it) },
+                                onOpenPlaylist = { pl: Playlist ->
+                                    pushDetail(DetailRoute.Playlist(pl.id))
+                                },
+                                onOpenSongAlbum = { openAlbumForSong(it) }
+                            )
+                            TopTab.Explore -> ExploreScreen(
+                                query = exploreQuery,
+                                onQueryChange = { exploreQuery = it },
+                                nowPlaying = currentSong,
+                                isPlaybackActive = playing,
+                                onPlay = { songs, index -> player.playSource(songs, index) },
+                                onAddToQueue = { player.addToHotQueue(it) },
+                                onOpenAlbum = { album -> openAlbumResolved(album) },
+                                onOpenArtist = { artist -> openArtistResolved(artist) },
+                                onOpenPlaylist = { pl: Playlist ->
+                                    pushDetail(DetailRoute.Playlist(pl.id))
+                                }
+                            )
+                        }
+                            }
+                        }
+                    }
+
+                    val mediaDetailHost = @Composable { d: DetailRoute ->
+                    when (d) {
                         is DetailRoute.Album -> {
                             val key = albumKey(d.album.name, d.album.artist)
                             var resolvedAlbum by remember(key) { mutableStateOf(d.album) }
@@ -905,31 +1044,37 @@ fun YuriApp(
                             )
                         }
                         is DetailRoute.Settings -> SettingsScreen(onBack = { popDetail() })
-                        null -> when (topTab) {
-                            TopTab.MyStuff -> MyStuffScreen(
-                                library = library,
-                                nowPlaying = currentSong,
-                                isPlaybackActive = playing,
-                                onPlay = { songs, index -> player.playSource(songs, index) },
-                                onAddToQueue = { player.addToHotQueue(it) },
-                                onOpenAlbum = { openAlbumResolved(it) },
-                                onOpenArtist = { openArtistResolved(it) },
-                                onOpenPlaylist = { pl: Playlist ->
-                                    pushDetail(DetailRoute.Playlist(pl.id))
+                    }
+                    }
+
+                    if (previousDetail != null) {
+                        Surface(
+                            modifier = Modifier.fillMaxSize(),
+                            color = MaterialTheme.colorScheme.background
+                        ) {
+                            mediaDetailHost(previousDetail)
+                        }
+                    }
+                    if (detail != null) {
+                        val progress = backProgress
+                        val edge = backSwipeEdge
+                        Surface(
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .graphicsLayer {
+                                    val dir = if (edge == BackEventCompat.EDGE_RIGHT) -1f else 1f
+                                    translationX = dir * progress * 48.dp.toPx()
+                                    val s = 1f - (0.06f * progress)
+                                    scaleX = s
+                                    scaleY = s
+                                    alpha = 1f - (0.12f * progress)
+                                    clip = true
+                                    shadowElevation = 16f * (1f - progress)
+                                    transformOrigin = TransformOrigin.Center
                                 },
-                                onOpenSongAlbum = { openAlbumForSong(it) }
-                            )
-                            TopTab.Explore -> ExploreScreen(
-                                nowPlaying = currentSong,
-                                isPlaybackActive = playing,
-                                onPlay = { songs, index -> player.playSource(songs, index) },
-                                onAddToQueue = { player.addToHotQueue(it) },
-                                onOpenAlbum = { album -> openAlbumResolved(album) },
-                                onOpenArtist = { artist -> openArtistResolved(artist) },
-                                onOpenPlaylist = { pl: Playlist ->
-                                    pushDetail(DetailRoute.Playlist(pl.id))
-                                }
-                            )
+                            color = MaterialTheme.colorScheme.background
+                        ) {
+                            mediaDetailHost(detail)
                         }
                     }
                 }

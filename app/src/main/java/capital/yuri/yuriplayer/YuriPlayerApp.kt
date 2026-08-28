@@ -1,10 +1,13 @@
 package capital.yuri.yuriplayer
 
+import capital.yuri.yuriplayer.core.log.yuriLog
+
 import android.app.Application
 import android.content.Intent
 import android.os.Handler
 import android.os.Looper
 import androidx.core.content.ContextCompat
+import capital.yuri.yuriplayer.core.platform.AndroidAppDirectories
 import capital.yuri.yuriplayer.data.LibraryIndex
 import capital.yuri.yuriplayer.data.LibrarySettings
 import capital.yuri.yuriplayer.di.appModule
@@ -30,6 +33,7 @@ import org.koin.core.qualifier.named
 class YuriPlayerApp : Application(), SingletonImageLoader.Factory {
     override fun onCreate() {
         super.onCreate()
+        AndroidAppDirectories.install(this)
 
         startKoin {
             androidLogger(Level.ERROR)
@@ -59,7 +63,7 @@ class YuriPlayerApp : Application(), SingletonImageLoader.Factory {
         ImageLoader.Builder(context)
             .coroutineContext(
                 SupervisorJob() + Dispatchers.IO + CoroutineExceptionHandler { _, t ->
-                    android.util.Log.w("Coil", "image load cancelled", t)
+                    yuriLog("Coil").w(t) { "image load cancelled" }
                 }
             )
             .components {

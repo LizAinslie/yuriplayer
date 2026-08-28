@@ -1,7 +1,7 @@
 package capital.yuri.yuriplayer.data
 
 import android.content.Context
-import android.util.Log
+import capital.yuri.yuriplayer.core.log.yuriLog
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -27,13 +27,15 @@ class LibraryIndex(
     private val cache: LibraryCache,
     private val catalog: CatalogRepository,
     private val notifier: LibraryScanNotifier
-) {
+) : LocalLibrary {
 
     // Default dispatcher: never block Main while loading large lists
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
 
     private val _songs = MutableStateFlow<List<Song>>(emptyList())
     val songs: StateFlow<List<Song>> = _songs.asStateFlow()
+
+    override fun songs(): List<Song> = _songs.value
 
     private val _isLoading = MutableStateFlow(false)
     val isLoading: StateFlow<Boolean> = _isLoading.asStateFlow()
@@ -65,7 +67,7 @@ class LibraryIndex(
             if (hadCache) {
                 _songs.value = cached!!.songs
                 _lastScannedAt.value = cached.scannedAt
-                Log.i(TAG, "bootstrap from cache: ${cached.songs.size} tracks")
+                log.i { "bootstrap from cache: ${cached.songs.size} tracks" }
             }
 
             // 2) Room only when cache missed — avoid loading large local tables
@@ -75,7 +77,7 @@ class LibraryIndex(
                 if (fromDb.isNotEmpty()) {
                     _songs.value = fromDb
                     _lastScannedAt.value = System.currentTimeMillis()
-                    Log.i(TAG, "bootstrap from Room local: ${fromDb.size} tracks")
+                    log.i { "bootstrap from Room local: ${fromDb.size} tracks" }
                 }
             }
 
@@ -85,7 +87,7 @@ class LibraryIndex(
                 _songs.value.isEmpty() -> {
                     delay(COLD_EMPTY_RESCAN_DELAY_MS)
                     if (_songs.value.isEmpty() && !_isLoading.value) {
-                        Log.i(TAG, "bootstrap: empty after delay → local rescan")
+                        log.i { "bootstrap: empty after delay → local rescan" }
                         refresh()
                     }
                 }
@@ -98,7 +100,7 @@ class LibraryIndex(
                         if (stillStale && !_isLoading.value) {
                             delay(STALE_RESCAN_DELAY_MS)
                             if (!_isLoading.value) {
-                                Log.i(TAG, "bootstrap: stale after reconcile → deferred local rescan")
+                                log.i { "bootstrap: stale after reconcile → deferred local rescan" }
                                 refresh()
                             }
                         }
@@ -108,11 +110,11 @@ class LibraryIndex(
                 age > staleAfterMs -> {
                     delay(STALE_RESCAN_DELAY_MS)
                     if (!_isLoading.value) {
-                        Log.i(TAG, "bootstrap: stale (${age}ms) → deferred local rescan")
+                        log.i { "bootstrap: stale (${age}ms) → deferred local rescan" }
                         refresh()
                     }
                 }
-                else -> Log.i(TAG, "bootstrap: warm local index, skip auto-rescan")
+                else -> log.i { "bootstrap: warm local index, skip auto-rescan" }
             }
         }
     }
@@ -122,7 +124,7 @@ class LibraryIndex(
         val local = withContext(Dispatchers.IO) { catalog.getLocalSongs() }
         _songs.value = local
         _lastScannedAt.value = System.currentTimeMillis()
-        Log.i(TAG, "reloadFromCatalog (local): ${local.size} tracks")
+        log.i { "reloadFromCatalog (local): ${local.size} tracks" }
     }
 
     fun refresh() {
@@ -150,7 +152,6 @@ class LibraryIndex(
             notifier.finish("Library scan", "Storage permission required")
         } catch (e: Exception) {
             _error.value = e.message ?: "Scan failed"
-            Log.e(TAG, "Refresh failed", e)
             _events.tryEmit(LibraryEvent.ScanFailed(e.message ?: "Scan failed"))
             notifier.finish("Library scan", e.message ?: "Scan failed")
         } finally {
@@ -167,14 +168,14 @@ class LibraryIndex(
         var changed = false
         val next = current.map { song ->
             val key = albumKey(song.album, song.effectiveAlbumArtist)
-            if (key == albumKey && (song.year == null || song.year <= 0)) {
+            if (key == albumKey && (song.year ?: 0) <= 0) {
                 changed = true
                 song.copy(year = year)
             } else song
         }
         if (changed) {
             _songs.value = next
-            Log.i(TAG, "applied year $year to albumKey=$albumKey")
+            log.i { "applied year $year to albumKey=$albumKey" }
         }
     }
 
@@ -193,6 +194,9 @@ class LibraryIndex(
         if (q.isEmpty()) return base
         return base.filter { songMatches(it, q) }
     }
+
+    override fun albums(taggedOnly: Boolean): List<AlbumItem> =
+        albums(query = "", taggedOnly = taggedOnly)
 
     fun albums(query: String = "", taggedOnly: Boolean = true): List<AlbumItem> {
         val q = query.trim()
@@ -241,7 +245,7 @@ class LibraryIndex(
                     ?: tracks.firstOrNull()?.album
 
                 val deduped = tracks.distinctBy {
-                    it.path?.lowercase() ?: it.contentUri.toString()
+                    it.path?.lowercase() ?: it.contentUri
                 }
 
                 AlbumItem(
@@ -283,7 +287,7 @@ class LibraryIndex(
                     ?.key
                 if (isCombinedArtistName(displayName)) return@mapNotNull null
                 val deduped = tracks.distinctBy {
-                    it.path?.lowercase() ?: it.contentUri.toString()
+                    it.path?.lowercase() ?: it.contentUri
                 }
                 val albumKeys = deduped.mapNotNull { albumKey(it.album, it.effectiveAlbumArtist) }.toSet()
                 ArtistItem(
@@ -304,7 +308,7 @@ class LibraryIndex(
     fun untaggedCount(): Int = _songs.value.count { !it.isTagged }
 
     companion object {
-        private const val TAG = "LibraryIndex"
+        private val log = yuriLog("LibraryIndex")
         const val DEFAULT_STALE_MS = 12L * 60 * 60 * 1000
         /** Wait so MusicService can restore + user can hit Play first. */
         private const val COLD_EMPTY_RESCAN_DELAY_MS = 5_000L
@@ -313,8 +317,7 @@ class LibraryIndex(
         private const val ROOM_RECONCILE_DELAY_MS = 8_000L
 
         fun normalizeKey(value: String?): String? {
-            if (value == null) return null
-            val t = value.trim().replace(Regex("\\s+"), " ").lowercase()
+            val t = value.orEmpty().trim().replace(Regex("\\s+"), " ").lowercase()
             return t.takeIf { it.isNotEmpty() }
         }
 
@@ -354,24 +357,4 @@ class LibraryIndex(
             }
         }
     }
-}
-
-data class AlbumItem(
-    val name: String?,
-    val artist: String?,
-    val trackCount: Int,
-    val songs: List<Song>
-) {
-    val displayName: String get() = name ?: "Unknown Album"
-    val displayArtist: String
-        get() = primaryArtistName(artist) ?: artist ?: "Unknown Artist"
-}
-
-data class ArtistItem(
-    val name: String?,
-    val trackCount: Int,
-    val albumCount: Int,
-    val songs: List<Song>
-) {
-    val displayName: String get() = primaryArtistName(name) ?: name ?: "Unknown Artist"
 }
